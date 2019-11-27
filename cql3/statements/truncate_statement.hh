@@ -54,7 +54,7 @@ class truncate_statement : public raw::cf_statement, public cql_statement_no_met
 public:
     truncate_statement(::shared_ptr<cf_name> name);
 
-    virtual uint32_t get_bound_terms() override;
+    virtual uint32_t get_bound_terms() const override;
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
@@ -64,12 +64,12 @@ public:
 
     virtual bool depends_on_column_family(const sstring& cf_name) const override;
 
-    virtual future<> check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) const override;
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) override;
+    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override;
+    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const override;
 };
 
 }

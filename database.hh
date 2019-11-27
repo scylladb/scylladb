@@ -1222,14 +1222,14 @@ public:
 
 private:
     ::cf_stats _cf_stats;
-    static const size_t max_count_concurrent_reads{100};
+    static constexpr size_t max_count_concurrent_reads{100};
     size_t max_memory_concurrent_reads() { return _dbcfg.available_memory * 0.02; }
     // Assume a queued read takes up 10kB of memory, and allow 2% of memory to be filled up with such reads.
     size_t max_inactive_queue_length() { return _dbcfg.available_memory * 0.02 / 10000; }
     // They're rather heavyweight, so limit more
-    static const size_t max_count_streaming_concurrent_reads{10};
+    static constexpr size_t max_count_streaming_concurrent_reads{10};
     size_t max_memory_streaming_concurrent_reads() { return _dbcfg.available_memory * 0.02; }
-    static const size_t max_count_system_concurrent_reads{10};
+    static constexpr size_t max_count_system_concurrent_reads{10};
     size_t max_memory_system_concurrent_reads() { return _dbcfg.available_memory * 0.02; };
     static constexpr size_t max_concurrent_sstable_loads() { return 3; }
     size_t max_memory_pending_view_updates() const { return _dbcfg.available_memory * 0.1; }

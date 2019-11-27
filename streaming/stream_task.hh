@@ -65,12 +65,12 @@ public:
     /**
      * @return total number of files this task receives/streams.
      */
-    virtual int get_total_number_of_files() = 0;
+    virtual int get_total_number_of_files() const = 0;
 
     /**
      * @return total bytes expected to receive
      */
-    virtual long get_total_size() = 0;
+    virtual long get_total_size() const = 0;
 
     /**
      * Abort the task.
@@ -81,7 +81,7 @@ public:
     /**
      * @return StreamSummary that describes this task
      */
-    virtual stream_summary get_summary() {
+    virtual stream_summary get_summary() const {
         return stream_summary(this->cf_id, this->get_total_number_of_files(), this->get_total_size());
     }
 };

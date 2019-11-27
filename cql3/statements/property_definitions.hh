@@ -67,7 +67,7 @@ protected:
     protected static final Logger logger = LoggerFactory.getLogger(PropertyDefinitions.class);
 #endif
 
-    std::unordered_map<sstring, value_type> _properties;
+    mutable std::unordered_map<sstring, value_type> _properties;
 
     property_definitions();
 public:
@@ -75,14 +75,14 @@ public:
 
     void add_property(const sstring& name, const std::map<sstring, sstring>& value);
 
-    void validate(const std::set<sstring>& keywords, const std::set<sstring>& exts = {}, const std::set<sstring>& obsolete = {});
+    void validate(const std::set<sstring>& keywords, const std::set<sstring>& exts = {}, const std::set<sstring>& obsolete = {}) const;
 
 protected:
     std::optional<sstring> get_simple(const sstring& name) const;
 
     std::optional<std::map<sstring, sstring>> get_map(const sstring& name) const;
 
-    void remove_from_map_if_exists(const sstring& name, const sstring& key);
+    void remove_from_map_if_exists(const sstring& name, const sstring& key) const;
 public:
     bool has_property(const sstring& name) const;
 

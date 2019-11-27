@@ -92,7 +92,7 @@ void stream_manager::register_receiving(shared_ptr<stream_result_future> result)
     _receiving_streams[result->plan_id] = std::move(result);
 }
 
-shared_ptr<stream_result_future> stream_manager::get_sending_stream(UUID plan_id) {
+shared_ptr<stream_result_future> stream_manager::get_sending_stream(UUID plan_id) const {
     auto it = _initiated_streams.find(plan_id);
     if (it != _initiated_streams.end()) {
         return it->second;
@@ -100,7 +100,7 @@ shared_ptr<stream_result_future> stream_manager::get_sending_stream(UUID plan_id
     return {};
 }
 
-shared_ptr<stream_result_future> stream_manager::get_receiving_stream(UUID plan_id) {
+shared_ptr<stream_result_future> stream_manager::get_receiving_stream(UUID plan_id) const {
     auto it = _receiving_streams.find(plan_id);
     if (it != _receiving_streams.end()) {
         return it->second;
@@ -118,11 +118,11 @@ void stream_manager::remove_stream(UUID plan_id) {
     });
 }
 
-void stream_manager::show_streams() {
-    for (auto& x : _initiated_streams) {
+void stream_manager::show_streams() const {
+    for (auto const& x : _initiated_streams) {
         sslog.debug("stream_manager:initiated_stream: plan_id={}", x.first);
     }
-    for (auto& x : _receiving_streams) {
+    for (auto const& x : _receiving_streams) {
         sslog.debug("stream_manager:receiving_stream: plan_id={}", x.first);
     }
 }
@@ -163,14 +163,14 @@ void stream_manager::remove_progress(UUID plan_id) {
     _stream_bytes.erase(plan_id);
 }
 
-stream_bytes stream_manager::get_progress(UUID plan_id, gms::inet_address peer) {
-    auto& sbytes = _stream_bytes[plan_id];
-    return sbytes[peer];
+stream_bytes stream_manager::get_progress(UUID plan_id, gms::inet_address peer) const {
+    auto const& sbytes = _stream_bytes.at(plan_id);
+    return sbytes.at(peer);
 }
 
-stream_bytes stream_manager::get_progress(UUID plan_id) {
+stream_bytes stream_manager::get_progress(UUID plan_id) const {
     stream_bytes ret;
-    for (auto& x : _stream_bytes[plan_id]) {
+    for (auto const& x : _stream_bytes.at(plan_id)) {
         ret += x.second;
     }
     return ret;
@@ -182,7 +182,7 @@ future<> stream_manager::remove_progress_on_all_shards(UUID plan_id) {
     });
 }
 
-future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gms::inet_address peer) {
+future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gms::inet_address peer) const {
     return get_stream_manager().map_reduce0(
         [plan_id, peer] (auto& sm) {
             return sm.get_progress(plan_id, peer);
@@ -192,7 +192,7 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gm
     );
 }
 
-future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) {
+future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) const {
     return get_stream_manager().map_reduce0(
         [plan_id] (auto& sm) {
             return sm.get_progress(plan_id);
@@ -202,7 +202,7 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) {
     );
 }
 
-future<stream_bytes> stream_manager::get_progress_on_all_shards(gms::inet_address peer) {
+future<stream_bytes> stream_manager::get_progress_on_all_shards(gms::inet_address peer) const {
     return get_stream_manager().map_reduce0(
         [peer] (auto& sm) {
             stream_bytes ret;
@@ -216,7 +216,7 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(gms::inet_addres
     );
 }
 
-future<stream_bytes> stream_manager::get_progress_on_all_shards() {
+future<stream_bytes> stream_manager::get_progress_on_all_shards() const {
     return get_stream_manager().map_reduce0(
         [] (auto& sm) {
             stream_bytes ret;
@@ -232,17 +232,17 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards() {
     );
 }
 
-stream_bytes stream_manager::get_progress_on_local_shard() {
+stream_bytes stream_manager::get_progress_on_local_shard() const {
     stream_bytes ret;
-    for (auto& sbytes : _stream_bytes) {
-        for (auto& sb : sbytes.second) {
+    for (auto const& sbytes : _stream_bytes) {
+        for (auto const& sb : sbytes.second) {
             ret += sb.second;
         }
     }
     return ret;
 }
 
-bool stream_manager::has_peer(inet_address endpoint) {
+bool stream_manager::has_peer(inet_address endpoint) const {
     for (auto sr : get_all_streams()) {
         for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
             if (session->peer == endpoint) {

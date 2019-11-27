@@ -56,7 +56,7 @@ public:
         _in = std::make_unique < input_stream < char >> (open_at(pos));
     }
 
-    bool eof() { return _in->eof(); }
+    bool eof() const { return _in->eof(); }
 
     virtual future<> close() {
         return _close_gate.close().then([this] {

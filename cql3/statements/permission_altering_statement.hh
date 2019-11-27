@@ -54,14 +54,14 @@ namespace statements {
 class permission_altering_statement : public authorization_statement {
 protected:
     auth::permission_set _permissions;
-    auth::resource _resource;
+    mutable auth::resource _resource;
     sstring _role_name;
 
 public:
     permission_altering_statement(auth::permission_set, auth::resource, const cql3::role_name&);
 
-    void validate(service::storage_proxy&, const service::client_state&) override;
-    future<> check_access(const service::client_state&) override;
+    void validate(service::storage_proxy&, const service::client_state&) const override;
+    future<> check_access(const service::client_state&) const override;
 };
 
 }

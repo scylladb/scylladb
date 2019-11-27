@@ -297,12 +297,12 @@ private:
     size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept;
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
     template<typename Range>
-    bool cannot_hint(const Range& targets, db::write_type type);
-    bool hints_enabled(db::write_type type) noexcept;
+    bool cannot_hint(const Range& targets, db::write_type type) const;
+    bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
-    std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token);
+    std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token) const;
     static void sort_endpoints_by_proximity(std::vector<gms::inet_address>& eps);
-    std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
+    std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             schema_ptr schema,
@@ -327,7 +327,6 @@ private:
             dht::partition_range_vector partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);
-    float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
     static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
     future<query_partition_key_range_concurrent_result> query_partition_key_range_concurrent(clock_type::time_point timeout,
             std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
@@ -622,7 +621,7 @@ public:
     future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
     future<bool> accept_proposal(const paxos::proposal& proposal, bool timeout_if_partially_accepted = true);
     future<> learn_decision(paxos::proposal decision, bool allow_hints = false);
-    uint64_t id() {
+    uint64_t id() const {
         return _id;
     }
 };

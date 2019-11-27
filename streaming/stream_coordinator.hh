@@ -70,14 +70,14 @@ public:
     /**
      * @return true if any stream session is active
      */
-    bool has_active_sessions();
+    bool has_active_sessions() const;
 
-    std::vector<shared_ptr<stream_session>> get_all_stream_sessions();
+    std::vector<shared_ptr<stream_session>> get_all_stream_sessions() const;
 
-    bool is_receiving();
+    bool is_receiving() const;
 
     void connect_all_stream_sessions();
-    std::set<inet_address> get_peers();
+    std::set<inet_address> get_peers() const;
 
 public:
     shared_ptr<stream_session> get_or_create_session(inet_address peer) {
@@ -88,8 +88,8 @@ public:
         return session;
     }
 
-    std::vector<session_info> get_all_session_info();
-    std::vector<session_info> get_peer_session_info(inet_address peer);
+    std::vector<session_info> get_all_session_info() const;
+    std::vector<session_info> get_peer_session_info(inet_address peer) const;
 
     void abort_all_stream_sessions();
 };

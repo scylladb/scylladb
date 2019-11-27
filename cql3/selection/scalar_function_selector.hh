@@ -48,7 +48,7 @@ namespace selection {
 
 class scalar_function_selector : public abstract_function_selector_for<functions::scalar_function> {
 public:
-    virtual bool is_aggregate() override {
+    virtual bool is_aggregate() const override {
         // We cannot just return true as it is possible to have a scalar function wrapping an aggregation function
         if (_arg_selectors.empty()) {
             return false;
@@ -78,7 +78,7 @@ public:
         return fun()->execute(sf, _args);
     }
 
-    virtual bool requires_thread() override;
+    virtual bool requires_thread() const override;
 
     scalar_function_selector(shared_ptr<functions::function> fun, std::vector<shared_ptr<selector>> arg_selectors)
             : abstract_function_selector_for<functions::scalar_function>(

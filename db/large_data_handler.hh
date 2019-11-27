@@ -46,7 +46,7 @@ private:
     // We need a concurrency of:
     //  C = (1GB/s / 1MB) * 4ms = 1k/s * 4ms = 4
     // 16 should be enough for everybody.
-    static const size_t max_concurrency = 16;
+    static constexpr size_t max_concurrency = 16;
     semaphore _sem{max_concurrency};
 
     // A convenience function for using the above semaphore. Unlike the global with_semaphore, this will not wait on the

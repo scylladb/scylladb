@@ -58,7 +58,7 @@ protected:
     }
 
 public:
-    virtual bool is_aggregate() override {
+    virtual bool is_aggregate() const override {
         return false;
     }
 };
@@ -74,7 +74,7 @@ public:
             : native_scalar_function(std::move(name), std::move(return_type), std::move(arg_types))
             , _func(std::forward<Func>(func)) {
     }
-    virtual bool is_pure() override {
+    virtual bool is_pure() const override {
         return Pure;
     }
     virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override {

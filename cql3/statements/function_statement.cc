@@ -28,7 +28,7 @@
 namespace cql3 {
 namespace statements {
 
-future<> function_statement::check_access(const service::client_state& state) { return make_ready_future<>(); }
+future<> function_statement::check_access(const service::client_state& state) const { return make_ready_future<>(); }
 
 function_statement::function_statement(
         functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types)
@@ -47,7 +47,7 @@ shared_ptr<cql_transport::event::schema_change> function_statement::create_schem
     return ::make_shared<event::schema_change>(change, type, func.name().keyspace, std::move(options));
 }
 
-data_type function_statement::prepare_type(service::storage_proxy& proxy, cql3_type::raw& t) {
+data_type function_statement::prepare_type(service::storage_proxy& proxy, cql3_type::raw& t) const {
     if (t.is_user_type() && t.is_frozen()) {
         throw exceptions::invalid_request_exception("User defined argument and return types should not be frozen");
     }
@@ -66,7 +66,7 @@ data_type function_statement::prepare_type(service::storage_proxy& proxy, cql3_t
     return prepared;
 }
 
-void function_statement::create_arg_types(service::storage_proxy& proxy) {
+void function_statement::create_arg_types(service::storage_proxy& proxy) const {
     if (!service::get_local_storage_service().cluster_supports_user_defined_functions()) {
         throw exceptions::invalid_request_exception("User defined functions are disabled. Set enable_user_defined_functions to enable them");
     }
@@ -88,7 +88,7 @@ create_function_statement_base::create_function_statement_base(functions::functi
         std::vector<shared_ptr<cql3_type::raw>> raw_arg_types, bool or_replace, bool if_not_exists)
     : function_statement(std::move(name), std::move(raw_arg_types)), _or_replace(or_replace), _if_not_exists(if_not_exists) {}
 
-void create_function_statement_base::validate(service::storage_proxy& proxy, const service::client_state& state) {
+void create_function_statement_base::validate(service::storage_proxy& proxy, const service::client_state& state) const {
     create_arg_types(proxy);
     auto old = functions::functions::find(_name, _arg_types);
     if (!old || _or_replace) {
@@ -104,7 +104,7 @@ drop_function_statement_base::drop_function_statement_base(functions::function_n
         std::vector<shared_ptr<cql3_type::raw>> arg_types, bool args_present, bool if_exists)
     : function_statement(std::move(name), std::move(arg_types)), _args_present(args_present), _if_exists(if_exists) {}
 
-void drop_function_statement_base::validate(service::storage_proxy& proxy, const service::client_state& state) {
+void drop_function_statement_base::validate(service::storage_proxy& proxy, const service::client_state& state) const {
     create_arg_types(proxy);
     if (_args_present) {
         _func = functions::functions::find(_name, _arg_types);

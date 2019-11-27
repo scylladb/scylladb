@@ -623,7 +623,7 @@ query_options query_processor::make_internal_options(
         const std::initializer_list<data_value>& values,
         db::consistency_level cl,
         const timeout_config& timeout_config,
-        int32_t page_size) {
+        int32_t page_size) const {
     if (p->bound_names.size() != values.size()) {
         throw std::invalid_argument(
                 format("Invalid number of values. Expecting {:d} but got {:d}", p->bound_names.size(), values.size()));

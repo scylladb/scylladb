@@ -667,11 +667,11 @@ void stream_session::init(shared_ptr<stream_result_future> stream_result_) {
     _stream_result = stream_result_;
 }
 
-utils::UUID stream_session::plan_id() {
+utils::UUID stream_session::plan_id() const {
     return _stream_result ? _stream_result->plan_id : UUID();
 }
 
-sstring stream_session::description() {
+sstring stream_session::description() const {
     return _stream_result  ? _stream_result->description : "";
 }
 

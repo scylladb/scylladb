@@ -54,11 +54,11 @@ class drop_table_statement : public schema_altering_statement {
 public:
     drop_table_statement(::shared_ptr<cf_name> cf_name, bool if_exists);
 
-    virtual future<> check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) const override;
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) override;
+    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
 
-    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) override;
+    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) const override;
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 };

@@ -86,74 +86,74 @@ public:
      */
     void update_progress(progress_info new_progress);
 
-    std::vector<progress_info> get_receiving_files();
+    std::vector<progress_info> get_receiving_files() const;
 
-    std::vector<progress_info> get_sending_files();
+    std::vector<progress_info> get_sending_files() const;
 
     /**
      * @return total number of files already received.
      */
-    long get_total_files_received() {
+    long get_total_files_received() const {
         return get_total_files_completed(get_receiving_files());
     }
 
     /**
      * @return total number of files already sent.
      */
-    long get_total_files_sent() {
+    long get_total_files_sent() const {
         return get_total_files_completed(get_sending_files());
     }
 
     /**
      * @return total size(in bytes) already received.
      */
-    long get_total_size_received() {
+    long get_total_size_received() const {
         return get_total_size_in_progress(get_receiving_files());
     }
 
     /**
      * @return total size(in bytes) already sent.
      */
-    long get_total_size_sent() {
+    long get_total_size_sent() const {
         return get_total_size_in_progress(get_sending_files());
     }
 
     /**
      * @return total number of files to receive in the session
      */
-    long get_total_files_to_receive() {
+    long get_total_files_to_receive() const {
         return get_total_files(receiving_summaries);
     }
 
     /**
      * @return total number of files to send in the session
      */
-    long get_total_files_to_send() {
+    long get_total_files_to_send() const {
         return get_total_files(sending_summaries);
     }
 
     /**
      * @return total size(in bytes) to receive in the session
      */
-    long get_total_size_to_receive() {
+    long get_total_size_to_receive() const {
         return get_total_sizes(receiving_summaries);
     }
 
     /**
      * @return total size(in bytes) to send in the session
      */
-    long get_total_size_to_send() {
+    long get_total_size_to_send() const {
         return get_total_sizes(sending_summaries);
     }
 
 private:
-    long get_total_size_in_progress(std::vector<progress_info> files);
+    long get_total_size_in_progress(std::vector<progress_info> files) const;
 
-    long get_total_files(std::vector<stream_summary>& summaries);
+    long get_total_files(std::vector<stream_summary> const& summaries) const;
 
-    long get_total_sizes(std::vector<stream_summary>& summaries);
+    long get_total_sizes(std::vector<stream_summary> const& summaries) const;
 
-    long get_total_files_completed(std::vector<progress_info> files);
+    long get_total_files_completed(std::vector<progress_info> files) const;
 };
 
 } // namespace streaming

@@ -55,7 +55,7 @@ drop_view_statement::drop_view_statement(::shared_ptr<cf_name> view_name, bool i
 {
 }
 
-future<> drop_view_statement::check_access(const service::client_state& state)
+future<> drop_view_statement::check_access(const service::client_state& state) const
 {
     try {
         auto&& s = service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family());
@@ -68,12 +68,12 @@ future<> drop_view_statement::check_access(const service::client_state& state)
     return make_ready_future<>();
 }
 
-void drop_view_statement::validate(service::storage_proxy&, const service::client_state& state)
+void drop_view_statement::validate(service::storage_proxy&, const service::client_state& state) const
 {
     // validated in migration_manager::announce_view_drop()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_view_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> drop_view_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
 {
     return make_ready_future<>().then([this, is_local_only] {
         return service::get_local_migration_manager().announce_view_drop(keyspace(), column_family(), is_local_only);

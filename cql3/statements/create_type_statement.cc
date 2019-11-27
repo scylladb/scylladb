@@ -66,18 +66,18 @@ void create_type_statement::add_definition(::shared_ptr<column_identifier> name,
     _column_types.emplace_back(type);
 }
 
-future<> create_type_statement::check_access(const service::client_state& state)
+future<> create_type_statement::check_access(const service::client_state& state) const
 {
     return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
 }
 
-inline bool create_type_statement::type_exists_in(::keyspace& ks)
+inline bool create_type_statement::type_exists_in(::keyspace& ks) const
 {
     auto&& keyspace_types = ks.metadata()->user_types()->get_all_types();
     return keyspace_types.find(_name.get_user_type_name()) != keyspace_types.end();
 }
 
-void create_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
+void create_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
 {
     try {
         auto&& ks = proxy.get_db().local().find_keyspace(keyspace());
@@ -120,7 +120,7 @@ const sstring& create_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-inline user_type create_type_statement::create_type(database& db)
+inline user_type create_type_statement::create_type(database& db) const
 {
     std::vector<bytes> field_names;
     std::vector<data_type> field_types;
@@ -138,7 +138,7 @@ inline user_type create_type_statement::create_type(database& db)
         std::move(field_names), std::move(field_types), true /* multi cell */);
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
 {
     auto&& db = proxy.get_db().local();
 

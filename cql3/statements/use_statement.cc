@@ -54,7 +54,7 @@ use_statement::use_statement(sstring keyspace)
 {
 }
 
-uint32_t use_statement::get_bound_terms()
+uint32_t use_statement::get_bound_terms() const
 {
     return 0;
 }
@@ -88,18 +88,18 @@ bool use_statement::depends_on_column_family(const sstring& cf_name) const
     return false;
 }
 
-future<> use_statement::check_access(const service::client_state& state)
+future<> use_statement::check_access(const service::client_state& state) const
 {
     state.validate_login();
     return make_ready_future<>();
 }
 
-void use_statement::validate(service::storage_proxy&, const service::client_state& state)
+void use_statement::validate(service::storage_proxy&, const service::client_state& state) const
 {
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-use_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
+use_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
     state.get_client_state().set_keyspace(proxy.get_db().local(), _keyspace);
     auto result =::make_shared<cql_transport::messages::result_message::set_keyspace>(_keyspace);
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);

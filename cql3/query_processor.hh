@@ -325,7 +325,7 @@ private:
             const std::initializer_list<data_value>&,
             db::consistency_level,
             const timeout_config& timeout_config,
-            int32_t page_size = -1);
+            int32_t page_size = -1) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options);

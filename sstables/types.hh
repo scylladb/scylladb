@@ -622,14 +622,14 @@ inline column_mask operator|(column_mask m1, column_mask m2) {
 }
 
 class unfiltered_flags_m final {
-    static const uint8_t END_OF_PARTITION = 0x01u;
-    static const uint8_t IS_MARKER = 0x02u;
-    static const uint8_t HAS_TIMESTAMP = 0x04u;
-    static const uint8_t HAS_TTL = 0x08u;
-    static const uint8_t HAS_DELETION = 0x10u;
-    static const uint8_t HAS_ALL_COLUMNS = 0x20u;
-    static const uint8_t HAS_COMPLEX_DELETION = 0x40u;
-    static const uint8_t HAS_EXTENDED_FLAGS = 0x80u;
+    static constexpr uint8_t END_OF_PARTITION = 0x01u;
+    static constexpr uint8_t IS_MARKER = 0x02u;
+    static constexpr uint8_t HAS_TIMESTAMP = 0x04u;
+    static constexpr uint8_t HAS_TTL = 0x08u;
+    static constexpr uint8_t HAS_DELETION = 0x10u;
+    static constexpr uint8_t HAS_ALL_COLUMNS = 0x20u;
+    static constexpr uint8_t HAS_COMPLEX_DELETION = 0x40u;
+    static constexpr uint8_t HAS_EXTENDED_FLAGS = 0x80u;
     uint8_t _flags;
     bool check_flag(const uint8_t flag) const {
         return (_flags & flag) != 0u;

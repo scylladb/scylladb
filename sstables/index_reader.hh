@@ -98,7 +98,7 @@ private:
     inline bool is_mc_format() const { return static_cast<bool>(_ck_values_fixed_lengths); }
 
 public:
-    void verify_end_state() {
+    void verify_end_state() const {
         if (this->_remain > 0) {
             throw std::runtime_error("index_consume_entry_context - no more data but parsing is incomplete");
         }

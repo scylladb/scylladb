@@ -60,7 +60,7 @@ class prepared_statement;
 namespace raw {
 
 class parsed_statement {
-private:
+protected:
     ::shared_ptr<variable_specifications> _variables;
 
 public:

@@ -42,7 +42,7 @@ public:
             : native_scalar_function("castas" + to_type->as_cql3_type().to_string(), to_type, {from_type})
             , _func(func) {
     }
-    virtual bool is_pure() override {
+    virtual bool is_pure() const override {
         return true;
     }
     virtual void print(std::ostream& os) const override {

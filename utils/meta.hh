@@ -165,6 +165,6 @@ template<typename... Ts>
 constexpr size_t size = internal::get_size<Ts...>::value;
 
 template<template <class> typename Predicate, typename... Ts>
-static constexpr const bool all_of = std::conjunction_v<Predicate<Ts>...>;
+static constexpr bool all_of = std::conjunction_v<Predicate<Ts>...>;
 
 }

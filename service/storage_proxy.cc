@@ -2143,7 +2143,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 }
 
 template<typename Range>
-bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) {
+bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) const {
     // if hints are disabled we "can always hint" since there's going to be no hint generated in this case
     return hints_enabled(type) && boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &*_hints_manager, std::placeholders::_1));
 }
@@ -4119,7 +4119,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     });
 }
 
-std::vector<gms::inet_address> storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) {
+std::vector<gms::inet_address> storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) const {
     auto& rs = ks.get_replication_strategy();
     std::vector<gms::inet_address> eps = rs.get_natural_endpoints(token);
     auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper())));
@@ -4136,7 +4136,7 @@ void storage_proxy::sort_endpoints_by_proximity(std::vector<gms::inet_address>& 
     }
 }
 
-std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) {
+std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const {
     auto eps = get_live_endpoints(ks, token);
     sort_endpoints_by_proximity(eps);
     return eps;
@@ -4245,7 +4245,7 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
     }
 }
 
-bool storage_proxy::hints_enabled(db::write_type type) noexcept {
+bool storage_proxy::hints_enabled(db::write_type type) const noexcept {
     return (bool(_hints_manager) && type != db::write_type::CAS) || type == db::write_type::VIEW;
 }
 

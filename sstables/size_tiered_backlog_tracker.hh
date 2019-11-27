@@ -86,7 +86,7 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
 
     inflight_component partial_backlog(const compaction_backlog_tracker::ongoing_writes& ongoing_writes) const {
         inflight_component in;
-        for (auto& swp :  ongoing_writes) {
+        for (auto const& swp :  ongoing_writes) {
             auto written = swp.second->written();
             if (written > 0) {
                 in.total_bytes += written;
@@ -98,7 +98,7 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
 
     inflight_component compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
         inflight_component in;
-        for (auto& crp : ongoing_compactions) {
+        for (auto const& crp : ongoing_compactions) {
             auto compacted = crp.second->compacted();
             in.total_bytes += compacted;
             in.contribution += compacted * log4((crp.first->data_size()));

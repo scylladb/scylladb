@@ -59,7 +59,7 @@ protected:
     }
 
 public:
-    virtual bool is_aggregate() override final {
+    virtual bool is_aggregate() const override final {
         return true;
     }
 };

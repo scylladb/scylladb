@@ -68,33 +68,33 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
                 : _fun(std::move(fun)), _factories(std::move(factories)) {
         }
 
-        virtual sstring column_name() override {
+        virtual sstring column_name() const override {
             return _fun->column_name(_factories->get_column_names());
         }
 
-        virtual data_type get_return_type() override {
+        virtual data_type get_return_type() const override {
             return _fun->return_type();
         }
 
-        virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+        virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
             return _fun->uses_function(ks_name, function_name);
         }
 
-        virtual shared_ptr<selector> new_instance() override {
+        virtual shared_ptr<selector> new_instance() const override {
             using ret_type = shared_ptr<selector>;
             return _fun->is_aggregate() ? ret_type(::make_shared<aggregate_function_selector>(_fun, _factories->new_instances()))
                                         : ret_type(::make_shared<scalar_function_selector>(_fun, _factories->new_instances()));
         }
 
-        virtual bool is_write_time_selector_factory() override {
+        virtual bool is_write_time_selector_factory() const override {
             return _factories->contains_write_time_selector_factory();
         }
 
-        virtual bool is_ttl_selector_factory() override {
+        virtual bool is_ttl_selector_factory() const override {
             return _factories->contains_ttl_selector_factory();
         }
 
-        virtual bool is_aggregate_selector_factory() override {
+        virtual bool is_aggregate_selector_factory() const override {
             return _fun->is_aggregate() || _factories->contains_only_aggregate_functions();
         }
     };
@@ -102,7 +102,7 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
     return make_shared<fun_selector_factory>(std::move(fun), std::move(factories));
 }
 
-bool scalar_function_selector::requires_thread() {
+bool scalar_function_selector::requires_thread() const {
     return fun()->requires_thread();
 }
 

@@ -59,20 +59,20 @@ public:
 
     void add_definition(::shared_ptr<column_identifier> name, ::shared_ptr<cql3_type::raw> type);
 
-    virtual future<> check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) const override;
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) override;
+    virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) override;
+    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) const override;
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
     static void check_for_duplicate_names(user_type type);
 private:
-    bool type_exists_in(::keyspace& ks);
-    user_type create_type(database& db);
+    bool type_exists_in(::keyspace& ks) const;
+    user_type create_type(database& db) const;
 };
 
 }

@@ -39,13 +39,13 @@ namespace utils {
 
 template <typename T> class in;
 template <typename T> struct is_in {
-    static const bool value = false;
+    static constexpr bool value = false;
 };
 template <typename T> struct is_in<in<T>> {
-    static const bool value = true;
+    static constexpr bool value = true;
 };
 template <typename T> struct is_in<const in<T>> {
-    static const bool value = true;
+    static constexpr bool value = true;
 };
 
 //

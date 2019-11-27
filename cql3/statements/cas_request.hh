@@ -51,7 +51,7 @@ using namespace std::chrono;
  * we'll have only one.
  */
 struct cas_row_update {
-    modification_statement& statement;
+    modification_statement const& statement;
     std::vector<query::clustering_range> ranges;
     modification_statement::json_cache_opt json_cache;
     // This statement query options. Different from cas_request::query_options,
@@ -91,7 +91,7 @@ public:
 
     lw_shared_ptr<query::read_command> read_command() const;
 
-    void add_row_update(modification_statement &stmt_arg, std::vector<query::clustering_range> ranges_arg,
+    void add_row_update(const modification_statement& stmt_arg, std::vector<query::clustering_range> ranges_arg,
         modification_statement::json_cache_opt json_cache_arg, const query_options& options_arg);
 
     virtual std::optional<mutation> apply(query::result& qr,

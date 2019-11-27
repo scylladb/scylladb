@@ -223,9 +223,9 @@ public:
     stream_session(inet_address peer_);
     ~stream_session();
 
-    UUID plan_id();
+    UUID plan_id() const;
 
-    sstring description();
+    sstring description() const;
 
 public:
     /**
@@ -281,7 +281,7 @@ public:
     /**
      * @return current state
      */
-    stream_session_state get_state() {
+    stream_session_state get_state() const {
         return _state;
     }
 
@@ -290,7 +290,7 @@ public:
      *
      * @return true if session completed successfully.
      */
-    bool is_success() {
+    bool is_success() const {
         return _state == stream_session_state::COMPLETE;
     }
 

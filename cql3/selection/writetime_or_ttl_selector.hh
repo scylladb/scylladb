@@ -63,23 +63,23 @@ public:
                 : _column_name(std::move(column_name)), _idx(idx), _is_writetime(is_writetime) {
             }
 
-            virtual sstring column_name() override {
+            virtual sstring column_name() const override {
                 return format("{}({})", _is_writetime ? "writetime" : "ttl", _column_name);
             }
 
-            virtual data_type get_return_type() override {
+            virtual data_type get_return_type() const override {
                 return _is_writetime ? long_type : int32_type;
             }
 
-            virtual shared_ptr<selector> new_instance() override {
+            virtual shared_ptr<selector> new_instance() const override {
                 return make_shared<writetime_or_ttl_selector>(_column_name, _idx, _is_writetime);
             }
 
-            virtual bool is_write_time_selector_factory() override {
+            virtual bool is_write_time_selector_factory() const override {
                 return _is_writetime;
             }
 
-            virtual bool is_ttl_selector_factory() override {
+            virtual bool is_ttl_selector_factory() const override {
                 return !_is_writetime;
             }
         };
@@ -116,7 +116,7 @@ public:
         _current = std::nullopt;
     }
 
-    virtual data_type get_type() override {
+    virtual data_type get_type() const override {
         return _is_writetime ? long_type : int32_type;
     }
 

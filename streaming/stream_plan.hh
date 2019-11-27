@@ -136,7 +136,7 @@ public:
     /**
      * @return true if this plan has no plan to execute
      */
-    bool is_empty() {
+    bool is_empty() const {
         return !_coordinator->has_active_sessions();
     }
 

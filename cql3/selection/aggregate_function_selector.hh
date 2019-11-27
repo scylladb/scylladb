@@ -49,7 +49,7 @@ namespace selection {
 class aggregate_function_selector : public abstract_function_selector_for<functions::aggregate_function> {
     std::unique_ptr<functions::aggregate_function::aggregate> _aggregate;
 public:
-    virtual bool is_aggregate() override {
+    virtual bool is_aggregate() const override {
         return true;
     }
 

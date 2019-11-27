@@ -294,7 +294,7 @@ storage_service::isolate_on_commit_error() {
     do_isolate_on_error(disk_error::commit);
 }
 
-bool storage_service::is_auto_bootstrap() {
+bool storage_service::is_auto_bootstrap() const {
     return _db.local().get_config().auto_bootstrap();
 }
 sstring storage_service::get_known_features() {
@@ -417,7 +417,7 @@ bool get_property_load_ring_state() {
     return get_local_storage_service().db().local().get_config().load_ring_state();
 }
 
-bool storage_service::should_bootstrap() {
+bool storage_service::should_bootstrap() const {
     return is_auto_bootstrap() && !db::system_keyspace::bootstrap_complete() && !_gossiper.get_seeds().count(get_broadcast_address());
 }
 
@@ -816,7 +816,7 @@ future<> storage_service::join_ring() {
     });
 }
 
-bool storage_service::is_joined() {
+bool storage_service::is_joined() const {
     // Every time we set _joined, we do it on all shards, so we can read its
     // value locally.
     return _joined;
@@ -2604,7 +2604,7 @@ future<> storage_service::drain() {
     });
 }
 
-double storage_service::get_load() {
+double storage_service::get_load() const {
     double bytes = 0;
 #if 0
     for (String keyspaceName : Schema.instance.getKeyspaces())
@@ -2619,7 +2619,7 @@ double storage_service::get_load() {
     return bytes;
 }
 
-sstring storage_service::get_load_string() {
+sstring storage_service::get_load_string() const {
     return format("{:f}", get_load());
 }
 

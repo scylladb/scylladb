@@ -74,7 +74,7 @@ const sstring& drop_index_statement::column_family() const
     return cf_statement::column_family();
 }
 
-future<> drop_index_statement::check_access(const service::client_state& state)
+future<> drop_index_statement::check_access(const service::client_state& state) const
 {
     auto cfm = lookup_indexed_table();
     if (!cfm) {
@@ -83,12 +83,12 @@ future<> drop_index_statement::check_access(const service::client_state& state)
     return state.has_column_family_access(cfm->ks_name(), cfm->cf_name(), auth::permission::ALTER);
 }
 
-void drop_index_statement::validate(service::storage_proxy&, const service::client_state& state)
+void drop_index_statement::validate(service::storage_proxy&, const service::client_state& state) const
 {
     // validated in lookup_indexed_table()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
 {
     if (!service::get_local_storage_service().cluster_supports_indexes()) {
         throw exceptions::invalid_request_exception("Index support is not enabled");

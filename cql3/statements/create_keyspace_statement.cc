@@ -68,12 +68,12 @@ const sstring& create_keyspace_statement::keyspace() const
     return _name;
 }
 
-future<> create_keyspace_statement::check_access(const service::client_state& state)
+future<> create_keyspace_statement::check_access(const service::client_state& state) const
 {
     return state.has_all_keyspaces_access(auth::permission::CREATE);
 }
 
-void create_keyspace_statement::validate(service::storage_proxy&, const service::client_state& state)
+void create_keyspace_statement::validate(service::storage_proxy&, const service::client_state& state) const
 {
     std::string name;
     name.resize(_name.length());
@@ -107,7 +107,7 @@ void create_keyspace_statement::validate(service::storage_proxy&, const service:
 #endif
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
 {
     return make_ready_future<>().then([this, is_local_only] {
         const auto& tm = service::get_local_storage_service().get_token_metadata();
@@ -134,7 +134,7 @@ cql3::statements::create_keyspace_statement::prepare(database& db, cql_stats& st
     return std::make_unique<prepared_statement>(make_shared<create_keyspace_statement>(*this));
 }
 
-future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(const service::client_state& cs) {
+future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(const service::client_state& cs) const {
     return do_with(auth::make_data_resource(keyspace()), [&cs](const auth::resource& r) {
         return auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
@@ -146,7 +146,7 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
 }
 
 future<::shared_ptr<messages::result_message>>
-create_keyspace_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
+create_keyspace_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
     return schema_altering_statement::execute(proxy, state, options).then([this] (::shared_ptr<messages::result_message> msg) {
         bool multidc = service::get_local_storage_service().get_token_metadata().
                                 get_topology().get_datacenter_endpoints().size() > 1;

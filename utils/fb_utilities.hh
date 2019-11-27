@@ -61,7 +61,7 @@ private:
         return _broadcast_rpc_address;
     }
 public:
-   static const int32_t MAX_UNSIGNED_SHORT = 0xFFFF;
+   static constexpr int32_t MAX_UNSIGNED_SHORT = 0xFFFF;
 
    static void set_broadcast_address(inet_address addr) {
        broadcast_address() = addr;

@@ -76,7 +76,7 @@ const sstring cf_prop_defs::COMPACTION_STRATEGY_CLASS_KEY = "class";
 
 const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
 
-void cf_prop_defs::validate(const db::extensions& exts) {
+void cf_prop_defs::validate(const db::extensions& exts) const {
     // Skip validation if the comapction strategy class is already set as it means we've alreayd
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_compaction_strategy_class) {

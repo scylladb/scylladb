@@ -64,7 +64,7 @@ public:
         _args.resize(_arg_selectors.size());
     }
 
-    virtual data_type get_type() override {
+    virtual data_type get_type() const override {
         return _fun->return_type();
     }
 
@@ -87,6 +87,8 @@ class abstract_function_selector_for : public abstract_function_selector {
                           // so store it locally to amortize cost of dynamic_pointer_cast
 protected:
     shared_ptr<T> fun() { return _tfun; }
+
+    shared_ptr<const T> fun() const { return _tfun; }
 public:
     abstract_function_selector_for(shared_ptr<T> fun, std::vector<shared_ptr<selector>> arg_selectors)
             : abstract_function_selector(fun, std::move(arg_selectors))

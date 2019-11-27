@@ -175,7 +175,7 @@ int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_
     return weight;
 }
 
-bool compaction_manager::can_register_weight(column_family* cf, int weight) {
+bool compaction_manager::can_register_weight(column_family* cf, int weight) const {
     auto has_cf_ongoing_compaction = [&] () -> bool {
         return boost::range::count_if(_tasks, [&] (const lw_shared_ptr<task>& task) {
             return task->compacting_cf == cf && task->compaction_running;

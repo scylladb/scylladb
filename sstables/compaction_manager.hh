@@ -104,7 +104,7 @@ private:
     future<> task_stop(lw_shared_ptr<task> task);
 
     // Return true if weight is not registered.
-    bool can_register_weight(column_family* cf, int weight);
+    bool can_register_weight(column_family* cf, int weight) const;
     // Register weight for a column family. Do that only if can_register_weight()
     // returned true.
     void register_weight(int weight);

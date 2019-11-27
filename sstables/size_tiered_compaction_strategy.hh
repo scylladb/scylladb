@@ -129,11 +129,11 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     most_interesting_bucket(std::vector<std::vector<sstables::shared_sstable>> buckets, unsigned min_threshold, unsigned max_threshold);
 
     // Return the average size of a given list of sstables.
-    uint64_t avg_size(std::vector<sstables::shared_sstable>& sstables) {
+    uint64_t avg_size(std::vector<sstables::shared_sstable> const& sstables) const {
         assert(sstables.size() > 0); // this should never fail
         uint64_t n = 0;
 
-        for (auto& sstable : sstables) {
+        for (auto const& sstable : sstables) {
             // FIXME: Switch to sstable->bytes_on_disk() afterwards. That's what C* uses.
             n += sstable->data_size();
         }
