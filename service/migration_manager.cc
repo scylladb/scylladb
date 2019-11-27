@@ -93,8 +93,10 @@ void migration_manager::init_messaging_service()
         });
     };
 
-    _feature_listeners.push_back(ss.cluster_supports_view_virtual_columns().when_enabled(update_schema));
-    _feature_listeners.push_back(ss.cluster_supports_digest_insensitive_to_expiry().when_enabled(update_schema));
+    if (engine().cpu_id() == 0) {
+        _feature_listeners.push_back(ss.cluster_supports_view_virtual_columns().when_enabled(update_schema));
+        _feature_listeners.push_back(ss.cluster_supports_digest_insensitive_to_expiry().when_enabled(update_schema));
+    }
 
     auto& ms = netw::get_local_messaging_service();
     ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm, rpc::optional<std::vector<canonical_mutation>> cm) {
