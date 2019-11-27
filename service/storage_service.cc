@@ -2705,40 +2705,45 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 
 // Runs inside seastar::async context
 void storage_service::unbootstrap() {
-    std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
-
-    auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-    for (const auto& keyspace_name : non_system_keyspaces) {
-        auto ranges_mm = get_changed_ranges_for_leaving(keyspace_name, get_broadcast_address());
-        if (slogger.is_enabled(logging::log_level::debug)) {
-            std::vector<range<token>> ranges;
-            for (auto& x : ranges_mm) {
-                ranges.push_back(x.first);
-            }
-            slogger.debug("Ranges needing transfer for keyspace={} are [{}]", keyspace_name, ranges);
-        }
-        ranges_to_stream.emplace(keyspace_name, std::move(ranges_mm));
-    }
-
-    set_mode(mode::LEAVING, "replaying batch log and streaming data to other nodes", true);
-
-    auto stream_success = stream_ranges(ranges_to_stream);
-    // Wait for batch log to complete before streaming hints.
-    slogger.debug("waiting for batch log processing.");
-    // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
     db::get_local_batchlog_manager().do_batch_log_replay().get();
+    if (is_repair_based_node_ops_enabled()) {
+        decommission_with_repair(_db, _token_metadata).get();
+    } else {
+        std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
-    set_mode(mode::LEAVING, "streaming hints to other nodes", true);
+        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+        for (const auto& keyspace_name : non_system_keyspaces) {
+            auto ranges_mm = get_changed_ranges_for_leaving(keyspace_name, get_broadcast_address());
+            if (slogger.is_enabled(logging::log_level::debug)) {
+                std::vector<range<token>> ranges;
+                for (auto& x : ranges_mm) {
+                    ranges.push_back(x.first);
+                }
+                slogger.debug("Ranges needing transfer for keyspace={} are [{}]", keyspace_name, ranges);
+            }
+            ranges_to_stream.emplace(keyspace_name, std::move(ranges_mm));
+        }
 
-    // wait for the transfer runnables to signal the latch.
-    slogger.debug("waiting for stream acks.");
-    try {
-        stream_success.get();
-    } catch (...) {
-        slogger.warn("unbootstrap fails to stream : {}", std::current_exception());
-        throw;
+        set_mode(mode::LEAVING, "replaying batch log and streaming data to other nodes", true);
+
+        auto stream_success = stream_ranges(ranges_to_stream);
+        // Wait for batch log to complete before streaming hints.
+        slogger.debug("waiting for batch log processing.");
+        // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
+        db::get_local_batchlog_manager().do_batch_log_replay().get();
+
+        set_mode(mode::LEAVING, "streaming hints to other nodes", true);
+
+        // wait for the transfer runnables to signal the latch.
+        slogger.debug("waiting for stream acks.");
+        try {
+            stream_success.get();
+        } catch (...) {
+            slogger.warn("unbootstrap fails to stream : {}", std::current_exception());
+            throw;
+        }
+        slogger.debug("stream acks all received.");
     }
-    slogger.debug("stream acks all received.");
     leave_ring();
 }
 
