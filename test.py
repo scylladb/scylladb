@@ -188,7 +188,7 @@ class UnitTest:
 
 
 def print_progress(test, success, cookie, verbose):
-    if type(cookie) is int:
+    if isinstance(cookie, int):
         cookie = (0, 1, cookie)
 
     last_len, n, n_total = cookie
@@ -234,10 +234,10 @@ async def run_test(test, options):
         if process is not None:
             process.kill()
             stdout, _ = await process.communicate()
-        if type(e) == asyncio.TimeoutError:
+        if isinstance(e, asyncio.TimeoutError):
             print('  timed out', file=file)
             report_error(stdout.decode(encoding='UTF-8') if stdout else "No output")
-        elif type(e) == asyncio.CancelledError:
+        elif isinstance(e, asyncio.CancelledError):
             print(test.name, end=" ")
     except Exception as e:
         print('  with error {e}\n'.format(e=e), file=file)
@@ -306,7 +306,7 @@ def find_tests(options):
     for mode in options.modes:
         def add_test_list(lst, kind):
             for t in lst:
-                tests_to_run.append((t, None, kind, mode) if type(t) == str else (*t, kind, mode))
+                tests_to_run.append((t, None, kind, mode) if isinstance(t, str) else (*t, kind, mode))
 
         add_test_list(other_tests, 'other')
         add_test_list(boost_tests, 'boost')
@@ -345,7 +345,7 @@ async def run_all_tests(tests_to_run, signaled, options):
             await cancel(pending)
         for coro in done:
             result = coro.result()
-            if type(result) == bool:
+            if isinstance(result, bool):
                 continue # skip signaled task result
             results.append(result)
             test, success, out = result
