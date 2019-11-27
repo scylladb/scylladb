@@ -457,3 +457,60 @@ def test_query_limit_paging(test_table_sn):
         got_items = full_query(test_table_sn, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Limit=limit)
         got_sort_keys = [x['c'] for x in got_items]
         assert got_sort_keys == numbers
+
+# Test that the ScanIndexForward parameter works, and can be used to
+# return items sorted in reverse order. Combining this with Limit can
+# be used to return the last items instead of the first items of the
+# partition.
+@pytest.mark.xfail(reason="ScanIndexForward not supported yet")
+def test_query_reverse(test_table_sn):
+    numbers = [Decimal(i) for i in range(20)]
+    # Insert these numbers, in random order, into one partition:
+    p = random_string()
+    items = [{'p': p, 'c': num} for num in random.sample(numbers, len(numbers))]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Verify that we get back the numbers in their sorted order or reverse
+    # order, depending on the ScanIndexForward parameter being True or False.
+    # First, no Limit so we should get all numbers (we have few of them, so
+    # it all fits in the default 1MB limitation)
+    reversed_numbers = list(reversed(numbers))
+    got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ScanIndexForward=True)['Items']
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == numbers
+    got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ScanIndexForward=False)['Items']
+    got_sort_keys = [x['c'] for x in got_items]
+    assert got_sort_keys == reversed_numbers
+    # Now try a few different Limit values, and verify that the query
+    # returns exactly the first Limit sorted numbers - in regular or
+    # reverse order, depending on ScanIndexForward.
+    for limit in [1, 2, 3, 7, 10, 17, 100, 10000]:
+        got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Limit=limit, ScanIndexForward=True)['Items']
+        assert len(got_items) == min(limit, len(numbers))
+        got_sort_keys = [x['c'] for x in got_items]
+        assert got_sort_keys == numbers[0:limit]
+        got_items = test_table_sn.query(KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Limit=limit, ScanIndexForward=False)['Items']
+        assert len(got_items) == min(limit, len(numbers))
+        got_sort_keys = [x['c'] for x in got_items]
+        assert got_sort_keys == reversed_numbers[0:limit]
+
+# Test that paging also works properly with reverse order
+# (ScanIndexForward=false), i.e., reverse-order queries can be resumed
+@pytest.mark.xfail(reason="ScanIndexForward not supported yet")
+def test_query_reverse_paging(test_table_sn):
+    numbers = [Decimal(i) for i in range(20)]
+    # Insert these numbers, in random order, into one partition:
+    p = random_string()
+    items = [{'p': p, 'c': num} for num in random.sample(numbers, len(numbers))]
+    with test_table_sn.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    reversed_numbers = list(reversed(numbers))
+    # Verify that with ScanIndexForward=False, full_query() returns all
+    # these numbers in reversed sorted order - getting pages of Limit items
+    # at a time and resuming the query.
+    for limit in [1, 2, 3, 7, 10, 17, 100, 10000]:
+        got_items = full_query(test_table_sn, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ScanIndexForward=False, Limit=limit)
+        got_sort_keys = [x['c'] for x in got_items]
+        assert got_sort_keys == reversed_numbers
