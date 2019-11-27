@@ -2976,8 +2976,10 @@ class scylla_smp_queues(gdb.Command):
     """
     def __init__(self):
         gdb.Command.__init__(self, 'scylla smp-queues', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
-        qs = std_unique_ptr(gdb.parse_and_eval('seastar::smp::_qs')).get()
         self.queues = set()
+
+    def _init(self):
+        qs = std_unique_ptr(gdb.parse_and_eval('seastar::smp::_qs')).get()
         for i in range(cpus()):
             for j in range(cpus()):
                 self.queues.add(int(qs[i][j].address))
@@ -2985,6 +2987,9 @@ class scylla_smp_queues(gdb.Command):
         self._ptr_type = gdb.lookup_type('uintptr_t').pointer()
 
     def invoke(self, arg, from_tty):
+        if not self.queues:
+            self._init()
+
         def formatter(q):
             a, b = q
             return '{:2} -> {:2}'.format(a, b)
