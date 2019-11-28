@@ -149,10 +149,15 @@ inline bytes get_bytes() {
     return get_bytes(get_int<unsigned>(128 * 1024));
 }
 
-inline sstring get_sstring(size_t n) {
+template <typename RandomEngine>
+inline sstring get_sstring(size_t n, RandomEngine& engine) {
     sstring str(sstring::initialized_later(), n);
-    boost::generate(str, [] { return get_int<sstring::value_type>('a', 'z'); });
+    boost::generate(str, [&engine] { return get_int<sstring::value_type>('a', 'z', engine); });
     return str;
+}
+
+inline sstring get_sstring(size_t n) {
+    return get_sstring(n, gen());
 }
 
 inline sstring get_sstring() {
