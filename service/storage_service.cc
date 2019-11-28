@@ -2202,8 +2202,8 @@ future<> storage_service::start_rpc_server() {
             return make_ready_future<>();
         }
 
-        auto tserver = make_shared<distributed<thrift_server>>();
-        ss._thrift_server = tserver;
+        ss._thrift_server = distributed<thrift_server>();
+        auto tserver = &*ss._thrift_server;
 
         auto& cfg = ss._db.local().get_config();
         auto port = cfg.rpc_port();
@@ -2229,15 +2229,15 @@ future<> storage_service::start_rpc_server() {
 }
 
 future<> storage_service::do_stop_rpc_server() {
-    auto tserver = _thrift_server;
-    _thrift_server = {};
-    if (tserver) {
-        // Note: We must capture tserver so that it will not be freed before tserver->stop
-        return tserver->stop().then([tserver] {
-            slogger.info("Thrift server stopped");
-        });
-    }
-    return make_ready_future<>();
+    return do_with(std::move(_thrift_server), [this] (std::optional<distributed<thrift_server>>& tserver) {
+        _thrift_server = std::nullopt;
+        if (tserver) {
+            return tserver->stop().then([] {
+                slogger.info("Thrift server stopped");
+            });
+        }
+        return make_ready_future<>();
+    });
 }
 
 future<> storage_service::stop_rpc_server() {
