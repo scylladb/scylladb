@@ -2257,8 +2257,9 @@ future<> storage_service::start_native_transport() {
         if (ss._cql_server || isolated.load()) {
             return make_ready_future<>();
         }
-        auto cserver = make_shared<distributed<cql_transport::cql_server>>();
-        ss._cql_server = cserver;
+
+        ss._cql_server = distributed<cql_transport::cql_server>();
+        auto cserver = &*ss._cql_server;
 
         auto& cfg = ss._db.local().get_config();
         auto addr = cfg.rpc_address();
@@ -2330,18 +2331,18 @@ future<> storage_service::start_native_transport() {
 }
 
 future<> storage_service::do_stop_native_transport() {
-    auto cserver = _cql_server;
-    _cql_server = {};
-    if (cserver) {
-        // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-        // Note: We must capture cserver so that it will not be freed before cserver->stop
-        return set_cql_ready(false).then([cserver] {
-            return cserver->stop().then([cserver] {
-                slogger.info("CQL server stopped");
+    return do_with(std::move(_cql_server), [this] (std::optional<distributed<cql_transport::cql_server>>& cserver) {
+        _cql_server = std::nullopt;
+        if (cserver) {
+            // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
+            return set_cql_ready(false).then([&cserver] {
+                return cserver->stop().then([] {
+                    slogger.info("CQL server stopped");
+                });
             });
-        });
-    }
-    return make_ready_future<>();
+        }
+        return make_ready_future<>();
+    });
 }
 
 future<> storage_service::stop_native_transport() {
