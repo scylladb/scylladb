@@ -385,16 +385,7 @@ future<std::unique_ptr<cql_server::response>>
                 break;
         }
 
-        const auto user = [&client_state]() -> std::optional<auth::authenticated_user> {
-            const auto user = client_state.user();
-            if (!user) {
-                return {};
-            }
-
-            return *user;
-        }();
-
-        tracing::set_username(client_state.get_trace_state(), user);
+        tracing::set_username(client_state.get_trace_state(), client_state.user());
 
         auto in = request_reader(std::move(fbuf), *linearization_buffer_ptr);
         switch (cqlop) {
@@ -691,7 +682,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
     auto challenge = sasl_challenge->evaluate_response(buf);
     if (sasl_challenge->is_complete()) {
         return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge)](auth::authenticated_user user) mutable {
-            client_state.set_login(::make_shared<auth::authenticated_user>(std::move(user)));
+            client_state.set_login(std::move(user));
             auto f = client_state.check_user_can_login();
             return f.then([this, stream, &client_state, challenge = std::move(challenge)]() mutable {
                 auto tr_state = client_state.get_trace_state();
@@ -772,7 +763,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_ex
 
     // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
     // look for the prepared statement and then authorize it.
-    auto prepared = _server._query_processor.local().get_prepared(client_state.user().get(), cache_key);
+    auto prepared = _server._query_processor.local().get_prepared(client_state.user(), cache_key);
     if (!prepared) {
         needs_authorization = true;
         prepared = _server._query_processor.local().get_prepared(cache_key);
@@ -868,7 +859,7 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
 
             // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
             // look for the prepared statement and then authorize it.
-            ps = _server._query_processor.local().get_prepared(client_state.user().get(), cache_key);
+            ps = _server._query_processor.local().get_prepared(client_state.user(), cache_key);
             if (!ps) {
                 ps = _server._query_processor.local().get_prepared(cache_key);
                 if (!ps) {

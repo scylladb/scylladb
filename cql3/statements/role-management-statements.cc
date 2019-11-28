@@ -379,9 +379,8 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
 
     const auto& cs = state.get_client_state();
     const auto& as = *cs.get_auth_service();
-    const auto user = cs.user();
 
-    return auth::has_superuser(as, *user).then([this, &state, &cs, &as, user](bool super) {
+    return auth::has_superuser(as, *cs.user()).then([this, &state, &cs, &as](bool super) {
         const auto& rm = as.underlying_role_manager();
         const auto& a = as.underlying_authenticator();
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
@@ -391,14 +390,14 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
             // only the roles granted to them.
             return cs.check_has_permission(
                     auth::permission::DESCRIBE,
-                    auth::root_role_resource()).then([&cs, &rm, &a, user, query_mode](bool has_describe) {
+                    auth::root_role_resource()).then([&cs, &rm, &a, query_mode](bool has_describe) {
                 if (has_describe) {
                     return rm.query_all().then([&rm, &a](auto&& roles) {
                         return make_results(rm, a, std::move(roles));
                     });
                 }
 
-                return rm.query_granted(*user->name, query_mode).then([&rm, &a](auth::role_set roles) {
+                return rm.query_granted(*cs.user()->name, query_mode).then([&rm, &a](auth::role_set roles) {
                     return make_results(rm, a, std::move(roles));
                 });
             });

@@ -125,7 +125,7 @@ private:
         core_local_state(auth::service& auth_service)
             : client_state(service::client_state::external_tag{}, auth_service)
         {
-            client_state.set_login(::make_shared<auth::authenticated_user>(testing_superuser));
+            client_state.set_login(auth::authenticated_user(testing_superuser));
         }
 
         future<> stop() {

@@ -54,10 +54,7 @@
 
 thread_local api::timestamp_type service::client_state::_last_timestamp_micros = 0;
 
-void service::client_state::set_login(::shared_ptr<auth::authenticated_user> user) {
-    if (user == nullptr) {
-        throw std::invalid_argument("Must provide user");
-    }
+void service::client_state::set_login(auth::authenticated_user user) {
     _user = std::move(user);
 }
 
@@ -68,17 +65,17 @@ future<> service::client_state::check_user_can_login() {
 
     const auto& role_manager = _auth_service->underlying_role_manager();
 
-    return role_manager.exists(*_user->name).then([user = _user](bool exists) mutable {
+    return role_manager.exists(*_user->name).then([this](bool exists) mutable {
         if (!exists) {
             throw exceptions::authentication_exception(
                             format("User {} doesn't exist - create it with CREATE USER query first",
-                                            *user->name));
+                                            *_user->name));
         }
         return make_ready_future();
-    }).then([user = _user, &role_manager] {
-        return role_manager.can_login(*user->name).then([user = std::move(user)](bool can_login) {
+    }).then([this, &role_manager] {
+        return role_manager.can_login(*_user->name).then([this](bool can_login) {
             if (!can_login) {
-                throw exceptions::authentication_exception(format("{} is not permitted to log in", *user->name));
+                throw exceptions::authentication_exception(format("{} is not permitted to log in", *_user->name));
             }
 
             return make_ready_future();

@@ -100,17 +100,16 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
 
     const auto& cs = state.get_client_state();
     const auto& as = *cs.get_auth_service();
-    const auto user = cs.user();
 
-    return auth::has_superuser(as, *user).then([&cs, &as, user](bool has_superuser) {
+    return auth::has_superuser(as, *cs.user()).then([&cs, &as](bool has_superuser) {
         if (has_superuser) {
             return as.underlying_role_manager().query_all().then([&as](std::unordered_set<sstring> roles) {
                 return make_results(as, std::move(roles));
             });
         }
 
-        return auth::get_roles(as, *user).then([&as](std::unordered_set<sstring> granted_roles) {
+        return auth::get_roles(as, *cs.user()).then([&as](std::unordered_set<sstring> granted_roles) {
             return make_results(as, std::move(granted_roles));
         });
-    }).finally([user] {});
+    });
 }

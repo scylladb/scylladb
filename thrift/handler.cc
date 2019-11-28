@@ -242,7 +242,7 @@ public:
             auth::authenticator::credentials_map creds(auth_request.credentials.begin(), auth_request.credentials.end());
             auto& auth_service = *_query_state.get_client_state().get_auth_service();
             return auth_service.underlying_authenticator().authenticate(creds).then([this] (auto user) {
-                _query_state.get_client_state().set_login(::make_shared<auth::authenticated_user>(std::move(user)));
+                _query_state.get_client_state().set_login(std::move(user));
             });
         });
     }
@@ -1031,7 +1031,7 @@ public:
             cql3::prepared_cache_key_type cache_key(itemId);
             bool needs_authorization = false;
 
-            auto prepared = _query_processor.local().get_prepared(_query_state.get_client_state().user().get(), cache_key);
+            auto prepared = _query_processor.local().get_prepared(_query_state.get_client_state().user(), cache_key);
             if (!prepared) {
                 needs_authorization = true;
 
