@@ -55,19 +55,26 @@
 namespace service {
 
 class migration_manager : public seastar::async_sharded_service<migration_manager> {
-    std::vector<migration_listener*> _listeners;
+private:
+    migration_notifier& _notifier;
+
     std::unordered_map<netw::msg_addr, serialized_action, netw::msg_addr::hash> _schema_pulls;
     std::vector<gms::feature::listener_registration> _feature_listeners;
     seastar::gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;
 public:
-    migration_manager();
+    explicit migration_manager(migration_notifier&);
 
-    /// Register a migration listener on current shard.
-    void register_listener(migration_listener* listener);
+    void register_listener(migration_listener* listener) { // Temporary
+        _notifier.register_listener(listener);
+    }
 
-    /// Unregister a migration listener on current shard.
-    void unregister_listener(migration_listener* listener);
+    void unregister_listener(migration_listener* listener) { // Temporary
+        _notifier.unregister_listener(listener);
+    }
+
+    migration_notifier& get_notifier() { return _notifier; }
+    const migration_notifier& get_notifier() const { return _notifier; }
 
     future<> schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
 
@@ -89,23 +96,6 @@ public:
     future<> merge_schema_from(netw::msg_addr src, const std::vector<canonical_mutation>& mutations);
     // Deprecated. The canonical mutation should be used instead.
     future<> merge_schema_from(netw::msg_addr src, const std::vector<frozen_mutation>& mutations);
-
-    future<> notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
-    future<> notify_create_column_family(const schema_ptr& cfm);
-    future<> notify_create_user_type(const user_type& type);
-    future<> notify_create_view(const view_ptr& view);
-    future<> notify_update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
-    future<> notify_update_column_family(const schema_ptr& cfm, bool columns_changed);
-    future<> notify_update_user_type(const user_type& type);
-    future<> notify_update_view(const view_ptr& view, bool columns_changed);
-    future<> notify_drop_keyspace(const sstring& ks_name);
-    future<> notify_drop_column_family(const schema_ptr& cfm);
-    future<> notify_drop_user_type(const user_type& type);
-    future<> notify_drop_view(const view_ptr& view);
-
-    void notify_before_create_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
-    void notify_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);
-    void notify_before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
 
     bool should_pull_schema_from(const gms::inet_address& endpoint);
     bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);

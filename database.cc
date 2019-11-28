@@ -672,7 +672,7 @@ future<> database::update_keyspace(const sstring& name) {
         auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm->name(), tmp_ksm->strategy_name(), tmp_ksm->strategy_options(), tmp_ksm->durable_writes(),
                         boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
         ks.update_from(std::move(new_ksm));
-        return service::get_local_migration_manager().notify_update_keyspace(ks.metadata());
+        return service::get_local_migration_manager().get_notifier().update_keyspace(ks.metadata());
     });
 }
 

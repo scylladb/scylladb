@@ -375,6 +375,10 @@ public:
                 create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
             }
 
+            sharded<service::migration_notifier> mm_notif;
+            mm_notif.start().get();
+            auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
+
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
             auto& ms = netw::get_messaging_service();
@@ -433,7 +437,7 @@ public:
             proxy.start(std::ref(*db), spcfg, std::ref(b)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
-            mm.start().get();
+            mm.start(std::ref(mm_notif)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             auto& qp = cql3::get_query_processor();
