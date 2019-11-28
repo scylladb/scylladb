@@ -1315,6 +1315,8 @@ private:
     friend db::data_listeners;
     std::unique_ptr<db::data_listeners> _data_listeners;
 
+    service::migration_notifier& _mnotifier;
+
     bool _supports_infinite_bound_range_deletions = false;
 
     future<> init_commitlog();
@@ -1349,7 +1351,7 @@ public:
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     future<> parse_system_tables(distributed<service::storage_proxy>&);
-    database(const db::config&, database_config dbcfg);
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn);
     database(database&&) = delete;
     ~database();
 
@@ -1373,8 +1375,8 @@ public:
         return *_compaction_manager;
     }
 
-    service::migration_notifier& get_notifier();
-    const service::migration_notifier& get_notifier() const;
+    service::migration_notifier& get_notifier() { return _mnotifier; }
+    const service::migration_notifier& get_notifier() const { return _mnotifier; }
 
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
     future<> add_column_family_and_make_directory(schema_ptr schema);
