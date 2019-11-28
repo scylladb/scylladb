@@ -20,6 +20,7 @@
  */
 
 #include <seastar/core/reactor.hh>
+#include <seastar/core/print.hh>
 
 #include "reader_concurrency_semaphore.hh"
 
@@ -77,7 +78,12 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
 future<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> reader_concurrency_semaphore::wait_admission(size_t memory,
         db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
-        return make_exception_future<lw_shared_ptr<reader_permit>>(_make_queue_overloaded_exception());
+        if (_prethrow_action) {
+            _prethrow_action();
+        }
+        return make_exception_future<lw_shared_ptr<reader_permit>>(
+                std::make_exception_ptr(std::runtime_error(
+                        format("{}: restricted mutation reader queue overload", _name))));
     }
     auto r = resources(1, static_cast<ssize_t>(memory));
     auto it = _inactive_reads.begin();
