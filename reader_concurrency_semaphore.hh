@@ -24,10 +24,8 @@
 #include <map>
 #include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
-#include <seastar/core/semaphore.hh>
 #include "db/timeout_clock.hh"
-
-using namespace seastar;
+#include "seastarx.hh"
 
 /// Specific semaphore for controlling reader concurrency
 ///
