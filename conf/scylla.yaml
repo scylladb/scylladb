@@ -245,7 +245,10 @@ batch_size_fail_threshold_in_kb: 50
 # broadcast_rpc_address: 1.2.3.4
 
 # Uncomment to enable experimental features
-# experimental: true
+# experimental_features:
+#     - cdc
+#     - lwt
+#     - udf
 
 # The directory where hints files are stored if hinted handoff is enabled.
 # hints_directory: /var/lib/scylla/hints
