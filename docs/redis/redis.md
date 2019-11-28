@@ -63,11 +63,13 @@ queries the mapping information between hash slots and Server nodes. We
 just fill the mapping with random Scylla node IP address.
 
 Before you can start using Scylla with Redis API, you must set the
-`enable_redis_protocol` configuration option (visa the command line or YAML),
-to `true`, which default is `false`. By default, the Scylla will listen on the
-port (default is 6379, you can set the `redis_transport_prot` to other value).
+`redis-port` configuration option (visa the command line or YAML),
+to available port. By default, the Redis API is disabled. 
+In Scylla, SSL for Redis API is supported. To enable it,
+you must set the `redis-ssl-port` configuration option to available port.
+This feature is disabled by default.
 
-With Redis enabled, every Scylla node listens for Redis requests on this port.
+With Redis enabled, every Scylla node listens for Redis requests on the port.
 These requests, in [RESP](https://redis.io/topics/protocol) format over TCP,
 are parsed and result in calls to internal Scylla C++ functions.
 

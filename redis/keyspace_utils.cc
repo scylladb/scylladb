@@ -150,12 +150,12 @@ schema_ptr zsets_schema(sstring ks_name) {
 }
 
 future<> create_keyspace_if_not_exists_impl(db::config& config, int default_replication_factor) {
-    auto keyspace_options = config.redis_keyspace_options();
-    if (keyspace_options.count("class") == 0) {
-        keyspace_options["class"] = "SimpleStrategy";
-        keyspace_options["replication_factor"] = sprint("%d", default_replication_factor);
+    auto keyspace_replication_strategy_options = config.redis_keyspace_replication_strategy_options();
+    if (keyspace_replication_strategy_options.count("class") == 0) {
+        keyspace_replication_strategy_options["class"] = "SimpleStrategy";
+        keyspace_replication_strategy_options["replication_factor"] = sprint("%d", default_replication_factor);
     }
-    auto keyspace_gen = [&config, keyspace_options = std::move(keyspace_options)]  (sstring name) {
+    auto keyspace_gen = [&config, keyspace_replication_strategy_options = std::move(keyspace_replication_strategy_options)]  (sstring name) {
         auto& proxy = service::get_local_storage_proxy();
         if (proxy.get_db().local().has_keyspace(name)) {
             return make_ready_future<>();
@@ -163,8 +163,8 @@ future<> create_keyspace_if_not_exists_impl(db::config& config, int default_repl
         auto attrs = make_shared<cql3::statements::ks_prop_defs>();
         attrs->add_property(cql3::statements::ks_prop_defs::KW_DURABLE_WRITES, "true");
         std::map<sstring, sstring> replication_properties;
-        for (auto&& e : keyspace_options) {
-            replication_properties.emplace(e.first, e.second);
+        for (auto&& option : keyspace_replication_strategy_options) {
+            replication_properties.emplace(option.first, option.second);
         }
         attrs->add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties); 
         attrs->validate();
