@@ -218,6 +218,7 @@ if __name__ == '__main__':
     cpuscaling_setup = not args.no_cpuscaling_setup
     fstrim_setup = not args.no_fstrim_setup
     selinux_reboot_required = False
+    set_clocksource = False
 
     umask = current_umask()
     # files have to be world-readable
@@ -376,11 +377,14 @@ if __name__ == '__main__':
         sysconfig_setup = interactive_ask_service('Do you want to setup a system-wide customized configuration for Scylla?', 'Yes - setup the sysconfig file. No - skips this step.', sysconfig_setup)
         args.no_sysconfig_setup = not sysconfig_setup
         if sysconfig_setup:
-            nic = interactive_choose_nic()
             set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', set_nic_and_disks)
-        if sysconfig_setup:
             setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
-            run_setup_script('NIC queue', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
+            nic = interactive_choose_nic()
+
+            set_clocksource = interactive_ask_service('The clocksource is the physical device that Linux uses to take time measurements. In most cases Linux chooses the fastest available clocksource device as long as it is accurate. In some situations, however, Linux errs in the side of caution and does not choose the fastest available clocksource despite it being accurate enough. If you know your hardware''s fast clocksource is stable enough, choose "yes" here. The safest is the choose "no" (the default)', 'Yes - enforce clocksource setting. No - keep current configuration.', set_clocksource)
+            setup_args += ' --set-clocksource' if set_clocksource else ''
+
+            run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
 
     io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', io_setup)
     args.no_io_setup = not io_setup

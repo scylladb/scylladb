@@ -42,8 +42,12 @@ if __name__ == '__main__':
     else:
         cfg = sysconfig_parser('/etc/default/scylla-server')
     set_nic_and_disks = str2bool(get_set_nic_and_disks_config_value(cfg))
+    if cfg.has_option('SET_CLOCKSOURCE'):
+        set_clocksource = str2bool(cfg.get('SET_CLOCKSOURCE'))
+    else:
+        set_clocksource = 'no'
     ami = str2bool(cfg.get('AMI'))
-
+    
     parser = argparse.ArgumentParser(description='Setting parameters on Scylla sysconfig file.')
     parser.add_argument('--nic',
                         help='specify NIC')
@@ -61,6 +65,8 @@ if __name__ == '__main__':
                         help='scylla config directory')
     parser.add_argument('--setup-nic-and-disks', action='store_true', default=set_nic_and_disks,
                         help='setup NIC\'s and disks\' interrupts, RPS, XPS, nomerges and I/O scheduler')
+    parser.add_argument('--set-clocksource', action='store_true', default=set_clocksource,
+                        help='Set enforcing fastest available Linux clocksource')
     parser.add_argument('--ami', action='store_true', default=ami,
                         help='AMI instance mode')
     args = parser.parse_args()
@@ -112,6 +118,9 @@ if __name__ == '__main__':
         else:
             cfg.set('SET_NIC_AND_DISKS', bool2str(args.setup_nic_and_disks))
 
+    if cfg.has_option('SET_CLOCKSOURCE') and str2bool(cfg.get('SET_CLOCKSOURCE')) != args.set_clocksource:
+        cfg.set('SET_CLOCKSOURCE', bool2str(args.set_clocksource))
+        
     if str2bool(cfg.get('AMI')) != args.ami:
         cfg.set('AMI', bool2str(args.ami))
     cfg.commit()

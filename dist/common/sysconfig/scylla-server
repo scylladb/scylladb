@@ -13,6 +13,9 @@ IFNAME=eth0
 # setup NIC's and disks' interrupts, RPS, XPS, nomerges and I/O scheduler (posix)
 SET_NIC_AND_DISKS=no
 
+# tune clocksource
+SET_CLOCKSOURCE=no
+
 # ethernet device driver (dpdk)
 ETHDRV=
 
