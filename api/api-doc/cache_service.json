@@ -13,7 +13,7 @@
             {
                "method":"GET",
                "summary":"get row cache save period in seconds",
-               "type":"int",
+               "type": "long",
                "nickname":"get_row_cache_save_period_in_seconds",
                "produces":[
                   "application/json"
@@ -35,7 +35,7 @@
                      "description":"row cache save period in seconds",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -48,7 +48,7 @@
             {
                "method":"GET",
                "summary":"get key cache save period in seconds",
-               "type":"int",
+               "type": "long",
                "nickname":"get_key_cache_save_period_in_seconds",
                "produces":[
                   "application/json"
@@ -70,7 +70,7 @@
                      "description":"key cache save period in seconds",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -83,7 +83,7 @@
             {
                "method":"GET",
                "summary":"get counter cache save period in seconds",
-               "type":"int",
+               "type": "long",
                "nickname":"get_counter_cache_save_period_in_seconds",
                "produces":[
                   "application/json"
@@ -105,7 +105,7 @@
                      "description":"counter cache save period in seconds",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -118,7 +118,7 @@
             {
                "method":"GET",
                "summary":"get row cache keys to save",
-               "type":"int",
+               "type": "long",
                "nickname":"get_row_cache_keys_to_save",
                "produces":[
                   "application/json"
@@ -140,7 +140,7 @@
                      "description":"row cache keys to save",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -153,7 +153,7 @@
             {
                "method":"GET",
                "summary":"get key cache keys to save",
-               "type":"int",
+               "type": "long",
                "nickname":"get_key_cache_keys_to_save",
                "produces":[
                   "application/json"
@@ -175,7 +175,7 @@
                      "description":"key cache keys to save",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -188,7 +188,7 @@
             {
                "method":"GET",
                "summary":"get counter cache keys to save",
-               "type":"int",
+               "type": "long",
                "nickname":"get_counter_cache_keys_to_save",
                "produces":[
                   "application/json"
@@ -210,7 +210,7 @@
                      "description":"counter cache keys to save",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -448,7 +448,7 @@
         {
           "method": "GET",
           "summary": "Get key entries",
-          "type": "int",
+          "type": "long",
           "nickname": "get_key_entries",
           "produces": [
             "application/json"
@@ -568,7 +568,7 @@
         {
           "method": "GET",
           "summary": "Get row entries",
-          "type": "int",
+          "type": "long",
           "nickname": "get_row_entries",
           "produces": [
             "application/json"
@@ -688,7 +688,7 @@
         {
           "method": "GET",
           "summary": "Get counter entries",
-          "type": "int",
+          "type": "long",
           "nickname": "get_counter_entries",
           "produces": [
             "application/json"

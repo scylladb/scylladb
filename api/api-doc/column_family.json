@@ -121,7 +121,7 @@
                      "description":"The minimum number of sstables in queue before compaction kicks off",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -172,7 +172,7 @@
                      "description":"The maximum number of sstables in queue before compaction kicks off",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -223,7 +223,7 @@
                      "description":"The maximum number of sstables in queue before compaction kicks off",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   },
                   {
@@ -231,7 +231,7 @@
                      "description":"The minimum number of sstables in queue before compaction kicks off",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -544,7 +544,7 @@
                "summary":"sstable count for each level. empty unless leveled compaction is used",
                "type":"array",
                "items":{
-                  "type":"int"
+                  "type": "long"
                },
                "nickname":"get_sstable_count_per_level",
                "produces":[
@@ -636,7 +636,7 @@
                      "description":"Duration (in milliseconds) of monitoring operation",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   },
                   {
@@ -644,7 +644,7 @@
                     "description":"number of the top partitions to list",
                     "required":false,
                     "allowMultiple":false,
-                    "type":"int",
+                    "type": "long",
                     "paramType":"query"
                  },
                  {
@@ -652,7 +652,7 @@
                     "description":"capacity of stream summary: determines amount of resources used in query processing",
                     "required":false,
                     "allowMultiple":false,
-                    "type":"int",
+                    "type": "long",
                     "paramType":"query"
                  }
               ]
@@ -921,7 +921,7 @@
             {
                "method":"GET",
                "summary":"Get memtable switch count",
-               "type":"int",
+               "type": "long",
                "nickname":"get_memtable_switch_count",
                "produces":[
                   "application/json"
@@ -945,7 +945,7 @@
             {
                "method":"GET",
                "summary":"Get all memtable switch count",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_memtable_switch_count",
                "produces":[
                   "application/json"
@@ -1082,7 +1082,7 @@
             {
                "method":"GET",
                "summary":"Get read latency",
-               "type":"int",
+               "type": "long",
                "nickname":"get_read_latency",
                "produces":[
                   "application/json"
@@ -1235,7 +1235,7 @@
             {
                "method":"GET",
                "summary":"Get all read latency",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_read_latency",
                "produces":[
                   "application/json"
@@ -1251,7 +1251,7 @@
             {
                "method":"GET",
                "summary":"Get range latency",
-               "type":"int",
+               "type": "long",
                "nickname":"get_range_latency",
                "produces":[
                   "application/json"
@@ -1275,7 +1275,7 @@
             {
                "method":"GET",
                "summary":"Get all range latency",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_range_latency",
                "produces":[
                   "application/json"
@@ -1291,7 +1291,7 @@
             {
                "method":"GET",
                "summary":"Get write latency",
-               "type":"int",
+               "type": "long",
                "nickname":"get_write_latency",
                "produces":[
                   "application/json"
@@ -1444,7 +1444,7 @@
             {
                "method":"GET",
                "summary":"Get all write latency",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_write_latency",
                "produces":[
                   "application/json"
@@ -1460,7 +1460,7 @@
             {
                "method":"GET",
                "summary":"Get pending flushes",
-               "type":"int",
+               "type": "long",
                "nickname":"get_pending_flushes",
                "produces":[
                   "application/json"
@@ -1484,7 +1484,7 @@
             {
                "method":"GET",
                "summary":"Get all pending flushes",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_pending_flushes",
                "produces":[
                   "application/json"
@@ -1500,7 +1500,7 @@
             {
                "method":"GET",
                "summary":"Get pending compactions",
-               "type":"int",
+               "type": "long",
                "nickname":"get_pending_compactions",
                "produces":[
                   "application/json"
@@ -1524,7 +1524,7 @@
             {
                "method":"GET",
                "summary":"Get all pending compactions",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_pending_compactions",
                "produces":[
                   "application/json"
@@ -1540,7 +1540,7 @@
             {
                "method":"GET",
                "summary":"Get live ss table count",
-               "type":"int",
+               "type": "long",
                "nickname":"get_live_ss_table_count",
                "produces":[
                   "application/json"
@@ -1564,7 +1564,7 @@
             {
                "method":"GET",
                "summary":"Get all live ss table count",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_live_ss_table_count",
                "produces":[
                   "application/json"
@@ -1580,7 +1580,7 @@
             {
                "method":"GET",
                "summary":"Get live disk space used",
-               "type":"int",
+               "type": "long",
                "nickname":"get_live_disk_space_used",
                "produces":[
                   "application/json"
@@ -1604,7 +1604,7 @@
             {
                "method":"GET",
                "summary":"Get all live disk space used",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_live_disk_space_used",
                "produces":[
                   "application/json"
@@ -1620,7 +1620,7 @@
             {
                "method":"GET",
                "summary":"Get total disk space used",
-               "type":"int",
+               "type": "long",
                "nickname":"get_total_disk_space_used",
                "produces":[
                   "application/json"
@@ -1644,7 +1644,7 @@
             {
                "method":"GET",
                "summary":"Get all total disk space used",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_total_disk_space_used",
                "produces":[
                   "application/json"
@@ -2100,7 +2100,7 @@
             {
                "method":"GET",
                "summary":"Get speculative retries",
-               "type":"int",
+               "type": "long",
                "nickname":"get_speculative_retries",
                "produces":[
                   "application/json"
@@ -2124,7 +2124,7 @@
             {
                "method":"GET",
                "summary":"Get all speculative retries",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_speculative_retries",
                "produces":[
                   "application/json"
@@ -2204,7 +2204,7 @@
             {
                "method":"GET",
                "summary":"Get row cache hit out of range",
-               "type":"int",
+               "type": "long",
                "nickname":"get_row_cache_hit_out_of_range",
                "produces":[
                   "application/json"
@@ -2228,7 +2228,7 @@
             {
                "method":"GET",
                "summary":"Get all row cache hit out of range",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_row_cache_hit_out_of_range",
                "produces":[
                   "application/json"
@@ -2244,7 +2244,7 @@
             {
                "method":"GET",
                "summary":"Get row cache hit",
-               "type":"int",
+               "type": "long",
                "nickname":"get_row_cache_hit",
                "produces":[
                   "application/json"
@@ -2268,7 +2268,7 @@
             {
                "method":"GET",
                "summary":"Get all row cache hit",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_row_cache_hit",
                "produces":[
                   "application/json"
@@ -2284,7 +2284,7 @@
             {
                "method":"GET",
                "summary":"Get row cache miss",
-               "type":"int",
+               "type": "long",
                "nickname":"get_row_cache_miss",
                "produces":[
                   "application/json"
@@ -2308,7 +2308,7 @@
             {
                "method":"GET",
                "summary":"Get all row cache miss",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_row_cache_miss",
                "produces":[
                   "application/json"
@@ -2324,7 +2324,7 @@
             {
                "method":"GET",
                "summary":"Get cas prepare",
-               "type":"int",
+               "type": "long",
                "nickname":"get_cas_prepare",
                "produces":[
                   "application/json"
@@ -2348,7 +2348,7 @@
             {
                "method":"GET",
                "summary":"Get cas propose",
-               "type":"int",
+               "type": "long",
                "nickname":"get_cas_propose",
                "produces":[
                   "application/json"
@@ -2372,7 +2372,7 @@
             {
                "method":"GET",
                "summary":"Get cas commit",
-               "type":"int",
+               "type": "long",
                "nickname":"get_cas_commit",
                "produces":[
                   "application/json"

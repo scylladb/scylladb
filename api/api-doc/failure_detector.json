@@ -110,7 +110,7 @@
             {
                "method":"GET",
                "summary":"Get count down endpoint",
-               "type":"int",
+               "type": "long",
                "nickname":"get_down_endpoint_count",
                "produces":[
                   "application/json"
@@ -126,7 +126,7 @@
             {
                "method":"GET",
                "summary":"Get count up endpoint",
-               "type":"int",
+               "type": "long",
                "nickname":"get_up_endpoint_count",
                "produces":[
                   "application/json"
@@ -180,11 +180,11 @@
                     "description": "The endpoint address"
                 },
                 "generation": {
-                    "type": "int",
+                    "type": "long",
                     "description": "The heart beat generation"
                 },
                 "version": {
-                    "type": "int",
+                    "type": "long",
                     "description": "The heart beat version"
                 },
                 "update_time": {
@@ -209,7 +209,7 @@
            "description": "Holds a version value for an application state",
                "properties": {
                 "application_state": {
-                    "type": "int",
+                    "type": "long",
                     "description": "The application state enum index"
                 },
                 "value": {
@@ -217,7 +217,7 @@
                     "description": "The version value"
                 },
                 "version": {
-                    "type": "int",
+                    "type": "long",
                     "description": "The application state version"
                 }
             }

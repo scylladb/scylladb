@@ -99,7 +99,7 @@
         {
           "method": "GET",
           "summary": "Get create hint count",
-          "type": "int",
+          "type": "long",
           "nickname": "get_create_hint_count",
           "produces": [
             "application/json"
@@ -123,7 +123,7 @@
         {
           "method": "GET",
           "summary": "Get not stored hints count",
-          "type": "int",
+          "type": "long",
           "nickname": "get_not_stored_hints_count",
           "produces": [
             "application/json"
