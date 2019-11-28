@@ -185,6 +185,8 @@ if __name__ == '__main__':
                         help='skip daily version check')
     parser.add_argument('--no-node-exporter', action='store_true', default=False,
                         help='do not install the node exporter')
+    parser.add_argument('--no-clocksource', action='store_true', default=False,
+                        help='do not enforce the use of Linux clock source')
     parser.add_argument('--no-cpuscaling-setup', action='store_true', default=False,
                         help='skip cpu scaling setup')
     parser.add_argument('--no-fstrim-setup', action='store_true', default=False,
@@ -218,6 +220,7 @@ if __name__ == '__main__':
     io_setup = not args.no_io_setup
     version_check = not args.no_version_check
     node_exporter = not args.no_node_exporter
+    set_clocksource = not args.no_clocksource
     cpuscaling_setup = not args.no_cpuscaling_setup
     fstrim_setup = not args.no_fstrim_setup
     selinux_reboot_required = False
@@ -379,11 +382,14 @@ if __name__ == '__main__':
         sysconfig_setup = interactive_ask_service('Do you want to setup a system-wide customized configuration for Scylla?', 'Yes - setup the sysconfig file. No - skips this step.', sysconfig_setup)
         args.no_sysconfig_setup = not sysconfig_setup
         if sysconfig_setup:
-            nic = interactive_choose_nic()
             set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', set_nic_and_disks)
-        if sysconfig_setup:
             setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
-            run_setup_script('NIC queue', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
+            nic = interactive_choose_nic()
+
+            set_clocksource = interactive_ask_service('Do you want to enforce the use of fastest available Linux clocksource?', 'Yes - enforce TSC. No - keep current configuration.', set_clocksource)
+            setup_args += ' --set-clocksource' if set_clocksource else ''
+
+            run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
 
     io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', io_setup)
     args.no_io_setup = not io_setup
