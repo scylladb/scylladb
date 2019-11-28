@@ -138,7 +138,7 @@ private:
         };
 
 protected:
-    ::shared_ptr<restrictions::statement_restrictions> _restrictions;
+    std::optional<restrictions::statement_restrictions> _restrictions;
 public:
     typedef std::optional<std::unordered_map<sstring, bytes_opt>> json_cache_opt;
 
@@ -186,8 +186,8 @@ public:
 
     void inc_cql_stats(bool is_internal) const;
 
-    const ::shared_ptr<restrictions::statement_restrictions>& restrictions() const {
-        return _restrictions;
+    const restrictions::statement_restrictions& restrictions() const {
+        return *_restrictions;
     }
 public:
     void add_condition(::shared_ptr<column_condition> cond);

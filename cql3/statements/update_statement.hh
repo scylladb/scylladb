@@ -97,7 +97,7 @@ public:
         : update_statement(statement_type::INSERT, bound_terms, s, std::move(attrs), stats)
         , _term(t)
         , _default_unset(default_unset) {
-        _restrictions = ::make_shared<restrictions::statement_restrictions>(s, false);
+        _restrictions = restrictions::statement_restrictions(s, false);
     }
 private:
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const override;

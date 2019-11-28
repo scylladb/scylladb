@@ -473,8 +473,8 @@ void modification_statement::build_cas_result_set_metadata() {
 
 void
 modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
-    _restrictions = ::make_shared<restrictions::statement_restrictions>(
-            db, s, type, where_clause, std::move(names), applies_only_to_static_columns(), _selects_a_collection, false);
+    _restrictions = restrictions::statement_restrictions(db, s, type, where_clause, std::move(names),
+            applies_only_to_static_columns(), _selects_a_collection, false);
     /*
      * If there's no clustering columns restriction, we may assume that EXISTS
      * check only selects static columns and hence we can use any row from the
