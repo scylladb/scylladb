@@ -1607,6 +1607,15 @@ SEASTAR_TEST_CASE(test_aggregate_functions) {
             timeuuid_native_type{utils::UUID("00000000-0000-1000-0000-000000000002")}
         ).test_min_max_count();
 
+        aggregate_function_test(e, time_type,
+            time_native_type{std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    now.time_since_epoch() - std::chrono::seconds(1)).count()},
+            time_native_type{std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    now.time_since_epoch()).count()},
+            time_native_type{std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    now.time_since_epoch() + std::chrono::seconds(1)).count()}
+        ).test_min_max_count();
+
         aggregate_function_test(e, uuid_type,
             utils::UUID("00000000-0000-1000-0000-000000000000"),
             utils::UUID("00000000-0000-1000-0000-000000000001"),
@@ -1614,6 +1623,15 @@ SEASTAR_TEST_CASE(test_aggregate_functions) {
         ).test_min_max_count();
 
         aggregate_function_test(e, boolean_type, false, true).test_min_max_count();
+
+        aggregate_function_test(e, inet_addr_type,
+            net::inet_address("0.0.0.0"),
+            net::inet_address("::"),
+            net::inet_address("::1"),
+            net::inet_address("0.0.0.1"),
+            net::inet_address("1::1"),
+            net::inet_address("1.0.0.1")
+        ).test_min_max_count();
     });
 }
 
