@@ -351,17 +351,19 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
     // This should only be true in tests (see cql_test_env.cc:storage_service_for_tests)
     auto& db = service::get_local_storage_service().db();
     if (db.local_is_initialized()) {
-        auto& config = service::get_local_storage_service().db().local().get_config();
+        auto& config = db.local().get_config();
         if (config.enable_sstables_mc_format()) {
             features.insert(MC_SSTABLE_FEATURE);
         }
         if (config.enable_user_defined_functions()) {
-            db.local().get_config().check_experimental("UDF");
+            if (!config.check_experimental(db::experimental_features_t::UDF)) {
+                throw std::runtime_error(
+                        "You must use both enable_user_defined_functions and experimental_features:udf "
+                        "to enable user-defined functions");
+            }
             features.insert(UDF_FEATURE);
         }
-
-        if (config.experimental()) {
-            // push additional experimental features
+        if (config.check_experimental(db::experimental_features_t::CDC)) {
             features.insert(CDC_FEATURE);
         }
     }
