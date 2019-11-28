@@ -240,6 +240,8 @@ public:
 };
 
 class one_session_records {
+private:
+    shared_ptr<tracing> _local_tracing_ptr;
 public:
     utils::UUID session_id;
     session_record session_rec;
@@ -665,7 +667,7 @@ private:
 
 void one_session_records::set_pending_for_write() {
     _is_pending_for_write = true;
-    budget_ptr = tracing::get_local_tracing_instance().get_pending_records_ptr();
+    budget_ptr = _local_tracing_ptr->get_pending_records_ptr();
 }
 
 void one_session_records::data_consumed() {
@@ -674,7 +676,7 @@ void one_session_records::data_consumed() {
     }
 
     _is_pending_for_write = false;
-    budget_ptr = tracing::get_local_tracing_instance().get_cached_records_ptr();
+    budget_ptr = _local_tracing_ptr->get_cached_records_ptr();
 }
 
 inline span_id span_id::make_span_id() {
