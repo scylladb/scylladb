@@ -103,7 +103,7 @@ struct ack_msg_pending {
  * Upon hearing a GossipShutdownMessage, this module will instantly mark the remote node as down in
  * the Failure Detector.
  */
-class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
+class gossiper : public i_failure_detection_event_listener, public enable_shared_from_this<gossiper>, public seastar::peering_sharded_service<gossiper> {
 public:
     using clk = seastar::lowres_system_clock;
     using ignore_features_of_local_node = bool_class<class ignore_features_of_local_node_tag>;
