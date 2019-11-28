@@ -202,16 +202,20 @@ database::database(const db::config& cfg, database_config dbcfg)
         max_inactive_queue_length(),
         [this] {
             ++_stats->sstable_read_queue_overloaded;
-            return std::make_exception_ptr(std::runtime_error("sstable read queue overloaded"));
+            return std::make_exception_ptr(std::runtime_error("_read_concurrency_sem overloaded"));
         })
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(
             max_count_streaming_concurrent_reads,
-            max_memory_streaming_concurrent_reads())
+            max_memory_streaming_concurrent_reads(),
+            std::numeric_limits<size_t>::max(),
+            [] { return std::make_exception_ptr(std::runtime_error("_streaming_concurrency_sem overloaded")); })
     , _system_read_concurrency_sem(
             max_count_system_concurrent_reads,
-            max_memory_system_concurrent_reads())
+            max_memory_system_concurrent_reads(),
+            std::numeric_limits<size_t>::max(),
+            [] { return std::make_exception_ptr(std::runtime_error("_system_read_concurrency_sem overloaded")); })
     , _data_query_stage("data_query", &column_family::query)
     , _mutation_query_stage()
     , _apply_stage("db_apply", &database::do_apply)
