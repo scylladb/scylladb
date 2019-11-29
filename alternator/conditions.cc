@@ -221,13 +221,13 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
     if (!v2.IsObject() || v2.MemberCount() != 1) {
         throw api_error("ValidationException",
                         format("{} requires a single AttributeValue of type String, Number, or Binary",
-                               cmp.diagnostic()));
+                               cmp.diagnostic));
     }
     const auto& kv2 = *v2.MemberBegin();
     if (kv2.name != "S" && kv2.name != "N" && kv2.name != "B") {
         throw api_error("ValidationException",
                         format("{} requires a single AttributeValue of type String, Number, or Binary",
-                               cmp.diagnostic()));
+                               cmp.diagnostic));
     }
     if (!v1 || !v1->IsObject() || v1->MemberCount() != 1) {
         return false;
@@ -237,7 +237,7 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
         return false;
     }
     if (kv1.name == "N") {
-        return cmp(unwrap_number(*v1, cmp.diagnostic()), unwrap_number(v2, cmp.diagnostic()));
+        return cmp(unwrap_number(*v1, cmp.diagnostic), unwrap_number(v2, cmp.diagnostic));
     }
     if (kv1.name == "S") {
         return cmp(std::string_view(kv1.value.GetString(), kv1.value.GetStringLength()),
@@ -252,23 +252,23 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
 
 struct cmp_lt {
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs < rhs; }
-    const char* diagnostic() const { return "LT operator"; }
+    static constexpr const char* diagnostic = "LT operator";
 };
 
 struct cmp_le {
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs < rhs || lhs == rhs; }
-    const char* diagnostic() const { return "LE operator"; }
+    static constexpr const char* diagnostic = "LE operator";
 };
 
 struct cmp_ge {
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs || lhs == rhs; }
-    const char* diagnostic() const { return "GE operator"; }
+    static constexpr const char* diagnostic = "GE operator";
 };
 
 struct cmp_gt {
     // bytes only has <
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs; }
-    const char* diagnostic() const { return "GT operator"; }
+    static constexpr const char* diagnostic = "GT operator";
 };
 
 // Verify one Expect condition on one attribute (whose content is "got")
