@@ -2079,6 +2079,17 @@ def seastar_threads_on_current_shard():
 
 
 class scylla_thread(gdb.Command):
+    """Operations with seastar::threads.
+
+    There are two operations supported:
+    * Switch to seastar thread (see also `scylla unthread`);
+    * Execute command in the context of all existing seastar::threads.
+
+    Run `scylla thread --help` for more information on usage.
+
+    DISCLAIMER: This is a dangerous command with the potential to crash the
+    process if anything goes wrong!
+    """
     def __init__(self):
         gdb.Command.__init__(self, 'scylla thread', gdb.COMMAND_USER,
                              gdb.COMPLETE_COMMAND, True)
@@ -2090,31 +2101,47 @@ class scylla_thread(gdb.Command):
                 with seastar_thread_context(t):
                     gdb.execute(' '.join(args))
 
-    def print_usage(self):
-        gdb.write("""Missing argument. Usage:
-
- scylla thread <seastar::thread_context pointer> - switches to given seastar thread
- scylla thread apply all <cmd>                   - executes cmd in the context of each seastar thread
-
-""")
-
     def invoke(self, arg, for_tty):
-        args = arg.split()
+        parser = argparse.ArgumentParser(description="scylla thread")
+        parser.add_argument("--iamsure", action="store_true", default=False,
+                help="I know what I'm doing and I want to run this command knowing that it might *crash* this process.")
+        parser.add_argument("-s", "--switch", action="store_true", default=False,
+                help="Switch to the given thread."
+                " The corresponding `seastar::thread_context*` is expected to be provided as the positional argument."
+                " Any valid gdb expression that evaluates to such a pointer is accepted."
+                " To leave the thread later, use the `scylla unthread` command.")
+        parser.add_argument("-a", "--apply-all", action="store_true", default=False,
+                help="Execute the command in the context of each seastar::thread."
+                " The command (and its arguments) to execute is expected to be provided as the positional argument.")
+        parser.add_argument("arg", nargs='+')
 
-        if len(args) < 1:
-            self.print_usage()
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
             return
 
-        if args[0] == 'apply':
-            args.pop(0)
-            if len(args) < 2 or args[0] != 'all':
-                self.print_usage()
-                return
-            args.pop(0)
-            self.invoke_apply_all(args)
+        if not args.iamsure:
+            gdb.write("DISCLAIMER: This is a dangerous command with the potential to crash the process if anything goes wrong!"
+                    " Please pass the `--iamsure` flag to acknowledge being fine with this risk.\n")
             return
 
-        addr = gdb.parse_and_eval(args[0])
+        if args.apply_all and args.switch:
+            gdb.write("Only one of `--apply-all` and `--switch` can be used.\n")
+            return
+
+        if not args.apply_all and not args.switch:
+            gdb.write("No command specified, need either `--apply-all` or `--switch`.\n")
+            return
+
+        if args.apply_all:
+            self.invoke_apply_all(args.arg)
+            return
+
+        if len(args.arg) > 1:
+            gdb.write("Expected only one argument for the `--switch` command.\n")
+            return
+
+        addr = gdb.parse_and_eval(args.arg[0])
         ctx = addr.reinterpret_cast(gdb.lookup_type('seastar::thread_context').pointer()).dereference()
         exit_thread_context()
         global active_thread_context
@@ -2123,6 +2150,10 @@ class scylla_thread(gdb.Command):
 
 
 class scylla_unthread(gdb.Command):
+    """Leave the current seastar::thread context.
+
+    Does nothing when there is no active seastar::thread context.
+    """
     def __init__(self):
         gdb.Command.__init__(self, 'scylla unthread', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
@@ -2131,6 +2162,7 @@ class scylla_unthread(gdb.Command):
 
 
 class scylla_threads(gdb.Command):
+    """Find and list all seastar::threads on all shards."""
     def __init__(self):
         gdb.Command.__init__(self, 'scylla threads', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
