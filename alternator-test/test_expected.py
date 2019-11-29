@@ -307,7 +307,6 @@ def test_update_expected_1_lt(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "GE":
-@pytest.mark.xfail(reason="ComparisonOperator=GE in Expected not yet implemented")
 def test_update_expected_1_ge(test_table_s):
     p = random_string()
     # GE should work for string, number, and binary type

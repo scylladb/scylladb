@@ -260,6 +260,11 @@ struct cmp_le {
     const char* diagnostic() const { return "LE operator"; }
 };
 
+struct cmp_ge {
+    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs || lhs == rhs; }
+    const char* diagnostic() const { return "GE operator"; }
+};
+
 struct cmp_gt {
     // bytes only has <
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs; }
@@ -317,6 +322,9 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         case comparison_operator_type::GT:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_compare(got, (*attribute_value_list)[0], cmp_gt{});
+        case comparison_operator_type::GE:
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+            return check_compare(got, (*attribute_value_list)[0], cmp_ge{});
         case comparison_operator_type::BEGINS_WITH:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_BEGINS_WITH(got, (*attribute_value_list)[0]);
