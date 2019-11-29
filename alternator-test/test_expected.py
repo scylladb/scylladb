@@ -171,7 +171,6 @@ def test_update_expected_1_ne_false(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "LE":
-@pytest.mark.xfail(reason="ComparisonOperator=LE in Expected not yet implemented")
 def test_update_expected_1_le(test_table_s):
     p = random_string()
     # LE should work for string, number, and binary type
