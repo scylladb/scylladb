@@ -271,6 +271,59 @@ struct cmp_gt {
     static constexpr const char* diagnostic = "GT operator";
 };
 
+// True if v is between lb and ub, inclusive.  Throws if lb > ub.
+template <typename T>
+bool check_BETWEEN(const T& v, const T& lb, const T& ub) {
+    if (ub < lb) {
+        throw api_error("ValidationException",
+                        format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
+    }
+    return cmp_ge()(v, lb) && cmp_le()(v, ub);
+}
+
+static bool check_BETWEEN(const rjson::value* v, const rjson::value& lb, const rjson::value& ub) {
+    if (!v) {
+        return false;
+    }
+    if (!v->IsObject() || v->MemberCount() != 1) {
+        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", *v));
+    }
+    if (!lb.IsObject() || lb.MemberCount() != 1) {
+        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", lb));
+    }
+    if (!ub.IsObject() || ub.MemberCount() != 1) {
+        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", ub));
+    }
+
+    const auto& kv_v = *v->MemberBegin();
+    const auto& kv_lb = *lb.MemberBegin();
+    const auto& kv_ub = *ub.MemberBegin();
+    if (kv_lb.name != kv_ub.name) {
+        throw api_error(
+                "ValidationException",
+                format("BETWEEN operator requires the same type for lower and upper bound; instead got {} and {}",
+                       kv_lb.name, kv_ub.name));
+    }
+    if (kv_v.name != kv_lb.name) { // Cannot compare different types, so v is NOT between lb and ub.
+        return false;
+    }
+    if (kv_v.name == "N") {
+        const char* diag = "BETWEEN operator";
+        return check_BETWEEN(unwrap_number(*v, diag), unwrap_number(lb, diag), unwrap_number(ub, diag));
+    }
+    if (kv_v.name == "S") {
+        return check_BETWEEN(std::string_view(kv_v.value.GetString(), kv_v.value.GetStringLength()),
+                             std::string_view(kv_lb.value.GetString(), kv_lb.value.GetStringLength()),
+                             std::string_view(kv_ub.value.GetString(), kv_ub.value.GetStringLength()));
+    }
+    if (kv_v.name == "B") {
+        return check_BETWEEN(base64_decode(kv_v.value), base64_decode(kv_lb.value), base64_decode(kv_ub.value));
+    }
+    throw api_error("ValidationException",
+        format("BETWEEN operator requires AttributeValueList elements to be of type String, Number, or Binary; instead got {}",
+               kv_lb.name));
+}
+
 // Verify one Expect condition on one attribute (whose content is "got")
 // for the verify_expected() below.
 // This function returns true or false depending on whether the condition
@@ -337,6 +390,9 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         case comparison_operator_type::NOT_NULL:
             verify_operand_count(attribute_value_list, empty(), *comparison_operator);
             return check_NOT_NULL(got);
+        case comparison_operator_type::BETWEEN:
+            verify_operand_count(attribute_value_list, exact_size(2), *comparison_operator);
+            return check_BETWEEN(got, (*attribute_value_list)[0], (*attribute_value_list)[1]);
         default:
             // FIXME: implement all the missing types, so there will be no default here.
             throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));
