@@ -78,6 +78,10 @@ def test_ping():
     r = connect()
     assert r.ping() == True
 
+def test_echo():
+    r = connect()
+    assert r.echo('hello world') == 'hello world'
+
 def test_select():
     r = connect()
     key = random_string(10)
