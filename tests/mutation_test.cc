@@ -385,6 +385,71 @@ SEASTAR_THREAD_TEST_CASE(test_udt_mutations) {
     });
 }
 
+// Verify that serializing and unserializing a large collection doesn't
+// trigger any large allocations.
+// We create a 8MB collection, composed of key/value pairs of varying
+// size, apply it to a memtable and verify that during usual memtable
+// operations like merging two collections and compaction query results
+// there are no allocations larger than our usual 128KB buffer size.
+SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
+    const auto key_type = int32_type;
+    const auto value_type = utf8_type;
+    const auto collection_type = map_type_impl::get_instance(key_type, value_type, true);
+
+    auto schema = schema_builder("test", "test_large_collection_allocation")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("v", collection_type)
+        .build();
+
+    const std::array sizes_kb{size_t(1), size_t(10), size_t(64)};
+    auto mt = make_lw_shared<memtable>(schema);
+
+    auto make_mutation_with_collection = [&schema, collection_type] (partition_key pk, collection_mutation_description cmd) {
+        const auto& cdef = schema->column_at(column_kind::regular_column, 0);
+
+        mutation mut(schema, pk);
+
+        row r;
+        r.apply(cdef, atomic_cell_or_collection(cmd.serialize(*collection_type)));
+        mut.apply(clustering_row(clustering_key_prefix::make_empty(), {}, {}, std::move(r)));
+
+        return mut;
+    };
+
+    for (size_t i = 0; i != sizes_kb.size(); ++i) {
+        const auto pk = partition_key::from_single_value(*schema, int32_type->decompose(int(i)));
+        const auto blob_size = sizes_kb[i] * 1024;
+        const bytes blob(blob_size, 'a');
+
+        const auto stats_before = memory::stats();
+        const memory::scoped_large_allocation_warning_threshold _{128 * 1024};
+
+        const api::timestamp_type ts1 = 1;
+        const api::timestamp_type ts2 = 2;
+
+        collection_mutation_description cmd1;
+        collection_mutation_description cmd2;
+
+        for (size_t j = 0; j < size_t(8 * 1024 * 1024) / blob_size; ++j) { // we want no more than 8MB total size
+            cmd1.cells.emplace_back(int32_type->decompose(int(j)), atomic_cell::make_live(*value_type, ts1, blob, atomic_cell::collection_member::yes));
+            cmd2.cells.emplace_back(int32_type->decompose(int(j)), atomic_cell::make_live(*value_type, ts2, blob, atomic_cell::collection_member::yes));
+        }
+
+        mt->apply(make_mutation_with_collection(pk, std::move(cmd1)));
+        mt->apply(make_mutation_with_collection(pk, std::move(cmd2))); // this should trigger a merge of the two collections
+
+        auto rd = mt->make_flat_reader(schema);
+        auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
+        BOOST_REQUIRE(res_mut_opt);
+
+        res_mut_opt->partition().compact_for_query(*schema, gc_clock::now(), {query::full_clustering_range}, true, false,
+                std::numeric_limits<uint32_t>::max());
+
+        const auto stats_after = memory::stats();
+        BOOST_REQUIRE_EQUAL(stats_before.large_allocations(), stats_after.large_allocations());
+    }
+}
+
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     return seastar::async([] {
     storage_service_for_tests ssft;
