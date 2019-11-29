@@ -825,6 +825,7 @@ redis = [
         'redis/commands/get.cc',
         'redis/commands/del.cc',
         'redis/commands/select.cc',
+        'redis/commands/echo.cc',
         ]
 
 idls = ['idl/gossip_digest.idl.hh',
