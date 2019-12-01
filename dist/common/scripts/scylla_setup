@@ -103,13 +103,16 @@ def do_verify_package(pkg):
         sys.exit(1)
 
 def list_block_devices():
+    devices = []
     s = out('lsblk --help')
-    if re.match(r'\s*-p', s, flags=re.MULTILINE):
-        s = out('lsblk -pnr -e 7,252')
-        devices = re.findall(r'^(\S+) ', s, flags=re.MULTILINE)
+    if re.search(r'\s*-p', s, flags=re.MULTILINE):
+        s = out('lsblk -pnr')
+        res = re.findall(r'^(\S+) \S+ \S+ \S+ \S+ (\S+)', s, flags=re.MULTILINE)
+        for r in res:
+            if r[1] != 'rom' and r[1] != 'loop':
+                devices.append(r[0])
     else:
-        devices = []
-        for p in ['/dev/sd*', '/dev/hd*', '/dev/xvd*', '/dev/nvme*', '/dev/mapper/*']:
+        for p in ['/dev/sd*', '/dev/hd*', '/dev/xvd*', '/dev/vd*', '/dev/nvme*', '/dev/mapper/*']:
             devices.extend([d for d in glob.glob(p) if d != '/dev/mapper/control'])
     return devices
 
