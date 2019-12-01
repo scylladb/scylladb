@@ -355,17 +355,19 @@ struct cmp_lt {
 };
 
 struct cmp_le {
+    // bytes only has <, so we cannot use <=.
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs < rhs || lhs == rhs; }
     static constexpr const char* diagnostic = "LE operator";
 };
 
 struct cmp_ge {
+    // bytes only has <, so we cannot use >=.
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs || lhs == rhs; }
     static constexpr const char* diagnostic = "GE operator";
 };
 
 struct cmp_gt {
-    // bytes only has <
+    // bytes only has <, so we cannot use >.
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs; }
     static constexpr const char* diagnostic = "GT operator";
 };
