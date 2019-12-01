@@ -171,7 +171,6 @@ def test_update_expected_1_ne_false(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "LE":
-@pytest.mark.xfail(reason="ComparisonOperator=LE in Expected not yet implemented")
 def test_update_expected_1_le(test_table_s):
     p = random_string()
     # LE should work for string, number, and binary type
@@ -308,7 +307,6 @@ def test_update_expected_1_lt(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "GE":
-@pytest.mark.xfail(reason="ComparisonOperator=GE in Expected not yet implemented")
 def test_update_expected_1_ge(test_table_s):
     p = random_string()
     # GE should work for string, number, and binary type
@@ -798,13 +796,13 @@ def test_update_expected_1_in(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "BETWEEN":
-@pytest.mark.xfail(reason="ComparisonOperator=BETWEEN in Expected not yet implemented")
 def test_update_expected_1_between(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
         AttributeUpdates={'a': {'Value': 2, 'Action': 'PUT'},
                           'b': {'Value': 'cat', 'Action': 'PUT'},
-                          'c': {'Value': bytearray('cat', 'utf-8'), 'Action': 'PUT'}})
+                          'c': {'Value': bytearray('cat', 'utf-8'), 'Action': 'PUT'},
+                          'd': {'Value': set([2, 4, 7]), 'Action': 'PUT'}})
     # true cases:
     test_table_s.update_item(Key={'p': p},
         AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
@@ -842,6 +840,10 @@ def test_update_expected_1_between(test_table_s):
             AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
             Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': ['cat', 'dog']}}
         )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'q': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [0, 100]}})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 6
     # The given AttributeValueList array must contain exactly two items of the
     # same type, and in the right order. Any other input is considered a validation
@@ -861,7 +863,15 @@ def test_update_expected_1_between(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': ['dog', 'aardvark']}})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
             Expected={'a': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [4, 'dog']}})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+            Expected={'d': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [set([1]), set([2])]}})
 
 ##############################################################################
 # Instead of ComparisonOperator and AttributeValueList, one can specify either

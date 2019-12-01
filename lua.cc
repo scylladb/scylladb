@@ -471,10 +471,6 @@ static sstring get_string(lua_State *l, int index) {
 
 static data_value convert_from_lua(lua_slice_state &l, const data_type& type);
 
-std::ostream& operator<<(std::ostream& os, const big_decimal& p) {
-    return os << p.to_string();
-}
-
 namespace {
 struct lua_date_table {
     // The lua date table is documented at https://www.lua.org/pil/22.1.html

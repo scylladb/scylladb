@@ -221,13 +221,13 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
     if (!v2.IsObject() || v2.MemberCount() != 1) {
         throw api_error("ValidationException",
                         format("{} requires a single AttributeValue of type String, Number, or Binary",
-                               cmp.diagnostic()));
+                               cmp.diagnostic));
     }
     const auto& kv2 = *v2.MemberBegin();
     if (kv2.name != "S" && kv2.name != "N" && kv2.name != "B") {
         throw api_error("ValidationException",
                         format("{} requires a single AttributeValue of type String, Number, or Binary",
-                               cmp.diagnostic()));
+                               cmp.diagnostic));
     }
     if (!v1 || !v1->IsObject() || v1->MemberCount() != 1) {
         return false;
@@ -237,7 +237,7 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
         return false;
     }
     if (kv1.name == "N") {
-        return cmp(unwrap_number(*v1, cmp.diagnostic()), unwrap_number(v2, cmp.diagnostic()));
+        return cmp(unwrap_number(*v1, cmp.diagnostic), unwrap_number(v2, cmp.diagnostic));
     }
     if (kv1.name == "S") {
         return cmp(std::string_view(kv1.value.GetString(), kv1.value.GetStringLength()),
@@ -252,14 +252,77 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
 
 struct cmp_lt {
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs < rhs; }
-    const char* diagnostic() const { return "LT operator"; }
+    static constexpr const char* diagnostic = "LT operator";
+};
+
+struct cmp_le {
+    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs < rhs || lhs == rhs; }
+    static constexpr const char* diagnostic = "LE operator";
+};
+
+struct cmp_ge {
+    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs || lhs == rhs; }
+    static constexpr const char* diagnostic = "GE operator";
 };
 
 struct cmp_gt {
     // bytes only has <
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs; }
-    const char* diagnostic() const { return "GT operator"; }
+    static constexpr const char* diagnostic = "GT operator";
 };
+
+// True if v is between lb and ub, inclusive.  Throws if lb > ub.
+template <typename T>
+bool check_BETWEEN(const T& v, const T& lb, const T& ub) {
+    if (ub < lb) {
+        throw api_error("ValidationException",
+                        format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
+    }
+    return cmp_ge()(v, lb) && cmp_le()(v, ub);
+}
+
+static bool check_BETWEEN(const rjson::value* v, const rjson::value& lb, const rjson::value& ub) {
+    if (!v) {
+        return false;
+    }
+    if (!v->IsObject() || v->MemberCount() != 1) {
+        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", *v));
+    }
+    if (!lb.IsObject() || lb.MemberCount() != 1) {
+        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", lb));
+    }
+    if (!ub.IsObject() || ub.MemberCount() != 1) {
+        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", ub));
+    }
+
+    const auto& kv_v = *v->MemberBegin();
+    const auto& kv_lb = *lb.MemberBegin();
+    const auto& kv_ub = *ub.MemberBegin();
+    if (kv_lb.name != kv_ub.name) {
+        throw api_error(
+                "ValidationException",
+                format("BETWEEN operator requires the same type for lower and upper bound; instead got {} and {}",
+                       kv_lb.name, kv_ub.name));
+    }
+    if (kv_v.name != kv_lb.name) { // Cannot compare different types, so v is NOT between lb and ub.
+        return false;
+    }
+    if (kv_v.name == "N") {
+        const char* diag = "BETWEEN operator";
+        return check_BETWEEN(unwrap_number(*v, diag), unwrap_number(lb, diag), unwrap_number(ub, diag));
+    }
+    if (kv_v.name == "S") {
+        return check_BETWEEN(std::string_view(kv_v.value.GetString(), kv_v.value.GetStringLength()),
+                             std::string_view(kv_lb.value.GetString(), kv_lb.value.GetStringLength()),
+                             std::string_view(kv_ub.value.GetString(), kv_ub.value.GetStringLength()));
+    }
+    if (kv_v.name == "B") {
+        return check_BETWEEN(base64_decode(kv_v.value), base64_decode(kv_lb.value), base64_decode(kv_ub.value));
+    }
+    throw api_error("ValidationException",
+        format("BETWEEN operator requires AttributeValueList elements to be of type String, Number, or Binary; instead got {}",
+               kv_lb.name));
+}
 
 // Verify one Expect condition on one attribute (whose content is "got")
 // for the verify_expected() below.
@@ -306,9 +369,15 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         case comparison_operator_type::LT:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_compare(got, (*attribute_value_list)[0], cmp_lt{});
+        case comparison_operator_type::LE:
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+            return check_compare(got, (*attribute_value_list)[0], cmp_le{});
         case comparison_operator_type::GT:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_compare(got, (*attribute_value_list)[0], cmp_gt{});
+        case comparison_operator_type::GE:
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+            return check_compare(got, (*attribute_value_list)[0], cmp_ge{});
         case comparison_operator_type::BEGINS_WITH:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_BEGINS_WITH(got, (*attribute_value_list)[0]);
@@ -321,6 +390,9 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         case comparison_operator_type::NOT_NULL:
             verify_operand_count(attribute_value_list, empty(), *comparison_operator);
             return check_NOT_NULL(got);
+        case comparison_operator_type::BETWEEN:
+            verify_operand_count(attribute_value_list, exact_size(2), *comparison_operator);
+            return check_BETWEEN(got, (*attribute_value_list)[0], (*attribute_value_list)[1]);
         default:
             // FIXME: implement all the missing types, so there will be no default here.
             throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));
