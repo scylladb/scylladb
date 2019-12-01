@@ -111,8 +111,6 @@ is_podman="$(docker --version | grep -o podman)"
 
 docker_common_args=()
 
-z=":z"
-
 if [ -z "$is_podman" ]; then
     docker_common_args+=(
        -u "$(id -u):$(id -g)"
@@ -120,14 +118,10 @@ if [ -z "$is_podman" ]; then
        -v /etc/passwd:/etc/passwd:ro
        -v /etc/group:/etc/group:ro
        )
-else
-    # podman accesses filesystem as the calling user, so selinux relabeling
-    # is not needed; moreover it objects to relabeling /tmp
-    z=""
 fi
 
 if [ "$PWD" != "$toplevel" ]; then
-     docker_common_args+=(-v "$toplevel:$toplevel$z")
+     docker_common_args+=(-v "$toplevel:$toplevel:z")
 fi
 
 # podman cannot relabel system directories like /tmp, but it can
@@ -138,9 +132,9 @@ tmpdir=$(mktemp -d)
 docker_common_args+=(
        --network host \
        --cap-add SYS_PTRACE \
-       -v "$PWD:$PWD$z" \
+       -v "$PWD:$PWD:z" \
        -v "$tmpdir:/tmp:z" \
-       -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO$z" \
+       -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO:z" \
        -v /etc/localtime:/etc/localtime:ro \
        -w "$PWD" \
        -e HOME \
