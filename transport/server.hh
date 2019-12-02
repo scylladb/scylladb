@@ -135,7 +135,9 @@ private:
     const cql3::cql_config& _cql_config;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
-            const cql3::cql_config& cql_config, cql_server_config config);
+            const cql3::cql_config& cql_config,
+            service::migration_notifier& mn,
+            cql_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
     future<> stop();
@@ -263,8 +265,9 @@ class cql_server::event_notifier : public service::migration_listener,
     std::set<cql_server::connection*> _status_change_listeners;
     std::set<cql_server::connection*> _schema_change_listeners;
     std::unordered_map<gms::inet_address, event::status_change::status_type> _last_status_change;
+    service::migration_notifier& _mnotifier;
 public:
-    event_notifier();
+    event_notifier(service::migration_notifier& mn);
     ~event_notifier();
     void register_event(cql_transport::event::event_type et, cql_server::connection* conn);
     void unregister_connection(cql_server::connection* conn);
