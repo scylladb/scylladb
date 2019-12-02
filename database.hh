@@ -92,6 +92,7 @@
 #include <unordered_set>
 #include "disk-error-handler.hh"
 #include "utils/updateable_value.hh"
+#include "user_types_metadata.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -1044,16 +1045,6 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         sstables::read_monitor_generator& monitor_generator = sstables::default_read_monitor_generator());
 
 class user_types_metadata;
-
-// Customize deleter so that lw_shared_ptr can work with an incomplete user_types_metadata class
-namespace seastar {
-
-template <>
-struct lw_shared_ptr_deleter<user_types_metadata> {
-    static void dispose(user_types_metadata* o);
-};
-
-}
 
 class keyspace_metadata final {
     sstring _name;

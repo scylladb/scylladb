@@ -97,19 +97,6 @@ using namespace db;
 
 logging::logger dblog("database");
 
-namespace seastar {
-
-void
-lw_shared_ptr_deleter<user_types_metadata>::dispose(user_types_metadata* o) {
-    delete o;
-}
-
-}
-
-template
-user_types_metadata*
-seastar::internal::lw_shared_ptr_accessors<user_types_metadata, void>::to_value(seastar::lw_shared_ptr_counter_base*);
-
 sstables::sstable::version_types get_highest_supported_format() {
     return service::get_local_storage_service().sstables_format();
 }
