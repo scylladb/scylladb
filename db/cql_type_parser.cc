@@ -83,8 +83,12 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
     }
 
     auto raw = parse_raw(str);
-    auto cql = raw->prepare_internal(keyspace, *user_types);
-    return cql.get_type();
+    if (user_types) {
+        return raw->prepare_internal(keyspace, *user_types).get_type();
+    } else {
+        user_types_metadata empty;
+        return raw->prepare_internal(keyspace, empty).get_type();
+    }
 }
 
 data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& type) {
