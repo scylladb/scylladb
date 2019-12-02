@@ -39,7 +39,7 @@
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
-#include "service/migration_listener.hh"
+#include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 #include "database.hh"
 

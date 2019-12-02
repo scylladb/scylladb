@@ -85,10 +85,11 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, database& db, query_processor::memory_config mcfg)
+query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, query_processor::memory_config mcfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
+        , _mnotifier(mn)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::min(std::chrono::milliseconds(_db.get_config().permissions_validity_in_ms()),
@@ -442,14 +443,14 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
 
             });
 
-    service::get_local_migration_manager().register_listener(_migration_subscriber.get());
+    _mnotifier.register_listener(_migration_subscriber.get());
 }
 
 query_processor::~query_processor() {
 }
 
 future<> query_processor::stop() {
-    service::get_local_migration_manager().unregister_listener(_migration_subscriber.get());
+    _mnotifier.unregister_listener(_migration_subscriber.get());
     return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
 }
 
