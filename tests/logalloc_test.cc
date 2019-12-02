@@ -480,7 +480,7 @@ SEASTAR_TEST_CASE(test_region_groups) {
     return seastar::async([] {
         logalloc::region_group just_four;
         logalloc::region_group all;
-        logalloc::region_group one_and_two(&all);
+        logalloc::region_group one_and_two("one_and_two", &all);
 
         auto one = std::make_unique<logalloc::region>(one_and_two);
         auto two = std::make_unique<logalloc::region>(one_and_two);
@@ -594,8 +594,10 @@ inline void quiesce(FutureType&& fut) {
 // Simple RAII structure that wraps around a region_group
 // Not using defer because we usually employ many region groups
 struct test_region_group: public logalloc::region_group {
-    test_region_group(region_group* parent, region_group_reclaimer& reclaimer) : logalloc::region_group(parent, reclaimer) {}
-    test_region_group(region_group_reclaimer& reclaimer) : logalloc::region_group(nullptr, reclaimer) {}
+    test_region_group(region_group* parent, region_group_reclaimer& reclaimer)
+        : logalloc::region_group("test_region_group", parent, reclaimer) {}
+    test_region_group(region_group_reclaimer& reclaimer)
+        : logalloc::region_group("test_region_group", nullptr, reclaimer) {}
 
     ~test_region_group() {
         shutdown().get();
@@ -960,8 +962,8 @@ public:
         return _rg;
     }
 
-    test_reclaimer(size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(this), _rg(*this) {}
-    test_reclaimer(test_reclaimer& parent, size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(&parent), _rg(&parent._rg, *this) {}
+    test_reclaimer(size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(this), _rg("test_reclaimer RG", *this) {}
+    test_reclaimer(test_reclaimer& parent, size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(&parent), _rg("test_reclaimer RG", &parent._rg, *this) {}
 
     future<> unleash(future<> after) {
         // Result indirectly forwarded to _unleashed (returned below).
@@ -1144,14 +1146,14 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_no_double_r
 
 // Reproduces issue #2021
 SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_region_group_size) {
-    return seastar::async([] {
+    return seastar::async([test_name = get_name()] {
 #ifndef SEASTAR_DEFAULT_ALLOCATOR // Because we need memory::stats().free_memory();
         logging::logger_registry().set_logger_level("lsa", seastar::log_level::debug);
 
         auto free_space = memory::stats().free_memory();
         size_t threshold = size_t(0.75 * free_space);
         region_group_reclaimer recl(threshold, threshold);
-        region_group gr(recl);
+        region_group gr(test_name, recl);
         auto close_gr = defer([&gr] { gr.shutdown().get(); });
         region r(gr);
 
@@ -1197,7 +1199,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
 }
 
 SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
-    return seastar::async([] {
+    return seastar::async([test_name = get_name()] {
         size_t hard_threshold = logalloc::segment_size * 8;
         size_t soft_threshold = hard_threshold / 2;
 
@@ -1219,7 +1221,7 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
         };
 
         reclaimer recl(hard_threshold, soft_threshold);
-        region_group gr(recl);
+        region_group gr(test_name, recl);
         auto close_gr = defer([&gr] { gr.shutdown().get(); });
         region r(gr);
 

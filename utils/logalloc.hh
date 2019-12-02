@@ -208,7 +208,20 @@ class region_group {
         }
     };
 
-    struct on_request_expiry {
+    class on_request_expiry {
+        class blocked_requests_timed_out_error : public timed_out_error {
+            const sstring _msg;
+        public:
+            explicit blocked_requests_timed_out_error(sstring name)
+                : _msg(std::move(name) + ": timed out") {}
+            virtual const char* what() const noexcept override {
+                return _msg.c_str();
+            }
+        };
+
+        sstring _name;
+    public:
+        explicit on_request_expiry(sstring name) : _name(std::move(name)) {}
         void operator()(std::unique_ptr<allocating_function>&) noexcept;
     };
 
@@ -256,10 +269,11 @@ public:
     // The deferred_work_sg parameter specifies a scheduling group in which to run allocations
     // (given to run_when_memory_available()) when they must be deferred due to lack of memory
     // at the time the call to run_when_memory_available() was made.
-    region_group(region_group_reclaimer& reclaimer = no_reclaimer,
+    region_group(sstring name = "(unnamed region_group)",
+            region_group_reclaimer& reclaimer = no_reclaimer,
             scheduling_group deferred_work_sg = default_scheduling_group())
-            : region_group(nullptr, reclaimer, deferred_work_sg) {}
-    region_group(region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer,
+        : region_group(name, nullptr, reclaimer, deferred_work_sg) {}
+    region_group(sstring name, region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer,
             scheduling_group deferred_work_sg = default_scheduling_group());
     region_group(region_group&& o) = delete;
     region_group(const region_group&) = delete;
