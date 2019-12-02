@@ -21,6 +21,7 @@
 import pytest
 import redis
 import logging
+import requests
 from util import random_string, connect
 
 logger = logging.getLogger('redis-test')
@@ -100,9 +101,15 @@ def test_select():
     r.delete(key)
     assert r.get(key) == None
 
-    logger.debug('Try to switch to invalid database 16')
+def test_select_invalid_db():
+    r = connect()
+    logger.debug('Assume that user will not set redis_database_count to be bigger as 100')
+    invalid_db_idx = 100
+
+    logger.debug('Try to switch to invalid database %d' % invalid_db_idx)
     try:
-        r.execute_command('SELECT 16')
-        raise Exception('Expect that `SELECT 16` does not work')
+        query = 'SELECT %d' % invalid_db_idx
+        r.execute_command(query)
+        raise Exception('Expect that `%s` does not work' % query)
     except redis.exceptions.ResponseError as ex:
         assert str(ex) == 'invalid DB index'
