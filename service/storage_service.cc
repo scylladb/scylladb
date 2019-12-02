@@ -1445,12 +1445,7 @@ future<> storage_service::drain_on_shutdown() {
             }).get();
             slogger.info("Drain on shutdown: shutdown commitlog done");
 
-            // NOTE: We currently don't destroy migration_manager nor
-            // storage_service in scylla, so when we reach here
-            // migration_manager should to be still alive. Be careful, when
-            // scylla starts to destroy migration_manager in the shutdown
-            // process.
-            service::get_local_migration_manager().unregister_listener(&ss);
+            ss._mnotifier.local().unregister_listener(&ss);
 
             slogger.info("Drain on shutdown: done");
         });
@@ -1527,9 +1522,9 @@ future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
 #endif
         _initialized = true;
 
-        // Register storage_service to migration_manager so we can update
+        // Register storage_service to migration_notifier so we can update
         // pending ranges when keyspace is chagned
-        service::get_local_migration_manager().register_listener(this);
+        _mnotifier.local().register_listener(this);
 #if 0
         try
         {
