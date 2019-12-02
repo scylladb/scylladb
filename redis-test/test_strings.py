@@ -113,3 +113,23 @@ def test_select_invalid_db():
         raise Exception('Expect that `%s` does not work' % query)
     except redis.exceptions.ResponseError as ex:
         assert str(ex) == 'invalid DB index'
+
+def test_redis_database_count():
+    """
+    Test enough keyspaces can be prepared if redis_database_count is set to be larger than default 16.
+    Test will fail if redis_database_count isn't set correctly.
+    """
+    logger.info('Make sure redis_database_count is set to be larger than default 16')
+
+    r = connect()
+
+    try:
+        r.execute_command('SELECT 16')  # Use the select to verify the redis_database_count configuration
+        key = random_string(10)
+        r.get(key)
+    except redis.exceptions.ResponseError as ex:
+        if str(ex) == 'invalid DB index':
+            raise Exception('Make sure redis_database_count is set to be larger than default 16')
+    finally:
+        logger.debug('Switch back to default database 0')
+        assert r.execute_command('SELECT 0') == 'OK'
