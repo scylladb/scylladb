@@ -1052,7 +1052,7 @@ class keyspace_metadata final {
     std::map<sstring, sstring> _strategy_options;
     std::unordered_map<sstring, schema_ptr> _cf_meta_data;
     bool _durable_writes;
-    lw_shared_ptr<user_types_metadata> _user_types;
+    user_types_metadata _user_types;
 public:
     keyspace_metadata(sstring name,
                  sstring strategy_name,
@@ -1064,7 +1064,7 @@ public:
                  std::map<sstring, sstring> strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs,
-                 lw_shared_ptr<user_types_metadata> user_types);
+                 user_types_metadata user_types);
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(sstring name,
                  sstring strategy_name,
@@ -1087,7 +1087,12 @@ public:
     bool durable_writes() const {
         return _durable_writes;
     }
-    const lw_shared_ptr<user_types_metadata>& user_types() const;
+    user_types_metadata& user_types() {
+        return _user_types;
+    }
+    const user_types_metadata& user_types() const {
+        return _user_types;
+    }
     void add_or_update_column_family(const schema_ptr& s) {
         _cf_meta_data[s->cf_name()] = s;
     }

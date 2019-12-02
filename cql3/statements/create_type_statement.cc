@@ -73,7 +73,7 @@ future<> create_type_statement::check_access(const service::client_state& state)
 
 inline bool create_type_statement::type_exists_in(::keyspace& ks) const
 {
-    auto&& keyspace_types = ks.metadata()->user_types()->get_all_types();
+    auto&& keyspace_types = ks.metadata()->user_types().get_all_types();
     return keyspace_types.find(_name.get_user_type_name()) != keyspace_types.end();
 }
 

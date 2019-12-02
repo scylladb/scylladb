@@ -72,7 +72,7 @@ cql3_type::kind_enum_set::prepared cql3_type::get_kind() const {
 cql3_type cql3_type::raw::prepare(database& db, const sstring& keyspace) {
     try {
         auto&& ks = db.find_keyspace(keyspace);
-        return prepare_internal(keyspace, *ks.metadata()->user_types());
+        return prepare_internal(keyspace, ks.metadata()->user_types());
     } catch (no_such_keyspace& nsk) {
         throw exceptions::invalid_request_exception("Unknown keyspace " + keyspace);
     }

@@ -70,18 +70,12 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
         return i->second.get_type();
     }
 
-    lw_shared_ptr<user_types_metadata> user_types;
-    if (service::get_storage_proxy().local_is_initialized()) {
-        user_types = service::get_storage_proxy().local().get_db().local().find_keyspace(keyspace).metadata()->user_types();
-    }
-
+    const auto& sp = service::get_storage_proxy();
+    const user_types_metadata& user_types =
+            sp.local_is_initialized() ? sp.local().get_db().local().find_keyspace(keyspace).metadata()->user_types()
+                                      : user_types_metadata{};
     auto raw = parse_raw(str);
-    if (user_types) {
-        return raw->prepare_internal(keyspace, *user_types).get_type();
-    } else {
-        user_types_metadata empty;
-        return raw->prepare_internal(keyspace, empty).get_type();
-    }
+    return raw->prepare_internal(keyspace, user_types).get_type();
 }
 
 class db::cql_type_parser::raw_builder::impl {
@@ -157,7 +151,7 @@ public:
         // Create a copy of the existing types, so that we don't
         // modify the one in the keyspace. It is up to the caller to
         // do that.
-        user_types_metadata types = *_ks.user_types();
+        user_types_metadata types = _ks.user_types();
 
         const auto &ks_name = _ks.name();
         std::vector<user_type> created;
