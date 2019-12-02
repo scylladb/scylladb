@@ -56,7 +56,7 @@ static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {
         });
 }
 
-data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str, lw_shared_ptr<user_types_metadata> user_types) {
+data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str) {
     static const thread_local std::unordered_map<sstring, cql3::cql3_type> native_types = []{
         std::unordered_map<sstring, cql3::cql3_type> res;
         for (auto& nt : cql3::cql3_type::values()) {
@@ -70,7 +70,8 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
         return i->second.get_type();
     }
 
-    if (!user_types && service::get_storage_proxy().local_is_initialized()) {
+    lw_shared_ptr<user_types_metadata> user_types;
+    if (service::get_storage_proxy().local_is_initialized()) {
         user_types = service::get_storage_proxy().local().get_db().local().find_keyspace(keyspace).metadata()->user_types();
     }
     // special-case top-level UDTs
@@ -89,10 +90,6 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
         user_types_metadata empty;
         return raw->prepare_internal(keyspace, empty).get_type();
     }
-}
-
-data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& type) {
-    return parse(keyspace, type, {});
 }
 
 class db::cql_type_parser::raw_builder::impl {
