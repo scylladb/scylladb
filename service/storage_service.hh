@@ -150,6 +150,7 @@ private:
     gms::gossiper& _gossiper;
     sharded<auth::service>& _auth_service;
     sharded<cql3::cql_config>& _cql_config;
+    sharded<service::migration_notifier>& _mnotifier;
     // Note that this is obviously only valid for the current shard. Users of
     // this facility should elect a shard to be the coordinator based on any
     // given objective criteria
@@ -168,7 +169,7 @@ private:
     size_t _service_memory_total;
     semaphore _service_memory_limiter;
 public:
-    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, /* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
+    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,/* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -2384,7 +2385,8 @@ public:
 
 future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service,
         sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service, storage_service_config config);
+        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
+        storage_service_config config, sharded<service::migration_notifier>& mn);
 future<> deinit_storage_service();
 
 future<> read_sstables_format(distributed<storage_service>& ss);
