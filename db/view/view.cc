@@ -1157,16 +1157,16 @@ future<> mutate_MV(
     return f.finally([fs = std::move(fs)] { });
 }
 
-view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_dist_ks, service::migration_manager& mm)
+view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_dist_ks, service::migration_notifier& mn)
         : _db(db)
         , _sys_dist_ks(sys_dist_ks)
-        , _mm(mm) {
+        , _mnotifier(mn) {
 }
 
-future<> view_builder::start() {
-    _started = seastar::async([this] {
+future<> view_builder::start(service::migration_manager& mm) {
+    _started = seastar::async([this, &mm] {
         // Wait for schema agreement even if we're a seed node.
-        while (!_mm.have_schema_agreement()) {
+        while (!mm.have_schema_agreement()) {
             if (_as.abort_requested()) {
                 return;
             }
@@ -1175,7 +1175,7 @@ future<> view_builder::start() {
         auto built = system_keyspace::load_built_views().get0();
         auto in_progress = system_keyspace::load_view_build_progress().get0();
         calculate_shard_build_step(std::move(built), std::move(in_progress)).get();
-        _mm.register_listener(this);
+        _mnotifier.register_listener(this);
         _current_step = _base_to_build_step.begin();
         // Waited on indirectly in stop().
         (void)_build_step.trigger();
@@ -1187,7 +1187,7 @@ future<> view_builder::stop() {
     vlogger.info("Stopping view builder");
     _as.request_abort();
     return _started.finally([this] {
-        _mm.unregister_listener(this);
+        _mnotifier.unregister_listener(this);
         return _sem.wait().then([this] {
             _sem.broken();
             return _build_step.join();

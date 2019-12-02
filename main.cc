@@ -994,8 +994,10 @@ int main(int ac, char** av) {
             static sharded<db::view::view_builder> view_builder;
             if (cfg->view_building()) {
                 supervisor::notify("starting the view builder");
-                view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm)).get();
-                view_builder.invoke_on_all(&db::view::view_builder::start).get();
+                view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm_notifier)).get();
+                view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) { 
+                    return vb.start(mm.local());
+                }).get();
             }
 
             // Truncate `clients' CF - this table should not persist between server restarts.

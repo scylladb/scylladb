@@ -146,7 +146,7 @@ class view_builder final : public service::migration_listener::only_view_notific
 
     database& _db;
     db::system_distributed_keyspace& _sys_dist_ks;
-    service::migration_manager& _mm;
+    service::migration_notifier& _mnotifier;
     base_to_build_step_type _base_to_build_step;
     base_to_build_step_type::iterator _current_step = _base_to_build_step.end();
     serialized_action _build_step{std::bind(&view_builder::do_build_step, this)};
@@ -174,7 +174,7 @@ public:
     static constexpr size_t batch_memory_max = 1024*1024;
 
 public:
-    view_builder(database&, db::system_distributed_keyspace&, service::migration_manager&);
+    view_builder(database&, db::system_distributed_keyspace&, service::migration_notifier&);
     view_builder(view_builder&&) = delete;
 
     /**
@@ -182,7 +182,7 @@ public:
      * Requires that all views have been loaded from the system tables and are accessible
      * through the database, and that the commitlog has been replayed.
      */
-    future<> start();
+    future<> start(service::migration_manager&);
 
     /**
      * Stops the view building process.

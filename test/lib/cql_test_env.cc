@@ -493,8 +493,10 @@ public:
             });
 
             auto view_builder = ::make_shared<seastar::sharded<db::view::view_builder>>();
-            view_builder->start(std::ref(*db), std::ref(sys_dist_ks), std::ref(mm)).get();
-            view_builder->invoke_on_all(&db::view::view_builder::start).get();
+            view_builder->start(std::ref(*db), std::ref(sys_dist_ks), std::ref(mm_notif)).get();
+            view_builder->invoke_on_all([&mm] (db::view::view_builder& vb) {
+                return vb.start(mm.local());
+            }).get();
             auto stop_view_builder = defer([view_builder] {
                 view_builder->stop().get();
             });
