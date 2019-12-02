@@ -74,14 +74,6 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
     if (service::get_storage_proxy().local_is_initialized()) {
         user_types = service::get_storage_proxy().local().get_db().local().find_keyspace(keyspace).metadata()->user_types();
     }
-    // special-case top-level UDTs
-    if (user_types) {
-        auto& map = user_types->get_all_types();
-        auto i = map.find(utf8_type->decompose(str));
-        if (i != map.end()) {
-            return i->second;
-        }
-    }
 
     auto raw = parse_raw(str);
     if (user_types) {
