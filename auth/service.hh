@@ -43,6 +43,7 @@ class query_processor;
 
 namespace service {
 class migration_manager;
+class migration_notifier;
 class migration_listener;
 }
 
@@ -85,7 +86,7 @@ class service final : public seastar::peering_sharded_service<service> {
 
     cql3::query_processor& _qp;
 
-    ::service::migration_manager& _migration_manager;
+    ::service::migration_notifier& _mnotifier;
 
     std::unique_ptr<authorizer> _authorizer;
 
@@ -100,7 +101,7 @@ public:
     service(
             permissions_cache_config,
             cql3::query_processor&,
-            ::service::migration_manager&,
+            ::service::migration_notifier&,
             std::unique_ptr<authorizer>,
             std::unique_ptr<authenticator>,
             std::unique_ptr<role_manager>);
@@ -113,10 +114,11 @@ public:
     service(
             permissions_cache_config,
             cql3::query_processor&,
+            ::service::migration_notifier&,
             ::service::migration_manager&,
             const service_config&);
 
-    future<> start();
+    future<> start(::service::migration_manager&);
 
     future<> stop();
 
@@ -162,7 +164,7 @@ public:
 private:
     future<bool> has_existing_legacy_users() const;
 
-    future<> create_keyspace_if_missing() const;
+    future<> create_keyspace_if_missing(::service::migration_manager& mm) const;
 };
 
 future<bool> has_superuser(const service&, const authenticated_user&);

@@ -792,10 +792,13 @@ void storage_service::join_token_ring(int delay) {
     _auth_service.start(
             permissions_cache_config_from_db_config(_db.local().get_config()),
             std::ref(cql3::get_query_processor()),
+            std::ref(_mnotifier),
             std::ref(service::get_migration_manager()),
             auth_service_config_from_db_config(_db.local().get_config())).get();
 
-    _auth_service.invoke_on_all(&auth::service::start).get();
+    _auth_service.invoke_on_all([] (auth::service& auth) {
+        return auth.start(service::get_local_migration_manager());
+    }).get();
 
     supervisor::notify("starting tracing");
     tracing::tracing::start_tracing().get();
