@@ -65,14 +65,6 @@ private:
 public:
     explicit migration_manager(migration_notifier&);
 
-    void register_listener(migration_listener* listener) { // Temporary
-        _notifier.register_listener(listener);
-    }
-
-    void unregister_listener(migration_listener* listener) { // Temporary
-        _notifier.unregister_listener(listener);
-    }
-
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }
 
