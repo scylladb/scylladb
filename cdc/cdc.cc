@@ -62,7 +62,7 @@ template<> struct hash<std::pair<net::inet_address, unsigned int>> {
 
 using namespace std::chrono_literals;
 
-static logging::logger cdc_log("cdc");
+logging::logger cdc_log("cdc");
 
 namespace cdc {
 static schema_ptr create_log_schema(const schema&, std::optional<utils::UUID> = {});
