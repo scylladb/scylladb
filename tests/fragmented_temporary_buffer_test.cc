@@ -24,7 +24,7 @@
 
 #include "utils/fragmented_temporary_buffer.hh"
 
-#include "random-utils.hh"
+#include "test/lib/random_utils.hh"
 
 struct {
     [[noreturn]]

@@ -28,15 +28,15 @@
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 #include "tests/mutation_source_test.hh"
-#include "tests/result_set_assertions.hh"
+#include "test/lib/result_set_assertions.hh"
 #include "service/migration_manager.hh"
 #include "schema_builder.hh"
 #include "schema_registry.hh"
 #include "types/list.hh"
 #include "types/user.hh"
 #include "db/config.hh"
-#include "tmpdir.hh"
-#include "exception_utils.hh"
+#include "test/lib/tmpdir.hh"
+#include "test/lib/exception_utils.hh"
 
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
@@ -676,7 +676,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
         utils::UUID("1d91ad22-ea7c-3e7f-9557-87f0f3bb94d7"),
         utils::UUID("2dcd4a37-cbb5-399b-b3c9-8eb1398b096b")
     };
-    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS"}, std::move(expected_digests), [] (cql_test_env& e) {});
+    return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
@@ -691,7 +691,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
         utils::UUID("d58e5214-516e-3d0b-95b5-01ab71584a8d"),
         utils::UUID("e1b50bed-2ab8-3759-92c7-1f4288046ae6")
     };
-    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test_computed_columns", std::set<sstring>{}, std::move(expected_digests), [] (cql_test_env& e) {});
+    return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test_computed_columns", std::set<sstring>{}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
@@ -707,7 +707,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
         utils::UUID("0678bd76-3b67-3901-bad1-424d51b13d7b")
     };
     return test_schema_digest_does_not_change_with_disabled_features(
-        "./tests/sstables/schema_digest_with_functions_test",
+        "./test/resource/sstables/schema_digest_with_functions_test",
         std::set<sstring>{},
         std::move(expected_digests),
         [] (cql_test_env& e) {

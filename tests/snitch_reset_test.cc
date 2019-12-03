@@ -30,7 +30,7 @@
 
 namespace fs = std::filesystem;
 
-static fs::path test_files_subdir("tests/snitch_property_files");
+static fs::path test_files_subdir("test/resource/snitch_property_files");
 
 future<> one_test(const std::string& property_fname1,
                   const std::string& property_fname2,

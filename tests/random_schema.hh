@@ -23,7 +23,7 @@
 
 #include "schema.hh"
 #include "dht/i_partitioner.hh"
-#include "tests/data_model.hh"
+#include "test/lib/data_model.hh"
 
 ///
 /// Random schema and random data generation related utilities.

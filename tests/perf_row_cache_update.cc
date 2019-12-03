@@ -33,7 +33,7 @@
 #include "log.hh"
 #include "schema_builder.hh"
 #include "memtable.hh"
-#include "tests/perf/perf.hh"
+#include "test/perf/perf.hh"
 
 static const int update_iterations = 16;
 static const int cell_size = 128;

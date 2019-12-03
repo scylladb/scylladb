@@ -31,8 +31,8 @@
 #include "mutation_writer/multishard_writer.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "tests/cql_test_env.hh"
-#include "tests/mutation_assertions.hh"
-#include "tests/random-utils.hh"
+#include "test/lib/mutation_assertions.hh"
+#include "test/lib/random_utils.hh"
 #include "tests/random_schema.hh"
 
 using namespace mutation_writer;

@@ -26,7 +26,7 @@
 
 #include "types/user.hh"
 #include "types/list.hh"
-#include "exception_utils.hh"
+#include "test/lib/exception_utils.hh"
 
 // Specifies that the given 'cql' query fails with the 'msg' message.
 // Requires a cql_test_env. The caller must be inside thread.

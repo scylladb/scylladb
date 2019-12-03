@@ -32,11 +32,11 @@
 #include "partition_snapshot_reader.hh"
 
 #include <seastar/testing/test_case.hh>
-#include "tests/mutation_assertions.hh"
-#include "tests/simple_schema.hh"
+#include "test/lib/mutation_assertions.hh"
+#include "test/lib/simple_schema.hh"
 #include "tests/mutation_source_test.hh"
-#include "tests/failure_injecting_allocation_strategy.hh"
-#include "tests/range_tombstone_list_assertions.hh"
+#include "test/lib/failure_injecting_allocation_strategy.hh"
+#include "test/boost/range_tombstone_list_assertions.hh"
 #include "real_dirty_memory_accounter.hh"
 
 using namespace std::chrono_literals;

@@ -31,8 +31,8 @@
 #include "types/user.hh"
 #include "utils/big_decimal.hh"
 #include "db/config.hh"
-#include "tmpdir.hh"
-#include "exception_utils.hh"
+#include "test/lib/tmpdir.hh"
+#include "test/lib/exception_utils.hh"
 
 using ire = exceptions::invalid_request_exception;
 using exception_predicate::message_equals;

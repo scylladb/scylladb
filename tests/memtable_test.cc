@@ -31,11 +31,11 @@
 #include <seastar/core/thread.hh>
 #include "memtable.hh"
 #include "mutation_source_test.hh"
-#include "mutation_assertions.hh"
-#include "flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_assertions.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
 #include "flat_mutation_reader.hh"
-#include "data_model.hh"
-#include "random-utils.hh"
+#include "test/lib/data_model.hh"
+#include "test/lib/random_utils.hh"
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;

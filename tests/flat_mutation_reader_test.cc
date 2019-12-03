@@ -32,12 +32,12 @@
 #include "schema_builder.hh"
 #include "memtable.hh"
 #include "row_cache.hh"
-#include "tmpdir.hh"
+#include "test/lib/tmpdir.hh"
 #include "repair/repair.hh"
 
-#include "tests/test_services.hh"
-#include "tests/simple_schema.hh"
-#include "flat_mutation_reader_assertions.hh"
+#include "test/lib/test_services.hh"
+#include "test/lib/simple_schema.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
 
 struct mock_consumer {
     struct result {

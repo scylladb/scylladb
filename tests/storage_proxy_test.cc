@@ -26,7 +26,7 @@
 
 #include "tests/cql_test_env.hh"
 #include "tests/mutation_source_test.hh"
-#include "tests/result_set_assertions.hh"
+#include "test/lib/result_set_assertions.hh"
 #include "service/storage_proxy.hh"
 #include "partition_slice_builder.hh"
 #include "schema_builder.hh"

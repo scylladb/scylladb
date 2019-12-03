@@ -26,7 +26,7 @@
 #include "mutation_fragment.hh"
 #include "schema_builder.hh"
 #include "tests/random_schema.hh"
-#include "tests/random-utils.hh"
+#include "test/lib/random_utils.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"

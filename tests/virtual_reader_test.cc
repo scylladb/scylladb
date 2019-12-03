@@ -30,7 +30,7 @@
 #include <seastar/testing/test_case.hh>
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
-#include "tests/test_services.hh"
+#include "test/lib/test_services.hh"
 
 #include "index/secondary_index_manager.hh"
 #include "db/size_estimates_virtual_reader.hh"

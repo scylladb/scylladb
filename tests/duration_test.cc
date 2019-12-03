@@ -26,7 +26,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <string_view>
-#include "exception_utils.hh"
+#include "test/lib/exception_utils.hh"
 
 namespace {
 

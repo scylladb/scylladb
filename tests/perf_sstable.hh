@@ -20,13 +20,13 @@
  */
 
 #pragma once
-#include "../sstable_test.hh"
+#include "sstable_test.hh"
 #include "sstables/sstables.hh"
 #include "sstables/compaction_manager.hh"
 #include "cell_locking.hh"
 #include "mutation_reader.hh"
-#include "tests/sstable_utils.hh"
-#include "tests/test_services.hh"
+#include "test/lib/sstable_utils.hh"
+#include "test/lib/test_services.hh"
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics.hpp>
 #include <boost/range/irange.hpp>

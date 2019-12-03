@@ -33,9 +33,9 @@
 #include "memtable.hh"
 #include "row_cache.hh"
 
-#include "memtable_snapshot_source.hh"
-#include "mutation_assertions.hh"
-#include "flat_mutation_reader_assertions.hh"
+#include "test/lib/memtable_snapshot_source.hh"
+#include "test/lib/mutation_assertions.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
 
 #include <variant>
 

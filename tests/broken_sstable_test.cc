@@ -22,7 +22,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "sstable_test.hh"
-#include "exception_utils.hh"
+#include "test/lib/exception_utils.hh"
 
 using namespace sstables;
 
@@ -66,11 +66,11 @@ SEASTAR_THREAD_TEST_CASE(test_empty_index) {
                  .set_compressor_params(compression_parameters::no_compression())
                  .build();
     sstables::test_env env;
-    sstable_ptr sstp = std::get<0>(env.reusable_sst(s, "tests/sstables/empty_index", 36, sstable_version_types::mc).get());
+    sstable_ptr sstp = std::get<0>(env.reusable_sst(s, "test/resource/sstables/empty_index", 36, sstable_version_types::mc).get());
     sstp->load().get();
     auto fut = sstables::test(sstp).read_indexes();
     BOOST_REQUIRE_EXCEPTION(fut.get(), malformed_sstable_exception, exception_predicate::message_equals(
-        "missing index entry in sstable tests/sstables/empty_index/mc-36-big-Index.db"));
+        "missing index entry in sstable test/resource/sstables/empty_index/mc-36-big-Index.db"));
 }
 
 SEASTAR_THREAD_TEST_CASE(missing_column_in_schema) {
@@ -79,9 +79,9 @@ SEASTAR_THREAD_TEST_CASE(missing_column_in_schema) {
                        .with_column("key2", utf8_type, column_kind::clustering_key)
                        .with_column("key3", utf8_type, column_kind::clustering_key)
                        .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/incompatible_serialized_type", 122, s,
+    broken_sst("test/resource/sstables/incompatible_serialized_type", 122, s,
         "Column val missing in current schema in sstable "
-        "tests/sstables/incompatible_serialized_type/mc-122-big-Data.db",
+        "test/resource/sstables/incompatible_serialized_type/mc-122-big-Data.db",
         sstable::version_types::mc);
 }
 
@@ -92,11 +92,11 @@ SEASTAR_THREAD_TEST_CASE(incompatible_serialized_type) {
                        .with_column("key3", utf8_type, column_kind::clustering_key)
                        .with_column("val", int32_type, column_kind::regular_column)
                        .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/incompatible_serialized_type", 122, s,
+    broken_sst("test/resource/sstables/incompatible_serialized_type", 122, s,
         "val definition in serialization header does not match schema. Expected "
         "org.apache.cassandra.db.marshal.Int32Type but got "
         "org.apache.cassandra.db.marshal.UTF8Type in sstable "
-        "tests/sstables/incompatible_serialized_type/mc-122-big-Data.db",
+        "test/resource/sstables/incompatible_serialized_type/mc-122-big-Data.db",
         sstable::version_types::mc);
 }
 
@@ -108,9 +108,9 @@ SEASTAR_THREAD_TEST_CASE(invalid_boundary) {
                        .with_column("c", int32_type, column_kind::clustering_key)
                        .with_column("r", int32_type, column_kind::regular_column)
                        .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/invalid_boundary", 33, s,
+    broken_sst("test/resource/sstables/invalid_boundary", 33, s,
         "Corrupted range tombstone: invalid boundary type static_clustering in sstable "
-        "tests/sstables/invalid_boundary/mc-33-big-Data.db",
+        "test/resource/sstables/invalid_boundary/mc-33-big-Data.db",
         sstable::version_types::mc);
 }
 
@@ -121,11 +121,11 @@ SEASTAR_THREAD_TEST_CASE(mismatched_timestamp) {
                        .with_column("key3", utf8_type, column_kind::clustering_key)
                        .with_column("val", utf8_type, column_kind::regular_column)
                        .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/mismatched_timestamp", 122, s,
+    broken_sst("test/resource/sstables/mismatched_timestamp", 122, s,
         "Range tombstone with ck ckp{00056b65793262} and two different tombstones at ends: "
         "{tombstone: timestamp=1544745393692803, deletion_time=1544745393}, {tombstone: "
         "timestamp=1446576446577440, deletion_time=1442880998} in sstable "
-        "tests/sstables/mismatched_timestamp/mc-122-big-Data.db",
+        "test/resource/sstables/mismatched_timestamp/mc-122-big-Data.db",
         sstable::version_types::mc);
 }
 
@@ -136,12 +136,12 @@ SEASTAR_THREAD_TEST_CASE(broken_open_tombstone) {
                        .with_column("key3", utf8_type, column_kind::clustering_key)
                        .with_column("val", utf8_type, column_kind::regular_column)
                        .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/broken_open_tombstone", 122, s,
+    broken_sst("test/resource/sstables/broken_open_tombstone", 122, s,
         "Range tombstones have to be disjoint: current opened range tombstone { clustering: "
         "ckp{00056b65793262}, kind: incl start, tombstone: {tombstone: timestamp=1544745393692803, "
         "deletion_time=1544745393} }, new tombstone {tombstone: timestamp=1544745393692803, "
         "deletion_time=1544745393} in sstable "
-        "tests/sstables/broken_open_tombstone/mc-122-big-Data.db",
+        "test/resource/sstables/broken_open_tombstone/mc-122-big-Data.db",
         sstable::version_types::mc);
 }
 
@@ -152,10 +152,10 @@ SEASTAR_THREAD_TEST_CASE(broken_close_tombstone) {
                        .with_column("key3", utf8_type, column_kind::clustering_key)
                        .with_column("val", utf8_type, column_kind::regular_column)
                        .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/broken_close_tombstone", 122, s,
+    broken_sst("test/resource/sstables/broken_close_tombstone", 122, s,
         "Closing range tombstone that wasn't opened: clustering ckp{00056b65793262}, kind incl "
         "end, tombstone {tombstone: timestamp=1544745393692803, deletion_time=1544745393} in "
-        "sstable tests/sstables/broken_close_tombstone/mc-122-big-Data.db",
+        "sstable test/resource/sstables/broken_close_tombstone/mc-122-big-Data.db",
         sstable::version_types::mc);
 }
 
@@ -165,8 +165,8 @@ SEASTAR_THREAD_TEST_CASE(broken_start_composite) {
             .with_column("test_key", utf8_type, column_kind::partition_key)
             .with_column("test_val", utf8_type, column_kind::clustering_key)
             .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/broken_start_composite", 76, s,
-        "Unexpected start composite marker 2 in sstable tests/sstables/broken_start_composite/la-76-big-Data.db");
+    broken_sst("test/resource/sstables/broken_start_composite", 76, s,
+        "Unexpected start composite marker 2 in sstable test/resource/sstables/broken_start_composite/la-76-big-Data.db");
 }
 
 SEASTAR_THREAD_TEST_CASE(broken_end_composite) {
@@ -175,8 +175,8 @@ SEASTAR_THREAD_TEST_CASE(broken_end_composite) {
             .with_column("test_key", utf8_type, column_kind::partition_key)
             .with_column("test_val", utf8_type, column_kind::clustering_key)
             .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/broken_end_composite", 76, s,
-        "Unexpected end composite marker 3 in sstable tests/sstables/broken_end_composite/la-76-big-Data.db");
+    broken_sst("test/resource/sstables/broken_end_composite", 76, s,
+        "Unexpected end composite marker 3 in sstable test/resource/sstables/broken_end_composite/la-76-big-Data.db");
 }
 
 SEASTAR_THREAD_TEST_CASE(static_mismatch) {
@@ -186,9 +186,9 @@ SEASTAR_THREAD_TEST_CASE(static_mismatch) {
             .with_column("test_foo_bar_zed_baz_val", utf8_type, column_kind::clustering_key)
             .with_column("test_foo_bar_zed_baz_static", utf8_type, column_kind::regular_column)
             .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/static_column", 58, s,
+    broken_sst("test/resource/sstables/static_column", 58, s,
         "Mismatch between static cell and non-static column definition in sstable "
-        "tests/sstables/static_column/la-58-big-Data.db");
+        "test/resource/sstables/static_column/la-58-big-Data.db");
 }
 
 SEASTAR_THREAD_TEST_CASE(static_with_clustering) {
@@ -198,49 +198,49 @@ SEASTAR_THREAD_TEST_CASE(static_with_clustering) {
             .with_column("test_foo_bar_zed_baz_val", utf8_type, column_kind::clustering_key)
             .with_column("test_foo_bar_zed_baz_static", utf8_type, column_kind::static_column)
             .build(schema_builder::compact_storage::no);
-    broken_sst("tests/sstables/static_with_clustering", 58, s,
+    broken_sst("test/resource/sstables/static_with_clustering", 58, s,
         "Static row has clustering key information. I didn't expect that! in sstable "
-        "tests/sstables/static_with_clustering/la-58-big-Data.db");
+        "test/resource/sstables/static_with_clustering/la-58-big-Data.db");
 }
 
 SEASTAR_THREAD_TEST_CASE(zero_sized_histogram) {
-    broken_sst("tests/sstables/zero_sized_histogram", 5,
+    broken_sst("test/resource/sstables/zero_sized_histogram", 5,
                "Estimated histogram with zero size found. Can't continue! in sstable "
-               "tests/sstables/zero_sized_histogram/la-5-big-Statistics.db");
+               "test/resource/sstables/zero_sized_histogram/la-5-big-Statistics.db");
 }
 
 SEASTAR_THREAD_TEST_CASE(bad_column_name) {
-    broken_sst("tests/sstables/bad_column_name", 58,
+    broken_sst("test/resource/sstables/bad_column_name", 58,
                "Found 3 clustering elements in column name. Was not expecting that! in sstable "
-               "tests/sstables/bad_column_name/la-58-big-Data.db");
+               "test/resource/sstables/bad_column_name/la-58-big-Data.db");
 }
 
 SEASTAR_THREAD_TEST_CASE(empty_toc) {
-    broken_sst("tests/sstables/badtoc", 1,
-               "Empty TOC in sstable tests/sstables/badtoc/la-1-big-TOC.txt");
+    broken_sst("test/resource/sstables/badtoc", 1,
+               "Empty TOC in sstable test/resource/sstables/badtoc/la-1-big-TOC.txt");
 }
 
 SEASTAR_THREAD_TEST_CASE(alien_toc) {
-    broken_sst("tests/sstables/badtoc", 2,
-               "tests/sstables/badtoc/la-2-big-Statistics.db: file not found");
+    broken_sst("test/resource/sstables/badtoc", 2,
+               "test/resource/sstables/badtoc/la-2-big-Statistics.db: file not found");
 }
 
 SEASTAR_THREAD_TEST_CASE(truncated_toc) {
-    broken_sst("tests/sstables/badtoc", 3,
-               "tests/sstables/badtoc/la-3-big-Statistics.db: file not found");
+    broken_sst("test/resource/sstables/badtoc", 3,
+               "test/resource/sstables/badtoc/la-3-big-Statistics.db: file not found");
 }
 
 SEASTAR_THREAD_TEST_CASE(wrong_format_toc) {
-    broken_sst("tests/sstables/badtoc", 4,
-               "tests/sstables/badtoc/la-4-big-TOC.txt: file not found");
+    broken_sst("test/resource/sstables/badtoc", 4,
+               "test/resource/sstables/badtoc/la-4-big-TOC.txt: file not found");
 }
 
 SEASTAR_THREAD_TEST_CASE(compression_truncated) {
-    broken_sst("tests/sstables/badcompression", 1,
-               "tests/sstables/badcompression/la-1-big-Statistics.db: file not found");
+    broken_sst("test/resource/sstables/badcompression", 1,
+               "test/resource/sstables/badcompression/la-1-big-Statistics.db: file not found");
 }
 
 SEASTAR_THREAD_TEST_CASE(compression_bytes_flipped) {
-    broken_sst("tests/sstables/badcompression", 2,
-               "tests/sstables/badcompression/la-2-big-Statistics.db: file not found");
+    broken_sst("test/resource/sstables/badcompression", 2,
+               "test/resource/sstables/badcompression/la-2-big-Statistics.db: file not found");
 }

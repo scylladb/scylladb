@@ -21,14 +21,14 @@
 
 #include <boost/range/irange.hpp>
 #include "seastarx.hh"
-#include "tests/simple_schema.hh"
+#include "test/lib/simple_schema.hh"
 #include <seastar/core/app-template.hh>
 #include "memtable.hh"
 #include "row_cache.hh"
 #include "partition_slice_builder.hh"
 #include "utils/int_range.hh"
 #include "utils/div_ceil.hh"
-#include "tests/memtable_snapshot_source.hh"
+#include "test/lib/memtable_snapshot_source.hh"
 #include <seastar/core/reactor.hh>
 
 logging::logger test_log("test");

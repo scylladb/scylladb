@@ -35,16 +35,16 @@
 #include "mutation_reader.hh"
 #include "mutation_source_test.hh"
 #include "partition_slice_builder.hh"
-#include "tmpdir.hh"
+#include "test/lib/tmpdir.hh"
 #include "memtable-sstable.hh"
-#include "tests/index_reader_assertions.hh"
-#include "tests/test_services.hh"
-#include "flat_mutation_reader_assertions.hh"
-#include "simple_schema.hh"
-#include "tests/sstable_utils.hh"
-#include "tests/make_random_string.hh"
-#include "data_model.hh"
-#include "random-utils.hh"
+#include "test/lib/index_reader_assertions.hh"
+#include "test/lib/test_services.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/simple_schema.hh"
+#include "test/lib/sstable_utils.hh"
+#include "test/lib/make_random_string.hh"
+#include "test/lib/data_model.hh"
+#include "test/lib/random_utils.hh"
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -140,7 +140,7 @@ SEASTAR_THREAD_TEST_CASE(uncompressed_4) {
 // FIXME: we are lacking a full deletion test
 template <int Generation>
 future<mutation> generate_clustered(sstables::test_env& env, bytes&& key) {
-    return env.reusable_sst(complex_schema(), "tests/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
+    return env.reusable_sst(complex_schema(), "test/resource/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
         return do_with(make_dkey(complex_schema(), std::move(k)), [sstp] (auto& key) {
             auto s = complex_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -493,7 +493,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
 SEASTAR_THREAD_TEST_CASE(compact_storage_sparse_read) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     sstables::test_env env;
-    env.reusable_sst(compact_sparse_schema(), "tests/sstables/compact_sparse", 1).then([] (auto sstp) {
+    env.reusable_sst(compact_sparse_schema(), "test/resource/sstables/compact_sparse", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_sparse_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_sparse_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -512,7 +512,7 @@ SEASTAR_THREAD_TEST_CASE(compact_storage_sparse_read) {
 SEASTAR_THREAD_TEST_CASE(compact_storage_simple_dense_read) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     sstables::test_env env;
-    env.reusable_sst(compact_simple_dense_schema(), "tests/sstables/compact_simple_dense", 1).then([] (auto sstp) {
+    env.reusable_sst(compact_simple_dense_schema(), "test/resource/sstables/compact_simple_dense", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_simple_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_simple_dense_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -533,7 +533,7 @@ SEASTAR_THREAD_TEST_CASE(compact_storage_simple_dense_read) {
 SEASTAR_THREAD_TEST_CASE(compact_storage_dense_read) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     sstables::test_env env;
-    env.reusable_sst(compact_dense_schema(), "tests/sstables/compact_dense", 1).then([] (auto sstp) {
+    env.reusable_sst(compact_dense_schema(), "test/resource/sstables/compact_dense", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_dense_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -558,7 +558,7 @@ SEASTAR_THREAD_TEST_CASE(compact_storage_dense_read) {
 SEASTAR_THREAD_TEST_CASE(broken_ranges_collection) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     sstables::test_env env;
-    env.reusable_sst(peers_schema(), "tests/sstables/broken_ranges", 2).then([] (auto sstp) {
+    env.reusable_sst(peers_schema(), "test/resource/sstables/broken_ranges", 2).then([] (auto sstp) {
         auto s = peers_schema();
         auto reader = make_lw_shared<flat_mutation_reader>(sstp->as_mutation_source().make_reader(s, query::full_partition_range));
         return repeat([s, reader] {
@@ -626,7 +626,7 @@ static future<sstable_ptr> ka_sst(schema_ptr schema, sstring dir, unsigned long 
 //               ]
 SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
-    ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 1).then([] (auto sstp) {
+    ka_sst(tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 1).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows_flat(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
@@ -690,7 +690,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
 // CQL, but we saw a similar thing is a real use case.
 SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
-    ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 4).then([] (auto sstp) {
+    ka_sst(tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 4).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows_flat(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
@@ -768,7 +768,7 @@ static schema_ptr tombstone_overlap_schema2() {
 }
 SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
-    ka_sst(tombstone_overlap_schema2(), "tests/sstables/tombstone_overlap", 3).then([] (auto sstp) {
+    ka_sst(tombstone_overlap_schema2(), "test/resource/sstables/tombstone_overlap", 3).then([] (auto sstp) {
         auto s = tombstone_overlap_schema2();
         return do_with(sstp->read_rows_flat(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
@@ -849,7 +849,7 @@ static schema_ptr buffer_overflow_schema() {
 }
 SEASTAR_THREAD_TEST_CASE(buffer_overflow) {
     auto s = buffer_overflow_schema();
-    auto sstp = ka_sst(s, "tests/sstables/buffer_overflow", 5).get0();
+    auto sstp = ka_sst(s, "test/resource/sstables/buffer_overflow", 5).get0();
     auto r = sstp->read_rows_flat(s);
     auto pk1 = partition_key::from_exploded(*s, { int32_type->decompose(4) });
     auto dk1 = dht::global_partitioner().decorate_key(*s, pk1);

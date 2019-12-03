@@ -36,7 +36,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/do_with.hh>
 #include "sstables/compaction_manager.hh"
-#include "tmpdir.hh"
+#include "test/lib/tmpdir.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/murmur3_partitioner.hh"
 #include "range.hh"
@@ -44,16 +44,16 @@
 #include "sstables/compaction_strategy_impl.hh"
 #include "sstables/date_tiered_compaction_strategy.hh"
 #include "sstables/time_window_compaction_strategy.hh"
-#include "mutation_assertions.hh"
+#include "test/lib/mutation_assertions.hh"
 #include "counters.hh"
 #include "cell_locking.hh"
-#include "simple_schema.hh"
+#include "test/lib/simple_schema.hh"
 #include "memtable-sstable.hh"
-#include "tests/index_reader_assertions.hh"
-#include "flat_mutation_reader_assertions.hh"
-#include "tests/make_random_string.hh"
-#include "tests/normalizing_reader.hh"
-#include "sstable_run_based_compaction_strategy_for_tests.hh"
+#include "test/lib/index_reader_assertions.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/make_random_string.hh"
+#include "test/lib/normalizing_reader.hh"
+#include "test/boost/sstable_run_based_compaction_strategy_for_tests.hh"
 #include "compatible_ring_position.hh"
 #include "mutation_compactor.hh"
 #include "service/priority_manager.hh"
@@ -64,10 +64,10 @@
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/is_sorted.hpp>
-#include "test_services.hh"
+#include "test/lib/test_services.hh"
 #include "cql_test_env.hh"
 
-#include "sstable_utils.hh"
+#include "test/lib/sstable_utils.hh"
 
 namespace fs = std::filesystem;
 
@@ -1137,7 +1137,7 @@ SEASTAR_TEST_CASE(compact) {
     cf->mark_ready_for_writes();
 
     return test_setup::do_with_tmp_directory([s, generation, cf, cm] (test_env& env, sstring tmpdir_path) {
-        return open_sstables(env, s, "tests/sstables/compaction", {1,2,3}).then([&env, tmpdir_path, s, cf, cm, generation] (auto sstables) {
+        return open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).then([&env, tmpdir_path, s, cf, cm, generation] (auto sstables) {
             auto new_sstable = [&env, gen = make_lw_shared<unsigned>(generation), s, tmpdir_path] {
                 return env.make_sstable(s, tmpdir_path,
                         (*gen)++, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
@@ -3841,7 +3841,7 @@ static void copy_directory(fs::path src_dir, fs::path dst_dir) {
 SEASTAR_TEST_CASE(test_unknown_component) {
     return test_env::do_with_async([] (test_env& env) {
         auto tmp = tmpdir();
-        copy_directory("tests/sstables/unknown_component", std::string(tmp.path().string()) + "/unknown_component");
+        copy_directory("test/resource/sstables/unknown_component", std::string(tmp.path().string()) + "/unknown_component");
         auto sstp = env.reusable_sst(uncompressed_schema(), tmp.path().string() + "/unknown_component", 1).get0();
         sstp->create_links(tmp.path().string()).get();
         // check that create_links() moved unknown component to new dir
@@ -4048,7 +4048,7 @@ SEASTAR_TEST_CASE(sstable_bad_tombstone_histogram_test) {
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
         auto s = builder.build();
-        auto sst = env.reusable_sst(s, "tests/sstables/bad_tombstone_histogram", 1).get0();
+        auto sst = env.reusable_sst(s, "test/resource/sstables/bad_tombstone_histogram", 1).get0();
         auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
         BOOST_REQUIRE(histogram.max_bin_size == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
         // check that bad histogram was discarded

@@ -25,10 +25,10 @@
 #include "partition_slice_builder.hh"
 #include "serializer_impl.hh"
 #include "tests/cql_test_env.hh"
-#include "tests/eventually.hh"
+#include "test/lib/eventually.hh"
 #include "tests/cql_assertions.hh"
-#include "tests/mutation_assertions.hh"
-#include "tests/test_table.hh"
+#include "test/lib/mutation_assertions.hh"
+#include "test_table.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 

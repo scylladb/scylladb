@@ -20,7 +20,7 @@
  */
 
 #include "utils/murmur_hash.hh"
-#include "tests/perf/perf.hh"
+#include "test/perf/perf.hh"
 
 volatile uint64_t black_hole;
 

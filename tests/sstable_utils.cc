@@ -19,14 +19,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "sstable_utils.hh"
+#include "test/lib/sstable_utils.hh"
 
 #include "database.hh"
 #include "memtable-sstable.hh"
 #include "dht/i_partitioner.hh"
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
-#include "flat_mutation_reader_assertions.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
     auto sst = sst_factory();

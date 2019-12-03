@@ -24,7 +24,7 @@
 #include "transport/request.hh"
 #include "transport/response.hh"
 
-#include "random-utils.hh"
+#include "test/lib/random_utils.hh"
 
 SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     auto stream_id = tests::random::get_int<int16_t>();

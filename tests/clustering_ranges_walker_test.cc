@@ -23,7 +23,7 @@
 #include <boost/test/unit_test.hpp>
 #include <seastar/testing/test_case.hh>
 
-#include "simple_schema.hh"
+#include "test/lib/simple_schema.hh"
 #include "clustering_ranges_walker.hh"
 
 using namespace std::chrono_literals;

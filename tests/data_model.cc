@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "data_model.hh"
+#include "test/lib/data_model.hh"
 
 #include <boost/algorithm/string/join.hpp>
 

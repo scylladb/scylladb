@@ -27,7 +27,7 @@
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
-#include "tests/perf/perf.hh"
+#include "test/perf/perf.hh"
 #include "log.hh"
 
 #include <random>

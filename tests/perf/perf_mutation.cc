@@ -21,7 +21,7 @@
  */
 
 #include "database.hh"
-#include "perf.hh"
+#include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 
 static atomic_cell make_atomic_cell(data_type dt, bytes value) {

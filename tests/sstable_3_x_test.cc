@@ -36,11 +36,11 @@
 #include "counters.hh"
 #include "schema_builder.hh"
 #include "sstable_test.hh"
-#include "flat_mutation_reader_assertions.hh"
-#include "tests/test_services.hh"
-#include "tests/tmpdir.hh"
-#include "tests/sstable_utils.hh"
-#include "tests/index_reader_assertions.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/test_services.hh"
+#include "test/lib/tmpdir.hh"
+#include "test/lib/sstable_utils.hh"
+#include "test/lib/index_reader_assertions.hh"
 #include "sstables/types.hh"
 #include "keys.hh"
 #include "types.hh"
@@ -50,8 +50,8 @@
 #include "utils/UUID_gen.hh"
 #include "encoding_stats.hh"
 #include "sstables/mc/writer.hh"
-#include "simple_schema.hh"
-#include "exception_utils.hh"
+#include "test/lib/simple_schema.hh"
+#include "test/lib/exception_utils.hh"
 
 using namespace sstables;
 
@@ -138,7 +138,7 @@ public:
     }
 };
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/filtering_and_forwarding
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/filtering_and_forwarding
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -169,7 +169,7 @@ public:
 // INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 110, 1010);
 
 static thread_local const sstring UNCOMPRESSED_FILTERING_AND_FORWARDING_PATH =
-    "tests/sstables/3.x/uncompressed/filtering_and_forwarding";
+    "test/resource/sstables/3.x/uncompressed/filtering_and_forwarding";
 static thread_local const schema_ptr UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -418,7 +418,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
  */
 
 static thread_local const sstring UNCOMPRESSED_SKIP_USING_INDEX_ROWS_PATH =
-    "tests/sstables/3.x/uncompressed/skip_using_index_rows";
+    "test/resource/sstables/3.x/uncompressed/skip_using_index_rows";
 static thread_local const schema_ptr UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -662,7 +662,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
  * ...
  */
 static thread_local const sstring UNCOMPRESSED_FILTERING_AND_FORWARDING_RANGE_TOMBSTONES_PATH =
-    "tests/sstables/3.x/uncompressed/filtering_and_forwarding_range_tombstones";
+    "test/resource/sstables/3.x/uncompressed/filtering_and_forwarding_range_tombstones";
 static thread_local const schema_ptr UNCOMPRESSED_FILTERING_AND_FORWARDING_RANGE_TOMBSTONES_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -992,7 +992,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombst
  * ...
  */
 static thread_local const sstring UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_PATH =
-    "tests/sstables/3.x/uncompressed/slicing_interleaved_rows_and_rts";
+    "test/resource/sstables/3.x/uncompressed/slicing_interleaved_rows_and_rts";
 static thread_local const schema_ptr UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -1183,7 +1183,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
     }
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/static_row
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/static_row
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -1198,7 +1198,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
 // INSERT INTO test_ks.test_table(pk, ck, s, val) VALUES(5, 15, 105, 1005);
 
 static thread_local const sstring UNCOMPRESSED_STATIC_ROW_PATH =
-    "tests/sstables/3.x/uncompressed/static_row";
+    "test/resource/sstables/3.x/uncompressed/static_row";
 static thread_local const schema_ptr UNCOMPRESSED_STATIC_ROW_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -1258,7 +1258,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_static_row_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/random_partitioner
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/random_partitioner
 // They were created using following CQL statements:
 //
 // Partitioner: org.apache.cassandra.dht.RandomPartitioner
@@ -1277,7 +1277,7 @@ using exception_predicate::message_equals;
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_random_partitioner) {
     auto abj = defer([] { await_background_jobs().get(); });
     const sstring uncompressed_random_partitioner_path =
-            "tests/sstables/3.x/uncompressed/random_partitioner";
+            "test/resource/sstables/3.x/uncompressed/random_partitioner";
     const schema_ptr uncompressed_random_partitioner_schema =
             schema_builder("test_ks", "test_table")
                 .with_column("pk", int32_type, column_kind::partition_key)
@@ -1290,11 +1290,11 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_random_partitioner) {
                            uncompressed_random_partitioner_path);
     using namespace std::string_literals;
     BOOST_REQUIRE_EXCEPTION(sst.load(), std::runtime_error,
-        message_equals("SSTable tests/sstables/3.x/uncompressed/random_partitioner/mc-1-big-Data.db uses "
+        message_equals("SSTable test/resource/sstables/3.x/uncompressed/random_partitioner/mc-1-big-Data.db uses "
                        "org.apache.cassandra.dht.RandomPartitioner partitioner which is different than "
                        "org.apache.cassandra.dht.Murmur3Partitioner partitioner used by the database"s));
 }
-// Following tests run on files in tests/sstables/3.x/uncompressed/compound_static_row
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/compound_static_row
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -1320,7 +1320,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_random_partitioner) {
 //                         VALUES(5, 15, 105, 'Text for 5', '10.0.0.5', 1005);
 
 static thread_local const sstring UNCOMPRESSED_COMPOUND_STATIC_ROW_PATH =
-    "tests/sstables/3.x/uncompressed/compound_static_row";
+    "test/resource/sstables/3.x/uncompressed/compound_static_row";
 static thread_local const schema_ptr UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -1396,7 +1396,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_static_row_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_only
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/partition_key_only
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -1411,7 +1411,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_static_row_read) {
 // INSERT INTO test_ks.test_table(pk) VALUES(5);
 
 static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_ONLY_PATH =
-    "tests/sstables/3.x/uncompressed/partition_key_only";
+    "test/resource/sstables/3.x/uncompressed/partition_key_only";
 static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -1452,7 +1452,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_only_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_with_value
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/partition_key_with_value
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -1467,7 +1467,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_only_read) {
 // INSERT INTO test_ks.test_table(pk, val) VALUES(5, 105);
 
 static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_PATH =
-    "tests/sstables/3.x/uncompressed/partition_key_with_value";
+    "test/resource/sstables/3.x/uncompressed/partition_key_with_value";
 static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -1508,7 +1508,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/counters
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/counters
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -1529,7 +1529,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
 // UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 3;
 
 static thread_local const sstring UNCOMPRESSED_COUNTERS_PATH =
-    "tests/sstables/3.x/uncompressed/counters";
+    "test/resource/sstables/3.x/uncompressed/counters";
 static thread_local const schema_ptr UNCOMPRESSED_COUNTERS_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -1585,7 +1585,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
     .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/{uncompressed,lz4,snappy,deflate,zstd}/partition_key_with_value_of_different_types
+// Following tests run on files in test/resource/sstables/3.x/{uncompressed,lz4,snappy,deflate,zstd}/partition_key_with_value_of_different_types
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -1637,15 +1637,15 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
 //                                'variable length text 5');
 
 static const sstring UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
-    "tests/sstables/3.x/uncompressed/partition_key_with_values_of_different_types";
+    "test/resource/sstables/3.x/uncompressed/partition_key_with_values_of_different_types";
 static const sstring LZ4_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
-    "tests/sstables/3.x/lz4/partition_key_with_values_of_different_types";
+    "test/resource/sstables/3.x/lz4/partition_key_with_values_of_different_types";
 static const sstring SNAPPY_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
-    "tests/sstables/3.x/snappy/partition_key_with_values_of_different_types";
+    "test/resource/sstables/3.x/snappy/partition_key_with_values_of_different_types";
 static const sstring DEFLATE_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
-    "tests/sstables/3.x/deflate/partition_key_with_values_of_different_types";
+    "test/resource/sstables/3.x/deflate/partition_key_with_values_of_different_types";
 static const sstring ZSTD_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
-    "tests/sstables/3.x/zstd/partition_key_with_values_of_different_types";
+    "test/resource/sstables/3.x/zstd/partition_key_with_values_of_different_types";
 static thread_local const schema_builder PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA_BUILDER =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -1782,7 +1782,7 @@ SEASTAR_THREAD_TEST_CASE(test_zstd_partition_key_with_values_of_different_types_
             {"compression_level", "1"}}));
 }
 
-// Following test runs on files in tests/sstables/3.x/zstd/multiple_chunks.
+// Following test runs on files in test/resource/sstables/3.x/zstd/multiple_chunks.
 // Size of data in the sstables is big enough that multiple compressed chunks were used.
 // The files were created using following CQL statements:
 //
@@ -1797,7 +1797,7 @@ SEASTAR_THREAD_TEST_CASE(test_zstd_partition_key_with_values_of_different_types_
 // INSERT INTO test_ks.test_table (val1, val2) VALUES (0, i);
 
 static thread_local const sstring ZSTD_MULTIPLE_CHUNKS_PATH =
-    "tests/sstables/3.x/zstd/multiple_chunks";
+    "test/resource/sstables/3.x/zstd/multiple_chunks";
 static thread_local const schema_ptr ZSTD_MULTIPLE_CHUNKS_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("val1", int32_type, column_kind::partition_key)
@@ -1828,7 +1828,7 @@ SEASTAR_THREAD_TEST_CASE(test_zstd_compression) {
     assertions.produces_partition_end().produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/subset_of_columns
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/subset_of_columns
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -1864,7 +1864,7 @@ SEASTAR_THREAD_TEST_CASE(test_zstd_compression) {
 //                         VALUES(5, 5, 55, 50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab);
 
 static thread_local const sstring UNCOMPRESSED_SUBSET_OF_COLUMNS_PATH =
-    "tests/sstables/3.x/uncompressed/subset_of_columns";
+    "test/resource/sstables/3.x/uncompressed/subset_of_columns";
 static thread_local const schema_ptr UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -1990,7 +1990,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_subset_of_columns_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/large_subset_of_columns_sparse
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/large_subset_of_columns_sparse
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -2035,7 +2035,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_subset_of_columns_read) {
 // IMPORTANT: each column has to be covered by at least one insert otherwise it won't be present in the sstable
 
 static thread_local const sstring UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_PATH =
-    "tests/sstables/3.x/uncompressed/large_subset_of_columns_sparse";
+    "test/resource/sstables/3.x/uncompressed/large_subset_of_columns_sparse";
 static thread_local const schema_ptr UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -2163,7 +2163,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) 
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/large_subset_of_columns_dense
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/large_subset_of_columns_dense
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -2247,7 +2247,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) 
 // IMPORTANT: each column has to be covered by at least one insert otherwise it won't be present in the sstable
 
 static thread_local const sstring UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_PATH =
-    "tests/sstables/3.x/uncompressed/large_subset_of_columns_dense";
+    "test/resource/sstables/3.x/uncompressed/large_subset_of_columns_dense";
 static thread_local const schema_ptr UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -2396,7 +2396,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/deleted_cells
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/deleted_cells
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -2412,7 +2412,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
 // DELETE val FROM test_ks.test_table WHERE pk = 1 AND ck = 102;
 // DELETE val FROM test_ks.test_table WHERE pk = 1 AND ck = 104;
 
-static thread_local const sstring UNCOMPRESSED_DELETED_CELLS_PATH = "tests/sstables/3.x/uncompressed/deleted_cells";
+static thread_local const sstring UNCOMPRESSED_DELETED_CELLS_PATH = "test/resource/sstables/3.x/uncompressed/deleted_cells";
 static thread_local const schema_ptr UNCOMPRESSED_DELETED_CELLS_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -2472,7 +2472,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_deleted_cells_read) {
     .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/range_tombstones_simple
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/range_tombstones_simple
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -2494,7 +2494,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_deleted_cells_read) {
 // DELETE FROM test_ks.test_table WHERE pk = 1 AND ck >= 104 AND ck < 105;
 // DELETE FROM test_ks.test_table WHERE pk = 1 AND ck > 108;
 
-static thread_local const sstring UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_PATH = "tests/sstables/3.x/uncompressed/range_tombstones_simple";
+static thread_local const sstring UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_PATH = "test/resource/sstables/3.x/uncompressed/range_tombstones_simple";
 static thread_local const schema_ptr UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -2553,7 +2553,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
     .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/range_tombstones_partial
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/range_tombstones_partial
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -2565,7 +2565,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
 // INSERT INTO test_ks.test_table(pk, ck1, ck2) VALUES(1, 2, 13);
 // DELETE FROM test_ks.test_table WHERE pk = 1 AND ck1 > 3;
 
-static thread_local const sstring UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_PATH = "tests/sstables/3.x/uncompressed/range_tombstones_partial";
+static thread_local const sstring UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_PATH = "test/resource/sstables/3.x/uncompressed/range_tombstones_partial";
 static thread_local const schema_ptr UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -2624,7 +2624,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_partial_read) {
     .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/simple
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/simple
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -2638,7 +2638,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_partial_read) {
 // INSERT INTO test_ks.test_table(pk, ck, val) VALUES(4, 104, 1004);
 // INSERT INTO test_ks.test_table(pk, ck, val) VALUES(5, 105, 1005);
 
-static thread_local const sstring UNCOMPRESSED_SIMPLE_PATH = "tests/sstables/3.x/uncompressed/simple";
+static thread_local const sstring UNCOMPRESSED_SIMPLE_PATH = "test/resource/sstables/3.x/uncompressed/simple";
 static thread_local const schema_ptr UNCOMPRESSED_SIMPLE_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -2741,7 +2741,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/compound_ck
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/compound_ck
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -2766,7 +2766,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read) {
 // INSERT INTO test_ks.test_table(pk, ck_int, ck_text, ck_uuid, ck_inet, val)
 //        VALUES(5, 105, 'This is a string for 5',  f1badb6f-80a0-4eef-90df-b3651d9a5578, '10.0.0.5', 1005);
 
-static thread_local const sstring UNCOMPRESSED_COMPOUND_CK_PATH = "tests/sstables/3.x/uncompressed/compound_ck";
+static thread_local const sstring UNCOMPRESSED_COMPOUND_CK_PATH = "test/resource/sstables/3.x/uncompressed/compound_ck";
 static thread_local const schema_ptr UNCOMPRESSED_COMPOUND_CK_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -2843,7 +2843,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_ck_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/collections
+// Following tests run on files in test/resource/sstables/3.x/uncompressed/collections
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -2863,7 +2863,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_ck_read) {
 //                         VALUES(5, {13, 14, 15}, ['Text 13', 'Text 14', 'Text 15'], {13 : 'Text 13', 14 : 'Text 14', 15 : 'Text 15'});
 
 static thread_local const sstring UNCOMPRESSED_COLLECTIONS_PATH =
-    "tests/sstables/3.x/uncompressed/collections";
+    "test/resource/sstables/3.x/uncompressed/collections";
 static thread_local const schema_ptr UNCOMPRESSED_COLLECTIONS_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -3006,7 +3006,7 @@ static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     tmpdir tmp;
-    auto sstables = open_sstables(env, s, format("tests/sstables/3.x/uncompressed/{}", table_name), generations);
+    auto sstables = open_sstables(env, s, format("test/resource/sstables/3.x/uncompressed/{}", table_name), generations);
     auto new_generation = generations.back() + 1;
     auto new_sstable = [s, &tmp, &env, new_generation] {
         return env.make_sstable(s, tmp.path().string(), new_generation,
@@ -3172,7 +3172,7 @@ static void compare_files(sstring filename1, sstring filename2) {
 }
 
 static sstring get_write_test_path(sstring table_name) {
-    return format("tests/sstables/3.x/uncompressed/write_{}", table_name);
+    return format("test/resource/sstables/3.x/uncompressed/write_{}", table_name);
 }
 
 // This method should not be called for compressed sstables because compression is not deterministic
@@ -4554,7 +4554,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_overlapped_range_tombstones) {
 }
 
 static sstring get_read_index_test_path(sstring table_name) {
-    return format("tests/sstables/3.x/uncompressed/read_{}", table_name);
+    return format("test/resource/sstables/3.x/uncompressed/read_{}", table_name);
 }
 
 static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
@@ -4660,7 +4660,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_table_empty_clustering_key) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    sstable_assertions sst(s, "tests/sstables/3.x/uncompressed/empty_clustering_key");
+    sstable_assertions sst(s, "test/resource/sstables/3.x/uncompressed/empty_clustering_key");
     sst.load();
 
     std::vector<dht::decorated_key> keys;
@@ -4681,7 +4681,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_table_empty_clustering_key) {
 SEASTAR_THREAD_TEST_CASE(test_complex_column_zero_subcolumns_read) {
     using utils::UUID;
     const sstring path =
-        "tests/sstables/3.x/uncompressed/complex_column_zero_subcolumns";
+        "test/resource/sstables/3.x/uncompressed/complex_column_zero_subcolumns";
 
     schema_ptr s = schema_builder("test_ks", "test_table")
         .with_column("id", uuid_type, column_kind::partition_key)
@@ -4726,14 +4726,14 @@ SEASTAR_THREAD_TEST_CASE(test_complex_column_zero_subcolumns_read) {
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
     auto abj = defer([] { await_background_jobs().get(); });
-    // Following tests run on files in tests/sstables/3.x/uncompressed/read_two_rows_fast_forwarding
+    // Following tests run on files in test/resource/sstables/3.x/uncompressed/read_two_rows_fast_forwarding
     // They were created using following CQL statements:
     //
     // CREATE TABLE two_rows_fast_forwarding (pk int, ck int, rc int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
     // INSERT INTO two_rows_fast_forwarding (pk, ck, rc) VALUES (0, 7, 7);
     // INSERT INTO two_rows_fast_forwarding (pk, ck, rc) VALUES (0, 8, 8);
 
-    static const sstring path = "tests/sstables/3.x/uncompressed/read_two_rows_fast_forwarding";
+    static const sstring path = "test/resource/sstables/3.x/uncompressed/read_two_rows_fast_forwarding";
     static thread_local const schema_ptr s =
         schema_builder("test_ks", "two_rows_fast_forwarding")
             .with_column("pk", int32_type, column_kind::partition_key)
@@ -5054,7 +5054,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
 
 SEASTAR_THREAD_TEST_CASE(test_read_missing_summary) {
     auto abj = defer([] { await_background_jobs().get(); });
-    const sstring path = "tests/sstables/3.x/uncompressed/read_missing_summary";
+    const sstring path = "test/resource/sstables/3.x/uncompressed/read_missing_summary";
     const schema_ptr s =
         schema_builder("test_ks", "test_table")
             .with_column("pk", utf8_type, column_kind::partition_key)

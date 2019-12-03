@@ -28,11 +28,11 @@
 #include <query-result-set.hh>
 #include <query-result-writer.hh>
 
-#include "tests/test_services.hh"
+#include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
-#include "tests/mutation_assertions.hh"
-#include "tests/result_set_assertions.hh"
+#include "test/lib/mutation_assertions.hh"
+#include "test/lib/result_set_assertions.hh"
 #include "tests/mutation_source_test.hh"
 
 #include "mutation_query.hh"

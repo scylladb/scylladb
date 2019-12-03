@@ -25,7 +25,7 @@
 #include <seastar/core/sleep.hh>
 #include "seastar/include/seastar/testing/perf_tests.hh"
 
-#include "tests/simple_schema.hh"
+#include "test/lib/simple_schema.hh"
 
 #include "mutation_reader.hh"
 #include "flat_mutation_reader.hh"

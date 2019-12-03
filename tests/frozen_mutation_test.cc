@@ -22,13 +22,13 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "tests/test_services.hh"
+#include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 
 #include "frozen_mutation.hh"
 #include "schema_builder.hh"
-#include "tests/mutation_assertions.hh"
+#include "test/lib/mutation_assertions.hh"
 #include "tests/mutation_source_test.hh"
 
 #include <seastar/core/thread.hh>

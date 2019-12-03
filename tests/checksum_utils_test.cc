@@ -23,7 +23,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "sstables/checksum_utils.hh"
-#include "make_random_string.hh"
+#include "test/lib/make_random_string.hh"
 #include <seastar/core/print.hh>
 
 template<typename ReferenceImpl, typename Impl>

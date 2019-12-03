@@ -14,11 +14,11 @@
 #include "sstables/compaction_manager.hh"
 #include "mutation_reader.hh"
 #include "sstable_test.hh"
-#include "test_services.hh"
-#include "tmpdir.hh"
+#include "test/lib/test_services.hh"
+#include "test/lib/tmpdir.hh"
 #include "cell_locking.hh"
-#include "flat_mutation_reader_assertions.hh"
-#include "sstable_utils.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/sstable_utils.hh"
 #include "service/storage_proxy.hh"
 
 using namespace sstables;

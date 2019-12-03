@@ -21,7 +21,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "result_set_assertions.hh"
+#include "test/lib/result_set_assertions.hh"
 #include "to_string.hh"
 
 static inline

@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "exception_utils.hh"
+#include "test/lib/exception_utils.hh"
 
 #include <boost/test/unit_test.hpp>
 #include <fmt/format.h>

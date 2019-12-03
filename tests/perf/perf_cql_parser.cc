@@ -20,7 +20,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "perf.hh"
+#include "test/perf/perf.hh"
 
 #include "cql3/error_collector.hh"
 #include "cql3/CqlParser.hpp"

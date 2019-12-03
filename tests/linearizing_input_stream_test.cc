@@ -28,7 +28,7 @@
 #include "bytes_ostream.hh"
 #include "utils/linearizing_input_stream.hh"
 #include "utils/serialization.hh"
-#include "tests/random-utils.hh"
+#include "test/lib/random_utils.hh"
 
 namespace {
 

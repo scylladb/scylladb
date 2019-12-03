@@ -30,9 +30,9 @@
 #include "schema_builder.hh"
 #include <seastar/core/thread.hh>
 #include "sstables/index_reader.hh"
-#include "tests/test_services.hh"
+#include "test/lib/test_services.hh"
 #include "tests/sstable_test_env.hh"
-#include "tmpdir.hh"
+#include "test/lib/tmpdir.hh"
 #include <array>
 
 constexpr auto la = sstables::sstable::version_types::la;
@@ -228,12 +228,12 @@ inline auto replacer_fn_no_op() {
 
 inline sstring get_test_dir(const sstring& name, const sstring& ks, const sstring& cf)
 {
-    return seastar::format("tests/sstables/{}/{}/{}-1c6ace40fad111e7b9cf000000000002", name, ks, cf);
+    return seastar::format("test/resource/sstables/{}/{}/{}-1c6ace40fad111e7b9cf000000000002", name, ks, cf);
 }
 
 inline sstring get_test_dir(const sstring& name, const schema_ptr s)
 {
-    return seastar::format("tests/sstables/{}/{}/{}-1c6ace40fad111e7b9cf000000000002", name, s->ks_name(), s->cf_name());
+    return seastar::format("test/resource/sstables/{}/{}/{}-1c6ace40fad111e7b9cf000000000002", name, s->ks_name(), s->cf_name());
 }
 
 inline std::array<sstables::sstable::version_types, 3> all_sstable_versions = {
@@ -625,7 +625,7 @@ class test_setup {
     subscription<directory_entry> _listing;
 
     static sstring& path() {
-        static sstring _p = "tests/sstables/tests-temporary";
+        static sstring _p = "test/resource/sstables/tests-temporary";
         return _p;
     };
 

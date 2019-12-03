@@ -22,7 +22,7 @@
 #pragma once
 
 #include "mutation_reader.hh"
-#include "tests/sstable_utils.hh"
+#include "test/lib/sstable_utils.hh"
 
 using populate_fn = std::function<mutation_source(schema_ptr s, const std::vector<mutation>&)>;
 using populate_fn_ex = std::function<mutation_source(schema_ptr s, const std::vector<mutation>&, gc_clock::time_point)>;

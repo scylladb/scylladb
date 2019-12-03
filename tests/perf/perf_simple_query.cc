@@ -24,7 +24,7 @@
 
 #include <boost/range/irange.hpp>
 #include "tests/cql_test_env.hh"
-#include "tests/perf/perf.hh"
+#include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 #include <seastar/testing/test_runner.hh>
 #include "schema_builder.hh"

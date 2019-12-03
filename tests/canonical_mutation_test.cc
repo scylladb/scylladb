@@ -24,9 +24,9 @@
 
 #include "canonical_mutation.hh"
 #include "mutation_source_test.hh"
-#include "mutation_assertions.hh"
+#include "test/lib/mutation_assertions.hh"
 
-#include "tests/test_services.hh"
+#include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>
 
 #include <seastar/core/thread.hh>

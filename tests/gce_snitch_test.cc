@@ -42,7 +42,7 @@
 
 namespace fs = std::filesystem;
 
-static fs::path test_files_subdir("tests/snitch_property_files");
+static fs::path test_files_subdir("test/resource/snitch_property_files");
 static constexpr const char* DUMMY_META_SERVER_IP = "DUMMY_META_SERVER_IP";
 static constexpr const char* USE_GCE_META_SERVER = "USE_GCE_META_SERVER";
 

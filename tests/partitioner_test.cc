@@ -32,8 +32,8 @@
 #include "utils/div_ceil.hh"
 #include "repair/range_split.hh"
 
-#include "simple_schema.hh"
-#include "total_order_check.hh"
+#include "test/lib/simple_schema.hh"
+#include "test/boost/total_order_check.hh"
 
 template <typename... Args>
 static

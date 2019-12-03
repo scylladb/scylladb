@@ -21,7 +21,7 @@
  */
 
 #include "sstables/checksum_utils.hh"
-#include "tests/make_random_string.hh"
+#include "test/lib/make_random_string.hh"
 #include "utils/gz/crc_combine.hh"
 
 #include "seastar/include/seastar/testing/perf_tests.hh"

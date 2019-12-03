@@ -29,7 +29,7 @@
 #include <boost/test/unit_test.hpp>
 #include "serializer_impl.hh"
 
-#include "tests/random-utils.hh"
+#include "test/lib/random_utils.hh"
 
 void append_sequence(bytes_ostream& buf, int count) {
     for (int i = 0; i < count; i++) {

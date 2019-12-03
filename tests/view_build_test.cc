@@ -30,7 +30,7 @@
 #include "tests/cql_assertions.hh"
 #include "schema_builder.hh"
 #include "service/priority_manager.hh"
-#include "test_services.hh"
+#include "test/lib/test_services.hh"
 
 using namespace std::literals::chrono_literals;
 

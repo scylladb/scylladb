@@ -26,7 +26,7 @@
 #include <seastar/testing/thread_test_case.hh>
 
 #include "tests/cql_test_env.hh"
-#include "tests/result_set_assertions.hh"
+#include "test/lib/result_set_assertions.hh"
 
 #include "database.hh"
 #include "partition_slice_builder.hh"
@@ -37,7 +37,7 @@
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog_replayer.hh"
-#include "tmpdir.hh"
+#include "test/lib/tmpdir.hh"
 #include "db/data_listeners.hh"
 
 using namespace std::chrono_literals;

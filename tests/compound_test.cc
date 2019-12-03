@@ -24,7 +24,7 @@
 #include <boost/test/unit_test.hpp>
 #include "compound.hh"
 #include "compound_compat.hh"
-#include "tests/range_assert.hh"
+#include "test/boost/range_assert.hh"
 #include "schema_builder.hh"
 #include "dht/murmur3_partitioner.hh"
 

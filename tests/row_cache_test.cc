@@ -27,17 +27,17 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 #include <seastar/testing/test_case.hh>
-#include "tests/mutation_assertions.hh"
-#include "tests/flat_mutation_reader_assertions.hh"
+#include "test/lib/mutation_assertions.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
 #include "tests/mutation_source_test.hh"
 
 #include "schema_builder.hh"
-#include "simple_schema.hh"
+#include "test/lib/simple_schema.hh"
 #include "row_cache.hh"
 #include <seastar/core/thread.hh>
 #include "memtable.hh"
 #include "partition_slice_builder.hh"
-#include "tests/memtable_snapshot_source.hh"
+#include "test/lib/memtable_snapshot_source.hh"
 
 using namespace std::chrono_literals;
 

@@ -27,16 +27,16 @@
 #include "sstables/sstables.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/key.hh"
-#include "sstable_utils.hh"
+#include "test/lib/sstable_utils.hh"
 #include <seastar/testing/test_case.hh>
 #include "schema.hh"
 #include "compress.hh"
 #include "database.hh"
 #include <memory>
 #include "sstable_test.hh"
-#include "tmpdir.hh"
+#include "test/lib/tmpdir.hh"
 #include "partition_slice_builder.hh"
-#include "tests/test_services.hh"
+#include "test/lib/test_services.hh"
 #include "cell_locking.hh"
 #include "sstables/data_consume_context.hh"
 
@@ -58,11 +58,11 @@ SEASTAR_TEST_CASE(uncompressed_data) {
 
 SEASTAR_TEST_CASE(compressed_data) {
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return test_using_working_sst(std::move(s), "tests/sstables/compressed", 1);
+    return test_using_working_sst(std::move(s), "test/resource/sstables/compressed", 1);
 }
 
 SEASTAR_TEST_CASE(composite_index) {
-    return test_using_working_sst(composite_schema(), "tests/sstables/composite", 1);
+    return test_using_working_sst(composite_schema(), "test/resource/sstables/composite", 1);
 }
 
 template<typename Func>
@@ -88,7 +88,7 @@ SEASTAR_TEST_CASE(simple_index_read) {
 }
 
 SEASTAR_TEST_CASE(composite_index_read) {
-    return index_read(composite_schema(), "tests/sstables/composite").then([] (auto vec) {
+    return index_read(composite_schema(), "test/resource/sstables/composite").then([] (auto vec) {
         BOOST_REQUIRE(vec.size() == 20);
     });
 }
@@ -129,11 +129,11 @@ SEASTAR_TEST_CASE(small_summary_query_negative_fail) {
 }
 
 SEASTAR_TEST_CASE(big_summary_query_0) {
-    return summary_query<0, 0, 182>(uncompressed_schema(), "tests/sstables/bigsummary", 76);
+    return summary_query<0, 0, 182>(uncompressed_schema(), "test/resource/sstables/bigsummary", 76);
 }
 
 SEASTAR_TEST_CASE(big_summary_query_32) {
-    return summary_query<32, 0xc4000, 182>(uncompressed_schema(), "tests/sstables/bigsummary", 76);
+    return summary_query<32, 0xc4000, 182>(uncompressed_schema(), "test/resource/sstables/bigsummary", 76);
 }
 
 // The following two files are just a copy of uncompressed's 1. But the Summary
@@ -233,8 +233,8 @@ static future<> compare_files(sstdesc file1, sstdesc file2, component_type compo
 static future<> check_component_integrity(component_type component) {
     auto tmp = make_lw_shared<tmpdir>();
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return write_sst_info(s, "tests/sstables/compressed", tmp->path().string(), 1).then([component, tmp] {
-        return compare_files(sstdesc{"tests/sstables/compressed", 1 },
+    return write_sst_info(s, "test/resource/sstables/compressed", tmp->path().string(), 1).then([component, tmp] {
+        return compare_files(sstdesc{"test/resource/sstables/compressed", 1 },
                              sstdesc{tmp->path().string(), 2 },
                              component);
     }).then([tmp] {});
@@ -257,7 +257,7 @@ write_and_validate_sst(schema_ptr s, sstring dir, Func&& func) {
 
 SEASTAR_TEST_CASE(check_summary_func) {
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return write_and_validate_sst(std::move(s), "tests/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
+    return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_summary().then([sst1, sst2] {
             summary& sst1_s = sstables::test(sst1).get_summary();
             summary& sst2_s = sstables::test(sst2).get_summary();
@@ -278,7 +278,7 @@ SEASTAR_TEST_CASE(check_filter_func) {
 
 SEASTAR_TEST_CASE(check_statistics_func) {
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return write_and_validate_sst(std::move(s), "tests/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
+    return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_statistics().then([sst1, sst2] {
             statistics& sst1_s = sstables::test(sst1).get_statistics();
             statistics& sst2_s = sstables::test(sst2).get_statistics();
@@ -297,7 +297,7 @@ SEASTAR_TEST_CASE(check_statistics_func) {
 
 SEASTAR_TEST_CASE(check_toc_func) {
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return write_and_validate_sst(std::move(s), "tests/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
+    return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_toc().then([sst1, sst2] {
             auto& sst1_c = sstables::test(sst1).get_components();
             auto& sst2_c = sstables::test(sst2).get_components();
@@ -321,7 +321,7 @@ SEASTAR_TEST_CASE(uncompressed_random_access_read) {
 
 SEASTAR_TEST_CASE(compressed_random_access_read) {
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return test_using_reusable_sst(std::move(s), "tests/sstables/compressed", 1, [] (auto sstp) {
+    return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
         return sstables::test(sstp).data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
             BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
             return make_ready_future<>();
@@ -433,7 +433,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
 
 SEASTAR_TEST_CASE(compressed_rows_read_one) {
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return test_using_reusable_sst(std::move(s), "tests/sstables/compressed", 1, [] (auto sstp) {
+    return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
         return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c, {0, 95}, 95);
             auto fut = context.read();
@@ -517,7 +517,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_all) {
 
 SEASTAR_TEST_CASE(compressed_rows_read_all) {
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
-    return test_using_reusable_sst(std::move(s), "tests/sstables/compressed", 1, [] (auto sstp) {
+    return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
         return do_with(count_row_consumer(), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context.read();
@@ -591,7 +591,7 @@ public:
 };
 
 SEASTAR_TEST_CASE(read_set) {
-    return test_using_reusable_sst(set_schema(), "tests/sstables/set", 1, [] (auto sstp) {
+    return test_using_reusable_sst(set_schema(), "test/resource/sstables/set", 1, [] (auto sstp) {
         return do_with(set_consumer(), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context.read();
@@ -648,7 +648,7 @@ public:
 };
 
 SEASTAR_TEST_CASE(ttl_read) {
-    return test_using_reusable_sst(uncompressed_schema(), "tests/sstables/ttl", 1, [] (auto sstp) {
+    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/ttl", 1, [] (auto sstp) {
         return do_with(ttl_row_consumer(1430151018675502), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context.read();
@@ -687,7 +687,7 @@ public:
 };
 
 SEASTAR_TEST_CASE(deleted_cell_read) {
-    return test_using_reusable_sst(uncompressed_schema(), "tests/sstables/deleted_cell", 2, [] (auto sstp) {
+    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/deleted_cell", 2, [] (auto sstp) {
         return do_with(deleted_cell_row_consumer(), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
             auto fut = context.read();
@@ -705,7 +705,7 @@ SEASTAR_TEST_CASE(deleted_cell_read) {
 
 
 SEASTAR_TEST_CASE(find_key_map) {
-    return test_using_reusable_sst(map_schema(), "tests/sstables/map_pk", 1, [] (auto sstp) {
+    return test_using_reusable_sst(map_schema(), "test/resource/sstables/map_pk", 1, [] (auto sstp) {
         schema_ptr s = map_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -727,7 +727,7 @@ SEASTAR_TEST_CASE(find_key_map) {
 }
 
 SEASTAR_TEST_CASE(find_key_set) {
-    return test_using_reusable_sst(set_schema(), "tests/sstables/set_pk", 1, [] (auto sstp) {
+    return test_using_reusable_sst(set_schema(), "test/resource/sstables/set_pk", 1, [] (auto sstp) {
         schema_ptr s = set_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -749,7 +749,7 @@ SEASTAR_TEST_CASE(find_key_set) {
 }
 
 SEASTAR_TEST_CASE(find_key_list) {
-    return test_using_reusable_sst(list_schema(), "tests/sstables/list_pk", 1, [] (auto sstp) {
+    return test_using_reusable_sst(list_schema(), "test/resource/sstables/list_pk", 1, [] (auto sstp) {
         schema_ptr s = set_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -772,7 +772,7 @@ SEASTAR_TEST_CASE(find_key_list) {
 
 
 SEASTAR_TEST_CASE(find_key_composite) {
-    return test_using_reusable_sst(composite_schema(), "tests/sstables/composite", 1, [] (auto sstp) {
+    return test_using_reusable_sst(composite_schema(), "test/resource/sstables/composite", 1, [] (auto sstp) {
         schema_ptr s = composite_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -790,7 +790,7 @@ SEASTAR_TEST_CASE(find_key_composite) {
 }
 
 SEASTAR_TEST_CASE(all_in_place) {
-    return test_using_reusable_sst(uncompressed_schema(), "tests/sstables/bigsummary", 76, [] (auto sstp) {
+    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/bigsummary", 76, [] (auto sstp) {
         auto& summary = sstables::test(sstp)._summary();
 
         int idx = 0;
@@ -815,7 +815,7 @@ SEASTAR_TEST_CASE(full_index_search) {
 }
 
 SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
-    return test_using_reusable_sst(composite_schema(), "tests/sstables/composite", 1, [] (auto sstp) {
+    return test_using_reusable_sst(composite_schema(), "test/resource/sstables/composite", 1, [] (auto sstp) {
         schema_ptr s = composite_schema();
         auto& summary = sstables::test(sstp)._summary();
         std::vector<data_value> kk;
@@ -835,7 +835,7 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
 
 // See CASSANDRA-7593. This sstable writes 0 in the range_start. We need to handle that case as well
 SEASTAR_TEST_CASE(wrong_range) {
-    return test_using_reusable_sst(uncompressed_schema(), "tests/sstables/wrongrange", 114, [] (auto sstp) {
+    return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/wrongrange", 114, [] (auto sstp) {
         return do_with(make_dkey(uncompressed_schema(), "todata"), [sstp] (auto& key) {
             auto s = columns_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -1186,7 +1186,7 @@ static future<> compare_files(sstring file1, sstring file2) {
 }
 
 // This test creates the same data as we previously created with Cassandra
-// in the tests/sstables/large_partition directory (which we read in the
+// in the test/resource/sstables/large_partition directory (which we read in the
 // promoted_index_read test above). The index file in both sstables - which
 // includes the promoted index - should be bit-for-bit identical, otherwise
 // we have a problem in our promoted index writing code (or in the data

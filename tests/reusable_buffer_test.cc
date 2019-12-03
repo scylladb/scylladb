@@ -26,7 +26,7 @@
 
 #include <boost/range/algorithm/copy.hpp>
 
-#include "random-utils.hh"
+#include "test/lib/random_utils.hh"
 
 BOOST_AUTO_TEST_CASE(test_get_linearized_view) {
     utils::reusable_buffer buffer;

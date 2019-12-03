@@ -26,13 +26,13 @@
 #include "mutation_source_test.hh"
 #include "mutation_fragment.hh"
 #include "frozen_mutation.hh"
-#include "tests/test_services.hh"
+#include "test/lib/test_services.hh"
 #include "schema_builder.hh"
-#include "total_order_check.hh"
+#include "test/boost/total_order_check.hh"
 #include "schema_upgrader.hh"
 #include "memtable.hh"
 
-#include "mutation_assertions.hh"
+#include "test/lib/mutation_assertions.hh"
 
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {

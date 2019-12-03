@@ -24,8 +24,8 @@
 #include <seastar/core/do_with.hh>
 
 #include "sstables/sstables.hh"
-#include "tests/tmpdir.hh"
-#include "tests/test_services.hh"
+#include "test/lib/tmpdir.hh"
+#include "test/lib/test_services.hh"
 
 namespace sstables {
 

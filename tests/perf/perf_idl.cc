@@ -22,7 +22,7 @@
 
 #include "seastar/include/seastar/testing/perf_tests.hh"
 
-#include "tests/simple_schema.hh"
+#include "test/lib/simple_schema.hh"
 
 #include "frozen_mutation.hh"
 

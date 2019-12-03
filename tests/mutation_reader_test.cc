@@ -32,16 +32,16 @@
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
-#include "tests/mutation_assertions.hh"
-#include "tests/flat_mutation_reader_assertions.hh"
-#include "tests/tmpdir.hh"
-#include "tests/sstable_utils.hh"
+#include "test/lib/mutation_assertions.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/tmpdir.hh"
+#include "test/lib/sstable_utils.hh"
 #include "tests/sstable_test.hh"
-#include "tests/simple_schema.hh"
-#include "tests/test_services.hh"
+#include "test/lib/simple_schema.hh"
+#include "test/lib/test_services.hh"
 #include "tests/mutation_source_test.hh"
 #include "tests/cql_test_env.hh"
-#include "tests/make_random_string.hh"
+#include "test/lib/make_random_string.hh"
 
 #include "mutation_reader.hh"
 #include "schema_builder.hh"

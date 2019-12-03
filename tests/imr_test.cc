@@ -35,10 +35,10 @@
 #include "imr/methods.hh"
 #include "imr/utils.hh"
 
-#include "failure_injecting_allocation_strategy.hh"
+#include "test/lib/failure_injecting_allocation_strategy.hh"
 #include "utils/logalloc.hh"
 
-#include "random-utils.hh"
+#include "test/lib/random_utils.hh"
 
 static constexpr auto random_test_iteration_count = 20;
 

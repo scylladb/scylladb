@@ -29,7 +29,7 @@
 
 #include "data/cell.hh"
 
-#include "random-utils.hh"
+#include "test/lib/random_utils.hh"
 #include "disk-error-handler.hh"
 
 BOOST_AUTO_TEST_CASE(test_atomic_cell) {

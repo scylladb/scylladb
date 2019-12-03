@@ -30,11 +30,11 @@
 #include "memtable.hh"
 #include "row_cache.hh"
 #include "frozen_mutation.hh"
-#include "tmpdir.hh"
+#include "test/lib/tmpdir.hh"
 #include "sstables/sstables.hh"
 #include "canonical_mutation.hh"
-#include "sstable_utils.hh"
-#include "test_services.hh"
+#include "test/lib/sstable_utils.hh"
+#include "test/lib/test_services.hh"
 #include "sstable_test_env.hh"
 
 class size_calculator {

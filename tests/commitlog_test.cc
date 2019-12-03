@@ -37,12 +37,12 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include "utils/UUID_gen.hh"
-#include "tmpdir.hh"
+#include "test/lib/tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/rp_set.hh"
 #include "log.hh"
 #include "service/priority_manager.hh"
-#include "exception_utils.hh"
+#include "test/lib/exception_utils.hh"
 
 using namespace db;
 

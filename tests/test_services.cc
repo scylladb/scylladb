@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "tests/test_services.hh"
+#include "test/lib/test_services.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"

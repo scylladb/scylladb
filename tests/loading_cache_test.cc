@@ -32,10 +32,10 @@
 
 
 #include "seastarx.hh"
-#include "tests/eventually.hh"
+#include "test/lib/eventually.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
-#include "tmpdir.hh"
+#include "test/lib/tmpdir.hh"
 #include "log.hh"
 
 #include <vector>

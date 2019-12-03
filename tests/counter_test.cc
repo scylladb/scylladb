@@ -28,7 +28,7 @@
 #include <boost/range/algorithm/sort.hpp>
 
 #include <seastar/testing/test_case.hh>
-#include "tests/test_services.hh"
+#include "test/lib/test_services.hh"
 #include "schema_builder.hh"
 #include "keys.hh"
 #include "mutation.hh"

@@ -27,7 +27,7 @@
 #include "keys.hh"
 #include "schema_builder.hh"
 #include "range_tombstone_list.hh"
-#include "range_tombstone_list_assertions.hh"
+#include "test/boost/range_tombstone_list_assertions.hh"
 
 static thread_local schema_ptr s = schema_builder("ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
