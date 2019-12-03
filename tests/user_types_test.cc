@@ -21,7 +21,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 
 #include "types/user.hh"

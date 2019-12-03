@@ -25,7 +25,7 @@
 #include <boost/range/algorithm_ext.hpp>
 #include <boost/range/adaptors.hpp>
 #include <json/json.h>
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 #include "schema_builder.hh"

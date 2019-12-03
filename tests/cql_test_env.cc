@@ -25,7 +25,7 @@
 #include <seastar/util/defer.hh>
 #include <sstables/sstables.hh>
 #include <seastar/core/do_with.hh>
-#include "cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"

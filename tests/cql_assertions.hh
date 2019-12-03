@@ -22,7 +22,7 @@
 
 #pragma once
 
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "transport/messages/result_message_base.hh"
 #include "bytes.hh"
 #include <experimental/source_location>

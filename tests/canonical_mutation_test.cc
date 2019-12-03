@@ -23,7 +23,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include "canonical_mutation.hh"
-#include "mutation_source_test.hh"
+#include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 
 #include "test/lib/test_services.hh"

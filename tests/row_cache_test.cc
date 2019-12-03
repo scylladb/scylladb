@@ -29,7 +29,7 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
-#include "tests/mutation_source_test.hh"
+#include "test/lib/mutation_source_test.hh"
 
 #include "schema_builder.hh"
 #include "test/lib/simple_schema.hh"

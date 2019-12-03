@@ -24,7 +24,7 @@
 #include "db/config.hh"
 #include "partition_slice_builder.hh"
 #include "serializer_impl.hh"
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
 #include "tests/cql_assertions.hh"
 #include "test/lib/mutation_assertions.hh"

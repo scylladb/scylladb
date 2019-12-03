@@ -23,7 +23,7 @@
 ///
 /// See the various `create_test_table()` overloads for more details.
 
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 
 namespace test {
 

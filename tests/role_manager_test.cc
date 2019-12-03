@@ -24,7 +24,7 @@
 #include <seastar/testing/test_case.hh>
 
 #include "service/migration_manager.hh"
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 
 auto make_manager(cql_test_env& env) {
     auto stop_role_manager = [] (auth::standard_role_manager* m) {

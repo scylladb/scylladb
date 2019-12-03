@@ -26,7 +26,7 @@
 
 #include "mutation.hh"
 #include "mutation_fragment.hh"
-#include "mutation_source_test.hh"
+#include "test/lib/mutation_source_test.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"
 #include "schema_builder.hh"

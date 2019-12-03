@@ -33,7 +33,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/result_set_assertions.hh"
-#include "tests/mutation_source_test.hh"
+#include "test/lib/mutation_source_test.hh"
 
 #include "mutation_query.hh"
 #include <seastar/core/do_with.hh>

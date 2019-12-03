@@ -30,7 +30,7 @@
 #include "utils/big_decimal.hh"
 #include "exceptions/exceptions.hh"
 #include <seastar/testing/test_case.hh>
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>

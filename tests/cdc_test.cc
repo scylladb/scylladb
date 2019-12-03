@@ -24,7 +24,7 @@
 
 #include "cdc/cdc.hh"
 #include "tests/cql_assertions.hh"
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "transport/messages/result_message.hh"
 #include "types.hh"
 #include "types/tuple.hh"

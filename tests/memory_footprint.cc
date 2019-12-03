@@ -35,7 +35,7 @@
 #include "canonical_mutation.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
-#include "sstable_test_env.hh"
+#include "test/lib/sstable_test_env.hh"
 
 class size_calculator {
     class nest {

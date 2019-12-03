@@ -39,8 +39,8 @@
 #include "tests/sstable_test.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/test_services.hh"
-#include "tests/mutation_source_test.hh"
-#include "tests/cql_test_env.hh"
+#include "test/lib/mutation_source_test.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/lib/make_random_string.hh"
 
 #include "mutation_reader.hh"

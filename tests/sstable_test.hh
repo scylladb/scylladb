@@ -31,7 +31,7 @@
 #include <seastar/core/thread.hh>
 #include "sstables/index_reader.hh"
 #include "test/lib/test_services.hh"
-#include "tests/sstable_test_env.hh"
+#include "test/lib/sstable_test_env.hh"
 #include "test/lib/tmpdir.hh"
 #include <array>
 

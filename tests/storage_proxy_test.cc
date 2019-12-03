@@ -24,8 +24,8 @@
 #include <seastar/testing/test_case.hh>
 #include "query-result-writer.hh"
 
-#include "tests/cql_test_env.hh"
-#include "tests/mutation_source_test.hh"
+#include "test/lib/cql_test_env.hh"
+#include "test/lib/mutation_source_test.hh"
 #include "test/lib/result_set_assertions.hh"
 #include "service/storage_proxy.hh"
 #include "partition_slice_builder.hh"

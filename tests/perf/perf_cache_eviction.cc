@@ -22,7 +22,7 @@
 #include <boost/range/irange.hpp>
 #include "seastarx.hh"
 #include "test/lib/simple_schema.hh"
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include <seastar/core/app-template.hh>
 #include "database.hh"
 #include "db/config.hh"

@@ -22,7 +22,7 @@
 #include "querier.hh"
 #include "service/priority_manager.hh"
 #include "test/lib/simple_schema.hh"
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "db/config.hh"
 
 #include <seastar/core/sleep.hh>

@@ -22,7 +22,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "tests/cql_assertions.hh"
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "types/list.hh"
 #include "transport/messages/result_message.hh"
 #include "types/map.hh"

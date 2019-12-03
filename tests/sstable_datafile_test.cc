@@ -65,7 +65,7 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/is_sorted.hpp>
 #include "test/lib/test_services.hh"
-#include "cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 
 #include "test/lib/sstable_utils.hh"
 

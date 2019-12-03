@@ -20,7 +20,7 @@
  */
 
 #include <seastar/testing/test_case.hh>
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 #include "transport/messages/result_message.hh"
 #include "service/pager/paging_state.hh"

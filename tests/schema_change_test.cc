@@ -25,9 +25,9 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/defer.hh>
 
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
-#include "tests/mutation_source_test.hh"
+#include "test/lib/mutation_source_test.hh"
 #include "test/lib/result_set_assertions.hh"
 #include "service/migration_manager.hh"
 #include "schema_builder.hh"

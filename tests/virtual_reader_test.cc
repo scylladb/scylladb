@@ -28,7 +28,7 @@
 #include <stdint.h>
 
 #include <seastar/testing/test_case.hh>
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 #include "test/lib/test_services.hh"
 

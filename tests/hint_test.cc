@@ -30,7 +30,7 @@
 #include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>
 
-#include "tests/mutation_source_test.hh"
+#include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 
 #include <seastar/core/future-util.hh>

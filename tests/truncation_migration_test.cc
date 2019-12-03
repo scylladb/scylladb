@@ -22,7 +22,7 @@
 #include <string_view>
 #include <seastar/testing/test_case.hh>
 
-#include "cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "cql_assertions.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"

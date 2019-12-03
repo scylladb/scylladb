@@ -23,7 +23,7 @@
 #include <boost/test/unit_test.hpp>
 #include "partition_slice_builder.hh"
 #include "schema_builder.hh"
-#include "mutation_source_test.hh"
+#include "test/lib/mutation_source_test.hh"
 #include "counters.hh"
 #include "test/lib/simple_schema.hh"
 #include "flat_mutation_reader.hh"

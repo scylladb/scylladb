@@ -38,7 +38,7 @@
 #include "exceptions/exceptions.hh"
 #include "seastarx.hh"
 #include "service/client_state.hh"
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include <seastar/testing/test_case.hh>
 
 static const auto alice = std::string_view("alice");

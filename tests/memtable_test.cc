@@ -30,7 +30,7 @@
 
 #include <seastar/core/thread.hh>
 #include "memtable.hh"
-#include "mutation_source_test.hh"
+#include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "flat_mutation_reader.hh"

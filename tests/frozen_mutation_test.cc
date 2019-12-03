@@ -29,7 +29,7 @@
 #include "frozen_mutation.hh"
 #include "schema_builder.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "tests/mutation_source_test.hh"
+#include "test/lib/mutation_source_test.hh"
 
 #include <seastar/core/thread.hh>
 

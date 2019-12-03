@@ -23,7 +23,7 @@
 #include <json/json.h>
 
 #include <boost/range/irange.hpp>
-#include "tests/cql_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 #include <seastar/testing/test_runner.hh>
