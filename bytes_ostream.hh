@@ -38,6 +38,7 @@ class bytes_ostream {
 public:
     using size_type = bytes::size_type;
     using value_type = bytes::value_type;
+    using fragment_type = bytes_view;
     static constexpr size_type max_chunk_size() { return 128 * 1024; }
 private:
     static_assert(sizeof(value_type) == 1, "value_type is assumed to be one byte long");
@@ -92,6 +93,29 @@ public:
         bool operator!=(const fragment_iterator& other) const {
             return _current != other._current;
         }
+    };
+    using const_iterator = fragment_iterator;
+
+    class output_iterator {
+    public:
+        using iterator_category = std::output_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = bytes_ostream::value_type;
+        using pointer = bytes_ostream::value_type*;
+        using reference = bytes_ostream::value_type&;
+
+        friend class bytes_ostream;
+
+    private:
+        bytes_ostream* _ostream = nullptr;
+
+    private:
+        explicit output_iterator(bytes_ostream& os) : _ostream(&os) { }
+
+    public:
+        reference operator*() const { return *_ostream->write_place_holder(1); }
+        output_iterator& operator++() { return *this; }
+        output_iterator operator++(int) { return *this; }
     };
 private:
     inline size_type current_space_left() const {
@@ -289,6 +313,11 @@ public:
         return _size;
     }
 
+    // For the FragmentRange concept
+    size_type size_bytes() const {
+        return _size;
+    }
+
     bool empty() const {
         return _size == 0;
     }
@@ -325,6 +354,8 @@ public:
     // Any modification of this instance invalidates iterators.
     fragment_iterator begin() const { return { _begin.get() }; }
     fragment_iterator end() const { return { nullptr }; }
+
+    output_iterator write_begin() { return output_iterator(*this); }
 
     boost::iterator_range<fragment_iterator> fragments() const {
         return { begin(), end() };

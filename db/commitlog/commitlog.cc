@@ -366,8 +366,8 @@ private:
     uint64_t _new_counter = 0;
 };
 
-template<typename T, typename Output>
-static void write(Output& out, T value) {
+template<typename T>
+static void write(fragmented_temporary_buffer::ostream& out, T value) {
     auto v = net::hton(value);
     out.write(reinterpret_cast<const char*>(&v), sizeof(v));
 }

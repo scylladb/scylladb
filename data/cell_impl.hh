@@ -61,13 +61,13 @@ private:
             return [this, n] (uint8_t* out) mutable noexcept {
                 auto dst = reinterpret_cast<bytes_mutable_view::pointer>(out);
                 while (n) {
-                    auto this_size = std::min(_value_current.size(), n);
-                    dst = std::copy_n(_value_current.data(), this_size, dst);
-                    _value_current.remove_prefix(this_size);
                     if (_value_current.empty()) {
                         ++_value_it;
                         _value_current = *_value_it;
                     }
+                    auto this_size = std::min(_value_current.size(), n);
+                    dst = std::copy_n(_value_current.data(), this_size, dst);
+                    _value_current.remove_prefix(this_size);
                     n -= this_size;
                 }
             };

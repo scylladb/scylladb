@@ -154,9 +154,9 @@ size_t serialize_string_size(const sstring& s) {;
     return serialize_int16_size + s.size();
 }
 
-template<typename T>
+template<typename T, typename CharOutputIterator>
 static inline
-void write(bytes::iterator& out, const T& val) {
+void write(CharOutputIterator& out, const T& val) {
     auto v = net::ntoh(val);
     out = std::copy_n(reinterpret_cast<char*>(&v), sizeof(v), out);
 }

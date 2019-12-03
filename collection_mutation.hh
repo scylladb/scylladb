@@ -26,8 +26,11 @@
 #include "gc_clock.hh"
 #include "atomic_cell.hh"
 #include "cql_serialization_format.hh"
+#include "marshal_exception.hh"
+#include "utils/linearizing_input_stream.hh"
 
 class abstract_type;
+class bytes_ostream;
 class compaction_garbage_collector;
 class row_tombstone;
 
@@ -66,10 +69,13 @@ struct collection_mutation_view_description {
     collection_mutation serialize(const abstract_type&) const;
 };
 
+using collection_mutation_input_stream = utils::linearizing_input_stream<atomic_cell_value_view, marshal_exception>;
+
 // Given a linearized collection_mutation_view, returns an auxiliary struct allowing the inspection of each cell.
-// The struct is an observer of the data given by the collection_mutation_view and doesn't extend its lifetime.
+// The struct is an observer of the data given by the collection_mutation_view and is only valid while the
+// passed in `collection_mutation_input_stream` is alive.
 // The function needs to be given the type of stored data to reconstruct the structural information.
-collection_mutation_view_description deserialize_collection_mutation(const abstract_type&, bytes_view);
+collection_mutation_view_description deserialize_collection_mutation(const abstract_type&, collection_mutation_input_stream&);
 
 class collection_mutation_view {
 public:
@@ -90,9 +96,8 @@ public:
     // calls it on the corresponding description of `this`.
     template <typename F>
     inline decltype(auto) with_deserialized(const abstract_type& type, F f) const {
-        return data.with_linearized([&] (bytes_view bv) {
-            return f(deserialize_collection_mutation(type, std::move(bv)));
-        });
+        auto stream = collection_mutation_input_stream(data);
+        return f(deserialize_collection_mutation(type, stream));
     }
 };
 
@@ -112,7 +117,7 @@ public:
 
     collection_mutation() {}
     collection_mutation(const abstract_type&, collection_mutation_view);
-    collection_mutation(const abstract_type&, bytes_view);
+    collection_mutation(const abstract_type& type, const bytes_ostream& data);
     operator collection_mutation_view() const;
 };
 

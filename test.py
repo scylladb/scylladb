@@ -133,6 +133,7 @@ boost_tests = [
     'data_listeners_test',
     'truncation_migration_test',
     'like_matcher_test',
+    'linearizing_input_stream_test',
 ]
 
 other_tests = [

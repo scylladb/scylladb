@@ -74,8 +74,8 @@ private:
      *   <len(value1)><value1><len(value2)><value2>...<len(value_n)><value_n>
      *
      */
-    template<typename RangeOfSerializedComponents>
-    static void serialize_value(RangeOfSerializedComponents&& values, bytes::iterator& out) {
+    template<typename RangeOfSerializedComponents, typename CharOutputIterator>
+    static void serialize_value(RangeOfSerializedComponents&& values, CharOutputIterator& out) {
         for (auto&& val : values) {
             assert(val.size() <= std::numeric_limits<size_type>::max());
             write<size_type>(out, size_type(val.size()));
