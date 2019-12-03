@@ -81,7 +81,7 @@ blob := any+ >start_blob $advance_blob;
 command := any+ >start_command $advance_command;
 arg = '$' u32 crlf ${ _arg_size = _u32;};
 
-main := (args_count (arg @{fcall command; } crlf) (arg @{fcall blob; } crlf)+) ${_req._state = request_state::ok;};
+main := (args_count (arg @{fcall command; } crlf) (arg @{fcall blob; } crlf)+) ${_req._state = request_state::ok;} >eof{_req._state = request_state::eof;};
 
 prepush {
     prepush();

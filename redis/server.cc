@@ -220,6 +220,9 @@ void redis_server::connection::write_reply(redis_server::result result)
 future<> redis_server::connection::process_request() {
     _parser.init();
     return _read_buf.consume(_parser).then([this] {
+        if (_parser.eof()) {
+            return make_ready_future<>();
+        }
         ++_server._stats._requests_serving;
         _pending_requests_gate.enter();
         utils::latency_counter lc;
