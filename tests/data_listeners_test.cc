@@ -23,7 +23,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
-#include "tests/cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 #include "cql3/query_processor.hh"
 
 #include "db/data_listeners.hh"

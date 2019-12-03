@@ -23,7 +23,7 @@
 #include <seastar/testing/test_case.hh>
 
 #include "test/lib/cql_test_env.hh"
-#include "cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_service.hh"

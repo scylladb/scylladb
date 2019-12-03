@@ -13,7 +13,7 @@
 #include "database.hh"
 #include "sstables/compaction_manager.hh"
 #include "mutation_reader.hh"
-#include "sstable_test.hh"
+#include "test/boost/sstable_test.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/tmpdir.hh"
 #include "cell_locking.hh"

@@ -30,7 +30,7 @@
 #include "exceptions/exceptions.hh"
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
-#include "tests/cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/exception_utils.hh"
 
 #include <seastar/core/future-util.hh>

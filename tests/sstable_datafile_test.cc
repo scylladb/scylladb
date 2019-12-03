@@ -32,7 +32,7 @@
 #include "database.hh"
 #include "sstables/leveled_manifest.hh"
 #include <memory>
-#include "sstable_test.hh"
+#include "test/boost/sstable_test.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/core/do_with.hh>
 #include "sstables/compaction_manager.hh"

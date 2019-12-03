@@ -29,7 +29,7 @@
 #define BOOST_REQUIRE(x) (void)(x)
 #define BOOST_CHECK_NO_THROW(x) (void)(x)
 
-#include "tests/perf_sstable.hh"
+#include "test/perf/perf_sstable.hh"
 
 using namespace sstables;
 

@@ -26,7 +26,7 @@
 #include <seastar/util/defer.hh>
 
 #include "test/lib/cql_test_env.hh"
-#include "tests/cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/result_set_assertions.hh"
 #include "service/migration_manager.hh"

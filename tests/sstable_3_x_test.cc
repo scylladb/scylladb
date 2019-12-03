@@ -35,7 +35,7 @@
 #include "compress.hh"
 #include "counters.hh"
 #include "schema_builder.hh"
-#include "sstable_test.hh"
+#include "test/boost/sstable_test.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/tmpdir.hh"

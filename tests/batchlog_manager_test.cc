@@ -28,7 +28,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
-#include "tests/cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_ptr.hh>

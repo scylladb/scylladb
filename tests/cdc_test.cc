@@ -23,7 +23,7 @@
 #include <string>
 
 #include "cdc/cdc.hh"
-#include "tests/cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "transport/messages/result_message.hh"
 #include "types.hh"

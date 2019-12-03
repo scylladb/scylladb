@@ -20,7 +20,7 @@
  */
 
 #pragma once
-#include "sstable_test.hh"
+#include "test/boost/sstable_test.hh"
 #include "sstables/sstables.hh"
 #include "sstables/compaction_manager.hh"
 #include "cell_locking.hh"

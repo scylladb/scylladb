@@ -32,7 +32,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
-#include "tests/cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 
 #include "auth/allow_all_authenticator.hh"
 #include "auth/authenticator.hh"

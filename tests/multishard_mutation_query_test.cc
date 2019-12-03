@@ -26,9 +26,9 @@
 #include "serializer_impl.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
-#include "tests/cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "test_table.hh"
+#include "test/lib/test_table.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 

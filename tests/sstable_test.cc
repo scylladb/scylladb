@@ -33,7 +33,7 @@
 #include "compress.hh"
 #include "database.hh"
 #include <memory>
-#include "sstable_test.hh"
+#include "test/boost/sstable_test.hh"
 #include "test/lib/tmpdir.hh"
 #include "partition_slice_builder.hh"
 #include "test/lib/test_services.hh"

@@ -19,11 +19,11 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "tests/test_table.hh"
+#include "test/lib/test_table.hh"
 
 #include <boost/range/adaptor/map.hpp>
 
-#include "tests/cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 
 namespace test {
 

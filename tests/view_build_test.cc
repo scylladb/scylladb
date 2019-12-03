@@ -27,7 +27,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
-#include "tests/cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 #include "schema_builder.hh"
 #include "service/priority_manager.hh"
 #include "test/lib/test_services.hh"

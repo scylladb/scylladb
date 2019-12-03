@@ -22,7 +22,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-#include "cql_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 #include "transport/messages/result_message.hh"
 #include "to_string.hh"
 #include "bytes.hh"

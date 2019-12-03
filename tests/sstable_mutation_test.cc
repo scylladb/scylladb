@@ -24,7 +24,7 @@
 #include <seastar/net/inet_address.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
-#include "sstable_test.hh"
+#include "test/boost/sstable_test.hh"
 #include "sstables/key.hh"
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
