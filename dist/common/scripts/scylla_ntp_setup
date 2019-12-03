@@ -78,7 +78,7 @@ if __name__ == '__main__':
             run('rc-service ntpd start')
 
     if is_redhat_variant():
-        if is_redhat_8():
+        if redhat_version() >= 8:
             run('dnf install -y chrony')
             with open('/etc/chrony.conf') as f:
                 conf = f.read()
