@@ -36,16 +36,18 @@ namespace commands {
 
 shared_ptr<abstract_command> del::prepare(service::storage_proxy& proxy, request&& req)
 {
-    if (req.arguments_size() != 1) {
-        throw wrong_arguments_exception(1, req.arguments_size(), req._command);
+    if (req.arguments_size() == 0) {
+        throw wrong_number_of_arguments_exception(req._command);
     }
-    return seastar::make_shared<del> (std::move(req._command), std::move(req._args[0]));
+    return seastar::make_shared<del> (std::move(req._command), std::move(req._args));
 }
 
 future<redis_message> del::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit)
 {
-    return redis::delete_object(proxy, options, std::move(_key), permit).then([] {
-       return redis_message::one();
+    //FIXME: We should return the count of the actually deleted keys.
+    auto size = _keys.size();
+    return redis::delete_objects(proxy, options, std::move(_keys), permit).then([size] {
+       return redis_message::number(size);
     });
 }
 

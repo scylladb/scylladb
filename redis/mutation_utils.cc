@@ -77,15 +77,15 @@ mutation make_tombstone(service::storage_proxy& proxy, const redis_options& opti
     return m;
 }
 
-future<> delete_object(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, service_permit permit) {
-    
+future<> delete_objects(service::storage_proxy& proxy, redis::redis_options& options, std::vector<bytes>&& keys, service_permit permit) {
     db::timeout_clock::time_point timeout = db::timeout_clock::now() + options.get_write_timeout();
     auto write_consistency_level = options.get_write_consistency_level();
     std::vector<sstring> tables { redis::STRINGs, redis::LISTs, redis::HASHes, redis::SETs, redis::ZSETs }; 
-    
-    auto remove = [&proxy, timeout, write_consistency_level, permit, &options, key = std::move(key)] (const sstring& cf_name) {
-        auto m = make_tombstone(proxy, options, cf_name, key);
-        return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit);
+    auto remove = [&proxy, timeout, write_consistency_level, permit, &options, keys = std::move(keys)] (const sstring& cf_name) {
+        return parallel_for_each(keys.begin(), keys.end(), [&proxy, timeout, write_consistency_level, &options, permit, cf_name] (const bytes& key) {
+            auto m = make_tombstone(proxy, options, cf_name, key);
+            return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit);
+        });
     };  
     return parallel_for_each(tables.begin(), tables.end(), remove);
 }

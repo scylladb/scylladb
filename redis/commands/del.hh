@@ -29,12 +29,12 @@ namespace redis {
 namespace commands {
 
 class del : public abstract_command {
-    bytes _key;
+    std::vector<bytes> _keys;
 public:
     static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    del(bytes&& name, bytes&& key) 
+    del(bytes&& name, std::vector<bytes>&& keys) 
         : abstract_command(std::move(name)) 
-        , _key(std::move(key))
+        , _keys(std::move(keys))
     {
     }
     ~del() {}
