@@ -508,8 +508,11 @@ private:
     void wait_for_feature_listeners_to_finish();
     void maybe_start_sys_dist_ks();
 public:
-    future<> join_ring();
-    bool is_joined() const;
+    inline bool is_joined() const {
+        // Every time we set _joined, we do it on all shards, so we can read its
+        // value locally.
+        return _joined;
+    }
 
     future<> rebuild(sstring source_dc);
 

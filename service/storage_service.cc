@@ -411,10 +411,6 @@ std::optional<UUID> get_replace_node() {
     }
 }
 
-bool get_property_join_ring() {
-    return get_local_storage_service().db().local().get_config().join_ring();
-}
-
 bool get_property_rangemovement() {
     return get_local_storage_service().db().local().get_config().consistent_rangemovement();
 }
@@ -429,10 +425,6 @@ bool storage_service::should_bootstrap() const {
 
 // Runs inside seastar::async context
 void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind) {
-    if (_joined) {
-        return;
-    }
-
     std::map<gms::application_state, gms::versioned_value> app_states;
     if (db::system_keyspace::was_decommissioned()) {
         if (db().local().get_config().override_decommission()) {
@@ -444,9 +436,6 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
             slogger.error("{}", msg);
             throw std::runtime_error(msg);
         }
-    }
-    if (db().local().is_replacing() && !get_property_join_ring()) {
-        throw std::runtime_error("Cannot set both join_ring=false and attempt to replace a node");
     }
     if (get_replace_tokens().size() > 0 || get_replace_node()) {
          throw std::runtime_error("Replace method removed; use replace_address instead");
@@ -809,23 +798,6 @@ void storage_service::join_token_ring(int delay) {
 
     supervisor::notify("starting tracing");
     tracing::tracing::start_tracing().get();
-}
-
-future<> storage_service::join_ring() {
-    return run_with_api_lock(sstring("join_ring"), [] (storage_service& ss) {
-        return seastar::async([&ss] {
-            if (!ss._joined) {
-                slogger.info("Joining ring by operator request");
-                ss.join_token_ring(0);
-            }
-        });
-    });
-}
-
-bool storage_service::is_joined() const {
-    // Every time we set _joined, we do it on all shards, so we can read its
-    // value locally.
-    return _joined;
 }
 
 void storage_service::mark_existing_views_as_built() {
@@ -1613,21 +1585,7 @@ future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
                 cfs.initCounterCache();
 #endif
 
-        if (get_property_join_ring()) {
-            join_token_ring(delay);
-        } else {
-            auto tokens = db::system_keyspace::get_saved_tokens().get0();
-            if (!tokens.empty()) {
-                _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-                replicate_to_all_cores().get();
-                // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
-                _gossiper.add_local_application_state({
-                    { gms::application_state::TOKENS, value_factory.tokens(tokens) },
-                    { gms::application_state::STATUS, value_factory.hibernate(true) }
-                }).get();
-            }
-            slogger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
-        }
+        join_token_ring(delay);
 
         if (_db.local().get_config().enable_sstable_data_integrity_check()) {
             slogger.info0("SSTable data integrity checker is enabled.");

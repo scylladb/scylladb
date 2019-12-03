@@ -605,9 +605,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::join_ring.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().join_ring().then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::is_joined.set(r, [] (std::unique_ptr<request> req) {
