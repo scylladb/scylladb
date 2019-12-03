@@ -128,7 +128,7 @@ be dequeued for some other reason. This section explains how.
     sections that describe branches.
  4. Delete pick/merge commands that correspond to bad commits
  5. Save the file and let `git rebase` do the work
- 6. Publish your changes with `git push --force-with-leases`
+ 6. Publish your changes with `git push --force-with-lease`
 
 Note: git contains a bug where branch descriptions with the
 characters `['":\.]` confuse it. Best to search-and-replace those
