@@ -276,7 +276,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
         }
 
         auto shard = _db.local().shard_of(fm);
-        return _db.invoke_on(shard, [this, cer = std::move(cer), &src_cm, rp, shard, s] (database& db) -> future<> {
+        return _db.invoke_on(shard, [this, cer = std::move(cer), &src_cm, rp, shard, s] (database& db) mutable -> future<> {
             auto& fm = cer.mutation();
             // TODO: might need better verification that the deserialized mutation
             // is schema compatible. My guess is that just applying the mutation
@@ -306,7 +306,9 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
                     return db.apply_in_memory(m, cf, db::rp_handle(), db::no_timeout);
                 });
             } else {
-                return db.apply_in_memory(fm, cf.schema(), db::rp_handle(), db::no_timeout);
+                return do_with(std::move(cer).mutation(), [&](const frozen_mutation& m) {
+                    return db.apply_in_memory(m, cf.schema(), db::rp_handle(), db::no_timeout);
+                });
             }
         }).then_wrapped([s] (future<> f) {
             try {
