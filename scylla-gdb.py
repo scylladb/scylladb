@@ -2016,15 +2016,7 @@ class seastar_thread_context(object):
             gdb.execute('set $%s = %s' % (reg, value))
 
     def get_fs_base(self):
-        holder_addr = get_seastar_memory_start_and_size()[0]
-        holder = gdb.Value(holder_addr).reinterpret_cast(self.ulong_type.pointer())
-        saved = holder.dereference()
-        gdb.execute('set *(void**)%s = 0' % holder_addr)
-        if gdb.parse_and_eval('arch_prctl(0x1003, %d)' % holder_addr) != 0:
-            raise Exception('arch_prctl() failed')
-        fs_base = holder.dereference()
-        gdb.execute('set *(void**)%s = %s' % (holder_addr, saved))
-        return fs_base
+        return gdb.parse_and_eval('$fs_base')
 
     def regs_from_jmpbuf(self, jmpbuf):
         canary = gdb.Value(self.get_fs_base()).reinterpret_cast(self.ulong_type.pointer())[6]
