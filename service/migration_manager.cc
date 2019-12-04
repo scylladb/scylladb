@@ -147,7 +147,7 @@ void migration_manager::init_messaging_service()
         });
     });
     ms.register_schema_check([] {
-        return make_ready_future<utils::UUID>(service::get_local_storage_service().db().local().get_version());
+        return make_ready_future<utils::UUID>(service::get_local_storage_proxy().get_db().local().get_version());
     });
 }
 
