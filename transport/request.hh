@@ -69,6 +69,10 @@ public:
         , _linearization_buffer(&linearization_buffer)
     { }
 
+    fragmented_temporary_buffer::istream get_stream() {
+        return _in;
+    }
+
     size_t bytes_left() const {
         return _in.bytes_left();
     }

@@ -2236,6 +2236,9 @@ future<> storage_service::start_native_transport() {
             cql_server_config.max_request_size = ss._service_memory_total;
             cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
             cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
+            smp_service_group_config cql_server_smp_service_group_config;
+            cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
+            cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
             seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
             cserver->start(std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), std::ref(ss._cql_config), cql_server_config).get();
             struct listen_cfg {

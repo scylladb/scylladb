@@ -377,6 +377,12 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional BATCH"));
     }
 
+    auto shard = service::storage_proxy::cas_shard(request->key()[0].start()->value().as_decorated_key().token());
+    if (shard != engine().cpu_id()) {
+        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
+                make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
+    }
+
     return proxy.cas(schema, request, request->read_command(), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_commit, batch_timeout, cas_timeout).then([this, request] (bool is_applied) {

@@ -38,6 +38,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include "utils/fragmented_temporary_buffer.hh"
 #include "service_permit.hh"
+#include <seastar/core/sharded.hh>
 
 namespace scollectd {
 
@@ -97,6 +98,9 @@ struct cql_query_state {
     cql_query_state(service::client_state& client_state, service_permit permit)
         : query_state(client_state, std::move(permit))
     { }
+    cql_query_state(service::client_state& client_state, tracing::trace_state_ptr trace_state_ptr, service_permit permit)
+        : query_state(client_state, std::move(trace_state_ptr), std::move(permit))
+    { }
 };
 
 struct cql_server_config {
@@ -104,9 +108,10 @@ struct cql_server_config {
     size_t max_request_size;
     std::function<semaphore& ()> get_service_memory_limiter_semaphore;
     bool allow_shard_aware_drivers = true;
+    smp_service_group bounce_request_smp_service_group = default_smp_service_group();
 };
 
-class cql_server {
+class cql_server : public seastar::peering_sharded_service<cql_server> {
 private:
     class event_notifier;
 
@@ -138,6 +143,8 @@ public:
 private:
     class fmt_visitor;
     friend class connection;
+    friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
+            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, bool skip_metadata);
     class connection : public boost::intrusive::list_base_hook<> {
         cql_server& _server;
         socket_address _server_addr;
@@ -161,7 +168,7 @@ private:
         };
     private:
         using execution_stage_type = inheriting_concrete_execution_stage<
-                future<std::unique_ptr<cql_server::response>>,
+                future<foreign_ptr<std::unique_ptr<cql_server::response>>>,
                 cql_server::connection*,
                 fragmented_temporary_buffer::istream,
                 uint8_t,
@@ -179,7 +186,7 @@ private:
     private:
         const ::timeout_config& timeout_config() const { return _server.timeout_config(); }
         friend class process_request_executor;
-        future<std::unique_ptr<cql_server::response>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf) const;
@@ -188,9 +195,9 @@ private:
         future<std::unique_ptr<cql_server::response>> process_startup(uint16_t stream, request_reader in, service::client_state& client_state);
         future<std::unique_ptr<cql_server::response>> process_auth_response(uint16_t stream, request_reader in, service::client_state& client_state);
         future<std::unique_ptr<cql_server::response>> process_options(uint16_t stream, request_reader in, service::client_state& client_state);
-        future<std::unique_ptr<cql_server::response>> process_query(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit);
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_query(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit);
         future<std::unique_ptr<cql_server::response>> process_prepare(uint16_t stream, request_reader in, service::client_state& client_state);
-        future<std::unique_ptr<cql_server::response>> process_execute(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit);
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_execute(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit);
         future<std::unique_ptr<cql_server::response>> process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit);
         future<std::unique_ptr<cql_server::response>> process_register(uint16_t stream, request_reader in, service::client_state& client_state);
 
@@ -204,13 +211,19 @@ private:
         std::unique_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_result(int16_t stream, cql_transport::messages::result_message& msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata = false) const;
         std::unique_ptr<cql_server::response> make_topology_change_event(const cql_transport::event::topology_change& event) const;
         std::unique_ptr<cql_server::response> make_status_change_event(const cql_transport::event::status_change& event) const;
         std::unique_ptr<cql_server::response> make_schema_change_event(const cql_transport::event::schema_change& event) const;
         std::unique_ptr<cql_server::response> make_autheticate(int16_t, const sstring&, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
+
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+        process_execute_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
+                service::client_state& cs, service_permit permit);
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+        process_query_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
+                service::client_state& cs, service_permit permit);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
 

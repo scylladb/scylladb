@@ -137,6 +137,10 @@ sstring get_local_dc() {
     return get_dc(local_addr);
 }
 
+unsigned storage_proxy::cas_shard(dht::token token) {
+    return dht::shard_of(token);
+}
+
 class mutation_holder {
 protected:
     size_t _size = 0;
@@ -3969,6 +3973,7 @@ storage_proxy::do_query(schema_ptr s,
     }
 }
 
+// WARNING: the function should be called on a shard that owns the key that is been read
 future<storage_proxy::coordinator_query_result>
 storage_proxy::do_query_with_paxos(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
@@ -3983,6 +3988,9 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     auto cl_for_learn = cl == db::consistency_level::LOCAL_SERIAL ? db::consistency_level::LOCAL_QUORUM :
             db::consistency_level::QUORUM;
 
+    if (cas_shard(partition_ranges[0].start()->value().as_decorated_key().token()) != engine().cpu_id()) {
+        throw std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard");
+    }
     // All cas networking operations run with query provided timeout
     db::timeout_clock::time_point timeout = query_options.timeout(*this);
     // When to give up due to contention
@@ -4074,6 +4082,8 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
  * Note that since we are performing a CAS rather than a simple update, we perform a read (of committed
  * values) between the prepare and accept phases. This gives us a slightly longer window for another
  * coordinator to come along and trump our own promise with a newer one but is otherwise safe.
+ *
+ * WARNING: the function should be called on a shard that owns the key cas() operates on
  */
 future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges, storage_proxy::coordinator_query_options query_options,
@@ -4085,6 +4095,10 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
     db::validate_for_cas(cl_for_paxos);
     db::validate_for_cas_commit(cl_for_commit, schema->ks_name());
+
+    if (cas_shard(partition_ranges[0].start()->value().as_decorated_key().token()) != engine().cpu_id()) {
+        throw std::logic_error("storage_proxy::cas called on a wrong shard");
+    }
 
     shared_ptr<paxos_response_handler> handler;
     try {

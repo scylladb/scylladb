@@ -42,6 +42,12 @@ public:
         , _permit(std::move(permit))
     { }
 
+    query_state(client_state& client_state, tracing::trace_state_ptr trace_state_ptr, service_permit permit)
+        : _client_state(client_state)
+        , _trace_state_ptr(std::move(trace_state_ptr))
+        , _permit(std::move(permit))
+    { }
+
     const tracing::trace_state_ptr& get_trace_state() const {
         return _trace_state_ptr;
     }
