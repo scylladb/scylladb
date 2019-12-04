@@ -1179,6 +1179,7 @@ table::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sst
     _sstables = make_lw_shared(std::move(new_sstable_list));
 }
 
+// Note: must run in a seastar thread
 void
 table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new_sstables,
                                     const std::vector<sstables::shared_sstable>& sstables_to_remove) {
@@ -1212,43 +1213,38 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
 
     rebuild_sstable_list(new_sstables, sstables_to_remove);
 
+    // refresh underlying data source in row cache to prevent it from holding reference
+    // to sstables files that are about to be deleted.
+    _cache.refresh_snapshot();
+
     _sstables_compacted_but_not_deleted = std::move(new_compacted_but_not_deleted);
 
     rebuild_statistics();
 
-    // This is done in the background, so we can consider this compaction completed.
-    (void)seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
-       return with_semaphore(_sstable_deletion_sem, 1, [this, sstables_to_remove = std::move(sstables_to_remove)] {
-        return sstables::delete_atomically(sstables_to_remove).then_wrapped([this, sstables_to_remove] (future<> f) {
-            std::exception_ptr eptr;
-            try {
-                f.get();
-            } catch(...) {
-                eptr = std::current_exception();
-            }
-
-            // unconditionally remove compacted sstables from _sstables_compacted_but_not_deleted,
-            // or they could stay forever in the set, resulting in deleted files remaining
-            // opened and disk space not being released until shutdown.
-            std::unordered_set<sstables::shared_sstable> s(
-                   sstables_to_remove.begin(), sstables_to_remove.end());
-            auto e = boost::range::remove_if(_sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) -> bool {
-                return s.count(sst);
-            });
-            _sstables_compacted_but_not_deleted.erase(e, _sstables_compacted_but_not_deleted.end());
-            rebuild_statistics();
-
-            if (eptr) {
-                return make_exception_future<>(eptr);
-            }
-            return make_ready_future<>();
-         });
-        }).then([this] {
-            // refresh underlying data source in row cache to prevent it from holding reference
-            // to sstables files which were previously deleted.
-            _cache.refresh_snapshot();
-        });
+    auto f = seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
+       return with_semaphore(_sstable_deletion_sem, 1, [sstables_to_remove = std::move(sstables_to_remove)] {
+           return sstables::delete_atomically(std::move(sstables_to_remove));
+       });
     });
+
+    try {
+        f.get();
+    } catch (...) {
+        // There is nothing more we can do here.
+        // Any remaining SSTables will eventually be re-compacted and re-deleted.
+        tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::current_exception());
+    }
+
+    // unconditionally remove compacted sstables from _sstables_compacted_but_not_deleted,
+    // or they could stay forever in the set, resulting in deleted files remaining
+    // opened and disk space not being released until shutdown.
+    std::unordered_set<sstables::shared_sstable> s(
+           sstables_to_remove.begin(), sstables_to_remove.end());
+    auto e = boost::range::remove_if(_sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) -> bool {
+        return s.count(sst);
+    });
+    _sstables_compacted_but_not_deleted.erase(e, _sstables_compacted_but_not_deleted.end());
+    rebuild_statistics();
 }
 
 // For replace/remove_ancestors_needed_write, note that we need to update the compaction backlog
