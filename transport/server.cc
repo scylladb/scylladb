@@ -723,7 +723,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_qu
 
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, &query_state, skip_metadata] (auto msg) {
          tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
-         return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
+         return make_result(stream, *msg, query_state.get_trace_state(), skip_metadata);
     }).finally([q_state = std::move(q_state)] {});
 }
 
@@ -750,7 +750,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
             tracing::trace(client_state.get_trace_state(), "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
                 return messages::result_message::prepared::cql::get_id(msg);
             }));
-            return this->make_result(stream, msg, client_state.get_trace_state());
+            return this->make_result(stream, *msg, client_state.get_trace_state());
         });
     });
 }
@@ -815,7 +815,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_ex
             query_state, options, needs_authorization)
             .then([this, stream, trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state)] (auto msg) {
         tracing::trace(trace_state, "Done processing - preparing a result");
-        return this->make_result(stream, msg, trace_state, skip_metadata);
+        return this->make_result(stream, *msg, trace_state, skip_metadata);
     });
 }
 
@@ -913,7 +913,7 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
     return _server._query_processor.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries))
             .then([this, stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state()] (auto msg) {
-        return this->make_result(stream, msg, trace_state);
+        return this->make_result(stream, *msg, trace_state);
     });
 }
 
@@ -1140,15 +1140,15 @@ public:
 };
 
 std::unique_ptr<cql_server::response>
-cql_server::connection::make_result(int16_t stream, shared_ptr<messages::result_message> msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata) const
+cql_server::connection::make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata) const
 {
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
-    if (__builtin_expect(!msg->warnings().empty() && _version > 3, false)) {
+    if (__builtin_expect(!msg.warnings().empty() && _version > 3, false)) {
         response->set_frame_flag(cql_frame_flags::warning);
-        response->write_string_list(msg->warnings());
+        response->write_string_list(msg.warnings());
     }
     fmt_visitor fmt{_version, *response, skip_metadata};
-    msg->accept(fmt);
+    msg.accept(fmt);
     return response;
 }
 
