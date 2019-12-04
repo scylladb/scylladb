@@ -832,7 +832,7 @@ int main(int ac, char** av) {
             });
 
             supervisor::notify("loading non-system sstables");
-            distributed_loader::init_non_system_keyspaces(db, proxy).get();
+            distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db), std::ref(proxy)).get();

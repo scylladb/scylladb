@@ -579,7 +579,7 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
     });
 }
 
-future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy) {
+future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm) {
     using namespace db::schema_tables;
     return do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
@@ -609,12 +609,12 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
                 });
             });
             });
-    }).then([&proxy, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
-            return create_views_from_schema_partition(proxy, v.second).then([this] (std::vector<view_ptr> views) {
-                return parallel_for_each(views.begin(), views.end(), [this] (auto&& v) {
-                    return this->add_column_family_and_make_directory(v).then([this, v] {
-                        return maybe_update_legacy_secondary_index_mv_schema(*this, v);
+    }).then([&proxy, &mm, this] {
+        return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy, &mm] (schema_result_value_type &v) {
+            return create_views_from_schema_partition(proxy, v.second).then([this, &mm] (std::vector<view_ptr> views) {
+                return parallel_for_each(views.begin(), views.end(), [this, &mm] (auto&& v) {
+                    return this->add_column_family_and_make_directory(v).then([this, &mm, v] {
+                        return maybe_update_legacy_secondary_index_mv_schema(mm.local(), *this, v);
                     });
                 });
             });

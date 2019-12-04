@@ -104,6 +104,7 @@ class reconcilable_result;
 namespace service {
 class storage_proxy;
 class migration_notifier;
+class migration_manager;
 }
 
 namespace netw {
@@ -1350,7 +1351,7 @@ public:
 
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
-    future<> parse_system_tables(distributed<service::storage_proxy>&);
+    future<> parse_system_tables(distributed<service::storage_proxy>&, distributed<service::migration_manager>&);
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn);
     database(database&&) = delete;
     ~database();

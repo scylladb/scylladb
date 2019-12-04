@@ -471,7 +471,7 @@ public:
                 auto cfm = pair.second;
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
-            distributed_loader::init_non_system_keyspaces(*db, proxy).get();
+            distributed_loader::init_non_system_keyspaces(*db, proxy, mm).get();
 
             sharded<cdc::cdc_service> cdc;
             cdc.start(std::ref(proxy)).get();

@@ -2865,7 +2865,7 @@ std::vector<sstring> all_table_names(schema_features features) {
            boost::adaptors::transformed([] (auto schema) { return schema->cf_name(); }));
 }
 
-future<> maybe_update_legacy_secondary_index_mv_schema(database& db, view_ptr v) {
+future<> maybe_update_legacy_secondary_index_mv_schema(service::migration_manager& mm, database& db, view_ptr v) {
     // TODO(sarna): Remove once computed columns are guaranteed to be featured in the whole cluster.
     // Legacy format for a secondary index used a hardcoded "token" column, which ensured a proper
     // order for indexed queries. This "token" column is now implemented as a computed column,
@@ -2893,7 +2893,7 @@ future<> maybe_update_legacy_secondary_index_mv_schema(database& db, view_ptr v)
     if (base_schema->columns_by_name().count(first_view_ck.name()) == 0) {
         schema_builder builder{schema_ptr(v)};
         builder.mark_column_computed(first_view_ck.name(), std::make_unique<token_column_computation>());
-        return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build()), true);
+        return mm.announce_view_update(view_ptr(builder.build()), true);
     }
     return make_ready_future<>();
 }
