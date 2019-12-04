@@ -62,6 +62,7 @@ def colorformat(msg, **kwargs):
     fmt.update(kwargs)
     return msg.format(**fmt)
 
+
 def status_to_string(success):
     if success:
         status = colorformat("{green}PASSED{nocolor}") if os.isatty(sys.stdout.fileno()) else "PASSED"
@@ -79,16 +80,18 @@ class UnitTest:
             opts = UnitTest.seastar_args
         self.id = test_no
         self.name = name
+        # Name within the suite
+        self.shortname = os.path.basename(name)
         self.mode = mode
         self.kind = kind
-        self.path = os.path.join('build', self.mode, 'test', self.kind, self.name)
+        self.path = os.path.join("build", self.mode, "test", self.name)
         self.args = opts.split() + UnitTest.standard_args
 
         if self.kind == 'boost':
             boost_args = []
             if options.jenkins:
                 mode = 'debug' if self.mode == 'debug' else 'release'
-                xmlout = options.jenkins + "." + mode + "." + self.name + "." + str(self.id) + ".boost.xml"
+                xmlout = options.jenkins + "." + mode + "." + self.shortname + "." + str(self.id) + ".boost.xml"
                 boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
             boost_args += ['--']
             self.args = boost_args + self.args
@@ -178,8 +181,17 @@ def parse_cmd_line():
     default_num_jobs = min(default_num_jobs_mem, default_num_jobs_cpu)
 
     parser = argparse.ArgumentParser(description="Scylla test runner")
-    parser.add_argument('--name', action="store",
-                        help="Run only test whose name contains given string")
+    parser.add_argument(
+        "name",
+        nargs="*",
+        action="store",
+        help="""Can be empty. List of test names, to look for in
+                suites. Each name is used as a substring to look for in the
+                path to test file, e.g. "mem" will run all tests that have
+                "mem" in their name in all suites, "boost/mem" will only enable
+                tests starting with "mem" in "boost" suite. Default: run all
+                tests in all suites.""",
+    )
     parser.add_argument('--mode', choices=all_modes, action="append", dest="modes",
                         help="Run only tests for given build mode(s)")
     parser.add_argument('--repeat', action="store", default="1", type=int,
@@ -212,24 +224,25 @@ def find_tests(options):
     def add_test_list(kind, mode):
         lst = glob.glob(os.path.join("test", kind, "*_test.cc"))
         for t in lst:
-            t = os.path.splitext(os.path.basename(t))[0]
-            if mode not in ['release', 'dev'] and os.path.join(kind, t) in long_tests:
+            t = os.path.join(kind, os.path.splitext(os.path.basename(t))[0])
+            if mode not in ["release", "dev"] and t in long_tests:
                 continue
-            args = custom_test_args.get(os.path.join(kind, t))
+            args = custom_test_args.get(t)
             if isinstance(args, (str, type(None))):
-                args = [ args ]
+                args = [args]
             for a in args:
-                tests_to_run.append((t, a, kind, mode))
+                patterns = options.name if options.name else [t]
+                for p in patterns:
+                    if p in t:
+                        tests_to_run.append((t, a, kind, mode))
 
     for mode in options.modes:
         add_test_list('unit', mode)
         add_test_list('boost', mode)
 
-    if options.name:
-        tests_to_run = [t for t in tests_to_run if options.name in t[0]]
-        if not tests_to_run:
-            print("Test {} not found".format(options.name))
-            sys.exit(1)
+    if not tests_to_run:
+        print("Test {} not found".format(options.name))
+        sys.exit(1)
 
     tests_to_run = [t for t in tests_to_run for _ in range(options.repeat)]
     tests_to_run = [UnitTest(test_no, *t, options) for test_no, t in enumerate(tests_to_run)]
