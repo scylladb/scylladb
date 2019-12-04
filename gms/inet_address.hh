@@ -86,9 +86,6 @@ public:
     friend inline bool operator<(const inet_address& x, const inet_address& y) {
         return x.bytes() < y.bytes();
     }
-    friend inline std::ostream& operator<<(std::ostream& os, const inet_address& x) {
-        return os << x._addr;
-    }
     friend struct std::hash<inet_address>;
 
     using opt_family = std::optional<net::inet_address::family>;
