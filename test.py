@@ -272,8 +272,6 @@ def parse_cmd_line():
     default_num_jobs = min(default_num_jobs_mem, default_num_jobs_cpu)
 
     parser = argparse.ArgumentParser(description="Scylla test runner")
-    parser.add_argument('--fast', action="store_true",
-                        help="Run only fast tests")
     parser.add_argument('--name', action="store",
                         help="Run only test whose name contains given string")
     parser.add_argument('--mode', choices=all_modes, action="append", dest="modes",
