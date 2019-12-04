@@ -2539,7 +2539,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
         std::move(slice),
         std::move(m),
         [base, views = std::move(views), lock = std::move(lock), this, timeout, source = std::move(source), &io_priority] (auto& pk, auto& slice, auto& m) mutable {
-            auto reader = source.make_reader(base, pk, slice, io_priority);
+            auto reader = source.make_reader(base, pk, slice, io_priority, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
             return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader)).then([lock = std::move(lock)] () mutable {
                 // return the local partition/row lock we have taken so it
                 // remains locked until the caller is done modifying this
