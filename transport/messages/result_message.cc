@@ -29,6 +29,10 @@ std::ostream& operator<<(std::ostream& os, const result_message::void_message& m
     return fmt_print(os, "{{result_message::void}}");
 }
 
+std::ostream& operator<<(std::ostream& os, const result_message::bounce_to_shard& msg) {
+    return fmt_print(os, "{{result_message::bounce_to_shard {}}}", msg.move_to_shard());
+}
+
 std::ostream& operator<<(std::ostream& os, const result_message::set_keyspace& msg) {
     return fmt_print(os, "{{result_message::set_keyspace {}}}", msg.get_keyspace());
 }
@@ -80,6 +84,7 @@ std::ostream& operator<<(std::ostream& os, const result_message& msg) {
         void visit(const result_message::prepared::thrift& m) override { _os << m; };
         void visit(const result_message::schema_change& m) override { _os << m; };
         void visit(const result_message::rows& m) override { _os << m; };
+        void visit(const result_message::bounce_to_shard& m) override { _os << m; };
     };
     visitor print_visitor{os};
     msg.accept(print_visitor);
