@@ -1865,7 +1865,7 @@ future<utils::UUID> update_schema_version(distributed<service::storage_proxy>& p
 }
 
 future<> announce_schema_version(utils::UUID schema_version) {
-    return service::get_local_migration_manager().passive_announce(schema_version);
+    return service::migration_manager::passive_announce(schema_version);
 }
 
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features)
