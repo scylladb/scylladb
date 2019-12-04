@@ -137,10 +137,7 @@ static void test_random_ops(size_t size, std::random_device& rd ) {
     auto is_set = [&] (size_t i) -> bool {
         return bv[i];
     };
-    size_t limit = size * 100;
-#ifdef SEASTAR_DEBUG
-    limit = std::min<size_t>(limit, 20000);
-#endif
+    size_t limit = std::log(size) * 1000;
     for (size_t i = 0; i != limit; ++i) {
         if (global_op_dist(rd) == 0) {
             // perform a global operation
