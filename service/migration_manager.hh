@@ -153,6 +153,11 @@ public:
     void init_messaging_service();
 private:
     future<> uninit_messaging_service();
+
+    static future<> include_keyspace_and_announce(
+            const keyspace_metadata& keyspace, std::vector<mutation> mutations, bool announce_locally);
+
+    static future<> do_announce_new_type(user_type new_type, bool announce_locally);
 };
 
 extern distributed<migration_manager> _the_migration_manager;

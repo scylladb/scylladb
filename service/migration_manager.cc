@@ -623,7 +623,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool anno
     return announce_new_column_family(std::move(cfm), api::new_timestamp(), announce_locally);
 }
 
-static future<> include_keyspace_and_announce(
+future<> migration_manager::include_keyspace_and_announce(
         const keyspace_metadata& keyspace, std::vector<mutation> mutations, bool announce_locally) {
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
     return db::schema_tables::read_keyspace_mutation(service::get_storage_proxy(), keyspace.name())
@@ -701,7 +701,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
     }
 }
 
-static future<> do_announce_new_type(user_type new_type, bool announce_locally) {
+future<> migration_manager::do_announce_new_type(user_type new_type, bool announce_locally) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(new_type->_keyspace);
     auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, api::new_timestamp());
