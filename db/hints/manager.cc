@@ -402,7 +402,7 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_m
         // to be generated as a result of hints sending.
         if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
             manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_to_endpoint(std::move(m), end_point_key(), { }, write_type::SIMPLE, service::allow_hints::no);
+            return _proxy.send_hint_to_endpoint(std::move(m), end_point_key());
         } else {
             manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
             // FIXME: using 1h as infinite timeout. If a node is down, we should get an

@@ -224,6 +224,7 @@ public:
 
 // same mutation for each destination
 class shared_mutation : public mutation_holder {
+protected:
     lw_shared_ptr<const frozen_mutation> _mutation;
 public:
     explicit shared_mutation(frozen_mutation_and_schema&& fm_a_s)
@@ -255,6 +256,28 @@ public:
     }
     virtual void release_mutation() override {
         _mutation.release();
+    }
+};
+
+// shared mutation, but gets sent as a hint
+class hint_mutation : public shared_mutation {
+public:
+    using shared_mutation::shared_mutation;
+    virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
+        throw std::runtime_error("Attempted to store a hint for a hint");
+    }
+    virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) override {
+        return make_exception_future<>(std::runtime_error("Executing hint locally doesn't make sense"));
+    }
+    virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, std::vector<gms::inet_address>&& forward,
+            storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state) override {
+        tracing::trace(tr_state, "Sending a hint to /{}", ep);
+        auto& ms = netw::get_local_messaging_service();
+        return ms.send_hint_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
+                std::move(forward), utils::fb_utilities::get_broadcast_address(), engine().cpu_id(),
+                response_id, tracing::make_trace_info(tr_state));
     }
 };
 
@@ -2228,6 +2251,26 @@ future<> storage_proxy::send_to_endpoint(
             type,
             stats,
             allow_hints);
+}
+
+future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target) {
+    if (!service::get_local_storage_service().cluster_supports_hinted_handoff_separate_connection()) {
+        return send_to_endpoint(
+                std::make_unique<shared_mutation>(std::move(fm_a_s)),
+                std::move(target),
+                { },
+                db::write_type::SIMPLE,
+                _stats,
+                allow_hints::no);
+    }
+
+    return send_to_endpoint(
+            std::make_unique<hint_mutation>(std::move(fm_a_s)),
+            std::move(target),
+            { },
+            db::write_type::SIMPLE,
+            _stats,
+            allow_hints::no);
 }
 
 /**
@@ -4420,7 +4463,8 @@ void storage_proxy::init_messaging_service() {
         });
     };
 
-    ms.register_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
+    auto receive_mutation_handler = [] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward,
+            gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
@@ -4437,7 +4481,10 @@ void storage_proxy::init_messaging_service() {
                     auto& ms = netw::get_local_messaging_service();
                     return ms.send_mutation(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
                 });
-    });
+    };
+    ms.register_mutation(receive_mutation_handler);
+    ms.register_hint_mutation(receive_mutation_handler);
+
     ms.register_paxos_learn([] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
             std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
