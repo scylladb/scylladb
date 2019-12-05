@@ -2305,16 +2305,8 @@ public:
         return _feature_service.cluster_supports_roles();
     }
 
-    bool cluster_supports_la_sstable() const {
-        return _feature_service.cluster_supports_la_sstable();
-    }
-
     bool cluster_supports_stream_with_rpc_stream() const {
         return _feature_service.cluster_supports_stream_with_rpc_stream();
-    }
-
-    bool cluster_supports_mc_sstable() const {
-        return _feature_service.cluster_supports_mc_sstable();
     }
 
     const gms::feature& cluster_supports_cdc() const {
@@ -2332,9 +2324,6 @@ public:
     }
     const gms::feature& cluster_supports_correct_static_compact_in_mc() const {
         return _feature_service.cluster_supports_correct_static_compact_in_mc();
-    }
-    bool cluster_supports_unbounded_range_tombstones() const {
-        return _feature_service.cluster_supports_unbounded_range_tombstones();
     }
 
     const gms::feature& cluster_supports_view_virtual_columns() const {

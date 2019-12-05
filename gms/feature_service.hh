@@ -98,8 +98,6 @@ private:
     gms::feature _hinted_handoff_separate_connection;
     gms::feature _lwt_feature;
 
-    friend class service::storage_service;
-
 public:
     bool cluster_supports_range_tombstones() const {
         return bool(_range_tombstones_feature);
@@ -153,16 +151,16 @@ public:
         return bool(_roles_feature);
     }
 
-    bool cluster_supports_la_sstable() const {
-        return bool(_la_sstable_feature);
+    const feature& cluster_supports_la_sstable() const {
+        return _la_sstable_feature;
     }
 
     bool cluster_supports_stream_with_rpc_stream() const {
         return bool(_stream_with_rpc_stream_feature);
     }
 
-    bool cluster_supports_mc_sstable() const {
-        return bool(_mc_sstable_feature);
+    const feature& cluster_supports_mc_sstable() const {
+        return _mc_sstable_feature;
     }
 
     const feature& cluster_supports_cdc() const {
@@ -181,8 +179,8 @@ public:
     const feature& cluster_supports_correct_static_compact_in_mc() const {
         return _correct_static_compact_in_mc;
     }
-    bool cluster_supports_unbounded_range_tombstones() const {
-        return bool(_unbounded_range_tombstones_feature);
+    const feature& cluster_supports_unbounded_range_tombstones() const {
+        return _unbounded_range_tombstones_feature;
     }
 
     const feature& cluster_supports_view_virtual_columns() const {

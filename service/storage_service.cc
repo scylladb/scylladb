@@ -139,15 +139,15 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
 
     if (!for_testing) {
         if (engine().cpu_id() == 0) {
-            _feature_service._la_sstable_feature.when_enabled(_la_feature_listener);
-            _feature_service._mc_sstable_feature.when_enabled(_mc_feature_listener);
+            _feature_service.cluster_supports_la_sstable().when_enabled(_la_feature_listener);
+            _feature_service.cluster_supports_mc_sstable().when_enabled(_mc_feature_listener);
         }
     } else {
         _sstables_format = sstables::sstable_version_types::mc;
     }
 
     //FIXME: discarded future.
-    (void)_feature_service._unbounded_range_tombstones_feature.when_enabled().then([&db] () mutable {
+    (void)_feature_service.cluster_supports_unbounded_range_tombstones().when_enabled().then([&db] () mutable {
         slogger.debug("Enabling infinite bound range deletions");
         //FIXME: discarded future.
         (void)db.invoke_on_all([] (database& local_db) mutable {
