@@ -808,14 +808,14 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_ex
 
     options.prepare(prepared->bound_names);
 
+    tracing::add_prepared_query_options(client_state.get_trace_state(), options);
+
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return _server._query_processor.local().process_statement_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization).then([this, stream, &query_state, skip_metadata] (auto msg) {
-        tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
-        return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
-    }).then([&query_state, q_state = std::move(q_state), this] (std::unique_ptr<cql_server::response> response) {
-        /* Keep q_state alive. */
-        tracing::stop_foreground_prepared(query_state.get_trace_state(), q_state->options.get());
-        return std::move(response);
+    return _server._query_processor.local().process_statement_prepared(std::move(prepared), std::move(cache_key),
+            query_state, options, needs_authorization)
+            .then([this, stream, trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state)] (auto msg) {
+        tracing::trace(trace_state, "Done processing - preparing a result");
+        return this->make_result(stream, msg, trace_state, skip_metadata);
     });
 }
 
@@ -907,15 +907,13 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
 
     tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
     tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
+    tracing::add_prepared_query_options(client_state.get_trace_state(), options);
     tracing::trace(client_state.get_trace_state(), "Creating a batch statement");
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
-    return _server._query_processor.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries)).then([this, stream, batch, &query_state] (auto msg) {
-        return this->make_result(stream, msg, query_state.get_trace_state());
-    }).then([&query_state, q_state = std::move(q_state), this] (std::unique_ptr<cql_server::response> response) {
-        /* Keep q_state alive. */
-        tracing::stop_foreground_prepared(query_state.get_trace_state(), q_state->options.get());
-        return std::move(response);
+    return _server._query_processor.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries))
+            .then([this, stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state()] (auto msg) {
+        return this->make_result(stream, msg, trace_state);
     });
 }
 

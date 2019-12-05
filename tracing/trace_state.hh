@@ -226,11 +226,9 @@ private:
     /**
      * Stop a foreground state and write pending records to I/O.
      *
-     * @param prepared_options_ptr query options of the prepared statement
-     *
      * @note The tracing session's "duration" is the time it was in the "foreground" state.
      */
-    void stop_foreground_and_write(const cql3::query_options* prepared_options_ptr = nullptr) noexcept;
+    void stop_foreground_and_write() noexcept;
 
     bool should_log_slow_query(elapsed_clock::duration e) const {
         return log_slow_query() && e > _slow_query_threshold;
@@ -407,9 +405,15 @@ private:
     /**
      * Fill the map in a session's record with the values set so far.
      *
+     */
+    void build_parameters_map();
+
+    /**
+     * Store prepared statement parameters for traced query
+     *
      * @param prepared_options_ptr parameters of the prepared statement
      */
-    void build_parameters_map(const cql3::query_options* prepared_options_ptr);
+    void add_prepared_query_options(const cql3::query_options& prepared_options_ptr);
 
     /**
      * Fill the map in a session's record with the parameters' values of a single prepared statement.
@@ -418,10 +422,13 @@ private:
      * parameter.
      *
      * @param prepared prepared statement handle
-     * @param options CQL options used in the current invocation of the prepared statement
+     * @param names_opt CQL cell names used in the current invocation of the prepared statement
+     * @param values CQL value used in the current invocation of the prepared statement
      * @param param_name_prefix prefix of the parameter key in the map, e.g. "param" or "param[1]"
      */
-    void build_parameters_map_for_one_prepared(const prepared_checked_weak_ptr& prepared, const cql3::query_options& options, const sstring& param_name_prefix);
+    void build_parameters_map_for_one_prepared(const prepared_checked_weak_ptr& prepared_ptr,
+            std::optional<std::vector<sstring_view>>& names_opt,
+            std::vector<cql3::raw_value_view>& values, const sstring& param_name_prefix);
 
     /**
      * The actual trace message storing method.
@@ -488,6 +495,7 @@ private:
     friend void add_prepared_statement(const trace_state_ptr& p, prepared_checked_weak_ptr& prepared);
     friend void set_username(const trace_state_ptr& p, const std::optional<auth::authenticated_user>& user);
     friend void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name);
+    friend void add_prepared_query_options(const trace_state_ptr& state, const cql3::query_options& prepared_options_ptr);
     friend void stop_foreground(const trace_state_ptr& state) noexcept;
     friend void stop_foreground_prepared(const trace_state_ptr& state, const cql3::query_options* prepared_options_ptr) noexcept;
 };
@@ -718,9 +726,9 @@ inline void stop_foreground(const trace_state_ptr& state) noexcept {
     }
 }
 
-inline void stop_foreground_prepared(const trace_state_ptr& state, const cql3::query_options* prepared_options_ptr) noexcept {
+inline void add_prepared_query_options(const trace_state_ptr& state, const cql3::query_options& prepared_options_ptr) {
     if (state) {
-        state->stop_foreground_and_write(prepared_options_ptr);
+        state->add_prepared_query_options(prepared_options_ptr);
     }
 }
 

@@ -237,6 +237,10 @@ public:
         return _names;
     }
 
+    const std::vector<cql3::raw_value_view>& get_values() const noexcept {
+        return _value_views;
+    }
+
     const cql_config& get_cql_config() const {
         return _cql_config;
     }
