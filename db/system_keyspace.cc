@@ -62,6 +62,7 @@
 #include "query_context.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
+#include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema_builder.hh"
 #include "hashers.hh"
@@ -1300,9 +1301,9 @@ static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
     });
 }
 
-future<> migrate_truncation_records() {
+future<> migrate_truncation_records(const gms::feature& cluster_supports_truncation_table) {
     sstring req = format("SELECT truncated_at FROM system.{} WHERE key = '{}'", LOCAL, LOCAL);
-    return qctx->qp().execute_internal(req).then([](::shared_ptr<cql3::untyped_result_set> rs) {
+    return qctx->qp().execute_internal(req).then([&cluster_supports_truncation_table](::shared_ptr<cql3::untyped_result_set> rs) {
         truncation_map tmp;
         if (!rs->empty() && rs->one().has("truncated_at")) {
             auto map = rs->one().get_map<utils::UUID, bytes>("truncated_at");
@@ -1369,13 +1370,10 @@ future<> migrate_truncation_records() {
                     return save_truncation_record(uuid, tr.time_stamp, rp);
                 });
             });
-        }).then([tmp = std::move(tmp)] {
-            auto& ss = service::get_local_storage_service();
-            need_legacy_truncation_records = !ss.cluster_supports_truncation_table();
-
-            if (need_legacy_truncation_records || !tmp.empty()) {
+        }).then([&cluster_supports_truncation_table, tmp = std::move(tmp)] {
+            if (!cluster_supports_truncation_table || !tmp.empty()) {
                 //FIXME: discarded future.
-                (void)ss.cluster_supports_truncation_table().when_enabled().then([] {
+                (void)cluster_supports_truncation_table.when_enabled().then([] {
                     // this potentially races with a truncation, i.e. someone could be inserting into
                     // the legacy column while we delete it. But this is ok, it will just mean we have
                     // some unneeded data and will do a merge again next boot, but eventually we

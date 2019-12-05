@@ -501,7 +501,7 @@ public:
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
-            db::system_keyspace::migrate_truncation_records().get();
+            db::system_keyspace::migrate_truncation_records(feature_service->local().cluster_supports_truncation_table()).get();
 
             service::get_local_storage_service().init_messaging_service_part().get();
             service::get_local_storage_service().init_server_without_the_messaging_service_part(service::bind_messaging_port(false)).get();
