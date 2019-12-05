@@ -174,9 +174,6 @@ public:
     void isolate_on_error();
     void isolate_on_commit_error();
 
-    // only for tests
-    void set_disabled_features(std::set<sstring> = {});
-
     // Needed by distributed<>
     future<> stop();
     void init_messaging_service();
@@ -2354,6 +2351,9 @@ public:
 
     bool cluster_supports_row_level_repair() const {
         return bool(_row_level_repair_feature);
+    }
+    gms::feature& cluster_supports_truncation_table() {
+        return _truncation_table;
     }
     const gms::feature& cluster_supports_truncation_table() const {
         return _truncation_table;

@@ -383,10 +383,6 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
     return features;
 }
 
-void storage_service::set_disabled_features(std::set<sstring> s) {
-    _disabled_features = std::move(s);
-}
-
 std::unordered_set<token> get_replace_tokens() {
     std::unordered_set<token> ret;
     std::unordered_set<sstring> tokens;
