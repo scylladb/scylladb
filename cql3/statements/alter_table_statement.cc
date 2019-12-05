@@ -352,7 +352,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         if (schema->is_counter() && _properties->get_default_time_to_live() > 0) {
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
         }
-        _properties->apply_to_builder(cfm, db.extensions());
+        _properties->apply_to_builder(cfm, db);
         break;
 
     case alter_table_statement::type::rename:

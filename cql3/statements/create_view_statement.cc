@@ -336,7 +336,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
             db::view::create_virtual_column(builder, def->name(), def->type);
         }
     }
-    _properties.properties()->apply_to_builder(builder, proxy.get_db().local().extensions());
+    _properties.properties()->apply_to_builder(builder, proxy.get_db().local());
 
     if (builder.default_time_to_live().count() > 0) {
         throw exceptions::invalid_request_exception(

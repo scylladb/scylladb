@@ -161,7 +161,7 @@ future<stop_iteration> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mut
 future<> send_mutations(lw_shared_ptr<send_info> si) {
     size_t fragment_size = default_frozen_fragment_size;
     // Mutations cannot be sent fragmented if the receiving side doesn't support that.
-    if (!service::get_local_storage_service().cluster_supports_large_partitions()) {
+    if (!si->db.features().cluster_supports_large_partitions()) {
         fragment_size = std::numeric_limits<size_t>::max();
     }
     return fragment_and_freeze(std::move(si->reader), [si] (auto fm, bool fragmented) {
@@ -250,23 +250,22 @@ future<> stream_transfer_task::execute() {
     auto id = netw::messaging_service::msg_addr{session->peer, session->dst_cpu_id};
     sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
     sort_and_merge_ranges();
-    bool streaming_with_rpc_stream = service::get_local_storage_service().cluster_supports_stream_with_rpc_stream();
     auto reason = session->get_reason();
-    return session->get_db().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, streaming_with_rpc_stream, reason] (database& db) {
+    return session->get_db().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason] (database& db) {
         auto si = make_lw_shared<send_info>(db, plan_id, cf_id, std::move(ranges), id, dst_cpu_id, reason);
-        return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id, streaming_with_rpc_stream] (bool has_relevant_range_on_this_shard) {
+        return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
             if (!has_relevant_range_on_this_shard) {
                 sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
                         plan_id, cf_id, engine().cpu_id());
                 return make_ready_future<>();
             }
-            if (streaming_with_rpc_stream) {
+            if (si->db.features().cluster_supports_stream_with_rpc_stream()) {
                 return send_mutation_fragments(std::move(si));
             } else {
                 return send_mutations(std::move(si));
             }
         });
-    }).then([this, plan_id, cf_id, id, streaming_with_rpc_stream] {
+    }).then([this, plan_id, cf_id, id] {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
         return session->ms().send_stream_mutation_done(id, plan_id, _ranges,
                 cf_id, session->dst_cpu_id).handle_exception([plan_id, id, cf_id] (auto ep) {
