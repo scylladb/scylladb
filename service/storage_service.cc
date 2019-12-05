@@ -49,6 +49,7 @@
 #include "to_string.hh"
 #include "gms/gossiper.hh"
 #include "gms/failure_detector.hh"
+#include "gms/feature_service.hh"
 #include <seastar/core/thread.hh>
 #include <sstream>
 #include <algorithm>
@@ -351,29 +352,21 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
         HINTED_HANDOFF_SEPARATE_CONNECTION_FEATURE,
     };
 
-    // Do not respect config in the case database is not started
-    // This should only be true in tests (see cql_test_env.cc:storage_service_for_tests)
-    auto& db = service::get_local_storage_service().db();
-    if (db.local_is_initialized()) {
-        auto& config = db.local().get_config();
-        if (config.enable_sstables_mc_format()) {
-            features.insert(MC_SSTABLE_FEATURE);
-        }
-        if (config.enable_user_defined_functions()) {
-            if (!config.check_experimental(db::experimental_features_t::UDF)) {
-                throw std::runtime_error(
-                        "You must use both enable_user_defined_functions and experimental_features:udf "
-                        "to enable user-defined functions");
-            }
-            features.insert(UDF_FEATURE);
-        }
-        if (config.check_experimental(db::experimental_features_t::CDC)) {
-            features.insert(CDC_FEATURE);
-        }
-        if (config.check_experimental(db::experimental_features_t::LWT)) {
-            features.insert(LWT_FEATURE);
-        }
+    const auto& fcfg = _feature_service.cfg();
+
+    if (fcfg.enable_sstables_mc_format) {
+        features.insert(MC_SSTABLE_FEATURE);
     }
+    if (fcfg.enable_user_defined_functions) {
+        features.insert(UDF_FEATURE);
+    }
+    if (fcfg.enable_cdc) {
+        features.insert(CDC_FEATURE);
+    }
+    if (fcfg.enable_lwt) {
+        features.insert(LWT_FEATURE);
+    }
+
     if (!sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
         features.insert(UNBOUNDED_RANGE_TOMBSTONES_FEATURE);
     }

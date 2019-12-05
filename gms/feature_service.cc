@@ -21,6 +21,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/reactor.hh>
 #include "log.hh"
+#include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 
@@ -33,6 +34,26 @@ feature_service::feature_service(feature_config cfg) : _config(cfg) {
 
 feature_config feature_config_from_db_config(db::config& cfg) {
     feature_config fcfg;
+
+    if (cfg.enable_sstables_mc_format()) {
+        fcfg.enable_sstables_mc_format = true;
+    }
+    if (cfg.enable_user_defined_functions()) {
+        if (!cfg.check_experimental(db::experimental_features_t::UDF)) {
+            throw std::runtime_error(
+                    "You must use both enable_user_defined_functions and experimental_features:udf "
+                    "to enable user-defined functions");
+        }
+        fcfg.enable_user_defined_functions = true;
+    }
+
+    if (cfg.check_experimental(db::experimental_features_t::CDC)) {
+        fcfg.enable_cdc = true;
+    }
+
+    if (cfg.check_experimental(db::experimental_features_t::LWT)) {
+        fcfg.enable_lwt = true;
+    }
 
     return fcfg;
 }

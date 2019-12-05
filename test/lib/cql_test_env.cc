@@ -398,8 +398,15 @@ public:
             auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
+            gms::feature_config fcfg;
+            fcfg.enable_cdc = true;
+            fcfg.enable_lwt = true;
+            fcfg.enable_sstables_mc_format = true;
+            if (cfg->enable_user_defined_functions()) {
+                fcfg.enable_user_defined_functions = true;
+            }
             auto feature_service = make_shared<sharded<gms::feature_service>>();
-            feature_service->start().get();
+            feature_service->start(fcfg).get();
             auto stop_feature_service = defer([&] { feature_service->stop().get(); });
 
             // FIXME: split

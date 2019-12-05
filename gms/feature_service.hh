@@ -35,6 +35,10 @@ namespace gms {
 class feature;
 
 struct feature_config {
+    bool enable_sstables_mc_format;
+    bool enable_user_defined_functions;
+    bool enable_cdc;
+    bool enable_lwt;
 };
 
 feature_config feature_config_from_db_config(db::config& cfg);
@@ -56,6 +60,8 @@ public:
     void unregister_feature(feature* f);
     // Has to run inside seastar::async context
     void enable(const sstring& name);
+
+    const feature_config& cfg() const { return _config; }
 };
 
 } // namespace gms
