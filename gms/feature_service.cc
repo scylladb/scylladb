@@ -89,28 +89,20 @@ future<> feature_service::stop() {
     return make_ready_future<>();
 }
 
-void feature_service::register_feature(feature* f) {
-    _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
+void feature_service::register_feature(feature& f) {
+    auto i = _registered_features.emplace(f.name(), f);
+    assert(i.second);
 }
 
-void feature_service::unregister_feature(feature* f) {
-    auto&& fsit = _registered_features.find(f->name());
-    if (fsit == _registered_features.end()) {
-        return;
-    }
-    auto&& fs = fsit->second;
-    auto it = std::find(fs.begin(), fs.end(), f);
-    if (it != fs.end()) {
-        fs.erase(it);
-    }
+void feature_service::unregister_feature(feature& f) {
+    _registered_features.erase(f.name());
 }
 
 
 void feature_service::enable(const sstring& name) {
     if (auto it = _registered_features.find(name); it != _registered_features.end()) {
-        for (auto&& f : it->second) {
-            f->enable();
-        }
+        auto&& f = it->second;
+        f.get().enable();
     }
 }
 
@@ -167,7 +159,7 @@ feature::feature(feature_service& service, sstring name, bool enabled)
         : _service(&service)
         , _name(name)
         , _enabled(enabled) {
-    _service->register_feature(this);
+    _service->register_feature(*this);
     if (_enabled) {
         _pr.set_value();
     }
@@ -175,18 +167,18 @@ feature::feature(feature_service& service, sstring name, bool enabled)
 
 feature::~feature() {
     if (_service) {
-        _service->unregister_feature(this);
+        _service->unregister_feature(*this);
     }
 }
 
 feature& feature::operator=(feature&& other) {
-    _service->unregister_feature(this);
+    _service->unregister_feature(*this);
     _service = std::exchange(other._service, nullptr);
     _name = other._name;
     _enabled = other._enabled;
     _pr = std::move(other._pr);
     _s = std::move(other._s);
-    _service->register_feature(this);
+    _service->register_feature(*this);
     return *this;
 }
 

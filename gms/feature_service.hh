@@ -25,7 +25,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_future.hh>
 #include <unordered_map>
-#include <vector>
+#include <functional>
 #include "seastarx.hh"
 #include "db/schema_features.hh"
 
@@ -51,7 +51,11 @@ feature_config feature_config_from_db_config(db::config& cfg);
  * aware of support the specified feature.
  */
 class feature_service final {
-    std::unordered_map<sstring, std::vector<feature*>> _registered_features;
+    void register_feature(feature& f);
+    void unregister_feature(feature& f);
+    friend class feature;
+    std::unordered_map<sstring, std::reference_wrapper<feature>> _registered_features;
+
     feature_config _config;
 public:
     /* config-less initialization is for testing */
@@ -59,8 +63,6 @@ public:
     explicit feature_service(feature_config cfg);
     ~feature_service() = default;
     future<> stop();
-    void register_feature(feature* f);
-    void unregister_feature(feature* f);
     // Has to run inside seastar::async context
     void enable(const sstring& name);
     void enable(const std::set<sstring>& list);
