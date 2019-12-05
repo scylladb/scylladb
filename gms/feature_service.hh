@@ -27,6 +27,7 @@
 #include <unordered_map>
 #include <vector>
 #include "seastarx.hh"
+#include "db/schema_features.hh"
 
 namespace db { class config; }
 namespace service { class storage_service; }
@@ -62,6 +63,7 @@ public:
     // Has to run inside seastar::async context
     void enable(const sstring& name);
     void enable(const std::set<sstring>& list);
+    db::schema_features cluster_schema_features() const;
 
     const feature_config& cfg() const { return _config; }
 

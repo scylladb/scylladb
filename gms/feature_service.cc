@@ -152,6 +152,15 @@ void feature::enable() {
     }
 }
 
+db::schema_features feature_service::cluster_schema_features() const {
+    db::schema_features f;
+    f.set_if<db::schema_feature::VIEW_VIRTUAL_COLUMNS>(bool(_view_virtual_columns));
+    f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(bool(_digest_insensitive_to_expiry));
+    f.set_if<db::schema_feature::COMPUTED_COLUMNS>(bool(_computed_columns));
+    f.set_if<db::schema_feature::CDC_OPTIONS>(bool(_cdc_feature));
+    return f;
+}
+
 void feature_service::enable(const std::set<sstring>& list) {
     for (gms::feature& f : {
         std::ref(_range_tombstones_feature),
