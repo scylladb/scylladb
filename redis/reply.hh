@@ -50,7 +50,7 @@ public:
         m->append_static("+PONG\r\n");
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> err() {
+    static future<redis_message> zero() {
         auto m = make_lw_shared<scattered_message<char>> ();
         m->append_static(":0\r\n");
         return make_ready_future<redis_message>(m);
@@ -60,8 +60,18 @@ public:
         m->append_static(":1\r\n");
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> zero() {
-        return err();
+    static future<redis_message> nil() {
+        auto m = make_lw_shared<scattered_message<char>> ();
+        m->append_static("$-1\r\n");
+        return make_ready_future<redis_message>(m);
+    }
+    static future<redis_message> err() {
+        return zero();
+    }
+    static future<redis_message> number(size_t n) {
+        auto m = make_lw_shared<scattered_message<char>> ();
+        m->append(sstring(sprint(":%zu\r\n", n)));
+        return make_ready_future<redis_message>(m);
     }
     static future<redis_message> make_strings_result(bytes result) {
         auto m = make_lw_shared<scattered_message<char>> ();
@@ -71,11 +81,13 @@ public:
     static future<redis_message> unknown(const bytes& name) {
         return from_exception(make_message("-ERR unknown command '%s'\r\n", to_sstring(name)));
     }
-    static future<redis_message> exception(const redis_exception& e) {
-        return from_exception(make_message("-ERR %s\r\n", e.what_message()));
+    static future<redis_message> exception(const sstring& em) {
+        auto m = make_lw_shared<scattered_message<char>> ();
+        m->append(make_message("-ERR %s\r\n", em));
+        return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> make_exception(const sstring& em) {
-        return from_exception(make_message("-ERR %s\r\n", em)); 
+    static future<redis_message> exception(const redis_exception& e) {
+        return exception(e.what_message());
     }
     inline lw_shared_ptr<scattered_message<char>> message() { return _message; }
 private:

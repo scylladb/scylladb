@@ -40,6 +40,14 @@ public:
     }
 };
 
+class wrong_number_of_arguments_exception : public redis_exception {
+public:
+    wrong_number_of_arguments_exception(const bytes& command)
+        : redis_exception(sprint("wrong number of arguments for '%s' command", sstring(reinterpret_cast<const char*>(command.data()), command.size())))
+    {
+    }
+};
+
 class invalid_arguments_exception : public redis_exception {
 public:
     invalid_arguments_exception(const bytes& command) : redis_exception(sprint("invalid argument for '%s' command", command)) {}

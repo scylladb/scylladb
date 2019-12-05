@@ -67,7 +67,7 @@ future<> redis_service::listen(distributed<auth::service>& auth_service, db::con
     redis_cfg._read_consistency_level = make_consistency_level(cfg.redis_read_consistency_level());
     redis_cfg._write_consistency_level = make_consistency_level(cfg.redis_write_consistency_level());
     redis_cfg._max_request_size = memory::stats().total_memory() / 10;
-    redis_cfg._total_redis_db_count = cfg.redis_default_database_count();
+    redis_cfg._total_redis_db_count = cfg.redis_database_count();
     return gms::inet_address::lookup(addr, family, preferred).then([this, server, addr, &cfg, keepalive, ceo = std::move(ceo), redis_cfg, &auth_service] (seastar::net::inet_address ip) {
         return server->start(std::ref(service::get_storage_proxy()), std::ref(_query_processor), std::ref(auth_service), redis_cfg).then([server, &cfg, addr, ip, ceo, keepalive]() {
             auto f = make_ready_future();
@@ -76,7 +76,10 @@ future<> redis_service::listen(distributed<auth::service>& auth_service, db::con
                 std::shared_ptr<seastar::tls::credentials_builder> cred;
             };
 
-            std::vector<listen_cfg> configs({ { socket_address{ip, cfg.redis_transport_port()} }});
+            std::vector<listen_cfg> configs;
+            if (cfg.redis_port()) {
+                configs.emplace_back(listen_cfg { {socket_address{ip, cfg.redis_port()}} });
+            }
 
             // main should have made sure values are clean and neatish
             if (ceo.at("enabled") == "true") {
@@ -100,8 +103,8 @@ future<> redis_service::listen(distributed<auth::service>& auth_service, db::con
 
                 slogger.info("Enabling encrypted REDIS connections between client and server");
 
-                if (cfg.redis_transport_port_ssl.is_set() && cfg.redis_transport_port_ssl() != cfg.redis_transport_port()) {
-                    configs.emplace_back(listen_cfg{{ip, cfg.redis_transport_port_ssl()}, std::move(cred)});
+                if (cfg.redis_ssl_port() && cfg.redis_ssl_port() != cfg.redis_port()) {
+                    configs.emplace_back(listen_cfg{{ip, cfg.redis_ssl_port()}, std::move(cred)});
                 } else {
                     configs.back().cred = std::move(cred);
                 }
@@ -137,7 +140,7 @@ future<> redis_service::init(distributed<service::storage_proxy>& proxy, distrib
 
 future<> redis_service::stop()
 {
-    // If the `enable_redis_protocol disable, the redis_service::init is not
+    // If the redis protocol disable, the redis_service::init is not
     // invoked at all. Do nothing if `_server is null.
     if (_server) {
         return _server->stop().then([this] {

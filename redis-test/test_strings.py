@@ -33,7 +33,7 @@ def test_set_get_delete():
     assert r.set(key, val) == True
     assert r.get(key) == val
     assert r.delete(key) == 1
-    assert r.get(key) == 0
+    assert r.get(key) == None 
 
 
 def test_get():
@@ -41,7 +41,7 @@ def test_get():
     key = random_string(10)
     r.delete(key)
 
-    assert r.get(key) == 0
+    assert r.get(key) == None 
 
 def test_del_existent_key():
     r = connect()
@@ -52,6 +52,7 @@ def test_del_existent_key():
     assert r.get(key) == val
     assert r.delete(key) == 1
 
+@pytest.mark.xfail(reason="DEL command does not support to return number of deleted keys")
 def test_del_non_existent_key():
     r = connect()
     key = random_string(10)

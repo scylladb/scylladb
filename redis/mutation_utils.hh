@@ -34,6 +34,6 @@ namespace redis {
 class redis_options;
 
 future<> write_strings(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, bytes&& data, long ttl, service_permit permit);
-future<> delete_object(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, service_permit permit);
+future<> delete_objects(service::storage_proxy& proxy, redis::redis_options& options, std::vector<bytes>&& keys, service_permit permit);
 
 }
