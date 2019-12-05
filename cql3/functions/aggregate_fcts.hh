@@ -292,12 +292,41 @@ public:
     }
 };
 
+/// The same as `impl_max_function_for' but without knowledge of `Type'.
+class impl_max_dynamic_function final : public aggregate_function::aggregate {
+    opt_bytes _max;
+public:
+    virtual void reset() override {
+        _max = {};
+    }
+    virtual opt_bytes compute(cql_serialization_format sf) override {
+        return _max.value_or(bytes{});
+    }
+    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+        if (!values[0]) {
+            return;
+        }
+        const auto val = *values[0];
+        if (!_max || *_max < val) {
+            _max = val;
+        }
+    }
+};
+
 template <typename Type>
 class max_function_for final : public native_aggregate_function {
 public:
     max_function_for() : native_aggregate_function("max", data_type_for<Type>(), { data_type_for<Type>() }) {}
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_max_function_for<Type>>();
+    }
+};
+
+class max_dynamic_function final : public native_aggregate_function {
+public:
+    max_dynamic_function(data_type io_type) : native_aggregate_function("max", io_type, { io_type }) {}
+    virtual std::unique_ptr<aggregate> new_aggregate() override {
+        return std::make_unique<impl_max_dynamic_function>();
     }
 };
 
@@ -311,6 +340,12 @@ template <typename Type>
 shared_ptr<aggregate_function>
 make_max_function() {
     return make_shared<max_function_for<Type>>();
+}
+
+/// The same as `make_max_function()' but with type provided in runtime.
+inline shared_ptr<aggregate_function>
+make_max_dynamic_function(data_type io_type) {
+    return make_shared<max_dynamic_function>(io_type);
 }
 
 template <typename Type>
@@ -353,6 +388,27 @@ public:
     }
 };
 
+/// The same as `impl_min_function_for' but without knowledge of `Type'.
+class impl_min_dynamic_function final : public aggregate_function::aggregate {
+    opt_bytes _min;
+public:
+    virtual void reset() override {
+        _min = {};
+    }
+    virtual opt_bytes compute(cql_serialization_format sf) override {
+        return _min.value_or(bytes{});
+    }
+    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+        if (!values[0]) {
+            return;
+        }
+        const auto val = *values[0];
+        if (!_min || val < *_min) {
+            _min = val;
+        }
+    }
+};
+
 template <typename Type>
 class min_function_for final : public native_aggregate_function {
 public:
@@ -362,6 +418,13 @@ public:
     }
 };
 
+class min_dynamic_function final : public native_aggregate_function {
+public:
+    min_dynamic_function(data_type io_type) : native_aggregate_function("min", io_type, { io_type }) {}
+    virtual std::unique_ptr<aggregate> new_aggregate() override {
+        return std::make_unique<impl_min_dynamic_function>();
+    }
+};
 
     /**
      * Creates a MIN function for the specified type.
@@ -375,6 +438,11 @@ make_min_function() {
     return make_shared<min_function_for<Type>>();
 }
 
+/// The same as `make_min_function()' but with type provided in runtime.
+inline shared_ptr<aggregate_function>
+make_min_dynamic_function(data_type io_type) {
+    return make_shared<min_dynamic_function>(io_type);
+}
 
 template <typename Type>
 class impl_count_function_for final : public aggregate_function::aggregate {

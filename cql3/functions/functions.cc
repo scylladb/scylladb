@@ -280,6 +280,8 @@ functions::get(database& db,
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
     static const function_name FROM_JSON_FUNCTION_NAME = function_name::native_function("fromjson");
+    static const function_name MIN_FUNCTION_NAME = function_name::native_function("min");
+    static const function_name MAX_FUNCTION_NAME = function_name::native_function("max");
 
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
@@ -310,6 +312,40 @@ functions::get(database& db,
             throw exceptions::invalid_request_exception("fromJson() can only be called if receiver type is known");
         }
         return make_from_json_function(db, keyspace, receiver->type);
+    }
+
+    if (name.has_keyspace()
+                ? name == MIN_FUNCTION_NAME
+                : name.name == MIN_FUNCTION_NAME.name) {
+        if (provided_args.size() != 1) {
+            throw exceptions::invalid_request_exception("min() operates on 1 argument at a time");
+        }
+        selection::selector *sp = dynamic_cast<selection::selector*>(provided_args[0].get());
+        if (!sp) {
+            throw exceptions::invalid_request_exception("min() is only valid in SELECT clause");
+        }
+        const data_type arg_type = sp->get_type();
+        if (arg_type->is_collection() || arg_type->is_tuple() || arg_type->is_user_type()) {
+            // `min()' function is created on demand for arguments of compound types.
+            return aggregate_fcts::make_min_dynamic_function(arg_type);
+        }
+    }
+
+    if (name.has_keyspace()
+                ? name == MAX_FUNCTION_NAME
+                : name.name == MAX_FUNCTION_NAME.name) {
+        if (provided_args.size() != 1) {
+            throw exceptions::invalid_request_exception("max() operates on 1 argument at a time");
+        }
+        selection::selector *sp = dynamic_cast<selection::selector*>(provided_args[0].get());
+        if (!sp) {
+            throw exceptions::invalid_request_exception("max() is only valid in SELECT clause");
+        }
+        const data_type arg_type = sp->get_type();
+        if (arg_type->is_collection() || arg_type->is_tuple() || arg_type->is_user_type()) {
+            // `max()' function is created on demand for arguments of compound types.
+            return aggregate_fcts::make_max_dynamic_function(arg_type);
+        }
     }
 
     std::vector<shared_ptr<function>> candidates;
