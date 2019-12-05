@@ -27,6 +27,8 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+using namespace seastar;
+
 namespace bs2 = boost::signals2;
 
 namespace gms {

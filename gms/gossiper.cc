@@ -2333,39 +2333,6 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
     }
 }
 
-feature_service::feature_service() = default;
-
-feature_service::~feature_service() = default;
-
-future<> feature_service::stop() {
-    return make_ready_future<>();
-}
-
-void feature_service::register_feature(feature* f) {
-    _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
-}
-
-void feature_service::unregister_feature(feature* f) {
-    auto&& fsit = _registered_features.find(f->name());
-    if (fsit == _registered_features.end()) {
-        return;
-    }
-    auto&& fs = fsit->second;
-    auto it = std::find(fs.begin(), fs.end(), f);
-    if (it != fs.end()) {
-        fs.erase(it);
-    }
-}
-
-
-void feature_service::enable(const sstring& name) {
-    if (auto it = _registered_features.find(name); it != _registered_features.end()) {
-        for (auto&& f : it->second) {
-            f->enable();
-        }
-    }
-}
-
 // Runs inside seastar::async context
 void gossiper::maybe_enable_features() {
     if (!_gossip_settled) {
@@ -2379,44 +2346,6 @@ void gossiper::maybe_enable_features() {
         }
         g._features_condvar.broadcast();
     }).get();
-}
-
-feature::feature(feature_service& service, sstring name, bool enabled)
-        : _service(&service)
-        , _name(name)
-        , _enabled(enabled) {
-    _service->register_feature(this);
-    if (_enabled) {
-        _pr.set_value();
-    }
-}
-
-feature::~feature() {
-    if (_service) {
-        _service->unregister_feature(this);
-    }
-}
-
-feature& feature::operator=(feature&& other) {
-    _service->unregister_feature(this);
-    _service = std::exchange(other._service, nullptr);
-    _name = other._name;
-    _enabled = other._enabled;
-    _pr = std::move(other._pr);
-    _s = std::move(other._s);
-    _service->register_feature(this);
-    return *this;
-}
-
-void feature::enable() {
-    if (!_enabled) {
-        if (engine().cpu_id() == 0) {
-            logger.info("Feature {} is enabled", name());
-        }
-        _enabled = true;
-        _pr.set_value();
-        _s();
-    }
 }
 
 } // namespace gms
