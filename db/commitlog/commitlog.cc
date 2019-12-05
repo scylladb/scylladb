@@ -205,8 +205,19 @@ public:
     bool _shutdown = false;
     std::optional<shared_promise<>> _shutdown_promise = {};
 
+    struct request_controller_timeout_exception_factory {
+        class request_controller_timed_out_error : public timed_out_error {
+        public:
+            virtual const char* what() const noexcept override {
+                return "commitlog: timed out";
+            }
+        };
+        static auto timeout() {
+            return request_controller_timed_out_error();
+        }
+    };
     // Allocation must throw timed_out_error by contract.
-    using timeout_exception_factory = default_timeout_exception_factory;
+    using timeout_exception_factory = request_controller_timeout_exception_factory;
 
     basic_semaphore<timeout_exception_factory> _flush_semaphore;
 
@@ -1023,7 +1034,7 @@ db::commitlog::segment_manager::segment_manager(config c)
     // an existing in-flight buffer. Since we'll force the cycling() of any buffer that is bigger
     // than default_size at the end of the allocation, that allows for every valid mutation to
     // always be admitted for processing.
-    , _request_controller(max_request_controller_units())
+    , _request_controller(max_request_controller_units(), request_controller_timeout_exception_factory{})
     , _reserve_segments(1)
     , _reserve_replenisher(make_ready_future<>())
 {

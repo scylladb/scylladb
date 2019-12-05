@@ -24,10 +24,8 @@
 #include <map>
 #include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
-#include <seastar/core/semaphore.hh>
 #include "db/timeout_clock.hh"
-
-using namespace seastar;
+#include "seastarx.hh"
 
 /// Specific semaphore for controlling reader concurrency
 ///
@@ -41,16 +39,16 @@ using namespace seastar;
 /// construction. New readers will only be admitted when there is both
 /// enough count and memory units available. Readers are admitted in
 /// FIFO order.
-/// It's possible to specify the maximum allowed number of waiting
+/// Semaphore's `name` must be provided in ctor and its only purpose is
+/// to increase readability of exceptions: both timeout exceptions and
+/// queue overflow exceptions (read below) include this `name` in messages.
+/// It's also possible to specify the maximum allowed number of waiting
 /// readers by the `max_queue_length` constructor parameter. When the
-/// number waiting readers would be equal or greater than this number
-/// (when calling `wait_admission()`) an exception will be thrown.
-/// The type of the exception and optionally some additional code
-/// that should be executed when this happens can be customized by the
-/// `raise_queue_overloaded_exception` constructor parameter. This
-/// function will be called every time the queue limit is surpassed.
-/// It is expected to return an `std::exception_ptr` that will be
-/// injected into the future.
+/// number of waiting readers becomes equal or greater than
+/// `max_queue_length` (upon calling `wait_admission()`) an exception of
+/// type `std::runtime_error` is thrown. Optionally, some additional
+/// code can be executed just before throwing (`prethrow_action` 
+/// constructor parameter).
 class reader_concurrency_semaphore {
 public:
     struct resources {
@@ -153,9 +151,14 @@ private:
         resources res;
         entry(promise<lw_shared_ptr<reader_permit>>&& pr, resources r) : pr(std::move(pr)), res(r) {}
     };
-    struct expiry_handler {
+
+    class expiry_handler {
+        sstring _semaphore_name;
+    public:
+        explicit expiry_handler(sstring semaphore_name)
+            : _semaphore_name(std::move(semaphore_name)) {}
         void operator()(entry& e) noexcept {
-            e.pr.set_exception(semaphore_timed_out());
+            e.pr.set_exception(named_semaphore_timed_out(_semaphore_name));
         }
     };
 
@@ -164,17 +167,14 @@ private:
 
     expiring_fifo<entry, expiry_handler, db::timeout_clock> _wait_list;
 
+    sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
-    std::function<std::exception_ptr()> _make_queue_overloaded_exception;
+    std::function<void()> _prethrow_action;
     uint64_t _next_id = 1;
     std::map<uint64_t, std::unique_ptr<inactive_read>> _inactive_reads;
     inactive_read_stats _inactive_read_stats;
 
 private:
-    static std::exception_ptr default_make_queue_overloaded_exception() {
-        return std::make_exception_ptr(std::runtime_error("restricted mutation reader queue overload"));
-    }
-
     bool has_available_units(const resources& r) const {
         return bool(_resources) && _resources >= r;
     }
@@ -197,19 +197,23 @@ public:
 
     reader_concurrency_semaphore(int count,
             ssize_t memory,
+            sstring name,
             size_t max_queue_length = std::numeric_limits<size_t>::max(),
-            std::function<std::exception_ptr()> raise_queue_overloaded_exception = default_make_queue_overloaded_exception)
+            std::function<void()> prethrow_action = nullptr)
         : _resources(count, memory)
+        , _wait_list(expiry_handler(name))
+        , _name(std::move(name))
         , _max_queue_length(max_queue_length)
-        , _make_queue_overloaded_exception(raise_queue_overloaded_exception) {
-    }
+        , _prethrow_action(std::move(prethrow_action)) {}
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
     /// And conversely, no queue limit either.
     explicit reader_concurrency_semaphore(no_limits)
-        : reader_concurrency_semaphore(std::numeric_limits<int>::max(), std::numeric_limits<ssize_t>::max()) {
-    }
+        : reader_concurrency_semaphore(
+                std::numeric_limits<int>::max(),
+                std::numeric_limits<ssize_t>::max(),
+                "unlimited reader_concurrency_semaphore") {}
 
     reader_concurrency_semaphore(const reader_concurrency_semaphore&) = delete;
     reader_concurrency_semaphore& operator=(const reader_concurrency_semaphore&) = delete;

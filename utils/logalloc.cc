@@ -2199,10 +2199,11 @@ region_group::start_releaser(scheduling_group deferred_work_sg) {
     });
 }
 
-region_group::region_group(region_group *parent, region_group_reclaimer& reclaimer,
-        scheduling_group deferred_work_sg)
+region_group::region_group(sstring name, region_group *parent,
+        region_group_reclaimer& reclaimer, scheduling_group deferred_work_sg)
     : _parent(parent)
     , _reclaimer(reclaimer)
+    , _blocked_requests(on_request_expiry{std::move(name)})
     , _releaser(reclaimer_can_block() ? start_releaser(deferred_work_sg) : make_ready_future<>())
 {
     if (_parent) {
@@ -2304,7 +2305,7 @@ void allocating_section::set_std_reserve(size_t reserve) {
 }
 
 void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
-    func->fail(std::make_exception_ptr(timed_out_error()));
+    func->fail(std::make_exception_ptr(blocked_requests_timed_out_error{_name}));
 }
 
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory) {

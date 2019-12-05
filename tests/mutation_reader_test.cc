@@ -1079,7 +1079,7 @@ class dummy_file_impl : public file_impl {
 
 SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
     return async([&] {
-        reader_concurrency_semaphore semaphore(100, 4 * 1024);
+        reader_concurrency_semaphore semaphore(100, 4 * 1024, get_name());
         // Testing the tracker here, no need to have a base cost.
         auto permit = semaphore.wait_admission(0).get0();
 
@@ -1139,7 +1139,7 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
 SEASTAR_TEST_CASE(restricted_reader_reading) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
-        reader_concurrency_semaphore semaphore(2, new_reader_base_cost);
+        reader_concurrency_semaphore semaphore(2, new_reader_base_cost, get_name());
 
         {
             simple_schema s;
@@ -1210,7 +1210,7 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
 SEASTAR_TEST_CASE(restricted_reader_timeout) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
-        reader_concurrency_semaphore semaphore(2, new_reader_base_cost);
+        reader_concurrency_semaphore semaphore(2, new_reader_base_cost, get_name());
 
         {
             simple_schema s;
@@ -1256,9 +1256,7 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
 
-        struct queue_overloaded_exception {};
-
-        reader_concurrency_semaphore semaphore(2, new_reader_base_cost, 2, [] { return std::make_exception_ptr(queue_overloaded_exception()); });
+        reader_concurrency_semaphore semaphore(2, new_reader_base_cost, get_name(), 2);
 
         {
             simple_schema s;
@@ -1279,7 +1277,7 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
             BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
 
             // The queue should now be full.
-            BOOST_REQUIRE_THROW(reader4().get(), queue_overloaded_exception);
+            BOOST_REQUIRE_THROW(reader4().get(), std::runtime_error);
 
             reader1_ptr.reset();
             read2_fut.get();
@@ -1294,7 +1292,7 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
 SEASTAR_TEST_CASE(restricted_reader_create_reader) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
-        reader_concurrency_semaphore semaphore(100, new_reader_base_cost);
+        reader_concurrency_semaphore semaphore(100, new_reader_base_cost, get_name());
 
         {
             simple_schema s;
@@ -1327,8 +1325,8 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
 }
 
 SEASTAR_TEST_CASE(test_restricted_reader_as_mutation_source) {
-    return seastar::async([] {
-        reader_concurrency_semaphore semaphore(100, 10 * new_reader_base_cost);
+    return seastar::async([test_name = get_name()] {
+        reader_concurrency_semaphore semaphore(100, 10 * new_reader_base_cost, test_name);
 
         auto make_restricted_populator = [&semaphore](schema_ptr s, const std::vector<mutation> &muts) {
             auto mt = make_lw_shared<memtable>(s);
@@ -2067,7 +2065,8 @@ public:
         const auto shard = engine().cpu_id();
         if (!_contexts[shard].semaphore) {
             if (_evict_paused_readers) {
-                _contexts[shard].semaphore = make_foreign(std::make_unique<reader_concurrency_semaphore>(0, std::numeric_limits<ssize_t>::max()));
+                _contexts[shard].semaphore = make_foreign(std::make_unique<reader_concurrency_semaphore>(0, std::numeric_limits<ssize_t>::max(),
+                        format("reader_concurrency_semaphore @shard_id={}", shard)));
                  // Add a waiter, so that all registered inactive reads are
                  // immediately evicted.
                  // We don't care about the returned future.
