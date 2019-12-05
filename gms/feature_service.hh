@@ -41,6 +41,7 @@ struct feature_config {
     bool enable_user_defined_functions;
     bool enable_cdc;
     bool enable_lwt;
+    std::set<sstring> disabled_features;
 };
 
 feature_config feature_config_from_db_config(db::config& cfg);

@@ -115,7 +115,7 @@ int get_generation_number() {
 }
 
 storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>& auth_service, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, bool for_testing, std::set<sstring> disabled_features)
+        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, bool for_testing)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -123,7 +123,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _auth_service(auth_service)
         , _cql_config(cql_config)
         , _mnotifier(mn)
-        , _disabled_features(std::move(disabled_features))
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
         , _la_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::la)
@@ -223,7 +222,7 @@ sstring storage_service::get_known_features() {
 // The features this node supports
 std::set<sstring> storage_service::get_known_features_set() {
     auto s = get_config_supported_features_set();
-    if (_disabled_features.count(gms::features::UNBOUNDED_RANGE_TOMBSTONES) == 0) {
+    if (_feature_service.cfg().disabled_features.count(gms::features::UNBOUNDED_RANGE_TOMBSTONES) == 0) {
         s.insert(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
     }
     return s;
@@ -281,7 +280,7 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
     if (!sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
         features.insert(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
     }
-    for (const sstring& s : _disabled_features) {
+    for (const sstring& s : fcfg.disabled_features) {
         features.erase(s);
     }
     return features;

@@ -405,6 +405,7 @@ public:
             if (cfg->enable_user_defined_functions()) {
                 fcfg.enable_user_defined_functions = true;
             }
+            fcfg.disabled_features = cfg_in.disabled_features;
             auto feature_service = make_shared<sharded<gms::feature_service>>();
             feature_service->start(fcfg).get();
             auto stop_feature_service = defer([&] { feature_service->stop().get(); });
@@ -424,7 +425,7 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, std::ref(*mm_notif), true, cfg_in.disabled_features).get();
+            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, std::ref(*mm_notif), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;

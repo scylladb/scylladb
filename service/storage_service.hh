@@ -167,11 +167,10 @@ private:
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
-    std::set<sstring> _disabled_features;
     size_t _service_memory_total;
     semaphore _service_memory_limiter;
 public:
-    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,/* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
+    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,/* only for tests */ bool for_testing = false);
     void isolate_on_error();
     void isolate_on_commit_error();
 
