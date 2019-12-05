@@ -20,15 +20,15 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
+import argparse
 import asyncio
 import glob
-import os
-import sys
-import signal
-import argparse
-import subprocess
 import io
 import multiprocessing
+import os
+import signal
+import subprocess
+import sys
 import xml.etree.ElementTree as ET
 
 # Apply custom options to these tests
