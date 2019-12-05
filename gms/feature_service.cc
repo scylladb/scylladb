@@ -29,7 +29,34 @@ namespace gms {
 
 static logging::logger logger("features");
 
-feature_service::feature_service(feature_config cfg) : _config(cfg) {
+feature_service::feature_service(feature_config cfg) : _config(cfg)
+        , _range_tombstones_feature(*this, features::RANGE_TOMBSTONES)
+        , _large_partitions_feature(*this, features::LARGE_PARTITIONS)
+        , _materialized_views_feature(*this, features::MATERIALIZED_VIEWS)
+        , _counters_feature(*this, features::COUNTERS)
+        , _indexes_feature(*this, features::INDEXES)
+        , _digest_multipartition_read_feature(*this, features::DIGEST_MULTIPARTITION_READ)
+        , _correct_counter_order_feature(*this, features::CORRECT_COUNTER_ORDER)
+        , _schema_tables_v3(*this, features::SCHEMA_TABLES_V3)
+        , _correct_non_compound_range_tombstones(*this, features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES)
+        , _write_failure_reply_feature(*this, features::WRITE_FAILURE_REPLY)
+        , _xxhash_feature(*this, features::XXHASH)
+        , _udf_feature(*this, features::UDF)
+        , _roles_feature(*this, features::ROLES)
+        , _la_sstable_feature(*this, features::LA_SSTABLE)
+        , _stream_with_rpc_stream_feature(*this, features::STREAM_WITH_RPC_STREAM)
+        , _mc_sstable_feature(*this, features::MC_SSTABLE)
+        , _row_level_repair_feature(*this, features::ROW_LEVEL_REPAIR)
+        , _truncation_table(*this, features::TRUNCATION_TABLE)
+        , _correct_static_compact_in_mc(*this, features::CORRECT_STATIC_COMPACT_IN_MC)
+        , _unbounded_range_tombstones_feature(*this, features::UNBOUNDED_RANGE_TOMBSTONES)
+        , _view_virtual_columns(*this, features::VIEW_VIRTUAL_COLUMNS)
+        , _digest_insensitive_to_expiry(*this, features::DIGEST_INSENSITIVE_TO_EXPIRY)
+        , _computed_columns(*this, features::COMPUTED_COLUMNS)
+        , _cdc_feature(*this, features::CDC)
+        , _nonfrozen_udts(*this, features::NONFROZEN_UDTS)
+        , _hinted_handoff_separate_connection(*this, features::HINTED_HANDOFF_SEPARATE_CONNECTION)
+        , _lwt_feature(*this, features::LWT) {
 }
 
 feature_config feature_config_from_db_config(db::config& cfg) {
@@ -122,6 +149,43 @@ void feature::enable() {
         _enabled = true;
         _pr.set_value();
         _s();
+    }
+}
+
+void feature_service::enable(const std::set<sstring>& list) {
+    for (gms::feature& f : {
+        std::ref(_range_tombstones_feature),
+        std::ref(_large_partitions_feature),
+        std::ref(_materialized_views_feature),
+        std::ref(_counters_feature),
+        std::ref(_indexes_feature),
+        std::ref(_digest_multipartition_read_feature),
+        std::ref(_correct_counter_order_feature),
+        std::ref(_schema_tables_v3),
+        std::ref(_correct_non_compound_range_tombstones),
+        std::ref(_write_failure_reply_feature),
+        std::ref(_xxhash_feature),
+        std::ref(_udf_feature),
+        std::ref(_roles_feature),
+        std::ref(_la_sstable_feature),
+        std::ref(_stream_with_rpc_stream_feature),
+        std::ref(_mc_sstable_feature),
+        std::ref(_row_level_repair_feature),
+        std::ref(_truncation_table),
+        std::ref(_correct_static_compact_in_mc),
+        std::ref(_unbounded_range_tombstones_feature),
+        std::ref(_view_virtual_columns),
+        std::ref(_digest_insensitive_to_expiry),
+        std::ref(_computed_columns),
+        std::ref(_cdc_feature),
+        std::ref(_nonfrozen_udts),
+        std::ref(_hinted_handoff_separate_connection),
+        std::ref(_lwt_feature)
+    })
+    {
+        if (list.count(f.name())) {
+            f.enable();
+        }
     }
 }
 

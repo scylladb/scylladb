@@ -90,34 +90,6 @@ namespace service {
 
 static logging::logger slogger("storage_service");
 
-static const sstring RANGE_TOMBSTONES_FEATURE = "RANGE_TOMBSTONES";
-static const sstring LARGE_PARTITIONS_FEATURE = "LARGE_PARTITIONS";
-static const sstring MATERIALIZED_VIEWS_FEATURE = "MATERIALIZED_VIEWS";
-static const sstring COUNTERS_FEATURE = "COUNTERS";
-static const sstring INDEXES_FEATURE = "INDEXES";
-static const sstring DIGEST_MULTIPARTITION_READ_FEATURE = "DIGEST_MULTIPARTITION_READ";
-static const sstring CORRECT_COUNTER_ORDER_FEATURE = "CORRECT_COUNTER_ORDER";
-static const sstring SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
-static const sstring CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
-static const sstring WRITE_FAILURE_REPLY_FEATURE = "WRITE_FAILURE_REPLY";
-static const sstring XXHASH_FEATURE = "XXHASH";
-static const sstring UDF_FEATURE = "UDF";
-static const sstring ROLES_FEATURE = "ROLES";
-static const sstring LA_SSTABLE_FEATURE = "LA_SSTABLE_FORMAT";
-static const sstring STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
-static const sstring MC_SSTABLE_FEATURE = "MC_SSTABLE_FORMAT";
-static const sstring ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
-static const sstring TRUNCATION_TABLE = "TRUNCATION_TABLE";
-static const sstring CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
-static const sstring UNBOUNDED_RANGE_TOMBSTONES_FEATURE = "UNBOUNDED_RANGE_TOMBSTONES";
-static const sstring VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
-static const sstring DIGEST_INSENSITIVE_TO_EXPIRY = "DIGEST_INSENSITIVE_TO_EXPIRY";
-static const sstring COMPUTED_COLUMNS_FEATURE = "COMPUTED_COLUMNS";
-static const sstring CDC_FEATURE = "CDC";
-static const sstring NONFROZEN_UDTS_FEATURE = "NONFROZEN_UDTS";
-static const sstring HINTED_HANDOFF_SEPARATE_CONNECTION_FEATURE = "HINTED_HANDOFF_SEPARATE_CONNECTION";
-static const sstring LWT_FEATURE = "LWT";
-
 static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 
 distributed<storage_service> _the_storage_service;
@@ -154,33 +126,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _disabled_features(std::move(disabled_features))
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
-        , _range_tombstones_feature(_feature_service, RANGE_TOMBSTONES_FEATURE)
-        , _large_partitions_feature(_feature_service, LARGE_PARTITIONS_FEATURE)
-        , _materialized_views_feature(_feature_service, MATERIALIZED_VIEWS_FEATURE)
-        , _counters_feature(_feature_service, COUNTERS_FEATURE)
-        , _indexes_feature(_feature_service, INDEXES_FEATURE)
-        , _digest_multipartition_read_feature(_feature_service, DIGEST_MULTIPARTITION_READ_FEATURE)
-        , _correct_counter_order_feature(_feature_service, CORRECT_COUNTER_ORDER_FEATURE)
-        , _schema_tables_v3(_feature_service, SCHEMA_TABLES_V3)
-        , _correct_non_compound_range_tombstones(_feature_service, CORRECT_NON_COMPOUND_RANGE_TOMBSTONES)
-        , _write_failure_reply_feature(_feature_service, WRITE_FAILURE_REPLY_FEATURE)
-        , _xxhash_feature(_feature_service, XXHASH_FEATURE)
-        , _udf_feature(_feature_service, UDF_FEATURE)
-        , _roles_feature(_feature_service, ROLES_FEATURE)
-        , _la_sstable_feature(_feature_service, LA_SSTABLE_FEATURE)
-        , _stream_with_rpc_stream_feature(_feature_service, STREAM_WITH_RPC_STREAM)
-        , _mc_sstable_feature(_feature_service, MC_SSTABLE_FEATURE)
-        , _row_level_repair_feature(_feature_service, ROW_LEVEL_REPAIR)
-        , _truncation_table(_feature_service, TRUNCATION_TABLE)
-        , _correct_static_compact_in_mc(_feature_service, CORRECT_STATIC_COMPACT_IN_MC)
-        , _unbounded_range_tombstones_feature(_feature_service, UNBOUNDED_RANGE_TOMBSTONES_FEATURE)
-        , _view_virtual_columns(_feature_service, VIEW_VIRTUAL_COLUMNS)
-        , _digest_insensitive_to_expiry(_feature_service, DIGEST_INSENSITIVE_TO_EXPIRY)
-        , _computed_columns(_feature_service, COMPUTED_COLUMNS_FEATURE)
-        , _cdc_feature(_feature_service, CDC_FEATURE)
-        , _nonfrozen_udts(_feature_service, NONFROZEN_UDTS_FEATURE)
-        , _hinted_handoff_separate_connection(_feature_service, HINTED_HANDOFF_SEPARATE_CONNECTION_FEATURE)
-        , _lwt_feature(_feature_service, LWT_FEATURE)
         , _la_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::la)
         , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
@@ -195,15 +140,15 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
 
     if (!for_testing) {
         if (engine().cpu_id() == 0) {
-            _la_sstable_feature.when_enabled(_la_feature_listener);
-            _mc_sstable_feature.when_enabled(_mc_feature_listener);
+            _feature_service._la_sstable_feature.when_enabled(_la_feature_listener);
+            _feature_service._mc_sstable_feature.when_enabled(_mc_feature_listener);
         }
     } else {
         _sstables_format = sstables::sstable_version_types::mc;
     }
 
     //FIXME: discarded future.
-    (void)_unbounded_range_tombstones_feature.when_enabled().then([&db] () mutable {
+    (void)_feature_service._unbounded_range_tombstones_feature.when_enabled().then([&db] () mutable {
         slogger.debug("Enabling infinite bound range deletions");
         //FIXME: discarded future.
         (void)db.invoke_on_all([] (database& local_db) mutable {
@@ -214,41 +159,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
 
 void storage_service::enable_all_features() {
     auto features = get_config_supported_features_set();
-
-    for (gms::feature& f : {
-        std::ref(_range_tombstones_feature),
-        std::ref(_large_partitions_feature),
-        std::ref(_materialized_views_feature),
-        std::ref(_counters_feature),
-        std::ref(_indexes_feature),
-        std::ref(_digest_multipartition_read_feature),
-        std::ref(_correct_counter_order_feature),
-        std::ref(_schema_tables_v3),
-        std::ref(_correct_non_compound_range_tombstones),
-        std::ref(_write_failure_reply_feature),
-        std::ref(_xxhash_feature),
-        std::ref(_udf_feature),
-        std::ref(_roles_feature),
-        std::ref(_la_sstable_feature),
-        std::ref(_stream_with_rpc_stream_feature),
-        std::ref(_mc_sstable_feature),
-        std::ref(_row_level_repair_feature),
-        std::ref(_truncation_table),
-        std::ref(_correct_static_compact_in_mc),
-        std::ref(_unbounded_range_tombstones_feature),
-        std::ref(_view_virtual_columns),
-        std::ref(_digest_insensitive_to_expiry),
-        std::ref(_computed_columns),
-        std::ref(_cdc_feature),
-        std::ref(_nonfrozen_udts),
-        std::ref(_hinted_handoff_separate_connection),
-        std::ref(_lwt_feature)
-    })
-    {
-        if (features.count(f.name())) {
-            f.enable();
-        }
-    }
+    _feature_service.enable(features);
 }
 
 enum class node_external_status {
@@ -312,8 +223,8 @@ sstring storage_service::get_known_features() {
 // The features this node supports
 std::set<sstring> storage_service::get_known_features_set() {
     auto s = get_config_supported_features_set();
-    if (_disabled_features.count(UNBOUNDED_RANGE_TOMBSTONES_FEATURE) == 0) {
-        s.insert(UNBOUNDED_RANGE_TOMBSTONES_FEATURE);
+    if (_disabled_features.count(gms::features::UNBOUNDED_RANGE_TOMBSTONES) == 0) {
+        s.insert(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
     }
     return s;
 }
@@ -328,47 +239,47 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
     std::set<sstring> features = {
-        RANGE_TOMBSTONES_FEATURE,
-        LARGE_PARTITIONS_FEATURE,
-        COUNTERS_FEATURE,
-        DIGEST_MULTIPARTITION_READ_FEATURE,
-        CORRECT_COUNTER_ORDER_FEATURE,
-        SCHEMA_TABLES_V3,
-        CORRECT_NON_COMPOUND_RANGE_TOMBSTONES,
-        WRITE_FAILURE_REPLY_FEATURE,
-        XXHASH_FEATURE,
-        ROLES_FEATURE,
-        LA_SSTABLE_FEATURE,
-        STREAM_WITH_RPC_STREAM,
-        MATERIALIZED_VIEWS_FEATURE,
-        INDEXES_FEATURE,
-        ROW_LEVEL_REPAIR,
-        TRUNCATION_TABLE,
-        CORRECT_STATIC_COMPACT_IN_MC,
-        VIEW_VIRTUAL_COLUMNS,
-        DIGEST_INSENSITIVE_TO_EXPIRY,
-        COMPUTED_COLUMNS_FEATURE,
-        NONFROZEN_UDTS_FEATURE,
-        HINTED_HANDOFF_SEPARATE_CONNECTION_FEATURE,
+        gms::features::RANGE_TOMBSTONES,
+        gms::features::LARGE_PARTITIONS,
+        gms::features::COUNTERS,
+        gms::features::DIGEST_MULTIPARTITION_READ,
+        gms::features::CORRECT_COUNTER_ORDER,
+        gms::features::SCHEMA_TABLES_V3,
+        gms::features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES,
+        gms::features::WRITE_FAILURE_REPLY,
+        gms::features::XXHASH,
+        gms::features::ROLES,
+        gms::features::LA_SSTABLE,
+        gms::features::STREAM_WITH_RPC_STREAM,
+        gms::features::MATERIALIZED_VIEWS,
+        gms::features::INDEXES,
+        gms::features::ROW_LEVEL_REPAIR,
+        gms::features::TRUNCATION_TABLE,
+        gms::features::CORRECT_STATIC_COMPACT_IN_MC,
+        gms::features::VIEW_VIRTUAL_COLUMNS,
+        gms::features::DIGEST_INSENSITIVE_TO_EXPIRY,
+        gms::features::COMPUTED_COLUMNS,
+        gms::features::NONFROZEN_UDTS,
+        gms::features::HINTED_HANDOFF_SEPARATE_CONNECTION,
     };
 
     const auto& fcfg = _feature_service.cfg();
 
     if (fcfg.enable_sstables_mc_format) {
-        features.insert(MC_SSTABLE_FEATURE);
+        features.insert(gms::features::MC_SSTABLE);
     }
     if (fcfg.enable_user_defined_functions) {
-        features.insert(UDF_FEATURE);
+        features.insert(gms::features::UDF);
     }
     if (fcfg.enable_cdc) {
-        features.insert(CDC_FEATURE);
+        features.insert(gms::features::CDC);
     }
     if (fcfg.enable_lwt) {
-        features.insert(LWT_FEATURE);
+        features.insert(gms::features::LWT);
     }
 
     if (!sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
-        features.insert(UNBOUNDED_RANGE_TOMBSTONES_FEATURE);
+        features.insert(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
     }
     for (const sstring& s : _disabled_features) {
         features.erase(s);
@@ -3447,10 +3358,10 @@ void storage_service::notify_cql_change(inet_address endpoint, bool ready)
 
 db::schema_features storage_service::cluster_schema_features() const {
     db::schema_features f;
-    f.set_if<db::schema_feature::VIEW_VIRTUAL_COLUMNS>(bool(_view_virtual_columns));
-    f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(bool(_digest_insensitive_to_expiry));
-    f.set_if<db::schema_feature::COMPUTED_COLUMNS>(bool(_computed_columns));
-    f.set_if<db::schema_feature::CDC_OPTIONS>(bool(_cdc_feature));
+    f.set_if<db::schema_feature::VIEW_VIRTUAL_COLUMNS>(bool(_feature_service._view_virtual_columns));
+    f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(bool(_feature_service._digest_insensitive_to_expiry));
+    f.set_if<db::schema_feature::COMPUTED_COLUMNS>(bool(_feature_service._computed_columns));
+    f.set_if<db::schema_feature::CDC_OPTIONS>(bool(_feature_service._cdc_feature));
     return f;
 }
 

@@ -62,6 +62,7 @@
 #include <seastar/core/distributed.hh>
 #include "disk-error-handler.hh"
 #include "gms/feature.hh"
+#include "gms/feature_service.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
@@ -316,34 +317,6 @@ private:
 #endif
 private:
     std::unordered_set<token> _bootstrap_tokens;
-
-    gms::feature _range_tombstones_feature;
-    gms::feature _large_partitions_feature;
-    gms::feature _materialized_views_feature;
-    gms::feature _counters_feature;
-    gms::feature _indexes_feature;
-    gms::feature _digest_multipartition_read_feature;
-    gms::feature _correct_counter_order_feature;
-    gms::feature _schema_tables_v3;
-    gms::feature _correct_non_compound_range_tombstones;
-    gms::feature _write_failure_reply_feature;
-    gms::feature _xxhash_feature;
-    gms::feature _udf_feature;
-    gms::feature _roles_feature;
-    gms::feature _la_sstable_feature;
-    gms::feature _stream_with_rpc_stream_feature;
-    gms::feature _mc_sstable_feature;
-    gms::feature _row_level_repair_feature;
-    gms::feature _truncation_table;
-    gms::feature _correct_static_compact_in_mc;
-    gms::feature _unbounded_range_tombstones_feature;
-    gms::feature _view_virtual_columns;
-    gms::feature _digest_insensitive_to_expiry;
-    gms::feature _computed_columns;
-    gms::feature _cdc_feature;
-    gms::feature _nonfrozen_udts;
-    gms::feature _hinted_handoff_separate_connection;
-    gms::feature _lwt_feature;
 
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
     seastar::named_semaphore _feature_listeners_sem = {1, named_semaphore_exception_factory{"feature listeners"}};
@@ -2282,111 +2255,110 @@ public:
     std::set<sstring> get_known_features_set();
 
     bool cluster_supports_range_tombstones() const {
-        return bool(_range_tombstones_feature);
+        return _feature_service.cluster_supports_range_tombstones();
     }
 
     bool cluster_supports_large_partitions() const {
-        return bool(_large_partitions_feature);
+        return _feature_service.cluster_supports_large_partitions();
     }
 
     bool cluster_supports_materialized_views() const {
-        return bool(_materialized_views_feature);
+        return _feature_service.cluster_supports_materialized_views();
     }
 
     bool cluster_supports_counters() const {
-        return bool(_counters_feature);
+        return _feature_service.cluster_supports_counters();
     }
 
     bool cluster_supports_indexes() const {
-        return bool(_indexes_feature);
+        return _feature_service.cluster_supports_indexes();
     }
 
     bool cluster_supports_digest_multipartition_reads() const {
-        return bool(_digest_multipartition_read_feature);
+        return _feature_service.cluster_supports_digest_multipartition_reads();
     }
 
     bool cluster_supports_correct_counter_order() const {
-        return bool(_correct_counter_order_feature);
+        return _feature_service.cluster_supports_correct_counter_order();
     }
 
     const gms::feature& cluster_supports_schema_tables_v3() const {
-        return _schema_tables_v3;
+        return _feature_service.cluster_supports_schema_tables_v3();
     }
 
     bool cluster_supports_reading_correctly_serialized_range_tombstones() const {
-        return bool(_correct_non_compound_range_tombstones);
+        return _feature_service.cluster_supports_reading_correctly_serialized_range_tombstones();
     }
 
     bool cluster_supports_write_failure_reply() const {
-        return bool(_write_failure_reply_feature);
+        return _feature_service.cluster_supports_write_failure_reply();
     }
 
     bool cluster_supports_xxhash_digest_algorithm() const {
-        return bool(_xxhash_feature);
+        return _feature_service.cluster_supports_xxhash_digest_algorithm();
     }
 
     bool cluster_supports_user_defined_functions() const {
-        return bool(_udf_feature);
+        return _feature_service.cluster_supports_user_defined_functions();
     }
 
     bool cluster_supports_roles() const {
-        return bool(_roles_feature);
+        return _feature_service.cluster_supports_roles();
     }
 
     bool cluster_supports_la_sstable() const {
-        return bool(_la_sstable_feature);
+        return _feature_service.cluster_supports_la_sstable();
     }
 
     bool cluster_supports_stream_with_rpc_stream() const {
-        return bool(_stream_with_rpc_stream_feature);
+        return _feature_service.cluster_supports_stream_with_rpc_stream();
     }
 
     bool cluster_supports_mc_sstable() const {
-        return bool(_mc_sstable_feature);
+        return _feature_service.cluster_supports_mc_sstable();
     }
 
     const gms::feature& cluster_supports_cdc() const {
-        return _cdc_feature;
+        return _feature_service.cluster_supports_cdc();
     }
 
     bool cluster_supports_row_level_repair() const {
-        return bool(_row_level_repair_feature);
+        return _feature_service.cluster_supports_row_level_repair();
     }
     gms::feature& cluster_supports_truncation_table() {
-        return _truncation_table;
+        return _feature_service.cluster_supports_truncation_table();
     }
     const gms::feature& cluster_supports_truncation_table() const {
-        return _truncation_table;
+        return _feature_service.cluster_supports_truncation_table();
     }
     const gms::feature& cluster_supports_correct_static_compact_in_mc() const {
-        return _correct_static_compact_in_mc;
+        return _feature_service.cluster_supports_correct_static_compact_in_mc();
     }
     bool cluster_supports_unbounded_range_tombstones() const {
-        return bool(_unbounded_range_tombstones_feature);
+        return _feature_service.cluster_supports_unbounded_range_tombstones();
     }
 
     const gms::feature& cluster_supports_view_virtual_columns() const {
-        return _view_virtual_columns;
+        return _feature_service.cluster_supports_view_virtual_columns();
     }
     const gms::feature& cluster_supports_digest_insensitive_to_expiry() const {
-        return _digest_insensitive_to_expiry;
+        return _feature_service.cluster_supports_digest_insensitive_to_expiry();
     }
 
     bool cluster_supports_computed_columns() const {
-        return bool(_computed_columns);
+        return _feature_service.cluster_supports_computed_columns();
     }
 
     bool cluster_supports_nonfrozen_udts() const {
-        return bool(_nonfrozen_udts);
+        return _feature_service.cluster_supports_nonfrozen_udts();
     }
 
     bool cluster_supports_hinted_handoff_separate_connection() {
-        return bool(_hinted_handoff_separate_connection);
+        return _feature_service.cluster_supports_hinted_handoff_separate_connection();
     }
 
-    // Returns schema features which all nodes in the cluster advertise as supported.
     bool cluster_supports_lwt() {
-        return bool(_lwt_feature);
+        return _feature_service.cluster_supports_lwt();
     }
 
     // Returns schema features which all nodes in the cluster advertise as supported.
