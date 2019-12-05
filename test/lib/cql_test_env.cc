@@ -455,7 +455,7 @@ public:
             proxy.start(std::ref(*db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0()).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
-            mm.start(std::ref(*mm_notif)).get();
+            mm.start(std::ref(*mm_notif), std::ref(*feature_service)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             auto& qp = cql3::get_query_processor();

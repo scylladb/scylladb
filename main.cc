@@ -808,7 +808,7 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
-            mm.start(std::ref(mm_notifier)).get();
+            mm.start(std::ref(mm_notifier), std::ref(feature_service)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
