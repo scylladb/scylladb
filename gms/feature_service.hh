@@ -65,8 +65,7 @@ public:
     void enable(const sstring& name);
     void enable(const std::set<sstring>& list);
     db::schema_features cluster_schema_features() const;
-
-    const feature_config& cfg() const { return _config; }
+    std::set<sstring> known_feature_set();
 
 private:
     gms::feature _range_tombstones_feature;

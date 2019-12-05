@@ -221,11 +221,7 @@ sstring storage_service::get_known_features() {
 
 // The features this node supports
 std::set<sstring> storage_service::get_known_features_set() {
-    auto s = get_config_supported_features_set();
-    if (_feature_service.cfg().disabled_features.count(gms::features::UNBOUNDED_RANGE_TOMBSTONES) == 0) {
-        s.insert(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
-    }
-    return s;
+    return _feature_service.known_feature_set();
 }
 
 sstring storage_service::get_config_supported_features() {
@@ -234,55 +230,12 @@ sstring storage_service::get_config_supported_features() {
 
 // The features this node supports and is allowed to advertise to other nodes
 std::set<sstring> storage_service::get_config_supported_features_set() {
-    // Add features supported by this local node. When a new feature is
-    // introduced in scylla, update it here, e.g.,
-    // return sstring("FEATURE1,FEATURE2")
-    std::set<sstring> features = {
-        gms::features::RANGE_TOMBSTONES,
-        gms::features::LARGE_PARTITIONS,
-        gms::features::COUNTERS,
-        gms::features::DIGEST_MULTIPARTITION_READ,
-        gms::features::CORRECT_COUNTER_ORDER,
-        gms::features::SCHEMA_TABLES_V3,
-        gms::features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES,
-        gms::features::WRITE_FAILURE_REPLY,
-        gms::features::XXHASH,
-        gms::features::ROLES,
-        gms::features::LA_SSTABLE,
-        gms::features::STREAM_WITH_RPC_STREAM,
-        gms::features::MATERIALIZED_VIEWS,
-        gms::features::INDEXES,
-        gms::features::ROW_LEVEL_REPAIR,
-        gms::features::TRUNCATION_TABLE,
-        gms::features::CORRECT_STATIC_COMPACT_IN_MC,
-        gms::features::VIEW_VIRTUAL_COLUMNS,
-        gms::features::DIGEST_INSENSITIVE_TO_EXPIRY,
-        gms::features::COMPUTED_COLUMNS,
-        gms::features::NONFROZEN_UDTS,
-        gms::features::HINTED_HANDOFF_SEPARATE_CONNECTION,
-    };
+    auto features = _feature_service.known_feature_set();
 
-    const auto& fcfg = _feature_service.cfg();
-
-    if (fcfg.enable_sstables_mc_format) {
-        features.insert(gms::features::MC_SSTABLE);
-    }
-    if (fcfg.enable_user_defined_functions) {
-        features.insert(gms::features::UDF);
-    }
-    if (fcfg.enable_cdc) {
-        features.insert(gms::features::CDC);
-    }
-    if (fcfg.enable_lwt) {
-        features.insert(gms::features::LWT);
+    if (sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
+        features.erase(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
     }
 
-    if (!sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
-        features.insert(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
-    }
-    for (const sstring& s : fcfg.disabled_features) {
-        features.erase(s);
-    }
     return features;
 }
 

@@ -114,6 +114,55 @@ void feature_service::enable(const sstring& name) {
     }
 }
 
+std::set<sstring> feature_service::known_feature_set() {
+    // Add features known by this local node. When a new feature is
+    // introduced in scylla, update it here, e.g.,
+    // return sstring("FEATURE1,FEATURE2")
+    std::set<sstring> features = {
+        gms::features::RANGE_TOMBSTONES,
+        gms::features::LARGE_PARTITIONS,
+        gms::features::COUNTERS,
+        gms::features::DIGEST_MULTIPARTITION_READ,
+        gms::features::CORRECT_COUNTER_ORDER,
+        gms::features::SCHEMA_TABLES_V3,
+        gms::features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES,
+        gms::features::WRITE_FAILURE_REPLY,
+        gms::features::XXHASH,
+        gms::features::ROLES,
+        gms::features::LA_SSTABLE,
+        gms::features::STREAM_WITH_RPC_STREAM,
+        gms::features::MATERIALIZED_VIEWS,
+        gms::features::INDEXES,
+        gms::features::ROW_LEVEL_REPAIR,
+        gms::features::TRUNCATION_TABLE,
+        gms::features::CORRECT_STATIC_COMPACT_IN_MC,
+        gms::features::VIEW_VIRTUAL_COLUMNS,
+        gms::features::DIGEST_INSENSITIVE_TO_EXPIRY,
+        gms::features::COMPUTED_COLUMNS,
+        gms::features::NONFROZEN_UDTS,
+        gms::features::UNBOUNDED_RANGE_TOMBSTONES,
+        gms::features::HINTED_HANDOFF_SEPARATE_CONNECTION,
+    };
+
+    if (_config.enable_sstables_mc_format) {
+        features.insert(gms::features::MC_SSTABLE);
+    }
+    if (_config.enable_user_defined_functions) {
+        features.insert(gms::features::UDF);
+    }
+    if (_config.enable_cdc) {
+        features.insert(gms::features::CDC);
+    }
+    if (_config.enable_lwt) {
+        features.insert(gms::features::LWT);
+    }
+
+    for (const sstring& s : _config.disabled_features) {
+        features.erase(s);
+    }
+    return features;
+}
+
 feature::feature(feature_service& service, sstring name, bool enabled)
         : _service(&service)
         , _name(name)
