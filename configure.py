@@ -1379,6 +1379,7 @@ with open(buildfile_tmp, 'w') as f:
         ragels = {}
         antlr3_grammars = set()
         seastar_dep = 'build/{}/seastar/libseastar.a'.format(mode)
+        seastar_testing_dep = 'build/{}/seastar/libseastar_testing.a'.format(mode)
         for binary in build_artifacts:
             if binary in other:
                 continue
@@ -1416,9 +1417,9 @@ with open(buildfile_tmp, 'w') as f:
                     # So we strip the tests by default; The user can very
                     # quickly re-link the test unstripped by adding a "_g"
                     # to the test name, e.g., "ninja build/release/testname_g"
-                    f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs), seastar_dep))
+                    f.write('build $builddir/{}/{}: {}.{} {} | {} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
                     f.write('   libs = {}\n'.format(local_libs))
-                    f.write('build $builddir/{}/{}_g: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
+                    f.write('build $builddir/{}/{}_g: {}.{} {} | {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep))
                     f.write('   libs = {}\n'.format(local_libs))
                 else:
                     f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep))
@@ -1506,7 +1507,12 @@ with open(buildfile_tmp, 'w') as f:
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = build/{mode}/seastar\n'.format(**locals()))
-        f.write('  target = seastar seastar_testing\n'.format(**locals()))
+        f.write('  target = seastar\n'.format(**locals()))
+        f.write('build build/{mode}/seastar/libseastar_testing.a: ninja\n'
+                .format(**locals()))
+        f.write('  pool = submodule_pool\n')
+        f.write('  subdir = build/{mode}/seastar\n'.format(**locals()))
+        f.write('  target = seastar_testing\n'.format(**locals()))
         f.write('build build/{mode}/seastar/apps/iotune/iotune: ninja\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
