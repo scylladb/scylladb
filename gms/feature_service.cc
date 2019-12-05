@@ -28,9 +28,14 @@ namespace gms {
 
 static logging::logger logger("features");
 
-feature_service::feature_service() = default;
+feature_service::feature_service(feature_config cfg) : _config(cfg) {
+}
 
-feature_service::~feature_service() = default;
+feature_config feature_config_from_db_config(db::config& cfg) {
+    feature_config fcfg;
+
+    return fcfg;
+}
 
 future<> feature_service::stop() {
     return make_ready_future<>();

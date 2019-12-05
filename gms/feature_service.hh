@@ -28,9 +28,16 @@
 #include <vector>
 #include "seastarx.hh"
 
+namespace db { class config; }
+
 namespace gms {
 
 class feature;
+
+struct feature_config {
+};
+
+feature_config feature_config_from_db_config(db::config& cfg);
 
 /**
  * A gossip feature tracks whether all the nodes the current one is
@@ -38,9 +45,12 @@ class feature;
  */
 class feature_service final {
     std::unordered_map<sstring, std::vector<feature*>> _registered_features;
+    feature_config _config;
 public:
-    feature_service();
-    ~feature_service();
+    /* config-less initialization is for testing */
+    feature_service() : feature_service(feature_config{}) {}
+    explicit feature_service(feature_config cfg);
+    ~feature_service() = default;
     future<> stop();
     void register_feature(feature* f);
     void unregister_feature(feature* f);

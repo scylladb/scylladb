@@ -541,7 +541,9 @@ int main(int ac, char** av) {
                     throw bad_configuration_error();
                 }
             }
-            feature_service.start().get();
+            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
+
+            feature_service.start(fcfg).get();
             // FIXME: feature_service.stop(), when we fix up shutdown
             dht::set_global_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
             auto make_sched_group = [&] (sstring name, unsigned shares) {
