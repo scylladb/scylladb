@@ -113,7 +113,10 @@ Select "Squash and merge" and follow through.
 
 ### Applying patch series from github pull requests
 
-Select "Create a merge commit" and follow through.
+Select "Create a merge commit" and do NOT follow through -
+github will attribute itself as the commiter. Instead, click
+"view command line options", select the "git pull" line,
+paste it to a terminal and add `--no-ff --log` and execute.
 
 ## Dequeuing bad patches
 
