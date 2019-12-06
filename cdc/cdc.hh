@@ -66,6 +66,7 @@ class partition_key;
 namespace cdc {
 
 class db_context;
+class metadata;
 
 // Callback to be invoked on mutation finish to fix
 // the whole bit about post-image.
@@ -101,6 +102,7 @@ struct db_context final {
     service::storage_proxy& _proxy;
     service::migration_notifier& _migration_notifier;
     locator::token_metadata& _token_metadata;
+    cdc::metadata& _cdc_metadata;
     locator::snitch_ptr& _snitch;
     dht::i_partitioner& _partitioner;
 
@@ -108,6 +110,7 @@ struct db_context final {
         service::storage_proxy& _proxy;
         std::optional<std::reference_wrapper<service::migration_notifier>> _migration_notifier;
         std::optional<std::reference_wrapper<locator::token_metadata>> _token_metadata;
+        std::optional<std::reference_wrapper<cdc::metadata>> _cdc_metadata;
         std::optional<std::reference_wrapper<locator::snitch_ptr>> _snitch;
         std::optional<std::reference_wrapper<dht::i_partitioner>> _partitioner;
     public:
@@ -117,6 +120,7 @@ struct db_context final {
         builder& with_token_metadata(locator::token_metadata& token_metadata);
         builder& with_snitch(locator::snitch_ptr& snitch);
         builder& with_partitioner(dht::i_partitioner& partitioner);
+        builder& with_cdc_metadata(cdc::metadata&);
 
         db_context build();
     };
@@ -136,7 +140,5 @@ enum class column_op : int8_t {
 };
 
 seastar::sstring log_name(const seastar::sstring& table_name);
-
-seastar::sstring desc_name(const seastar::sstring& table_name);
 
 } // namespace cdc

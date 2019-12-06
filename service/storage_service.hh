@@ -209,6 +209,10 @@ public:
         return _token_metadata;
     }
 
+    cdc::metadata& get_cdc_metadata() {
+        return _cdc_metadata;
+    }
+
     const service::migration_notifier& get_migration_notifier() const {
         return _mnotifier.local();
     }
