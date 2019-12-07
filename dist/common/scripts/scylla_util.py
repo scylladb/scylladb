@@ -367,7 +367,7 @@ def is_gentoo_variant():
     return ('gentoo' in os_release['ID'])
 
 def redhat_version():
-    return int(os_release['VERSION_ID'])
+    return os_release['VERSION_ID']
 
 def is_ec2():
     if os.path.exists('/sys/hypervisor/uuid'):
