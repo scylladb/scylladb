@@ -24,8 +24,10 @@ import argparse
 import asyncio
 import glob
 import io
+import logging
 import multiprocessing
 import os
+import pathlib
 import signal
 import subprocess
 import sys
@@ -123,6 +125,7 @@ async def run_test(test, options):
     success = False
     process = None
     stdout = None
+    logging.info("Starting test #%d: %s %s", test.id, test.path, " ".join(test.args))
     try:
         process = await asyncio.create_subprocess_exec(
             test.path,
@@ -153,6 +156,7 @@ async def run_test(test, options):
     except Exception as e:
         print('  with error {e}\n'.format(e=e), file=file)
         report_error(e)
+    logging.info("Test #%d %s", test.id, "passed" if success else "failed")
     return (test, success, file.getvalue())
 
 def setup_signal_handlers(loop, signaled):
@@ -251,6 +255,9 @@ def find_tests(options):
         print("Test {} not found".format(options.name))
         sys.exit(1)
 
+    logging.info("Found %d tests, repeat count is %d",
+                 len(tests_to_run), options.repeat)
+
     tests_to_run = [t for t in tests_to_run for _ in range(options.repeat)]
     tests_to_run = [UnitTest(test_no, *t, options) for test_no, t in enumerate(tests_to_run)]
 
@@ -331,9 +338,25 @@ def write_xunit_report(options, results):
     with open(options.xunit, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
+
+def open_log(tmpdir):
+    tmpdir = os.path.abspath(tmpdir)
+    pathlib.Path(tmpdir).mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=os.path.join(tmpdir, "test.py.log"),
+        filemode="w",
+        level=logging.INFO,
+        format="%(asctime)s.%(msecs)03d %(levelname)s> %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.critical("Started %s", " ".join(sys.argv))
+
+
 async def main():
 
     options = parse_cmd_line()
+
+    open_log(options.tmpdir)
 
     tests_to_run = find_tests(options)
     signaled = asyncio.Event()
