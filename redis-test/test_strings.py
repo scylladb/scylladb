@@ -23,6 +23,8 @@ import redis
 import logging
 from util import random_string, connect
 
+from redis.exceptions import ResponseError
+
 logger = logging.getLogger('redis-test')
 
 def test_set_get_delete():
@@ -82,6 +84,24 @@ def test_ping():
 def test_echo():
     r = connect()
     assert r.echo('hello world') == 'hello world'
+
+def test_mset():
+    r = connect()
+    values = {}
+    for i in range(5):
+        key = random_string(10)
+        val = random_string(1000)
+        values[key] = val
+    assert r.mset(values) == True
+
+    # verify all keys were set correctlly
+    for k,v in values.items():
+        assert r.get(k) == v
+
+    logger.debug('test with empty mapping')
+    with pytest.raises(ResponseError) as ex:
+        r.mset({})
+    assert str(ex.value) == "wrong number of arguments for 'mset' command"
 
 def test_select():
     r = connect()
