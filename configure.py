@@ -1283,6 +1283,7 @@ with open(buildfile_tmp, 'w') as f:
         cxx = {cxx}
         cxxflags = {user_cflags} {warnings} {defines}
         ldflags = {gold_linker_flag} {user_ldflags}
+        ldflags_build = {gold_linker_flag}
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
@@ -1335,6 +1336,10 @@ with open(buildfile_tmp, 'w') as f:
             rule link_stripped.{mode}
               command = $cxx  $ld_flags_{mode} -s $ldflags -o $out $in $libs $libs_{mode}
               description = LINK (stripped) $out
+              pool = link_pool
+            rule link_build.{mode}
+              command = $cxx  $ld_flags_{mode} $ldflags_build -o $out $in $libs $libs_{mode}
+              description = LINK (build) $out
               pool = link_pool
             rule ar.{mode}
               command = rm -f $out; ar cr $out $in; ranlib $out
@@ -1442,7 +1447,7 @@ with open(buildfile_tmp, 'w') as f:
         compiles['$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'] = 'utils/gz/gen_crc_combine_table.cc'
         f.write('build {}: run {}\n'.format('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.cc',
                                             '$builddir/' + mode + '/utils/gz/gen_crc_combine_table'))
-        f.write('build {}: {}.{} {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', regular_link_rule, mode,
+        f.write('build {}: link_build.{} {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
                                                 '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'))
         f.write('   libs = $seastar_libs_{}\n'.format(mode))
         f.write(
