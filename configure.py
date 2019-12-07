@@ -820,13 +820,7 @@ redis = [
         'redis/query_utils.cc',
         'redis/abstract_command.cc',
         'redis/command_factory.cc',
-        'redis/commands/unknown.cc',
-        'redis/commands/ping.cc',
-        'redis/commands/set.cc',
-        'redis/commands/get.cc',
-        'redis/commands/del.cc',
-        'redis/commands/select.cc',
-        'redis/commands/echo.cc',
+        'redis/commands.cc',
         ]
 
 idls = ['idl/gossip_digest.idl.hh',
