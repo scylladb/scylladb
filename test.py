@@ -192,6 +192,13 @@ def parse_cmd_line():
                 tests starting with "mem" in "boost" suite. Default: run all
                 tests in all suites.""",
     )
+    parser.add_argument(
+        "--tmpdir",
+        action="store",
+        default="testlog",
+        help="""Path to temporary test data and log files. The data is
+        further segregated per build mode. Default: ./testlog.""",
+    )
     parser.add_argument('--mode', choices=all_modes, action="append", dest="modes",
                         help="Run only tests for given build mode(s)")
     parser.add_argument('--repeat', action="store", default="1", type=int,
