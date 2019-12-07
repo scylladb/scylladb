@@ -21,13 +21,7 @@
 
 #include "redis/command_factory.hh"
 #include "service/storage_proxy.hh"
-#include "redis/commands/unknown.hh"
-#include "redis/commands/ping.hh"
-#include "redis/commands/get.hh"
-#include "redis/commands/set.hh"
-#include "redis/commands/del.hh"
-#include "redis/commands/select.hh"
-#include "redis/commands/echo.hh"
+#include "redis/commands.hh"
 #include "log.hh"
 
 namespace redis {
