@@ -67,11 +67,12 @@ def colorformat(msg, **kwargs):
 
 def status_to_string(success):
     if success:
-        status = colorformat("{green}PASSED{nocolor}") if os.isatty(sys.stdout.fileno()) else "PASSED"
+        status = colorformat("{green}[ PASS ]{nocolor}") if os.isatty(sys.stdout.fileno()) else "[ PASS ]"
     else:
-        status = colorformat("{red}FAILED{nocolor}") if os.isatty(sys.stdout.fileno()) else "FAILED"
+        status = colorformat("{red}[ FAIL ]{nocolor}") if os.isatty(sys.stdout.fileno()) else "[ FAIL ]"
 
     return status
+
 
 class UnitTest:
     standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0'.split()
@@ -99,13 +100,29 @@ class UnitTest:
             self.args = boost_args + self.args
 
 
+def print_start_blurb():
+    print("="*80)
+    print("{:7s} {:50s} {:^8s} {:8s}".format("[N/TOTAL]", "TEST", "MODE", "RESULT"))
+    print("-"*78)
+
+
+def print_end_blurb(verbose):
+    if not verbose:
+        sys.stdout.write('\n')
+    print("-"*78)
+
+
 def print_progress(test, success, cookie, verbose):
     if isinstance(cookie, int):
         cookie = (0, 1, cookie)
 
     last_len, n, n_total = cookie
-    msg = "[{}/{}] {} {} {}".format(n, n_total, status_to_string(success), test.path, ' '.join(test.args))
-    if verbose is False and sys.stdout.isatty():
+    msg = "{:9s} {:50s} {:^8s} {:8s}".format(
+        "[{}/{}]".format(n, n_total),
+        test.name, test.mode[:8],
+        status_to_string(success)
+    )
+    if verbose is False:
         print('\r' + ' ' * last_len, end='')
         last_len = len(msg)
         print('\r' + msg, end='')
@@ -219,6 +236,9 @@ def parse_cmd_line():
                         help="Name of a file to write results of non-boost tests to in xunit format")
     args = parser.parse_args()
 
+    if not sys.stdout.isatty():
+        args.verbose = True
+
     if not args.modes:
         out = subprocess.Popen(['ninja', 'mode_list'], stdout=subprocess.PIPE).communicate()[0].decode()
         # [1/1] List configured modes
@@ -291,6 +311,7 @@ async def run_all_tests(tests_to_run, signaled, options):
             cookie = print_progress(test, success, cookie, options.verbose)
             if not success:
                 failed_tests.append((test, out))
+    print_start_blurb()
     try:
         for test in tests_to_run:
             # +1 for 'signaled' event
@@ -308,13 +329,13 @@ async def run_all_tests(tests_to_run, signaled, options):
     except asyncio.CancelledError:
         return None, None
 
+    print_end_blurb(options.verbose)
+
     return failed_tests, results
 
 
 def print_summary(failed_tests, total_tests):
-    if not failed_tests:
-        print('\nOK.')
-    else:
+    if failed_tests:
         print('\n\nOutput of the failed tests:')
         for test, out in failed_tests:
             print("Test {} {} failed:\n{}".format(test.path, ' '.join(test.args), out))
@@ -322,6 +343,7 @@ def print_summary(failed_tests, total_tests):
         for test, _ in failed_tests:
             print('  {} {}'.format(test.path, ' '.join(test.args)))
         print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), total_tests))
+
 
 def write_xunit_report(options, results):
     unit_results = [r for r in results if r[0].kind != 'boost']
