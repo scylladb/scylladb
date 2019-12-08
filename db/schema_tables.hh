@@ -110,7 +110,7 @@ schema_ptr view_virtual_columns();
 schema_ptr dropped_columns();
 schema_ptr indexes();
 schema_ptr tables();
-schema_ptr scylla_tables();
+schema_ptr scylla_tables(schema_features features = schema_features::full());
 schema_ptr views();
 schema_ptr computed_columns();
 
@@ -155,6 +155,7 @@ future<> save_system_keyspace_schema();
 future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features);
 
 future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features);
+std::vector<mutation> adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features);
 
 future<schema_result_value_type>
 read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name);

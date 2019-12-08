@@ -94,6 +94,7 @@ void migration_manager::init_messaging_service()
 
     _feature_listeners.push_back(ss.cluster_supports_view_virtual_columns().when_enabled(update_schema));
     _feature_listeners.push_back(ss.cluster_supports_digest_insensitive_to_expiry().when_enabled(update_schema));
+    _feature_listeners.push_back(ss.cluster_supports_cdc().when_enabled(update_schema));
 
     auto& ms = netw::get_local_messaging_service();
     ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm, rpc::optional<std::vector<canonical_mutation>> cm) {
@@ -904,8 +905,9 @@ future<> migration_manager::announce(std::vector<mutation> mutations, bool annou
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
     netw::messaging_service::msg_addr id{endpoint, 0};
-    auto fm = std::vector<frozen_mutation>(schema.begin(), schema.end());
-    auto cm = std::vector<canonical_mutation>(schema.begin(), schema.end());
+    auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, get_local_storage_service().cluster_schema_features());
+    auto fm = std::vector<frozen_mutation>(adjusted_schema.begin(), adjusted_schema.end());
+    auto cm = std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end());
     return netw::get_local_messaging_service().send_definitions_update(id, std::move(fm), std::move(cm));
 }
 
