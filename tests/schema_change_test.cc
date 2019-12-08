@@ -676,7 +676,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
         utils::UUID("1d91ad22-ea7c-3e7f-9557-87f0f3bb94d7"),
         utils::UUID("2dcd4a37-cbb5-399b-b3c9-8eb1398b096b")
     };
-    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS"}, std::move(expected_digests), [] (cql_test_env& e) {});
+    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS", "CDC"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
@@ -691,7 +691,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
         utils::UUID("d58e5214-516e-3d0b-95b5-01ab71584a8d"),
         utils::UUID("e1b50bed-2ab8-3759-92c7-1f4288046ae6")
     };
-    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test_computed_columns", std::set<sstring>{}, std::move(expected_digests), [] (cql_test_env& e) {});
+    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test_computed_columns", std::set<sstring>{"CDC"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
@@ -708,7 +708,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./tests/sstables/schema_digest_with_functions_test",
-        std::set<sstring>{},
+        std::set<sstring>{"CDC"},
         std::move(expected_digests),
         [] (cql_test_env& e) {
             e.execute_cql("create function twice(val int) called on null input returns int language lua as 'return 2 * val';").get();
