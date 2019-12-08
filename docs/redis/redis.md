@@ -362,3 +362,11 @@ we split the key set into 5 different Scylla table. The shared commands
 should operate on these tables in parallel. For instance, DEL command,
 which allows user to remove any key in Redis database, should delete the
 given key from 5 different Scylla tables.
+
+### 5.7 Atomicity Guarantee
+
+* "mset" implementation offers no atomicity guarantee.
+
+https://redis.io/commands/mset explains that "all given keys are set at once.
+It is not possible for clients to see that some of the keys were updated while
+others are unchanged." - but this is not promised by this implementation.
