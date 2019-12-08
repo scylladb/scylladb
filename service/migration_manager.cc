@@ -71,13 +71,14 @@ migration_manager::migration_manager()
 future<> migration_manager::stop()
 {
     mlogger.info("stopping migration service");
-    uninit_messaging_service();
+  return uninit_messaging_service().then([this] {
     return parallel_for_each(_schema_pulls.begin(), _schema_pulls.end(), [] (auto&& e) {
         serialized_action& sp = e.second;
         return sp.join();
     }).finally([this] {
         return _background_tasks.close();
     });
+  });
 }
 
 void migration_manager::init_messaging_service()
@@ -148,12 +149,14 @@ void migration_manager::init_messaging_service()
     });
 }
 
-void migration_manager::uninit_messaging_service()
+future<> migration_manager::uninit_messaging_service()
 {
     auto& ms = netw::get_local_messaging_service();
-    ms.unregister_migration_request();
-    ms.unregister_definitions_update();
-    ms.unregister_schema_check();
+    return when_all_succeed(
+        ms.unregister_migration_request(),
+        ms.unregister_definitions_update(),
+        ms.unregister_schema_check()
+    );
 }
 
 void migration_manager::register_listener(migration_listener* listener)

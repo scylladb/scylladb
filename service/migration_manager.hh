@@ -166,7 +166,7 @@ public:
 
     void init_messaging_service();
 private:
-    void uninit_messaging_service();
+    future<> uninit_messaging_service();
 };
 
 extern distributed<migration_manager> _the_migration_manager;

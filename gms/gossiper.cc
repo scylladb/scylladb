@@ -487,14 +487,17 @@ void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
     }
 }
 
-void gossiper::uninit_messaging_service_handler() {
+future<> gossiper::uninit_messaging_service_handler() {
     auto& ms = netw::get_local_messaging_service();
-    ms.unregister_gossip_echo();
-    ms.unregister_gossip_shutdown();
-    ms.unregister_gossip_digest_syn();
-    ms.unregister_gossip_digest_ack();
-    ms.unregister_gossip_digest_ack2();
-    _ms_registered = false;
+    return when_all_succeed(
+        ms.unregister_gossip_echo(),
+        ms.unregister_gossip_shutdown(),
+        ms.unregister_gossip_digest_syn(),
+        ms.unregister_gossip_digest_ack(),
+        ms.unregister_gossip_digest_ack2()
+    ).then([this] {
+        _ms_registered = false;
+    });
 }
 
 future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
@@ -1959,8 +1962,8 @@ future<> gossiper::do_stop_gossiping() {
                 if (engine().cpu_id() == 0) {
                     g.fd().unregister_failure_detection_event_listener(&g);
                 }
-                g.uninit_messaging_service_handler();
                 g._features_condvar.broken();
+                return g.uninit_messaging_service_handler();
             });
         }).get();
         logger.info("Gossip is now stopped");

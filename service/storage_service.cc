@@ -1679,7 +1679,7 @@ future<> storage_service::gossip_snitch_info() {
 
 future<> storage_service::stop() {
     return with_semaphore(_feature_listeners_sem, 1, [this] {
-        uninit_messaging_service();
+        return uninit_messaging_service();
     }).then([this] {
         return _service_memory_limiter.wait(_service_memory_total); // make sure nobody uses the semaphore
     });
@@ -3229,9 +3229,9 @@ void storage_service::init_messaging_service() {
     });
 }
 
-void storage_service::uninit_messaging_service() {
+future<> storage_service::uninit_messaging_service() {
     auto& ms = netw::get_local_messaging_service();
-    ms.unregister_replication_finished();
+    return ms.unregister_replication_finished();
 }
 
 void storage_service::do_isolate_on_error(disk_error type)

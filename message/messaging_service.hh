@@ -267,6 +267,8 @@ public:
     future<> init_local_preferred_ip_cache();
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
 
+    future<> unregister_handler(messaging_verb verb);
+
     // Wrapper for PREPARE_MESSAGE verb
     void register_prepare_message(std::function<future<streaming::prepare_message> (const rpc::client_info& cinfo,
             streaming::prepare_message msg, UUID plan_id, sstring description, rpc::optional<streaming::stream_reason> reason)>&& func);
@@ -310,94 +312,94 @@ public:
 
     // Wrapper for REPAIR_CHECKSUM_RANGE verb
     void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version)>&& func);
-    void unregister_repair_checksum_range();
+    future<> unregister_repair_checksum_range();
     future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, dht::token_range range, repair_checksum hash_version);
 
     // Wrapper for REPAIR_GET_FULL_ROW_HASHES
     void register_repair_get_full_row_hashes(std::function<future<std::unordered_set<repair_hash>> (const rpc::client_info& cinfo, uint32_t repair_meta_id)>&& func);
-    void unregister_repair_get_full_row_hashes();
+    future<> unregister_repair_get_full_row_hashes();
     future<std::unordered_set<repair_hash>> send_repair_get_full_row_hashes(msg_addr id, uint32_t repair_meta_id);
 
     // Wrapper for REPAIR_GET_COMBINED_ROW_HASH
     void register_repair_get_combined_row_hash(std::function<future<get_combined_row_hash_response> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary)>&& func);
-    void unregister_repair_get_combined_row_hash();
+    future<> unregister_repair_get_combined_row_hash();
     future<get_combined_row_hash_response> send_repair_get_combined_row_hash(msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary);
 
     // Wrapper for REPAIR_GET_SYNC_BOUNDARY
     void register_repair_get_sync_boundary(std::function<future<get_sync_boundary_response> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary)>&& func);
-    void unregister_repair_get_sync_boundary();
+    future<> unregister_repair_get_sync_boundary();
     future<get_sync_boundary_response> send_repair_get_sync_boundary(msg_addr id, uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary);
 
     // Wrapper for REPAIR_GET_ROW_DIFF
     void register_repair_get_row_diff(std::function<future<repair_rows_on_wire> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::unordered_set<repair_hash> set_diff, bool needs_all_rows)>&& func);
-    void unregister_repair_get_row_diff();
+    future<> unregister_repair_get_row_diff();
     future<repair_rows_on_wire> send_repair_get_row_diff(msg_addr id, uint32_t repair_meta_id, std::unordered_set<repair_hash> set_diff, bool needs_all_rows);
 
     // Wrapper for REPAIR_PUT_ROW_DIFF
     void register_repair_put_row_diff(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, repair_rows_on_wire row_diff)>&& func);
-    void unregister_repair_put_row_diff();
+    future<> unregister_repair_put_row_diff();
     future<> send_repair_put_row_diff(msg_addr id, uint32_t repair_meta_id, repair_rows_on_wire row_diff);
 
     // Wrapper for REPAIR_ROW_LEVEL_START
     void register_repair_row_level_start(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version)>&& func);
-    void unregister_repair_row_level_start();
+    future<> unregister_repair_row_level_start();
     future<> send_repair_row_level_start(msg_addr id, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version);
 
     // Wrapper for REPAIR_ROW_LEVEL_STOP
     void register_repair_row_level_stop(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range)>&& func);
-    void unregister_repair_row_level_stop();
+    future<> unregister_repair_row_level_stop();
     future<> send_repair_row_level_stop(msg_addr id, uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range);
 
     // Wrapper for REPAIR_GET_ESTIMATED_PARTITIONS
     void register_repair_get_estimated_partitions(std::function<future<uint64_t> (const rpc::client_info& cinfo, uint32_t repair_meta_id)>&& func);
-    void unregister_repair_get_estimated_partitions();
+    future<> unregister_repair_get_estimated_partitions();
     future<uint64_t> send_repair_get_estimated_partitions(msg_addr id, uint32_t repair_meta_id);
 
     // Wrapper for REPAIR_SET_ESTIMATED_PARTITIONS
     void register_repair_set_estimated_partitions(std::function<future<> (const rpc::client_info& cinfo, uint32_t repair_meta_id, uint64_t estimated_partitions)>&& func);
-    void unregister_repair_set_estimated_partitions();
+    future<> unregister_repair_set_estimated_partitions();
     future<> send_repair_set_estimated_partitions(msg_addr id, uint32_t repair_meta_id, uint64_t estimated_partitions);
 
     // Wrapper for REPAIR_GET_DIFF_ALGORITHMS
     void register_repair_get_diff_algorithms(std::function<future<std::vector<row_level_diff_detect_algorithm>> (const rpc::client_info& cinfo)>&& func);
-    void unregister_repair_get_diff_algorithms();
+    future<> unregister_repair_get_diff_algorithms();
     future<std::vector<row_level_diff_detect_algorithm>> send_repair_get_diff_algorithms(msg_addr id);
 
     // Wrapper for GOSSIP_ECHO verb
     void register_gossip_echo(std::function<future<> ()>&& func);
-    void unregister_gossip_echo();
+    future<> unregister_gossip_echo();
     future<> send_gossip_echo(msg_addr id);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);
-    void unregister_gossip_shutdown();
+    future<> unregister_gossip_shutdown();
     future<> send_gossip_shutdown(msg_addr id, inet_address from);
 
     // Wrapper for GOSSIP_DIGEST_SYN
     void register_gossip_digest_syn(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_syn)>&& func);
-    void unregister_gossip_digest_syn();
+    future<> unregister_gossip_digest_syn();
     future<> send_gossip_digest_syn(msg_addr id, gms::gossip_digest_syn msg);
 
     // Wrapper for GOSSIP_DIGEST_ACK
     void register_gossip_digest_ack(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_ack)>&& func);
-    void unregister_gossip_digest_ack();
+    future<> unregister_gossip_digest_ack();
     future<> send_gossip_digest_ack(msg_addr id, gms::gossip_digest_ack msg);
 
     // Wrapper for GOSSIP_DIGEST_ACK2
     void register_gossip_digest_ack2(std::function<rpc::no_wait_type (gms::gossip_digest_ack2)>&& func);
-    void unregister_gossip_digest_ack2();
+    future<> unregister_gossip_digest_ack2();
     future<> send_gossip_digest_ack2(msg_addr id, gms::gossip_digest_ack2 msg);
 
     // Wrapper for DEFINITIONS_UPDATE
     void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,
                 rpc::optional<std::vector<canonical_mutation>> cm)>&& func);
-    void unregister_definitions_update();
+    future<> unregister_definitions_update();
     future<> send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm, std::vector<canonical_mutation> cm);
 
     // Wrapper for MIGRATION_REQUEST
     void register_migration_request(std::function<future<rpc::tuple<std::vector<frozen_mutation>, std::vector<canonical_mutation>>> (
                 const rpc::client_info&, rpc::optional<schema_pull_options>)>&& func);
-    void unregister_migration_request();
+    future<> unregister_migration_request();
     future<rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>>> send_migration_request(msg_addr id,
             schema_pull_options options);
 
@@ -406,59 +408,59 @@ public:
     // Wrapper for MUTATION
     void register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);
-    void unregister_mutation();
+    future<> unregister_mutation();
     future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
 
     // Wrapper for COUNTER_MUTATION
     void register_counter_mutation(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info)>&& func);
-    void unregister_counter_mutation();
+    future<> unregister_counter_mutation();
     future<> send_counter_mutation(msg_addr id, clock_type::time_point timeout, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info = std::nullopt);
 
     // Wrapper for MUTATION_DONE
     void register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, rpc::optional<db::view::update_backlog> backlog)>&& func);
-    void unregister_mutation_done();
+    future<> unregister_mutation_done();
     future<> send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id, db::view::update_backlog backlog);
 
     // Wrapper for MUTATION_FAILED
     void register_mutation_failed(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog)>&& func);
-    void unregister_mutation_failed();
+    future<> unregister_mutation_failed();
     future<> send_mutation_failed(msg_addr id, unsigned shard, response_id_type response_id, size_t num_failed, db::view::update_backlog backlog);
 
     // Wrapper for READ_DATA
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
     void register_read_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> digest)>&& func);
-    void unregister_read_data();
+    future<> unregister_read_data();
     future<rpc::tuple<query::result, rpc::optional<cache_temperature>>> send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da);
 
     // Wrapper for GET_SCHEMA_VERSION
     void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
-    void unregister_get_schema_version();
+    future<> unregister_get_schema_version();
     future<frozen_schema> send_get_schema_version(msg_addr, table_schema_version);
 
     // Wrapper for SCHEMA_CHECK
     void register_schema_check(std::function<future<utils::UUID>()>&& func);
-    void unregister_schema_check();
+    future<> unregister_schema_check();
     future<utils::UUID> send_schema_check(msg_addr);
 
     // Wrapper for READ_MUTATION_DATA
     void register_read_mutation_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr)>&& func);
-    void unregister_read_mutation_data();
+    future<> unregister_read_mutation_data();
     future<rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>>> send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr);
 
     // Wrapper for READ_DIGEST
     void register_read_digest(std::function<future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> digest)>&& func);
-    void unregister_read_digest();
+    future<> unregister_read_digest();
     future<rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>>> send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da);
 
     // Wrapper for TRUNCATE
     void register_truncate(std::function<future<>(sstring, sstring)>&& func);
-    void unregister_truncate();
+    future<> unregister_truncate();
     future<> send_truncate(msg_addr, std::chrono::milliseconds, sstring, sstring);
 
     // Wrapper for REPLICATION_FINISHED verb
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);
-    void unregister_replication_finished();
+    future<> unregister_replication_finished();
     future<> send_replication_finished(msg_addr id, inet_address from);
 
     // Wrappers for PAXOS verbs
@@ -466,7 +468,7 @@ public:
                 const rpc::client_info&, rpc::opt_time_point, query::read_command cmd, partition_key key, utils::UUID ballot,
                 bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info>)>&& func);
 
-    void unregister_paxos_prepare();
+    future<> unregister_paxos_prepare();
 
     future<service::paxos::prepare_response> send_paxos_prepare(
             gms::inet_address peer, clock_type::time_point timeout, const query::read_command& cmd,
@@ -476,7 +478,7 @@ public:
     void register_paxos_accept(std::function<future<bool>(const rpc::client_info&, rpc::opt_time_point,
             service::paxos::proposal proposal, std::optional<tracing::trace_info>)>&& func);
 
-    void unregister_paxos_accept();
+    future<> unregister_paxos_accept();
 
     future<bool> send_paxos_accept(gms::inet_address peer, clock_type::time_point timeout,
             const service::paxos::proposal& proposal, std::optional<tracing::trace_info> trace_info);
@@ -485,7 +487,7 @@ public:
                 rpc::opt_time_point, service::paxos::proposal decision, std::vector<inet_address> forward, inet_address reply_to,
                 unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info)>&& func);
 
-    void unregister_paxos_learn();
+    future<> unregister_paxos_learn();
 
     future<> send_paxos_learn(msg_addr id, clock_type::time_point timeout, const service::paxos::proposal& decision,
             std::vector<inet_address> forward, inet_address reply_to, unsigned shard, response_id_type response_id,
@@ -493,7 +495,7 @@ public:
 
     void register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);
-    void unregister_hint_mutation();
+    future<> unregister_hint_mutation();
     future<> send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
 
