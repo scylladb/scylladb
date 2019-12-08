@@ -68,6 +68,11 @@ future<> write_strings(service::storage_proxy& proxy, redis::redis_options& opti
     return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit);
 }
 
+future<> write_strings_pairs(service::storage_proxy& proxy, redis::redis_options& options, std::map<bytes, bytes>&& data_map, long ttl, service_permit permit) {
+	return parallel_for_each(data_map.begin(), data_map.end(), [&proxy, &options, ttl, permit] (auto &pair) {
+		return write_strings(proxy, options, to_bytes(pair.first), to_bytes(pair.second), ttl, permit);
+	});
+}
 
 mutation make_tombstone(service::storage_proxy& proxy, const redis_options& options, const sstring& cf_name, const bytes& key) {
     auto schema = get_schema(proxy, options.get_keyspace_name(), cf_name);

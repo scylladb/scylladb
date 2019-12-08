@@ -93,6 +93,20 @@ public:
     virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
 };
 
+class mset: public abstract_command {
+    std::map<bytes, bytes> _data_map;
+    long _ttl = 0;
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    mset(bytes&& name, std::map<bytes, bytes>&& data_map, long ttl)
+        : abstract_command(std::move(name))
+        , _data_map(std::move(data_map))
+        , _ttl(ttl) {
+    }
+    mset(bytes&& name, std::map<bytes, bytes>&& data_map) : mset(std::move(name), std::move(data_map), 0) {}
+    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
 }
 
 }

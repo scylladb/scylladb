@@ -129,6 +129,26 @@ future<redis_message> echo::execute(service::storage_proxy&, redis::redis_option
     return redis_message::make_strings_result(std::move(_str));
 }
 
+shared_ptr<abstract_command> mset::prepare(service::storage_proxy& proxy, request&& req) {
+    std::map<bytes, bytes> data_map;
+    if (req.arguments_size() == 0 || req.arguments_size() % 2 != 0) {
+        throw wrong_number_of_arguments_exception(req._command);
+    }
+
+    for (unsigned i = 0; i < req.arguments_size() / 2; i++) {
+        data_map.insert(std::make_pair(req._args[2 * i], req._args[2 * i + 1]));
+    }
+
+    return seastar::make_shared<mset> (std::move(req._command), std::move(data_map), 0);
+}
+
+future<redis_message> mset::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
+    return redis::write_strings_pairs(proxy, options, std::move(_data_map), _ttl, permit).then([] () {
+        return redis_message::ok();
+    });
+}
+
+
 }
 
 }
