@@ -82,6 +82,7 @@ class UnitTest:
         if opts is None:
             opts = UnitTest.seastar_args
         self.id = test_no
+        # Name with test suite name
         self.name = name
         # Name within the suite
         self.shortname = os.path.basename(name)
@@ -89,13 +90,13 @@ class UnitTest:
         self.kind = kind
         self.path = os.path.join("build", self.mode, "test", self.name)
         self.args = opts.split() + UnitTest.standard_args
+        # Unique file name, which is also readable by human, as filename prefix
+        self.uname = "{}.{}.{}".format(self.mode, self.shortname, self.id)
 
         if self.kind == 'boost':
             boost_args = []
-            if options.jenkins:
-                mode = 'debug' if self.mode == 'debug' else 'release'
-                xmlout = options.jenkins + "." + mode + "." + self.shortname + "." + str(self.id) + ".boost.xml"
-                boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
+            xmlout = os.path.join(options.jenkins, self.uname + ".boost.xml")
+            boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
             boost_args += ['--']
             self.args = boost_args + self.args
 
@@ -226,14 +227,21 @@ def parse_cmd_line():
                         help="number of times to repeat test execution")
     parser.add_argument('--timeout', action="store", default="3000", type=int,
                         help="timeout value for test execution")
-    parser.add_argument('--jenkins', action="store",
-                        help="jenkins output file prefix")
+    parser.add_argument(
+        "--jenkins",
+        action="store",
+        help="""Jenkins output file prefix. Default: ${tmpdir}/xml"""
+    )
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
     parser.add_argument('--jobs', '-j', action="store", default=default_num_jobs, type=int,
                         help="Number of jobs to use for running the tests")
-    parser.add_argument('--xunit', action="store",
-                        help="Name of a file to write results of non-boost tests to in xunit format")
+    parser.add_argument(
+        "--xunit",
+        action="store",
+        help="""Name of a file to write results of non-boost tests to in
+        xunit format. Default: ${tmpdir}/xml/xunit.xml"""
+    )
     args = parser.parse_args()
 
     if not sys.stdout.isatty():
@@ -244,6 +252,16 @@ def parse_cmd_line():
         # [1/1] List configured modes
         # debug release dev
         args.modes = out.split('\n')[1].split(' ')
+
+    args.tmpdir = os.path.abspath(args.tmpdir)
+    pathlib.Path(args.tmpdir).mkdir(parents=True, exist_ok=True)
+    if not args.jenkins or not args.xunit:
+        xmldir = os.path.join(args.tmpdir, "xml")
+        pathlib.Path(xmldir).mkdir(parents=True, exist_ok=True)
+        if args.jenkins is None:
+            args.jenkins = xmldir
+        if args.xunit is None:
+            args.xunit = os.path.join(xmldir, "xunit.xml")
 
     return args
 
@@ -362,7 +380,6 @@ def write_xunit_report(options, results):
 
 
 def open_log(tmpdir):
-    tmpdir = os.path.abspath(tmpdir)
     pathlib.Path(tmpdir).mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         filename=os.path.join(tmpdir, "test.py.log"),
@@ -392,8 +409,7 @@ async def main():
 
     print_summary(failed_tests, len(tests_to_run))
 
-    if options.xunit:
-        write_xunit_report(options, results)
+    write_xunit_report(options, results)
 
     return 0 if not failed_tests else -1
 
