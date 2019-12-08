@@ -275,8 +275,8 @@ def find_tests(options):
         print("Test {} not found".format(options.name))
         sys.exit(1)
 
-    logging.info("Found %d tests, repeat count is %d",
-                 len(tests_to_run), options.repeat)
+    logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
+                 len(tests_to_run), options.repeat, options.jobs)
 
     tests_to_run = [t for t in tests_to_run for _ in range(options.repeat)]
     tests_to_run = [UnitTest(test_no, *t, options) for test_no, t in enumerate(tests_to_run)]
