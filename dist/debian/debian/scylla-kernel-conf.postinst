@@ -10,6 +10,7 @@ else
     # expect failures in virtualized environments
     sysctl -p/usr/lib/sysctl.d/99-scylla-sched.conf || :
     sysctl -p/usr/lib/sysctl.d/99-scylla-aio.conf || :
+    sysctl -p/usr/lib/sysctl.d/99-scylla-vm.conf || :
 fi
 
 #DEBHELPER#
