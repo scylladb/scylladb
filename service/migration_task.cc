@@ -51,7 +51,7 @@ namespace service {
 
 static logging::logger mlogger("migration_task");
 
-future<> migration_task::run_may_throw(distributed<service::storage_proxy>& proxy, const gms::inet_address& endpoint)
+future<> migration_task::run_may_throw(const gms::inet_address& endpoint)
 {
     if (!gms::get_local_gossiper().is_alive(endpoint)) {
         mlogger.warn("Can't send migration request: node {} is down.", endpoint);

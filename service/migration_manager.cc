@@ -269,7 +269,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
 
 future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint)
 {
-    return service::migration_task::run_may_throw(get_storage_proxy(), endpoint);
+    return service::migration_task::run_may_throw(endpoint);
 }
 
 future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
