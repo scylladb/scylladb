@@ -93,6 +93,7 @@ class UnitTest:
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}.{}".format(self.mode, self.shortname, self.id)
         self.log_filename = os.path.join(options.tmpdir, self.uname + ".log")
+        self.success = None
 
         if self.kind == 'boost':
             boost_args = []
@@ -114,7 +115,7 @@ def print_end_blurb(verbose):
     print("-"*78)
 
 
-def print_progress(test, success, cookie, verbose):
+def print_progress(test, cookie, verbose):
     if isinstance(cookie, int):
         cookie = (0, 1, cookie)
 
@@ -122,7 +123,7 @@ def print_progress(test, success, cookie, verbose):
     msg = "{:9s} {:50s} {:^8s} {:8s}".format(
         "[{}/{}]".format(n, n_total),
         test.name, test.mode[:8],
-        status_to_string(success)
+        status_to_string(test.success)
     )
     if verbose is False:
         print('\r' + ' ' * last_len, end='')
@@ -141,7 +142,6 @@ async def run_test(test, options):
         print('=== stdout START ===', file=file)
         print(out, file=file)
         print('=== stdout END ===', file=file)
-    success = False
     process = None
     stdout = None
     logging.info("Starting test #%d: %s %s", test.id, test.path, " ".join(test.args))
@@ -159,7 +159,7 @@ async def run_test(test, options):
                 preexec_fn=os.setsid,
             )
         stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
-        success = process.returncode == 0
+        test.success = process.returncode == 0
         if process.returncode != 0:
             print('  with error code {code}\n'.format(code=process.returncode), file=file)
             report_error(stdout.decode(encoding='UTF-8'))
@@ -176,8 +176,8 @@ async def run_test(test, options):
     except Exception as e:
         print('  with error {e}\n'.format(e=e), file=file)
         report_error(e)
-    logging.info("Test #%d %s", test.id, "passed" if success else "failed")
-    return (test, success)
+    logging.info("Test #%d %s", test.id, "passed" if test.success else "failed")
+    return test
 
 def setup_signal_handlers(loop, signaled):
 
@@ -312,8 +312,6 @@ def find_tests(options):
 
 
 async def run_all_tests(tests_to_run, signaled, options):
-    failed_tests = []
-    results = []
     cookie = len(tests_to_run)
     signaled_task = asyncio.create_task(signaled.wait())
     pending = set([signaled_task])
@@ -333,11 +331,7 @@ async def run_all_tests(tests_to_run, signaled, options):
             result = coro.result()
             if isinstance(result, bool):
                 continue    # skip signaled task result
-            results.append(result)
-            test, success = result
-            cookie = print_progress(test, success, cookie, options.verbose)
-            if not success:
-                failed_tests.append(test)
+            cookie = print_progress(result, cookie, options.verbose)
     print_start_blurb()
     try:
         for test in tests_to_run:
@@ -354,11 +348,9 @@ async def run_all_tests(tests_to_run, signaled, options):
             await reap(done, pending, signaled)
 
     except asyncio.CancelledError:
-        return None, None
+        return
 
     print_end_blurb(options.verbose)
-
-    return failed_tests, results
 
 
 def read_log(log_filename):
@@ -373,7 +365,7 @@ def read_log(log_filename):
         return "===Error reading log {}===".format(e)
 
 
-def print_summary(failed_tests, total_tests):
+def print_summary(tests, failed_tests):
     if failed_tests:
         print('\n\nOutput of the failed tests:')
         for test in failed_tests:
@@ -382,19 +374,19 @@ def print_summary(failed_tests, total_tests):
         print('\n\nThe following test(s) have failed:')
         for test in failed_tests:
             print('  {} {}'.format(test.path, ' '.join(test.args)))
-        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), total_tests))
+        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(tests)))
 
 
-def write_xunit_report(options, results):
-    unit_results = [r for r in results if r[0].kind != 'boost']
-    num_unit_failed = sum(1 for r in unit_results if not r[1])
+def write_xunit_report(tests, options):
+    unit_tests = [t for t in tests if t.kind == "unit"]
+    num_unit_failed = sum(1 for t in unit_tests if not t.success)
 
     xml_results = ET.Element('testsuite', name='non-boost tests',
-            tests=str(len(unit_results)), failures=str(num_unit_failed), errors='0')
+            tests=str(len(unit_tests)), failures=str(num_unit_failed), errors='0')
 
-    for test, success in unit_results:
+    for test in unit_tests:
         xml_res = ET.SubElement(xml_results, 'testcase', name=test.path)
-        if not success:
+        if not test.success:
             xml_fail = ET.SubElement(xml_res, 'failure')
             xml_fail.text = "Test {} {} failed:".format(test.path, " ".join(test.args))
             xml_fail.text += read_log(test.log_filename)
@@ -420,19 +412,21 @@ async def main():
 
     open_log(options.tmpdir)
 
-    tests_to_run = find_tests(options)
+    tests = find_tests(options)
     signaled = asyncio.Event()
 
     setup_signal_handlers(asyncio.get_event_loop(), signaled)
 
-    failed_tests, results = await run_all_tests(tests_to_run, signaled, options)
+    await run_all_tests(tests, signaled, options)
 
     if signaled.is_set():
         return -signaled.signo
 
-    print_summary(failed_tests, len(tests_to_run))
+    failed_tests = [t for t in tests if t.success is not True]
 
-    write_xunit_report(options, results)
+    print_summary(tests, failed_tests)
+
+    write_xunit_report(tests, options)
 
     return 0 if not failed_tests else -1
 
