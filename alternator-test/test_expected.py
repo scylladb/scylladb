@@ -524,7 +524,6 @@ def test_update_expected_1_null(test_table_s):
         )
 
 # Tests for Expected with ComparisonOperator = "CONTAINS":
-@pytest.mark.xfail(reason="ComparisonOperator=CONTAINS in Expected not yet implemented")
 def test_update_expected_1_contains(test_table_s):
     # true cases. CONTAINS can be used for two unrelated things: check substrings
     # (in string or binary) and membership (in set or list).
