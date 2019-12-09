@@ -156,7 +156,7 @@ struct table {
             streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         rd.push_back(cache.make_reader(s.schema(), r->pr, r->slice, default_priority_class(), nullptr,
             streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
-        r->rd = make_combined_reader(s.schema(), std::move(rd), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+        r->rd = make_combined_reader_for_tests(s.schema(), std::move(rd), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
         return r;
     }
 

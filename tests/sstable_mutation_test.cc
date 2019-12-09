@@ -343,7 +343,7 @@ future<> test_range_reads(sstables::test_env& env, const dht::token& min, const 
         auto stop = make_lw_shared<bool>(false);
         return do_with(dht::partition_range::make(dht::ring_position::starting_at(min),
                                                               dht::ring_position::ending_at(max)), [&, sstp, s] (auto& pr) {
-            auto mutations = make_lw_shared<flat_mutation_reader>(sstp->read_range_rows_flat(s, pr));
+            auto mutations = make_lw_shared<flat_mutation_reader>(sstp->read_range_rows_flat_for_tests(s, pr));
             return do_until([stop] { return *stop; },
                 // Note: The data in the following lambda, including
                 // "mutations", continues to live until after the last
@@ -409,7 +409,7 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
         mt->apply(m);
     }
 
-    sst->write_components(mt->make_flat_reader(s), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
+    sst->write_components(mt->make_flat_reader_for_tests(s), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();
 
     return sst;
@@ -560,7 +560,7 @@ SEASTAR_THREAD_TEST_CASE(broken_ranges_collection) {
     sstables::test_env env;
     env.reusable_sst(peers_schema(), "tests/sstables/broken_ranges", 2).then([] (auto sstp) {
         auto s = peers_schema();
-        auto reader = make_lw_shared<flat_mutation_reader>(sstp->as_mutation_source().make_reader(s, query::full_partition_range));
+        auto reader = make_lw_shared<flat_mutation_reader>(sstp->as_mutation_source().make_reader_for_tests(s, query::full_partition_range));
         return repeat([s, reader] {
             return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([s, reader] (mutation_opt mut) {
                 auto key_equal = [s, &mut] (sstring ip) {
@@ -1011,7 +1011,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
                                 sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader_for_tests(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
         assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
     });
@@ -1064,7 +1064,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader_for_tests(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
@@ -1073,7 +1073,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
 
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck1})).build();
-            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader_for_tests(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1124,7 +1124,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader_for_tests(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
@@ -1133,7 +1133,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
 
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck1})).build();
-            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader_for_tests(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1181,12 +1181,12 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
                                               sstables::sstable::format_types::big);
             sstable_writer_config cfg;
             cfg.promoted_index_block_size = 1;
-            sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+            sst->write_components(mt->make_flat_reader_for_tests(s), 1, s, cfg, mt->get_encoding_stats()).get();
             sst->load().get();
 
             {
                 auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck})).build();
-                assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
+                assert_that(sst->as_mutation_source().make_reader_for_tests(s, dht::partition_range::make_singular(dk), slice))
                         .produces(m)
                         .produces_end_of_stream();
             }
@@ -1226,12 +1226,12 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(s), 1, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader_for_tests(s), 1, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
             auto slice = partition_slice_builder(*s).build();
-            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader_for_tests(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1267,7 +1267,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader_for_tests(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         assert_that(get_index_reader(sst)).is_empty(*s);
@@ -1308,12 +1308,12 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.correctly_serialize_non_compound_range_tombstones = false;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader_for_tests(s), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
             auto slice = partition_slice_builder(*s).build();
-            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader_for_tests(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1360,12 +1360,12 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sst->write_components(make_combined_reader(s,
-            mt1->make_flat_reader(s),
-            mt2->make_flat_reader(s)), 1, s, sstable_writer_config{}, encoding_stats{}).get();
+        sst->write_components(make_combined_reader_for_tests(s,
+            mt1->make_flat_reader_for_tests(s),
+            mt2->make_flat_reader_for_tests(s)), 1, s, sstable_writer_config{}, encoding_stats{}).get();
         sst->load().get();
 
-        assert_that(sst->as_mutation_source().make_reader(s))
+        assert_that(sst->as_mutation_source().make_reader_for_tests(s))
             .produces(m1 + m2)
             .produces_end_of_stream();
       }
@@ -1406,7 +1406,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             auto before = index_accesses();
 
             {
-                assert_that(ms.make_reader(s))
+                assert_that(ms.make_reader_for_tests(s))
                     .produces(m1)
                     .produces(m2)
                     .produces_end_of_stream();
@@ -1546,17 +1546,17 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
                                       1 /* generation */,
                                       sstable_version_types::ka,
                                       sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(s), 1, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
+    sst->write_components(mt->make_flat_reader_for_tests(s), 1, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
     sst->load().get();
 
     auto pr = dht::partition_range::make_singular(small_keys[0]);
 
-    auto mt_reader = mt->make_flat_reader(s, pr);
+    auto mt_reader = mt->make_flat_reader_for_tests(s, pr);
     mutation expected = *read_mutation_from_flat_mutation_reader(mt_reader, db::no_timeout).get0();
 
     auto t0 = std::chrono::steady_clock::now();
     auto large_allocs_before = memory::stats().large_allocations();
-    auto sst_reader = sst->as_mutation_source().make_reader(s, pr);
+    auto sst_reader = sst->as_mutation_source().make_reader_for_tests(s, pr);
     mutation actual = *read_mutation_from_flat_mutation_reader(sst_reader, db::no_timeout).get0();
     auto large_allocs_after = memory::stats().large_allocations();
     auto duration = std::chrono::steady_clock::now() - t0;
@@ -1588,7 +1588,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
                     mt->apply(m);
                 }
                 created_with_base_schema = env.make_sstable(base, dir.path().string(), gen, version, sstables::sstable::format_types::big);
-                created_with_base_schema->write_components(mt->make_flat_reader(base), base_mutations.size(), base, sstable_writer_config{}, mt->get_encoding_stats()).get();
+                created_with_base_schema->write_components(mt->make_flat_reader_for_tests(base), base_mutations.size(), base, sstable_writer_config{}, mt->get_encoding_stats()).get();
                 created_with_base_schema->load().get();
 
                 created_with_changed_schema = env.make_sstable(changed, dir.path().string(), gen, version, sstables::sstable::format_types::big);
@@ -1604,14 +1604,14 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
             }
 
             auto mr = assert_that(created_with_base_schema->as_mutation_source()
-                        .make_reader(changed, dht::partition_range::make_open_ended_both_sides(), changed->full_slice()));
+                        .make_reader_for_tests(changed, dht::partition_range::make_open_ended_both_sides(), changed->full_slice()));
             for (auto& m : changed_mutations) {
                 mr.produces(m);
             }
             mr.produces_end_of_stream();
 
             mr = assert_that(created_with_changed_schema->as_mutation_source()
-                    .make_reader(changed, dht::partition_range::make_open_ended_both_sides(), changed->full_slice()));
+                    .make_reader_for_tests(changed, dht::partition_range::make_open_ended_both_sides(), changed->full_slice()));
             for (auto& m : changed_mutations) {
                 mr.produces(m);
             }
@@ -1667,7 +1667,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
         // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
         auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(s), 2, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader_for_tests(s), 2, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
     }
 
     auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
@@ -1762,10 +1762,10 @@ SEASTAR_THREAD_TEST_CASE(test_counter_header_size) {
     sstables::test_env env;
     for (const auto version : all_sstable_versions) {
         auto sst = env.make_sstable(s, dir.path().string(), 1, version, sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(s), 1, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader_for_tests(s), 1, s, sstable_writer_config{}, mt->get_encoding_stats()).get();
         sst->load().get();
 
-        assert_that(sst->as_mutation_source().make_reader(s))
+        assert_that(sst->as_mutation_source().make_reader_for_tests(s))
             .produces(m)
             .produces_end_of_stream();
     }
@@ -1804,7 +1804,7 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
                 cfg.correctly_serialize_static_compact_in_mc = correctly_serialize;
                 auto ms = make_sstable_mutation_source(env, s, dir.path().string(), muts, cfg, version);
 
-                assert_that(ms.make_reader(s))
+                assert_that(ms.make_reader_for_tests(s))
                     .produces(muts[0])
                     .produces(muts[1])
                     .produces_end_of_stream();

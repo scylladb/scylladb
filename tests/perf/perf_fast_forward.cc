@@ -751,7 +751,8 @@ static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_re
         cf.schema()->full_slice(),
         default_priority_class(),
         nullptr,
-        n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no);
+        n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no,
+        mutation_reader::forwarding::yes);
 
     metrics_snapshot before;
     assert_partition_start(rd);
@@ -791,7 +792,7 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
     int pk = 0;
     auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
                      : query::full_partition_range;
-    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice());
+    auto rd = cf.make_reader_for_tests(cf.schema(), pr, cf.schema()->full_slice());
 
     metrics_snapshot before;
 
@@ -817,7 +818,8 @@ static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1)
         cf.schema()->full_slice(),
         default_priority_class(),
         nullptr,
-        streamed_mutation::forwarding::yes);
+        streamed_mutation::forwarding::yes,
+        mutation_reader::forwarding::yes);
 
     metrics_snapshot before;
     assert_partition_start(rd);
@@ -842,7 +844,7 @@ static test_result slice_rows_by_ck(column_family& cf, int offset = 0, int n_rea
             clustering_key::from_singular(*cf.schema(), offset + n_read - 1)))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), pr, slice);
+    auto rd = cf.make_reader_for_tests(cf.schema(), pr, slice);
     return test_reading_all(rd);
 }
 
@@ -853,7 +855,7 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
     }
 
     auto slice = sb.build();
-    auto rd = cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader_for_tests(cf.schema(),
         query::full_partition_range,
         slice);
 
@@ -893,7 +895,7 @@ static test_result slice_partitions(column_family& cf, const std::vector<dht::de
         dht::partition_range::bound(keys[std::min<size_t>(keys.size(), offset + n_read) - 1], true)
     );
 
-    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice());
+    auto rd = cf.make_reader_for_tests(cf.schema(), pr, cf.schema()->full_slice());
     metrics_snapshot before;
 
     uint64_t fragments = consume_all_with_next_partition(rd);
@@ -1000,7 +1002,8 @@ static test_result test_forwarding_with_restriction(column_family& cf, clustered
         slice,
         default_priority_class(),
         nullptr,
-        streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+        streamed_mutation::forwarding::yes,
+        mutation_reader::forwarding::no);
 
     uint64_t fragments = 0;
     metrics_snapshot before;

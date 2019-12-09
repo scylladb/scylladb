@@ -399,7 +399,7 @@ table::make_sstable_reader(schema_ptr s,
 future<table::const_mutation_partition_ptr>
 table::find_partition(schema_ptr s, const dht::decorated_key& key) const {
     return do_with(dht::partition_range::make_singular(key), [s = std::move(s), this] (auto& range) {
-        return do_with(this->make_reader(s, range), [s] (flat_mutation_reader& reader) {
+        return do_with(this->make_reader_for_tests(s, range), [s] (flat_mutation_reader& reader) {
             return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
                 if (!mo) {
                     return {};
@@ -545,7 +545,7 @@ table::for_all_partitions_slow(schema_ptr s, std::function<bool (const dht::deco
     public:
         bool done() const { return !ok || empty; }
         iteration_state(schema_ptr s, const column_family& cf, std::function<bool (const dht::decorated_key&, const mutation_partition&)>&& func)
-            : reader(cf.make_reader(std::move(s)))
+            : reader(cf.make_reader_for_tests(std::move(s)))
             , func(std::move(func))
         { }
     };

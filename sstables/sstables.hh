@@ -224,16 +224,23 @@ public:
         schema_ptr schema,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        reader_resource_tracker resource_tracker = no_resource_tracking(),
-        tracing::trace_state_ptr trace_state = {},
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
+        const io_priority_class& pc,
+        reader_resource_tracker resource_tracker,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
         read_monitor& monitor = default_read_monitor());
 
-    flat_mutation_reader read_range_rows_flat(schema_ptr schema, const dht::partition_range& range) {
+    flat_mutation_reader read_range_rows_flat_for_tests(
+        schema_ptr schema,
+        const dht::partition_range& range,
+        const query::partition_slice& slice) {
+        return read_range_rows_flat(std::move(schema), range, slice, default_priority_class(), no_resource_tracking(), nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes);
+    }
+
+    flat_mutation_reader read_range_rows_flat_for_tests(schema_ptr schema, const dht::partition_range& range) {
         auto& full_slice = schema->full_slice();
-        return read_range_rows_flat(std::move(schema), range, full_slice);
+        return read_range_rows_flat_for_tests(std::move(schema), range, full_slice);
     }
 
     // read_rows_flat() returns each of the rows in the sstable, in sequence,

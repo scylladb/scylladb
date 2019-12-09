@@ -230,7 +230,7 @@ void test_slice_single_version(mutation& underlying,
 
     try {
         auto range = dht::partition_range::make_singular(DK);
-        auto reader = cache.make_reader(SCHEMA, range, slice);
+        auto reader = cache.make_reader_for_tests(SCHEMA, range, slice);
 
         check_produces_only(DK, std::move(reader), expected_sm_fragments, slice.row_ranges(*SCHEMA, DK.key()));
 

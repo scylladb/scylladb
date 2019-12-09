@@ -71,8 +71,8 @@ public:
 // of the same schema.
 flat_mutation_reader make_combined_reader(schema_ptr schema,
         std::vector<flat_mutation_reader>,
-        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+        streamed_mutation::forwarding fwd_sm,
+        mutation_reader::forwarding fwd_mr);
 flat_mutation_reader make_combined_reader(schema_ptr schema,
         std::unique_ptr<reader_selector>,
         streamed_mutation::forwarding,
@@ -80,8 +80,28 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
 flat_mutation_reader make_combined_reader(schema_ptr schema,
         flat_mutation_reader&& a,
         flat_mutation_reader&& b,
+        streamed_mutation::forwarding fwd_sm,
+        mutation_reader::forwarding fwd_mr);
+
+inline flat_mutation_reader make_combined_reader_for_tests(schema_ptr schema,
+        std::vector<flat_mutation_reader> readers,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) {
+    return make_combined_reader(std::move(schema), std::move(readers), fwd_sm, fwd_mr);
+}
+inline flat_mutation_reader make_combined_reader_for_tests(schema_ptr schema,
+        std::unique_ptr<reader_selector> s,
+        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) {
+    return make_combined_reader(std::move(schema), std::move(s), fwd_sm, fwd_mr);
+}
+inline flat_mutation_reader make_combined_reader_for_tests(schema_ptr schema,
+        flat_mutation_reader&& a,
+        flat_mutation_reader&& b,
+        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) {
+    return make_combined_reader(std::move(schema), std::move(a), std::move(b), fwd_sm, fwd_mr);
+}
 
 template <typename MutationFilter>
 GCC6_CONCEPT(
@@ -273,22 +293,24 @@ public:
         schema_ptr s,
         partition_range range,
         const query::partition_slice& slice,
-        io_priority pc = default_priority_class(),
-        tracing::trace_state_ptr trace_state = nullptr,
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
+        io_priority pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
         reader_resource_tracker tracker = no_resource_tracking()) const
     {
         return (*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr, tracker);
     }
 
     flat_mutation_reader
-    make_reader(
-        schema_ptr s,
-        partition_range range = query::full_partition_range) const
-    {
+    make_reader_for_tests(schema_ptr s, partition_range range, const query::partition_slice& slice) const {
+        return this->make_reader(std::move(s), range, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes);
+    }
+
+    flat_mutation_reader
+    make_reader_for_tests(schema_ptr s, partition_range range = query::full_partition_range) const {
         auto& full_slice = s->full_slice();
-        return this->make_reader(std::move(s), range, full_slice);
+        return make_reader_for_tests(std::move(s), range, full_slice);
     }
 
     partition_presence_checker make_partition_presence_checker() {
@@ -336,17 +358,18 @@ flat_mutation_reader make_restricted_flat_reader(reader_concurrency_semaphore& s
         schema_ptr s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        tracing::trace_state_ptr trace_state = nullptr,
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr);
 
-inline flat_mutation_reader make_restricted_flat_reader(reader_concurrency_semaphore& semaphore,
+inline flat_mutation_reader make_restricted_flat_reader_for_tests(reader_concurrency_semaphore& semaphore,
                                               mutation_source ms,
                                               schema_ptr s,
                                               const dht::partition_range& range = query::full_partition_range) {
     auto& full_slice = s->full_slice();
-    return make_restricted_flat_reader(semaphore, std::move(ms), std::move(s), range, full_slice);
+    return make_restricted_flat_reader(semaphore, std::move(ms), std::move(s), range, full_slice,
+            default_priority_class(), nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes);
 }
 
 using mutation_source_opt = optimized_optional<mutation_source>;
@@ -505,8 +528,8 @@ flat_mutation_reader make_multishard_combining_reader(
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
-        tracing::trace_state_ptr trace_state = nullptr,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr);
 
 class queue_reader;
 

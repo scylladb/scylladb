@@ -265,7 +265,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
                                                       default_priority_class(),
                                                       no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
-                                                      streamed_mutation::forwarding::yes));
+                                                      streamed_mutation::forwarding::yes,
+                                                      mutation_reader::forwarding::yes));
         r.produces_partition_start(to_key(1))
             .produces_static_row({{s_cdef, int32_type->decompose(int32_t(1))}})
             .produces_end_of_stream();
@@ -314,7 +315,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
                                                       default_priority_class(),
                                                       no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
-                                                      streamed_mutation::forwarding::yes));
+                                                      streamed_mutation::forwarding::yes,
+                                                      mutation_reader::forwarding::yes));
 
         r.produces_partition_start(to_key(1))
             .produces_static_row({{s_cdef, int32_type->decompose(int32_t(1))}})
@@ -525,7 +527,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
                                            default_priority_class(),
                                            no_resource_tracking(),
                                            tracing::trace_state_ptr(),
-                                           streamed_mutation::forwarding::yes);
+                                           streamed_mutation::forwarding::yes,
+                                           mutation_reader::forwarding::yes);
         rd.set_max_buffer_size(1);
         auto r = assert_that(std::move(rd));
         r.produces_partition_start(to_key(1));
@@ -566,7 +569,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
                                                       default_priority_class(),
                                                       no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
-                                                      streamed_mutation::forwarding::yes);
+                                                      streamed_mutation::forwarding::yes,
+                                                      mutation_reader::forwarding::yes);
         rd.set_max_buffer_size(1);
         auto r = assert_that(std::move(rd));
 
@@ -754,7 +758,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombst
                                            default_priority_class(),
                                            no_resource_tracking(),
                                            tracing::trace_state_ptr(),
-                                           streamed_mutation::forwarding::yes));
+                                           streamed_mutation::forwarding::yes,
+                                           mutation_reader::forwarding::yes));
         std::array<int32_t, 2> rt_deletion_times {1534898600, 1534899416};
         for (auto pkey : boost::irange(1, 3)) {
             const tombstone tomb = make_tombstone(1525385507816568, rt_deletion_times[pkey - 1]);
@@ -892,7 +897,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombst
                                                       default_priority_class(),
                                                       no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
-                                                      streamed_mutation::forwarding::yes));
+                                                      streamed_mutation::forwarding::yes,
+                                                      mutation_reader::forwarding::yes));
 
         std::array<int32_t, 2> rt_deletion_times {1534898600, 1534899416};
         for (auto pkey : boost::irange(1, 3)) {
@@ -1089,7 +1095,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
                                            default_priority_class(),
                                            no_resource_tracking(),
                                            tracing::trace_state_ptr(),
-                                           streamed_mutation::forwarding::yes));
+                                           streamed_mutation::forwarding::yes,
+                                           mutation_reader::forwarding::yes));
 
         const tombstone tomb = make_tombstone(1525385507816568, 1535592075);
         r.produces_partition_start(to_pkey(1));
@@ -1158,7 +1165,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
                                                       default_priority_class(),
                                                       no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
-                                                      streamed_mutation::forwarding::yes));
+                                                      streamed_mutation::forwarding::yes,
+                                                      mutation_reader::forwarding::yes));
         const tombstone tomb = make_tombstone(1525385507816568, 1535592075);
         r.produces_partition_start(to_pkey(1));
         r.fast_forward_to(to_full_ck(7460, 7461), to_full_ck(7600, 7601));
@@ -3016,7 +3024,7 @@ static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s
     sstables::compact_sstables(sstables::compaction_descriptor(std::move(sstables)), *cf, new_sstable, replacer_fn_no_op()).get();
 
     auto compacted_sst = open_sstable(env, s, tmp.path().string(), new_generation);
-    return compacted_sst->as_mutation_source().make_reader(s, query::full_partition_range, s->full_slice());
+    return compacted_sst->as_mutation_source().make_reader_for_tests(s, query::full_partition_range, s->full_slice());
 }
 
 SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
@@ -3195,9 +3203,9 @@ static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable
     tmpdir tmp;
     auto sst = env.make_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
 
-    sst->write_components(make_combined_reader(s,
-        mt1->make_flat_reader(s),
-        mt2->make_flat_reader(s)), 1, s, sstable_writer_config{}, mt1->get_encoding_stats()).get();
+    sst->write_components(make_combined_reader_for_tests(s,
+        mt1->make_flat_reader_for_tests(s),
+        mt2->make_flat_reader_for_tests(s)), 1, s, sstable_writer_config{}, mt1->get_encoding_stats()).get();
     return tmp;
 }
 
@@ -4767,7 +4775,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
                                                   default_priority_class(),
                                                   no_resource_tracking(),
                                                   tracing::trace_state_ptr(),
-                                                  streamed_mutation::forwarding::yes));
+                                                  streamed_mutation::forwarding::yes,
+                                                  mutation_reader::forwarding::yes));
     r.produces_partition_start(to_pkey(0))
         .produces_end_of_stream();
 
@@ -5109,7 +5118,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
             1 /* generation */,
             sstable_version_types::mc,
             sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(write_schema), 1, write_schema, cfg, mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader_for_tests(write_schema), 1, write_schema, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
 
         BOOST_REQUIRE_EXCEPTION(
@@ -5193,7 +5202,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     // trigger depends on the size of rows after they are written in the MC format and that size
     // depends on the encoding statistics (because of variable-length encoding). The original values
     // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-    sst->write_components(mt.make_flat_reader(s), 1, s, sstable_writer_config{}, encoding_stats{}).get();
+    sst->write_components(mt.make_flat_reader_for_tests(s), 1, s, sstable_writer_config{}, encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
 }
 
@@ -5242,7 +5251,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     auto env = test_env(&handler);
     tmpdir dir;
     auto sst = env.make_sstable(sc, dir.path().string(), 1, sstable_version_types::mc, sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(sc), 1, sc, sstable_writer_config{}, encoding_stats{}).get();
+    sst->write_components(mt->make_flat_reader_for_tests(sc), 1, sc, sstable_writer_config{}, encoding_stats{}).get();
 
     BOOST_REQUIRE_EQUAL(logged, expected);
 }

@@ -811,9 +811,9 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
         std::vector<flat_mutation_reader> rd;
         rd.reserve(addends.size());
         for (auto&& ms : addends) {
-            rd.emplace_back(ms.make_reader(s, pr, slice, pc, tr, fwd));
+            rd.emplace_back(ms.make_reader(s, pr, slice, pc, tr, fwd, mutation_reader::forwarding::yes));
         }
-        return make_combined_reader(s, std::move(rd), fwd);
+        return make_combined_reader(s, std::move(rd), fwd, mutation_reader::forwarding::yes);
     });
 }
 

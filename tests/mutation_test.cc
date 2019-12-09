@@ -91,7 +91,7 @@ static atomic_cell make_collection_member(data_type dt, T value) {
 static mutation_partition get_partition(memtable& mt, const partition_key& key) {
     auto dk = dht::global_partitioner().decorate_key(*mt.schema(), key);
     auto range = dht::partition_range::make_singular(dk);
-    auto reader = mt.make_flat_reader(mt.schema(), range);
+    auto reader = mt.make_flat_reader_for_tests(mt.schema(), range);
     auto mo = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
     BOOST_REQUIRE(bool(mo));
     return std::move(mo->partition());
@@ -438,7 +438,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         mt->apply(make_mutation_with_collection(pk, std::move(cmd1)));
         mt->apply(make_mutation_with_collection(pk, std::move(cmd2))); // this should trigger a merge of the two collections
 
-        auto rd = mt->make_flat_reader(schema);
+        auto rd = mt->make_flat_reader_for_tests(schema);
         auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
         BOOST_REQUIRE(res_mut_opt);
 
@@ -540,13 +540,13 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             std::sort(mutations.begin(), mutations.end(), mutation_decorated_key_less_comparator());
 
             // Flush will happen in the middle of reading for this scanner
-            auto assert_that_scanner1 = assert_that(cf.make_reader(s, query::full_partition_range));
+            auto assert_that_scanner1 = assert_that(cf.make_reader_for_tests(s, query::full_partition_range));
 
             // Flush will happen before it is invoked
-            auto assert_that_scanner2 = assert_that(cf.make_reader(s, query::full_partition_range));
+            auto assert_that_scanner2 = assert_that(cf.make_reader_for_tests(s, query::full_partition_range));
 
             // Flush will happen after all data was read, but before EOS was consumed
-            auto assert_that_scanner3 = assert_that(cf.make_reader(s, query::full_partition_range));
+            auto assert_that_scanner3 = assert_that(cf.make_reader_for_tests(s, query::full_partition_range));
 
             assert_that_scanner1.produces(mutations[0]);
             assert_that_scanner1.produces(mutations[1]);

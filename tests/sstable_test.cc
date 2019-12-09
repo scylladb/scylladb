@@ -1060,7 +1060,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstring ck2) {
     return seastar::async([sstp, s, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
-        auto reader = sstp->read_range_rows_flat(s, query::full_partition_range, ps);
+        auto reader = sstp->read_range_rows_flat_for_tests(s, query::full_partition_range, ps);
         int nrows = 0;
         auto mfopt = reader(db::no_timeout).get0();
         while (mfopt) {

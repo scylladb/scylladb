@@ -95,7 +95,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
             for (auto&& m : muts) {
                 mt->apply(m);
                 // Create reader so that each mutation is in a separate version
-                flat_mutation_reader rd = mt->make_flat_reader(s, ranges_storage.emplace_back(dht::partition_range::make_singular(m.decorated_key())));
+                flat_mutation_reader rd = mt->make_flat_reader_for_tests(s, ranges_storage.emplace_back(dht::partition_range::make_singular(m.decorated_key())));
                 rd.set_max_buffer_size(1);
                 rd.fill_buffer(db::no_timeout).get();
                 readers.push_back(std::move(rd));
@@ -198,8 +198,8 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
             mt->apply(m);
         }
 
-        auto check_rd_s1 = assert_that(mt->make_flat_reader(s1));
-        auto check_rd_s2 = assert_that(mt->make_flat_reader(s2));
+        auto check_rd_s1 = assert_that(mt->make_flat_reader_for_tests(s1));
+        auto check_rd_s2 = assert_that(mt->make_flat_reader_for_tests(s2));
         check_rd_s1.next_mutation().has_schema(s1).is_equal_to(ring[0]);
         check_rd_s2.next_mutation().has_schema(s2).is_equal_to(ring[0]);
         mt->set_schema(s2);
@@ -210,13 +210,13 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
         check_rd_s1.produces_end_of_stream();
         check_rd_s2.produces_end_of_stream();
 
-        assert_that(mt->make_flat_reader(s1))
+        assert_that(mt->make_flat_reader_for_tests(s1))
             .produces(ring[0])
             .produces(ring[1])
             .produces(ring[2])
             .produces_end_of_stream();
 
-        assert_that(mt->make_flat_reader(s2))
+        assert_that(mt->make_flat_reader_for_tests(s2))
             .produces(ring[0])
             .produces(ring[1])
             .produces(ring[2])
@@ -248,7 +248,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         }
 
         // Create a reader which will cause many partition versions to be created
-        flat_mutation_reader_opt rd1 = mt->make_flat_reader(s);
+        flat_mutation_reader_opt rd1 = mt->make_flat_reader_for_tests(s);
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer(db::no_timeout).get();
 
@@ -311,29 +311,29 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
         m3.set_clustered_cell(ck3, to_bytes("col"), data_value(bytes(bytes::initialized_later(), 8)), next_timestamp());
 
         mt->apply(m1);
-        std::optional<flat_reader_assertions> rd1 = assert_that(mt->make_flat_reader(s));
+        std::optional<flat_reader_assertions> rd1 = assert_that(mt->make_flat_reader_for_tests(s));
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer().get();
 
         mt->apply(m2);
-        std::optional<flat_reader_assertions> rd2 = assert_that(mt->make_flat_reader(s));
+        std::optional<flat_reader_assertions> rd2 = assert_that(mt->make_flat_reader_for_tests(s));
         rd2->set_max_buffer_size(1);
         rd2->fill_buffer().get();
 
         mt->apply(m3);
-        std::optional<flat_reader_assertions> rd3 = assert_that(mt->make_flat_reader(s));
+        std::optional<flat_reader_assertions> rd3 = assert_that(mt->make_flat_reader_for_tests(s));
         rd3->set_max_buffer_size(1);
         rd3->fill_buffer().get();
 
         logalloc::shard_tracker().full_compaction();
 
-        auto rd4 = assert_that(mt->make_flat_reader(s));
+        auto rd4 = assert_that(mt->make_flat_reader_for_tests(s));
         rd4.set_max_buffer_size(1);
         rd4.fill_buffer().get();
-        auto rd5 = assert_that(mt->make_flat_reader(s));
+        auto rd5 = assert_that(mt->make_flat_reader_for_tests(s));
         rd5.set_max_buffer_size(1);
         rd5.fill_buffer().get();
-        auto rd6 = assert_that(mt->make_flat_reader(s));
+        auto rd6 = assert_that(mt->make_flat_reader_for_tests(s));
         rd6.set_max_buffer_size(1);
         rd6.fill_buffer().get();
 
@@ -420,7 +420,7 @@ SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
             mt2->apply(m);
         }
 
-        auto rd = assert_that(mt->make_flat_reader(s));
+        auto rd = assert_that(mt->make_flat_reader_for_tests(s));
         rd.produces(ring[0]);
         mt->mark_flushed(mt2->as_data_source());
         rd.produces(ring[1]);
@@ -446,7 +446,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_range_reads) {
         do {
             try {
                 injector.fail_after(i++);
-                assert_that(mt->make_flat_reader(s, query::full_partition_range))
+                assert_that(mt->make_flat_reader_for_tests(s, query::full_partition_range))
                     .produces(ms);
                 injector.cancel();
             } catch (const std::bad_alloc&) {
@@ -499,7 +499,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
         do {
             try {
                 injector.fail_after(i++);
-                assert_that(mt->make_flat_reader(s, dht::partition_range::make_singular(ms[1].decorated_key())))
+                assert_that(mt->make_flat_reader_for_tests(s, dht::partition_range::make_singular(ms[1].decorated_key())))
                     .produces(ms[1]);
                 injector.cancel();
             } catch (const std::bad_alloc&) {
@@ -523,7 +523,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         mt->apply(m);
 
         {
-            auto rd = mt->make_flat_reader(s);
+            auto rd = mt->make_flat_reader_for_tests(s);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
@@ -532,14 +532,14 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto slice = s->full_slice();
             slice.options.set<query::partition_slice::option::with_digest>();
-            auto rd = mt->make_flat_reader(s, query::full_partition_range, slice);
+            auto rd = mt->make_flat_reader_for_tests(s, query::full_partition_range, slice);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
-            auto rd = mt->make_flat_reader(s);
+            auto rd = mt->make_flat_reader_for_tests(s);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
@@ -549,7 +549,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         mt->apply(m);
 
         {
-            auto rd = mt->make_flat_reader(s);
+            auto rd = mt->make_flat_reader_for_tests(s);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
@@ -558,14 +558,14 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto slice = s->full_slice();
             slice.options.set<query::partition_slice::option::with_digest>();
-            auto rd = mt->make_flat_reader(s, query::full_partition_range, slice);
+            auto rd = mt->make_flat_reader_for_tests(s, query::full_partition_range, slice);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
-            auto rd = mt->make_flat_reader(s);
+            auto rd = mt->make_flat_reader_for_tests(s);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));

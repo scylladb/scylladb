@@ -250,15 +250,21 @@ public:
     flat_mutation_reader make_flat_reader(schema_ptr,
                                           const dht::partition_range& range,
                                           const query::partition_slice& slice,
-                                          const io_priority_class& pc = default_priority_class(),
-                                          tracing::trace_state_ptr trace_state_ptr = nullptr,
-                                          streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-                                          mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+                                          const io_priority_class& pc,
+                                          tracing::trace_state_ptr trace_state_ptr,
+                                          streamed_mutation::forwarding fwd,
+                                          mutation_reader::forwarding fwd_mr);
 
-    flat_mutation_reader make_flat_reader(schema_ptr s,
+    flat_mutation_reader make_flat_reader_for_tests(schema_ptr s,
+                                          const dht::partition_range& range,
+                                          const query::partition_slice& slice) {
+        return make_flat_reader(s, range, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes);
+    }
+
+    flat_mutation_reader make_flat_reader_for_tests(schema_ptr s,
                                           const dht::partition_range& range = query::full_partition_range) {
         auto& full_slice = s->full_slice();
-        return make_flat_reader(s, range, full_slice);
+        return make_flat_reader_for_tests(s, range, full_slice);
     }
 
     flat_mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);

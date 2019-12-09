@@ -58,7 +58,7 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
     }
 
     // validate the sstable
-    auto rd = assert_that(sst->as_mutation_source().make_reader(s));
+    auto rd = assert_that(sst->as_mutation_source().make_reader_for_tests(s));
     for (auto&& m : merged) {
         rd.produces(m);
     }

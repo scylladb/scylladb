@@ -673,22 +673,26 @@ public:
     flat_mutation_reader make_reader(schema_ptr schema,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc = default_priority_class(),
-            tracing::trace_state_ptr trace_state = nullptr,
-            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr) const;
     flat_mutation_reader make_reader_excluding_sstable(schema_ptr schema,
             sstables::shared_sstable sst,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc = default_priority_class(),
-            tracing::trace_state_ptr trace_state = nullptr,
-            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr) const;
 
-    flat_mutation_reader make_reader(schema_ptr schema, const dht::partition_range& range = query::full_partition_range) const {
+    flat_mutation_reader make_reader_for_tests(schema_ptr schema, const dht::partition_range& range, const query::partition_slice& slice) const {
+        return make_reader(std::move(schema), range, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes);
+    }
+
+    flat_mutation_reader make_reader_for_tests(schema_ptr schema, const dht::partition_range& range = query::full_partition_range) const {
         auto& full_slice = schema->full_slice();
-        return make_reader(std::move(schema), range, full_slice);
+        return make_reader_for_tests(std::move(schema), range, full_slice);
     }
 
     // The streaming mutation reader differs from the regular mutation reader in that:
@@ -702,10 +706,10 @@ public:
     // Single range overload.
     flat_mutation_reader make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
             const query::partition_slice& slice,
-            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) const;
+            mutation_reader::forwarding fwd_mr) const;
 
     flat_mutation_reader make_streaming_reader(schema_ptr schema, const dht::partition_range& range) {
-        return make_streaming_reader(schema, range, schema->full_slice());
+        return make_streaming_reader(schema, range, schema->full_slice(), mutation_reader::forwarding::no);
     }
 
     sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
