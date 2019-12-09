@@ -383,6 +383,7 @@ scylla_tests = [
     'test/perf/perf_row_cache_update',
     'test/perf/perf_simple_query',
     'test/perf/perf_sstable',
+    'test/tools/cql_repl',
     'test/unit/lsa_async_eviction_test',
     'test/unit/lsa_sync_eviction_test',
     'test/unit/memory_footprint_test',
