@@ -192,10 +192,6 @@ public:
     future<> update_pending_ranges();
     void update_pending_ranges_nowait(inet_address endpoint);
 
-    auth::service& get_local_auth_service() {
-        return _auth_service.local();
-    }
-
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;
     }
