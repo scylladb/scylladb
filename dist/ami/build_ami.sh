@@ -173,6 +173,7 @@ else
     SCYLLA_PYTHON3_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} build/ami_packages/$PRODUCT-python3-*.rpm || true)
 fi
 
+SCYLLA_AMI_DESCRIPTION="scylla-$SCYLLA_VERSION scylla-ami-$SCYLLA_AMI_VERSION scylla-jmx-$SCYLLA_JMX_VERSION scylla-tools-$SCYLLA_TOOLS_VERSION scylla-python3-$SCYLLA_PYTHON3_VERSION"
 cd dist/ami
 
 if [ ! -f variables.json ]; then
@@ -195,4 +196,4 @@ if [ ! -d packer ]; then
     cd -
 fi
 
-env PACKER_LOG=1 PACKER_LOG_PATH=../../build/ami.log packer/packer build -var-file=variables.json -var install_args="$INSTALL_ARGS" -var region="$REGION" -var source_ami="$AMI" -var ssh_username="$SSH_USERNAME" -var scylla_version="$SCYLLA_VERSION" -var scylla_ami_version="$SCYLLA_AMI_VERSION" -var scylla_jmx_version="$SCYLLA_JMX_VERSION" -var scylla_tools_version="$SCYLLA_TOOLS_VERSION" -var scylla_python3_version="$SCYLLA_PYTHON3_VERSION" scylla.json
+env PACKER_LOG=1 PACKER_LOG_PATH=../../build/ami.log packer/packer build -var-file=variables.json -var install_args="$INSTALL_ARGS" -var region="$REGION" -var source_ami="$AMI" -var ssh_username="$SSH_USERNAME" -var scylla_version="$SCYLLA_VERSION" -var scylla_ami_version="$SCYLLA_AMI_VERSION" -var scylla_jmx_version="$SCYLLA_JMX_VERSION" -var scylla_tools_version="$SCYLLA_TOOLS_VERSION" -var scylla_python3_version="$SCYLLA_PYTHON3_VERSION" -var scylla_ami_description="${SCYLLA_AMI_DESCRIPTION:0:255}" scylla.json

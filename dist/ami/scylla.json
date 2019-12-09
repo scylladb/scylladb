@@ -57,7 +57,7 @@
       "subnet_id": "{{user `subnet_id`}}",
       "type": "amazon-ebs",
       "user_data_file": "user_data.txt",
-      "ami_description": "scylla-{{user `scylla_version`}} scylla-ami-{{user `scylla_ami_version`}} scylla-jmx-{{user `scylla_jmx_version`}} scylla-tools-{{user `scylla_tools_version`}} scylla-python3-{{user `scylla_python3_version`}}",
+      "ami_description": "{{user `scylla_ami_description`}}",
       "tags": {
           "ScyllaVersion": "{{user `scylla_version`}}",
           "ScyllaAMIVersion": "{{user `scylla_ami_version`}}",
