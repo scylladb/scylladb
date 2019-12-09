@@ -32,6 +32,7 @@ import signal
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+import yaml
 
 # Apply custom options to these tests
 custom_test_args = {
@@ -279,7 +280,14 @@ def find_tests(options):
 
     tests_to_run = []
 
-    def add_test_list(kind, mode):
+    def load_cfg(path):
+        with open(os.path.join(path, "suite.yaml"), "r") as cfg:
+            return yaml.safe_load(cfg.read())
+
+
+    def add_test_list(path, mode):
+        cfg = load_cfg(path)
+        kind = cfg["type"]
         lst = glob.glob(os.path.join("test", kind, "*_test.cc"))
         for t in lst:
             t = os.path.join(kind, os.path.splitext(os.path.basename(t))[0])
@@ -294,9 +302,10 @@ def find_tests(options):
                     if p in t:
                         tests_to_run.append((t, a, kind, mode))
 
-    for mode in options.modes:
-        add_test_list('unit', mode)
-        add_test_list('boost', mode)
+    for f in glob.glob(os.path.join("test", "*")):
+        if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
+            for mode in options.modes:
+                add_test_list(f, mode)
 
     if not tests_to_run:
         print("Test {} not found".format(options.name))
