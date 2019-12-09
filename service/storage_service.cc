@@ -396,7 +396,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     auto& proxy = service::get_storage_proxy();
     // Ensure we know our own actual Schema UUID in preparation for updates
-    auto schema_version = update_schema_version(proxy, cluster_schema_features()).get0();
+    auto schema_version = update_schema_version(proxy, _feature_service.cluster_schema_features()).get0();
     app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
     app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
@@ -3306,10 +3306,6 @@ void storage_service::notify_cql_change(inet_address endpoint, bool ready)
     } else {
         notify_down(endpoint);
     }
-}
-
-db::schema_features storage_service::cluster_schema_features() const {
-    return _feature_service.cluster_schema_features();
 }
 
 future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
