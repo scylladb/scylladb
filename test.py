@@ -92,6 +92,7 @@ class UnitTest:
         self.args = opts.split() + UnitTest.standard_args
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}.{}".format(self.mode, self.shortname, self.id)
+        self.log_filename = os.path.join(options.tmpdir, self.uname + ".log")
 
         if self.kind == 'boost':
             boost_args = []
@@ -145,15 +146,16 @@ async def run_test(test, options):
     stdout = None
     logging.info("Starting test #%d: %s %s", test.id, test.path, " ".join(test.args))
     try:
-        process = await asyncio.create_subprocess_exec(
-            test.path,
-            *test.args,
-            stderr=asyncio.subprocess.STDOUT,
-            stdout=asyncio.subprocess.PIPE,
-            env=dict(os.environ,
-                UBSAN_OPTIONS='halt_on_error=1:abort_on_error=1',
-                ASAN_OPTIONS='disable_coredump=0:abort_on_error=1',
-                BOOST_TEST_CATCH_SYSTEM_ERRORS='no'),
+        with open(test.log_filename, "wb") as log:
+            process = await asyncio.create_subprocess_exec(
+                test.path,
+                *test.args,
+                stderr=log,
+                stdout=log,
+                env=dict(os.environ,
+                         UBSAN_OPTIONS='halt_on_error=1:abort_on_error=1',
+                         ASAN_OPTIONS='disable_coredump=0:abort_on_error=1',
+                         BOOST_TEST_CATCH_SYSTEM_ERRORS="no"),
                 preexec_fn=os.setsid,
             )
         stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
@@ -175,7 +177,7 @@ async def run_test(test, options):
         print('  with error {e}\n'.format(e=e), file=file)
         report_error(e)
     logging.info("Test #%d %s", test.id, "passed" if success else "failed")
-    return (test, success, file.getvalue())
+    return (test, success)
 
 def setup_signal_handlers(loop, signaled):
 
@@ -253,11 +255,18 @@ def parse_cmd_line():
         # debug release dev
         args.modes = out.split('\n')[1].split(' ')
 
+    def prepare_dir(dirname, pattern):
+        # Ensure the dir exists
+        pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
+        # Remove old artefacts
+        for p in glob.glob(os.path.join(dirname, pattern), recursive=True):
+            pathlib.Path(p).unlink()
+
     args.tmpdir = os.path.abspath(args.tmpdir)
-    pathlib.Path(args.tmpdir).mkdir(parents=True, exist_ok=True)
+    prepare_dir(args.tmpdir, "*.log")
     if not args.jenkins or not args.xunit:
         xmldir = os.path.join(args.tmpdir, "xml")
-        pathlib.Path(xmldir).mkdir(parents=True, exist_ok=True)
+        prepare_dir(xmldir, "*.xml")
         if args.jenkins is None:
             args.jenkins = xmldir
         if args.xunit is None:
@@ -325,10 +334,10 @@ async def run_all_tests(tests_to_run, signaled, options):
             if isinstance(result, bool):
                 continue    # skip signaled task result
             results.append(result)
-            test, success, out = result
+            test, success = result
             cookie = print_progress(test, success, cookie, options.verbose)
             if not success:
-                failed_tests.append((test, out))
+                failed_tests.append(test)
     print_start_blurb()
     try:
         for test in tests_to_run:
@@ -352,13 +361,26 @@ async def run_all_tests(tests_to_run, signaled, options):
     return failed_tests, results
 
 
+def read_log(log_filename):
+    """Intelligently read test log output"""
+    try:
+        with open(log_filename, "r") as log:
+            msg = log.read()
+            return msg if len(msg) else "===Empty log output==="
+    except FileNotFoundError:
+        return "===Log {} not found===".format(log_filename)
+    except OSError as e:
+        return "===Error reading log {}===".format(e)
+
+
 def print_summary(failed_tests, total_tests):
     if failed_tests:
         print('\n\nOutput of the failed tests:')
-        for test, out in failed_tests:
-            print("Test {} {} failed:\n{}".format(test.path, ' '.join(test.args), out))
+        for test in failed_tests:
+            print("Test {} {} failed:".format(test.path, " ".join(test.args)))
+            print(read_log(test.log_filename))
         print('\n\nThe following test(s) have failed:')
-        for test, _ in failed_tests:
+        for test in failed_tests:
             print('  {} {}'.format(test.path, ' '.join(test.args)))
         print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), total_tests))
 
@@ -370,11 +392,12 @@ def write_xunit_report(options, results):
     xml_results = ET.Element('testsuite', name='non-boost tests',
             tests=str(len(unit_results)), failures=str(num_unit_failed), errors='0')
 
-    for test, success, out in unit_results:
+    for test, success in unit_results:
         xml_res = ET.SubElement(xml_results, 'testcase', name=test.path)
         if not success:
             xml_fail = ET.SubElement(xml_res, 'failure')
-            xml_fail.text = "Test {} {} failed:\n{}".format(test.path, ' '.join(test.args), out)
+            xml_fail.text = "Test {} {} failed:".format(test.path, " ".join(test.args))
+            xml_fail.text += read_log(test.log_filename)
     with open(options.xunit, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
