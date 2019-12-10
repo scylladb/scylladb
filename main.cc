@@ -260,10 +260,57 @@ public:
     future<> touch_and_lock(_Range&& r) {
         return touch_and_lock(std::begin(r), std::end(r));
     }
+
+    future<> init(db::config& cfg, bool hinted_handoff_enabled);
 private:
     std::vector<utils::file_lock>
         _locks;
 };
+
+future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
+  // XXX -- this indentation is temporary, wil go away with next patches
+  return seastar::async([&] {
+    supervisor::notify("creating data directories");
+    touch_and_lock(cfg.data_file_directories()).get();
+    supervisor::notify("creating commitlog directory");
+    touch_and_lock(cfg.commitlog_directory()).get();
+    std::unordered_set<sstring> directories;
+    directories.insert(cfg.data_file_directories().cbegin(),
+            cfg.data_file_directories().cend());
+    directories.insert(cfg.commitlog_directory());
+
+    supervisor::notify("creating hints directories");
+    if (hinted_handoff_enabled) {
+        fs::path hints_base_dir(cfg.hints_directory());
+        touch_and_lock(cfg.hints_directory()).get();
+        directories.insert(cfg.hints_directory());
+        for (unsigned i = 0; i < smp::count; ++i) {
+            sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
+            touch_and_lock(shard_dir).get();
+            directories.insert(std::move(shard_dir));
+        }
+    }
+    fs::path view_pending_updates_base_dir = fs::path(cfg.view_hints_directory());
+    sstring view_pending_updates_base_dir_str = view_pending_updates_base_dir.native();
+    touch_and_lock(view_pending_updates_base_dir_str).get();
+    directories.insert(view_pending_updates_base_dir_str);
+    for (unsigned i = 0; i < smp::count; ++i) {
+        sstring shard_dir((view_pending_updates_base_dir / seastar::to_sstring(i).c_str()).native());
+        touch_and_lock(shard_dir).get();
+        directories.insert(std::move(shard_dir));
+    }
+
+    supervisor::notify("verifying directories");
+    parallel_for_each(directories, [&cfg] (sstring pathname) {
+        return disk_sanity(pathname, cfg.developer_mode()).then([dir = std::move(pathname)] {
+            return distributed_loader::verify_owner_and_mode(fs::path(dir)).handle_exception([](auto ep) {
+                startlog.error("Failed owner and mode verification: {}", ep);
+                return make_exception_future<>(ep);
+            });
+        });
+    }).get();
+  });
+}
 
 static
 void
@@ -750,45 +797,8 @@ int main(int ac, char** av) {
             });
             verify_seastar_io_scheduler(opts.count("max-io-requests"), opts.count("io-properties") || opts.count("io-properties-file"),
                                         cfg->developer_mode()).get();
-            supervisor::notify("creating data directories");
-            dirs.touch_and_lock(db.local().get_config().data_file_directories()).get();
-            supervisor::notify("creating commitlog directory");
-            dirs.touch_and_lock(db.local().get_config().commitlog_directory()).get();
-            std::unordered_set<sstring> directories;
-            directories.insert(db.local().get_config().data_file_directories().cbegin(),
-                    db.local().get_config().data_file_directories().cend());
-            directories.insert(db.local().get_config().commitlog_directory());
 
-            supervisor::notify("creating hints directories");
-            if (hinted_handoff_enabled) {
-                fs::path hints_base_dir(db.local().get_config().hints_directory());
-                dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
-                directories.insert(db.local().get_config().hints_directory());
-                for (unsigned i = 0; i < smp::count; ++i) {
-                    sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
-                    dirs.touch_and_lock(shard_dir).get();
-                    directories.insert(std::move(shard_dir));
-                }
-            }
-            fs::path view_pending_updates_base_dir = fs::path(db.local().get_config().view_hints_directory());
-            sstring view_pending_updates_base_dir_str = view_pending_updates_base_dir.native();
-            dirs.touch_and_lock(view_pending_updates_base_dir_str).get();
-            directories.insert(view_pending_updates_base_dir_str);
-            for (unsigned i = 0; i < smp::count; ++i) {
-                sstring shard_dir((view_pending_updates_base_dir / seastar::to_sstring(i).c_str()).native());
-                dirs.touch_and_lock(shard_dir).get();
-                directories.insert(std::move(shard_dir));
-            }
-
-            supervisor::notify("verifying directories");
-            parallel_for_each(directories, [&db] (sstring pathname) {
-                return disk_sanity(pathname, db.local().get_config().developer_mode()).then([dir = std::move(pathname)] {
-                    return distributed_loader::verify_owner_and_mode(fs::path(dir)).handle_exception([](auto ep) {
-                        startlog.error("Failed owner and mode verification: {}", ep);
-                        return make_exception_future<>(ep);
-                    });
-                });
-            }).get();
+            dirs.init(*cfg, bool(hinted_handoff_enabled)).get();
 
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column
