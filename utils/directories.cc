@@ -86,17 +86,14 @@ future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
         directories.insert(std::move(shard_dir));
     }
 
-    supervisor::notify("creating directories");
-    parallel_for_each(directories, [this] (sstring path) {
-        return touch_and_lock(path);
-    }).get();
-
-    supervisor::notify("verifying directories");
-    parallel_for_each(directories, [&cfg] (sstring pathname) {
-        return disk_sanity(pathname, cfg.developer_mode()).then([dir = std::move(pathname)] {
-            return distributed_loader::verify_owner_and_mode(fs::path(dir)).handle_exception([](auto ep) {
-                startlog.error("Failed owner and mode verification: {}", ep);
-                return make_exception_future<>(ep);
+    supervisor::notify("creating and verifying directories");
+    parallel_for_each(directories, [this, &cfg] (sstring path) {
+        return touch_and_lock(path).then([path = std::move(path), &cfg] {
+            return disk_sanity(path, cfg.developer_mode()).then([path = std::move(path)] {
+                return distributed_loader::verify_owner_and_mode(fs::path(path)).handle_exception([](auto ep) {
+                    startlog.error("Failed owner and mode verification: {}", ep);
+                    return make_exception_future<>(ep);
+                });
             });
         });
     }).get();
