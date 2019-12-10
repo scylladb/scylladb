@@ -63,4 +63,10 @@ clustering_key ck_from_json(const rjson::value& item, schema_ptr schema);
 // If v encodes a number (i.e., it is a {"N": [...]}, returns an object representing it.  Otherwise,
 // raises ValidationException with diagnostic.
 big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic);
+
+// Check if a given JSON object encodes a set (i.e., it is a {"SS": [...]}, or "NS", "BS"
+// and returns set's type and a pointer to that set. If the object does not encode a set,
+// returned value is {"", nullptr}
+const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value& v);
+
 }
