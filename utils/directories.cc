@@ -62,30 +62,42 @@ future<> directories::touch_and_lock(sstring path) {
     });
 }
 
-future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
-    std::unordered_set<sstring> directories;
-    directories.insert(cfg.data_file_directories().cbegin(),
-            cfg.data_file_directories().cend());
-    directories.insert(cfg.commitlog_directory());
+static void add(fs::path path, std::vector<fs::path>& to) {
+    to.push_back(path);
+}
 
+static void add(sstring path, std::vector<fs::path>& to) {
+    add(fs::path(path), to);
+}
+
+static void add(std::vector<sstring> paths, std::vector<fs::path>& to) {
+    for (auto& path : paths) {
+        add(path, to);
+    }
+}
+
+static void add_sharded(sstring p, std::vector<fs::path>& to) {
+    fs::path path(p);
+
+    add(path, to);
+    for (unsigned i = 0; i < smp::count; i++) {
+         add(path / seastar::to_sstring(i).c_str(), to);
+    }
+}
+
+future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
+    std::vector<fs::path> paths;
+
+    add(cfg.data_file_directories(), paths);
+    add(cfg.commitlog_directory(), paths);
     if (hinted_handoff_enabled) {
-        fs::path hints_base_dir(cfg.hints_directory());
-        directories.insert(cfg.hints_directory());
-        for (unsigned i = 0; i < smp::count; ++i) {
-            sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
-            directories.insert(std::move(shard_dir));
-        }
+        add_sharded(cfg.hints_directory(), paths);
     }
-    fs::path view_pending_updates_base_dir = fs::path(cfg.view_hints_directory());
-    sstring view_pending_updates_base_dir_str = view_pending_updates_base_dir.native();
-    directories.insert(view_pending_updates_base_dir_str);
-    for (unsigned i = 0; i < smp::count; ++i) {
-        sstring shard_dir((view_pending_updates_base_dir / seastar::to_sstring(i).c_str()).native());
-        directories.insert(std::move(shard_dir));
-    }
+    add_sharded(cfg.view_hints_directory(), paths);
 
     supervisor::notify("creating and verifying directories");
-    return parallel_for_each(directories, [this, &cfg] (sstring path) {
+    return parallel_for_each(paths, [this, &cfg] (fs::path p) {
+        sstring path = p.native();
         return touch_and_lock(path).then([path = std::move(path), &cfg] {
             return disk_sanity(path, cfg.developer_mode()).then([path = std::move(path)] {
                 return distributed_loader::verify_owner_and_mode(fs::path(path)).handle_exception([](auto ep) {
