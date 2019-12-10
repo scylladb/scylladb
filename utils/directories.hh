@@ -32,21 +32,9 @@ namespace utils {
 
 class directories {
 public:
-    future<> touch_and_lock(sstring path);
-
-    template<typename _Iter>
-    future<> touch_and_lock(_Iter i, _Iter e) {
-        return parallel_for_each(i, e, [this](sstring path) {
-           return touch_and_lock(std::move(path));
-        });
-    }
-    template<typename _Range>
-    future<> touch_and_lock(_Range&& r) {
-        return touch_and_lock(std::begin(r), std::end(r));
-    }
-
     future<> init(db::config& cfg, bool hinted_handoff_enabled);
 private:
+    future<> touch_and_lock(sstring path);
     std::vector<file_lock> _locks;
 };
 
