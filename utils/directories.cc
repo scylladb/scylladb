@@ -27,8 +27,8 @@
 
 namespace utils {
 
-static future<> disk_sanity(sstring path, bool developer_mode) {
-    return check_direct_io_support(path).then([] {
+static future<> disk_sanity(fs::path path, bool developer_mode) {
+    return check_direct_io_support(path.native()).then([] {
         return make_ready_future<>();
     }).handle_exception([path](auto ep) {
         startlog.error("Could not access {}: {}", path, ep);
@@ -36,11 +36,11 @@ static future<> disk_sanity(sstring path, bool developer_mode) {
     });
 };
 
-future<> directories::touch_and_lock(sstring path) {
-    return io_check([path] { return recursive_touch_directory(path); }).then_wrapped([this, path] (future<> f) {
+future<> directories::touch_and_lock(fs::path path) {
+    return io_check([path] { return recursive_touch_directory(path.native()); }).then_wrapped([this, path] (future<> f) {
         try {
             f.get();
-            return file_lock::acquire(fs::path(path) / ".lock").then([this](file_lock lock) {
+            return file_lock::acquire(path / ".lock").then([this](file_lock lock) {
                _locks.emplace_back(std::move(lock));
             }).handle_exception([path](auto ep) {
                 // only do this because "normal" unhandled exception exit in seastar
@@ -96,11 +96,10 @@ future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
     add_sharded(cfg.view_hints_directory(), paths);
 
     supervisor::notify("creating and verifying directories");
-    return parallel_for_each(paths, [this, &cfg] (fs::path p) {
-        sstring path = p.native();
+    return parallel_for_each(paths, [this, &cfg] (fs::path path) {
         return touch_and_lock(path).then([path = std::move(path), &cfg] {
             return disk_sanity(path, cfg.developer_mode()).then([path = std::move(path)] {
-                return distributed_loader::verify_owner_and_mode(fs::path(path)).handle_exception([](auto ep) {
+                return distributed_loader::verify_owner_and_mode(path).handle_exception([](auto ep) {
                     startlog.error("Failed owner and mode verification: {}", ep);
                     return make_exception_future<>(ep);
                 });

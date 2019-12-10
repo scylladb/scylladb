@@ -34,7 +34,7 @@ class directories {
 public:
     future<> init(db::config& cfg, bool hinted_handoff_enabled);
 private:
-    future<> touch_and_lock(sstring path);
+    future<> touch_and_lock(fs::path path);
     std::vector<file_lock> _locks;
 };
 
