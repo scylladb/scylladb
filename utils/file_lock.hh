@@ -23,10 +23,13 @@
 
 #include <memory>
 #include <ostream>
+#include <filesystem>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 
 #include "seastarx.hh"
+
+namespace fs = std::filesystem;
 
 namespace utils {
     class file_lock {
@@ -38,15 +41,15 @@ namespace utils {
 
         file_lock& operator=(file_lock&&) = default;
 
-        static future<file_lock> acquire(sstring);
+        static future<file_lock> acquire(fs::path);
 
-        sstring path() const;
+        fs::path path() const;
         sstring to_string() const {
-            return path();
+            return path().native();
         }
     private:
         class impl;
-        file_lock(sstring);
+        file_lock(fs::path);
         std::unique_ptr<impl> _impl;
     };
 

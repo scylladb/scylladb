@@ -229,7 +229,7 @@ public:
         return io_check([path] { return recursive_touch_directory(path); }).then_wrapped([this, path] (future<> f) {
             try {
                 f.get();
-                return utils::file_lock::acquire(path + "/.lock").then([this](utils::file_lock lock) {
+                return utils::file_lock::acquire(fs::path(path) / ".lock").then([this](utils::file_lock lock) {
                    _locks.emplace_back(std::move(lock));
                 }).handle_exception([path](auto ep) {
                     // only do this because "normal" unhandled exception exit in seastar

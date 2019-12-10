@@ -29,12 +29,13 @@
 
 class utils::file_lock::impl {
 public:
-    impl(sstring path)
+    impl(fs::path path)
             : _path(std::move(path)), _fd(
-                    file_desc::open(_path, O_RDWR | O_CREAT | O_CLOEXEC,
+                    file_desc::open(_path.native(), O_RDWR | O_CREAT | O_CLOEXEC,
                     S_IRWXU)) {
         if (::lockf(_fd.get(), F_TLOCK, 0) != 0) {
-            throw std::system_error(errno, std::system_category(), "Could not acquire lock: " + _path);
+            throw std::system_error(errno, std::system_category(),
+                        "Could not acquire lock: " + _path.native());
         }
     }
     impl(impl&&) = default;
@@ -46,13 +47,11 @@ public:
         auto r = ::lockf(_fd.get(), F_ULOCK, 0);
         assert(r == 0);
     }
-    sstring
-        _path;
-    file_desc
-        _fd;
+    fs::path _path;
+    file_desc _fd;
 };
 
-utils::file_lock::file_lock(sstring path)
+utils::file_lock::file_lock(fs::path path)
     : _impl(std::make_unique<impl>(std::move(path)))
 {}
 
@@ -63,11 +62,11 @@ utils::file_lock::file_lock(file_lock&& f) noexcept
 utils::file_lock::~file_lock()
 {}
 
-sstring utils::file_lock::path() const {
+fs::path utils::file_lock::path() const {
     return _impl ? _impl->_path : "";
 }
 
-future<utils::file_lock> utils::file_lock::acquire(sstring path) {
+future<utils::file_lock> utils::file_lock::acquire(fs::path path) {
     // meh. not really any future stuff here. but pretend, for the
     // day when a future version of lock etc is added.
     try {
