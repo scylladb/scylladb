@@ -11,7 +11,7 @@ lister::lister(file f, dir_entry_types type, walker_type walker, filter_type fil
         , _walker(std::move(walker))
         , _filter(std::move(filter))
         , _expected_type(std::move(type))
-        , _listing(_f.list_directory([this] (directory_entry de) { return visit(de); }))
+        , _listing_done(_f.list_directory([this] (directory_entry de) { return visit(de); }).done())
         , _dir(std::move(dir))
         , _show_hidden(do_show_hidden) {}
 
@@ -32,7 +32,7 @@ future<> lister::visit(directory_entry de) {
 }
 
 future<> lister::done() {
-    return _listing.done().then([this] {
+    return _listing_done.then([this] {
         return _f.close();
     });
 }
