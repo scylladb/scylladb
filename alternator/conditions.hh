@@ -37,7 +37,7 @@
 namespace alternator {
 
 enum class comparison_operator_type {
-    EQ, NE, LE, LT, GE, GT, IN, BETWEEN, CONTAINS, IS_NULL, NOT_NULL, BEGINS_WITH
+    EQ, NE, LE, LT, GE, GT, IN, BETWEEN, CONTAINS, NOT_CONTAINS, IS_NULL, NOT_NULL, BEGINS_WITH
 };
 
 comparison_operator_type get_comparison_operator(const rjson::value& comparison_operator);

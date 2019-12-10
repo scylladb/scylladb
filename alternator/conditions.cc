@@ -29,6 +29,7 @@
 #include "rjson.hh"
 #include "serialization.hh"
 #include "base64.hh"
+#include <stdexcept>
 
 namespace alternator {
 
@@ -48,6 +49,7 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
             {"BETWEEN", comparison_operator_type::BETWEEN},
             {"BEGINS_WITH", comparison_operator_type::BEGINS_WITH},
             {"CONTAINS", comparison_operator_type::CONTAINS},
+            {"NOT_CONTAINS", comparison_operator_type::NOT_CONTAINS},
     };
     if (!comparison_operator.IsString()) {
         throw api_error("ValidationException", format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
@@ -223,6 +225,14 @@ static bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
         }
     }
     return false;
+}
+
+// Check if two JSON-encoded values match with the NOT_CONTAINS relation
+static bool check_NOT_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
+    if (!v1) {
+        return false;
+    }
+    return !check_CONTAINS(v1, v2);
 }
 
 // Check if a JSON-encoded value equals any element of an array, which must have at least one element.
@@ -442,10 +452,11 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
         case comparison_operator_type::CONTAINS:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
             return check_CONTAINS(got, (*attribute_value_list)[0]);
-        default:
-            // FIXME: implement all the missing types, so there will be no default here.
-            throw api_error("ValidationException", format("ComparisonOperator {} is not yet supported", *comparison_operator));
+        case comparison_operator_type::NOT_CONTAINS:
+            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+            return check_NOT_CONTAINS(got, (*attribute_value_list)[0]);
         }
+        throw std::logic_error(format("Internal error: corrupted operator enum: {}", int(op)));
     }
 }
 
