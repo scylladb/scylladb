@@ -86,7 +86,6 @@ def test_update_expected_1_eq_true(test_table_s):
 # Check that set equality is checked correctly. Unlike string equality (for
 # example), it cannot be done with just naive string comparison of the JSON
 # representation, and we need to allow for any order.
-@pytest.mark.xfail(reason="bug in EQ test of sets")
 def test_update_expected_1_eq_set(test_table_s):
     p = random_string()
     # Because boto3 sorts the set values we give it, in order to generate a
