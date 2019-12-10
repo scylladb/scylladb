@@ -399,12 +399,21 @@ commitlog_total_space_in_mb: -1
 
 # Enable or disable inter-node encryption. 
 # You must also generate keys and provide the appropriate key and trust store locations and passwords. 
-# No custom encryption options are currently enabled. The available options are:
 #
 # The available internode options are : all, none, dc, rack
 # If set to dc scylla  will encrypt the traffic between the DCs
 # If set to rack scylla  will encrypt the traffic between the racks
 #
+# SSL/TLS algorithm and ciphers used can be controlled by 
+# the priority_string parameter. Info on priority string
+# syntax and values is available at:
+#   https://gnutls.org/manual/html_node/Priority-Strings.html
+#
+# The require_client_auth parameter allows you to 
+# restrict access to service based on certificate 
+# validation. Client must provide a certificate 
+# accepted by the used trust store to connect.
+# 
 # server_encryption_options:
 #    internode_encryption: none
 #    certificate: conf/scylla.crt

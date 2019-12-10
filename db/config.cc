@@ -616,7 +616,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , permissions_cache_max_entries(this, "permissions_cache_max_entries", value_status::Used, 1000,
         "Maximum cached permission entries. Must have a non-zero value if permissions caching is enabled (see a permissions_validity_in_ms description).")
     , server_encryption_options(this, "server_encryption_options", value_status::Used, {/*none*/},
-        "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. No custom encryption options are currently enabled. The available options are:\n"
+        "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. The available options are:\n"
         "\n"
         "internode_encryption : (Default: none ) Enable or disable encryption of inter-node communication using the TLS_RSA_WITH_AES_128_CBC_SHA cipher suite for authentication, key exchange, and encryption of data transfers. The available inter-node options are:\n"
         "\tall : Encrypt all inter-node communications.\n"
@@ -633,7 +633,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\trequire_client_auth : (Default: false ) Enables or disables certificate authentication.\n"
         "Related information: Node-to-node encryption")
     , client_encryption_options(this, "client_encryption_options", value_status::Used, {/*none*/},
-        "Enable or disable client-to-node encryption. You must also generate keys and provide the appropriate key and certificate. No custom encryption options are currently enabled. The available options are:\n"
+        "Enable or disable client-to-node encryption. You must also generate keys and provide the appropriate key and certificate. The available options are:\n"
         "\n"
         "\tenabled : (Default: false ) To enable, set to true.\n"
         "\tcertificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"
