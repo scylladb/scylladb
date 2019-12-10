@@ -63,8 +63,6 @@ future<> directories::touch_and_lock(sstring path) {
 }
 
 future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
-  // XXX -- this indentation is temporary, wil go away with next patches
-  return seastar::async([&] {
     std::unordered_set<sstring> directories;
     directories.insert(cfg.data_file_directories().cbegin(),
             cfg.data_file_directories().cend());
@@ -87,7 +85,7 @@ future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
     }
 
     supervisor::notify("creating and verifying directories");
-    parallel_for_each(directories, [this, &cfg] (sstring path) {
+    return parallel_for_each(directories, [this, &cfg] (sstring path) {
         return touch_and_lock(path).then([path = std::move(path), &cfg] {
             return disk_sanity(path, cfg.developer_mode()).then([path = std::move(path)] {
                 return distributed_loader::verify_owner_and_mode(fs::path(path)).handle_exception([](auto ep) {
@@ -96,8 +94,7 @@ future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
                 });
             });
         });
-    }).get();
-  });
+    });
 }
 
 } // namespace utils
