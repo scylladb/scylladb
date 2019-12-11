@@ -127,7 +127,8 @@ class TestSuite(ABC):
             for a in args:
                 for p in patterns:
                     if p in t:
-                        tests_to_run.append((t, a, self, mode))
+                        for i in range(options.repeat):
+                            tests_to_run.append((t, a, self, mode))
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
@@ -357,7 +358,6 @@ def find_tests(options):
     logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
                  len(tests_to_run), options.repeat, options.jobs)
 
-    tests_to_run = [t for t in tests_to_run for _ in range(options.repeat)]
     tests_to_run = [UnitTest(test_no, *t, options) for test_no, t in enumerate(tests_to_run)]
 
     return tests_to_run
