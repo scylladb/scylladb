@@ -191,7 +191,7 @@
             {
                "method":"GET",
                "summary":"Get the version number",
-               "type":"int",
+               "type": "long",
                "nickname":"get_version",
                "produces":[
                   "application/json"

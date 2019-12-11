@@ -118,7 +118,7 @@
         {
           "method": "GET",
           "summary": "Get pending tasks",
-          "type": "int",
+          "type": "long",
           "nickname": "get_pending_tasks",
           "produces": [
             "application/json"
@@ -181,7 +181,7 @@
         {
           "method": "GET",
           "summary": "Get bytes compacted",
-          "type": "int",
+          "type": "long",
           "nickname": "get_bytes_compacted",
           "produces": [
             "application/json"
@@ -197,7 +197,7 @@
          "description":"A row merged information",
          "properties":{
             "key":{
-               "type":"int",
+               "type": "long",
                "description":"The number of sstable"
             },
             "value":{

@@ -458,7 +458,7 @@
             {
                "method":"GET",
                "summary":"Return the generation value for this node.",
-               "type":"int",
+               "type": "long",
                "nickname":"get_current_generation_number",
                "produces":[
                   "application/json"
@@ -646,7 +646,7 @@
             {
                "method":"POST",
                "summary":"Trigger a cleanup of keys on a single keyspace",
-               "type":"int",
+               "type": "long",
                "nickname":"force_keyspace_cleanup",
                "produces":[
                   "application/json"
@@ -678,7 +678,7 @@
             {
                "method":"GET",
                "summary":"Scrub (deserialize + reserialize at the latest version, skipping bad rows if any) the given keyspace. If columnFamilies array is empty, all CFs are scrubbed. Scrubbed CFs will be snapshotted first, if disableSnapshot is false",
-               "type":"int",
+               "type": "long",
                "nickname":"scrub",
                "produces":[
                   "application/json"
@@ -726,7 +726,7 @@
             {
                "method":"GET",
                "summary":"Rewrite all sstables to the latest version. Unlike scrub, it doesn't skip bad rows and do not snapshot sstables first.",
-               "type":"int",
+               "type": "long",
                "nickname":"upgrade_sstables",
                "produces":[
                   "application/json"
@@ -800,7 +800,7 @@
                "summary":"Return an array with the ids of the currently active repairs",
                "type":"array",
                "items":{
-                  "type":"int"
+                  "type": "long"
                },
                "nickname":"get_active_repair_async",
                "produces":[
@@ -816,7 +816,7 @@
             {
                "method":"POST",
                "summary":"Invoke repair asynchronously. You can track repair progress by using the get supplying id",
-               "type":"int",
+               "type": "long",
                "nickname":"repair_async",
                "produces":[
                   "application/json"
@@ -947,7 +947,7 @@
                      "description":"The repair ID to check for status",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -1277,18 +1277,18 @@
                   },
                   {
                      "name":"dynamic_update_interval",
-                     "description":"integer, in ms (default 100)",
+                     "description":"interval in ms (default 100)",
                      "required":false,
                      "allowMultiple":false,
-                     "type":"integer",
+                     "type":"long",
                      "paramType":"query"
                   },
                   {
                      "name":"dynamic_reset_interval",
-                     "description":"integer, in ms (default 600,000)",
+                     "description":"interval in ms (default 600,000)",
                      "required":false,
                      "allowMultiple":false,
-                     "type":"integer",
+                     "type":"long",
                      "paramType":"query"
                   },
                   {
@@ -1493,7 +1493,7 @@
                      "description":"Stream throughput",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -1501,7 +1501,7 @@
             {
                "method":"GET",
                "summary":"Get stream throughput mb per sec",
-               "type":"int",
+               "type": "long",
                "nickname":"get_stream_throughput_mb_per_sec",
                "produces":[
                   "application/json"
@@ -1517,7 +1517,7 @@
             {
                "method":"GET",
                "summary":"get compaction throughput mb per sec",
-               "type":"int",
+               "type": "long",
                "nickname":"get_compaction_throughput_mb_per_sec",
                "produces":[
                   "application/json"
@@ -1539,7 +1539,7 @@
                      "description":"compaction throughput",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -1943,7 +1943,7 @@
             {
                "method":"GET",
                "summary":"Returns the threshold for warning of queries with many tombstones",
-               "type":"int",
+               "type": "long",
                "nickname":"get_tombstone_warn_threshold",
                "produces":[
                   "application/json"
@@ -1965,7 +1965,7 @@
                      "description":"tombstone debug threshold",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -1978,7 +1978,7 @@
             {
                "method":"GET",
                "summary":"",
-               "type":"int",
+               "type": "long",
                "nickname":"get_tombstone_failure_threshold",
                "produces":[
                   "application/json"
@@ -2000,7 +2000,7 @@
                      "description":"tombstone debug threshold",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -2013,7 +2013,7 @@
             {
                "method":"GET",
                "summary":"Returns the threshold for rejecting queries due to a large batch size",
-               "type":"int",
+               "type": "long",
                "nickname":"get_batch_size_failure_threshold",
                "produces":[
                   "application/json"
@@ -2035,7 +2035,7 @@
                      "description":"batch size debug threshold",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -2059,7 +2059,7 @@
                      "description":"throttle in kb",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -2072,7 +2072,7 @@
             {
                "method":"GET",
                "summary":"Get load",
-               "type":"int",
+               "type": "long",
                "nickname":"get_metrics_load",
                "produces":[
                   "application/json"
@@ -2088,7 +2088,7 @@
             {
                "method":"GET",
                "summary":"Get exceptions",
-               "type":"int",
+               "type": "long",
                "nickname":"get_exceptions",
                "produces":[
                   "application/json"
@@ -2104,7 +2104,7 @@
             {
                "method":"GET",
                "summary":"Get total hints in progress",
-               "type":"int",
+               "type": "long",
                "nickname":"get_total_hints_in_progress",
                "produces":[
                   "application/json"
@@ -2120,7 +2120,7 @@
             {
                "method":"GET",
                "summary":"Get total hints",
-               "type":"int",
+               "type": "long",
                "nickname":"get_total_hints",
                "produces":[
                   "application/json"

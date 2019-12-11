@@ -32,7 +32,7 @@
             {
                "method":"GET",
                "summary":"Get number of active outbound streams",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_active_streams_outbound",
                "produces":[
                   "application/json"
@@ -48,7 +48,7 @@
             {
                "method":"GET",
                "summary":"Get total incoming bytes",
-               "type":"int",
+               "type": "long",
                "nickname":"get_total_incoming_bytes",
                "produces":[
                   "application/json"
@@ -72,7 +72,7 @@
             {
                "method":"GET",
                "summary":"Get all total incoming bytes",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_total_incoming_bytes",
                "produces":[
                   "application/json"
@@ -88,7 +88,7 @@
             {
                "method":"GET",
                "summary":"Get total outgoing bytes",
-               "type":"int",
+               "type": "long",
                "nickname":"get_total_outgoing_bytes",
                "produces":[
                   "application/json"
@@ -112,7 +112,7 @@
             {
                "method":"GET",
                "summary":"Get all total outgoing bytes",
-               "type":"int",
+               "type": "long",
                "nickname":"get_all_total_outgoing_bytes",
                "produces":[
                   "application/json"
@@ -154,7 +154,7 @@
                "description":"The peer"
             },
             "session_index":{
-               "type":"int",
+               "type": "long",
                "description":"The session index"
             },
             "connecting":{
@@ -211,7 +211,7 @@
                "description":"The ID"
             },
             "files":{
-               "type":"int",
+               "type": "long",
                "description":"Number of files to transfer. Can be 0 if nothing to transfer for some streaming request."
             },
             "total_size":{
@@ -242,7 +242,7 @@
                "description":"The peer address"
             },
             "session_index":{
-               "type":"int",
+               "type": "long",
                "description":"The session index"
             },
             "file_name":{

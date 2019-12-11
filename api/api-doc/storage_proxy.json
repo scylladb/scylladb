@@ -105,7 +105,7 @@
             {
                "method":"GET",
                "summary":"Get the max hint window",
-               "type":"int",
+               "type": "long",
                "nickname":"get_max_hint_window",
                "produces":[
                   "application/json"
@@ -128,7 +128,7 @@
                      "description":"max hint window in ms",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -141,7 +141,7 @@
             {
                "method":"GET",
                "summary":"Get max hints in progress",
-               "type":"int",
+               "type": "long",
                "nickname":"get_max_hints_in_progress",
                "produces":[
                   "application/json"
@@ -164,7 +164,7 @@
                      "description":"max hints in progress",
                      "required":true,
                      "allowMultiple":false,
-                     "type":"int",
+                     "type": "long",
                      "paramType":"query"
                   }
                ]
@@ -177,7 +177,7 @@
             {
                "method":"GET",
                "summary":"get hints in progress",
-               "type":"int",
+               "type": "long",
                "nickname":"get_hints_in_progress",
                "produces":[
                   "application/json"
@@ -602,7 +602,7 @@
         {
           "method": "GET",
           "summary": "Get cas write metrics",
-          "type": "int",
+          "type": "long",
           "nickname": "get_cas_write_metrics_unfinished_commit",
           "produces": [
             "application/json"
@@ -632,7 +632,7 @@
         {
           "method": "GET",
           "summary": "Get cas write metrics",
-          "type": "int",
+          "type": "long",
           "nickname": "get_cas_write_metrics_condition_not_met",
           "produces": [
             "application/json"
@@ -647,7 +647,7 @@
         {
           "method": "GET",
           "summary": "Get cas read metrics",
-          "type": "int",
+          "type": "long",
           "nickname": "get_cas_read_metrics_unfinished_commit",
           "produces": [
             "application/json"
@@ -677,7 +677,7 @@
         {
           "method": "GET",
           "summary": "Get read metrics",
-          "type": "int",
+          "type": "long",
           "nickname": "get_read_metrics_timeouts",
           "produces": [
             "application/json"
@@ -692,7 +692,7 @@
         {
           "method": "GET",
           "summary": "Get read metrics",
-          "type": "int",
+          "type": "long",
           "nickname": "get_read_metrics_unavailables",
           "produces": [
             "application/json"
@@ -827,7 +827,7 @@
         {
           "method": "GET",
           "summary": "Get range metrics",
-          "type": "int",
+          "type": "long",
           "nickname": "get_range_metrics_timeouts",
           "produces": [
             "application/json"
@@ -842,7 +842,7 @@
         {
           "method": "GET",
           "summary": "Get range metrics",
-          "type": "int",
+          "type": "long",
           "nickname": "get_range_metrics_unavailables",
           "produces": [
             "application/json"
@@ -887,7 +887,7 @@
         {
           "method": "GET",
           "summary": "Get write metrics",
-          "type": "int",
+          "type": "long",
           "nickname": "get_write_metrics_timeouts",
           "produces": [
             "application/json"
@@ -902,7 +902,7 @@
         {
           "method": "GET",
           "summary": "Get write metrics",
-          "type": "int",
+          "type": "long",
           "nickname": "get_write_metrics_unavailables",
           "produces": [
             "application/json"
@@ -1008,7 +1008,7 @@
             {
                "method":"GET",
                "summary":"Get read latency",
-               "type":"int",
+               "type": "long",
                "nickname":"get_read_latency",
                "produces":[
                   "application/json"
@@ -1040,7 +1040,7 @@
             {
                "method":"GET",
                "summary":"Get write latency",
-               "type":"int",
+               "type": "long",
                "nickname":"get_write_latency",
                "produces":[
                   "application/json"
@@ -1072,7 +1072,7 @@
             {
                "method":"GET",
                "summary":"Get range latency",
-               "type":"int",
+               "type": "long",
                "nickname":"get_range_latency",
                "produces":[
                   "application/json"
