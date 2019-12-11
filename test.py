@@ -154,6 +154,10 @@ class Test:
         self.log_filename = os.path.join(options.tmpdir, self.uname + ".log")
         self.success = None
 
+    @abstractmethod
+    def print_summary(self):
+        pass
+
 
 class UnitTest(Test):
     standard_args = shlex.split("--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0")
@@ -169,6 +173,10 @@ class UnitTest(Test):
             boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
             boost_args += ['--']
             self.args = boost_args + self.args
+
+    def print_summary(self):
+        print("Output of {} {}:".format(self.path, " ".join(self.args)))
+        print(read_log(self.log_filename))
 
 
 def print_start_blurb():
@@ -422,8 +430,7 @@ def print_summary(tests, failed_tests):
         print("The following test(s) have failed: {}".format(
             " ".join([t.name for t in failed_tests])))
         for test in failed_tests:
-            print("Output of {} {}:".format(test.path, " ".join(test.args)))
-            print(read_log(test.log_filename))
+            test.print_summary()
         print("Summary: {} of the total {} tests failed".format(len(failed_tests), len(tests)))
 
 
