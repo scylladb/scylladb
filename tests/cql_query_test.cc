@@ -4120,6 +4120,8 @@ SEASTAR_TEST_CASE(test_like_operator_on_clustering_key) {
         require_rows(e, "select s from t where s like '%c' allow filtering", {{T("abc")}});
         cquery_nofail(e, "insert into t (p, s) values (2, 'acc')");
         require_rows(e, "select s from t where s like '%c' allow filtering", {{T("abc")}, {T("acc")}});
+        cquery_nofail(e, "insert into t (p, s) values (2, 'acd')");
+        require_rows(e, "select s from t where p = 2 and s like '%c' allow filtering", {{T("acc")}});
     });
 }
 
