@@ -419,14 +419,12 @@ def read_log(log_filename):
 
 def print_summary(tests, failed_tests):
     if failed_tests:
-        print('\n\nOutput of the failed tests:')
+        print("The following test(s) have failed: {}".format(
+            " ".join([t.name for t in failed_tests])))
         for test in failed_tests:
-            print("Test {} {} failed:".format(test.path, " ".join(test.args)))
+            print("Output of {} {}:".format(test.path, " ".join(test.args)))
             print(read_log(test.log_filename))
-        print('\n\nThe following test(s) have failed:')
-        for test in failed_tests:
-            print('  {} {}'.format(test.path, ' '.join(test.args)))
-        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(tests)))
+        print("Summary: {} of the total {} tests failed".format(len(failed_tests), len(tests)))
 
 
 def write_xunit_report(tests, options):
