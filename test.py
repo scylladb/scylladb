@@ -124,7 +124,10 @@ class UnitTestSuite(TestSuite):
     def add_test(self, shortname, mode, options, tests_to_run):
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
-        args = self.custom_args.get(shortname, [None])
+
+        # Default seastar arguments, if not provided in custom test options,
+        # are two cores and 2G of RAM
+        args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
             test = UnitTest(self.next_id, shortname, a, self, mode, options)
             tests_to_run.append(test)
@@ -137,11 +140,7 @@ class BoostTestSuite(UnitTestSuite):
 
 class UnitTest:
     standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0'.split()
-    seastar_args = '-c2 -m2G'
-
     def __init__(self, test_no, shortname, opts, suite, mode, options):
-        if opts is None:
-            opts = UnitTest.seastar_args
         self.id = test_no
         # Name with test suite name
         self.name = os.path.join(suite.name, shortname)
