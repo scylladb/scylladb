@@ -124,25 +124,26 @@ class TestSuite(ABC):
             if mode not in ["release", "dev"] and shortname in long_tests:
                 continue
             t = os.path.join(self.name, shortname)
-            args = custom_test_args.get(t)
-            if isinstance(args, (str, type(None))):
-                args = [args]
             patterns = options.name if options.name else [t]
-            for a in args:
-                for p in patterns:
-                    if p in t:
-                        for i in range(options.repeat):
-                            self.add_test(t, a, mode, options, tests_to_run)
+            for p in patterns:
+                if p in t:
+                    for i in range(options.repeat):
+                        self.add_test(t, mode, options, tests_to_run)
+
 
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
 
-    def add_test(self, name, args, mode, options, tests_to_run):
+    def add_test(self, name, mode, options, tests_to_run):
         """Create a UnitTest class with possibly custom command line options
         and add it to the list of tests"""
-        test = UnitTest(self.next_id, name, args, self, mode, options)
-        tests_to_run.append(test)
+        args = custom_test_args.get(name)
+        if isinstance(args, (str, type(None))):
+            args = [args]
+        for a in args:
+            test = UnitTest(self.next_id, name, a, self, mode, options)
+            tests_to_run.append(test)
 
 
 class BoostTestSuite(UnitTestSuite):
