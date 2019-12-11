@@ -571,6 +571,8 @@ void manager::drain_for(gms::inet_address endpoint) {
                 manager_logger.error("Exception when draining {}: {}", endpoint, eptr);
             });
         });
+    }).finally([endpoint] {
+        manager_logger.trace("drain_for: finished draining {}", endpoint);
     });
 }
 
