@@ -1,1 +1,8 @@
+# Suite test type. Supported types: unit, boost, cql
 type: unit
+# A list of long tests, these are only run in dev and release modes
+long:
+    - lsa_async_eviction_test
+    - lsa_sync_eviction_test
+    - row_cache_alloc_stress_test
+    - row_cache_stress_test

@@ -51,14 +51,6 @@ custom_test_args = {
     'unit/row_cache_stress_test': '-c1 -m1G --seconds 10',
 }
 
-# Only run in dev, release configurations, skip in others
-long_tests = set([
-    'unit/lsa_async_eviction_test',
-    'unit/lsa_sync_eviction_test',
-    'unit/row_cache_alloc_stress_test',
-    'unit/row_cache_stress_test'
-])
-
 CONCOLORS = {'green': '\033[1;32m', 'red': '\033[1;31m', 'nocolor': '\033[0m'}
 
 def colorformat(msg, **kwargs):
@@ -122,10 +114,12 @@ class TestSuite(ABC):
 
     def add_test_list(self, mode, options, tests_to_run):
         lst = glob.glob(os.path.join(self.path, "*_test.cc"))
+        long_tests = set(self.cfg.get("long", []))
         for t in lst:
-            t = os.path.join(self.name, os.path.splitext(os.path.basename(t))[0])
-            if mode not in ["release", "dev"] and t in long_tests:
+            shortname = os.path.splitext(os.path.basename(t))[0]
+            if mode not in ["release", "dev"] and shortname in long_tests:
                 continue
+            t = os.path.join(self.name, shortname)
             args = custom_test_args.get(t)
             if isinstance(args, (str, type(None))):
                 args = [args]
