@@ -188,6 +188,10 @@ class UnitTest(Test):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
 
+    async def run(self, options):
+        await run_test(self, options)
+        return self
+
 
 def print_start_blurb():
     print("="*80)
@@ -263,7 +267,7 @@ async def run_test(test, options):
         print('  with error {e}\n'.format(e=e), file=file)
         report_error(e)
     logging.info("Test #%d %s", test.id, "passed" if test.success else "failed")
-    return test
+
 
 def setup_signal_handlers(loop, signaled):
 
@@ -410,7 +414,7 @@ async def run_all_tests(tests_to_run, signaled, options):
                 # Wait for some task to finish
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 await reap(done, pending, signaled)
-            pending.add(asyncio.create_task(run_test(test, options)))
+            pending.add(asyncio.create_task(test.run(options)))
         # Wait & reap ALL tasks but signaled_task
         # Do not use asyncio.ALL_COMPLETED to print a nice progress report
         while len(pending) > 1:
