@@ -290,7 +290,7 @@ public:
             auto pranges = make_partition_ranges(*schema, keys);
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys]() mutable {
-                auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout();
                 return service::get_local_storage_proxy().query(schema, cmd, std::move(pranges), cl_from_thrift(consistency_level), {timeout, empty_service_permit(), _query_state.get_client_state()}).then(
                         [schema, cmd, cell_limit, keys = std::move(keys)](service::storage_proxy::coordinator_query_result qr) {
                     return query::result_view::do_with(*qr.query_result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
@@ -318,7 +318,7 @@ public:
             auto pranges = make_partition_ranges(*schema, keys);
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys]() mutable {
-                auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout();
                 return service::get_local_storage_proxy().query(schema, cmd, std::move(pranges), cl_from_thrift(consistency_level), {timeout, empty_service_permit(), _query_state.get_client_state()}).then(
                         [schema, cmd, cell_limit, keys = std::move(keys)](service::storage_proxy::coordinator_query_result qr) {
                     return query::result_view::do_with(*qr.query_result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
@@ -355,7 +355,7 @@ public:
             }
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, schema, cmd, prange = std::move(prange), consistency_level] () mutable {
-                auto timeout = db::timeout_clock::now() + _timeout_config.range_read_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.range_read_timeout();
                 return service::get_local_storage_proxy().query(schema, cmd, std::move(prange), cl_from_thrift(consistency_level), {timeout, empty_service_permit(), _query_state.get_client_state()}).then(
                         [schema, cmd](service::storage_proxy::coordinator_query_result qr) {
                     return query::result_view::do_with(*qr.query_result, [schema, cmd](query::result_view v) {
@@ -420,7 +420,7 @@ public:
             range = {dht::partition_range::make_singular(std::move(range[0].start()->value()))};
         }
         auto range1 = range; // query() below accepts an rvalue, so need a copy to reuse later
-        auto timeout = db::timeout_clock::now() + timeout_config.range_read_timeout;
+        auto timeout = db::timeout_clock::now() + timeout_config.range_read_timeout();
         return service::get_local_storage_proxy().query(schema, cmd, std::move(range), consistency_level, {timeout, empty_service_permit(), qs.get_client_state()}).then(
                 [schema, cmd, column_limit](service::storage_proxy::coordinator_query_result qr) {
             return query::result_view::do_with(*qr.query_result, [schema, cmd, column_limit](query::result_view v) {
@@ -497,7 +497,7 @@ public:
             mutation m_to_apply(schema, key_from_thrift(*schema, to_bytes_view(key)));
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level] {
-                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout();
                 return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, /*FIXME: pass real permit*/empty_service_permit());
             });
         });
@@ -512,7 +512,7 @@ public:
             mutation m_to_apply(schema, key_from_thrift(*schema, to_bytes_view(key)));
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level] {
-                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout();
                 return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, /*FIXME: pass real permit*/empty_service_permit());
             });
         });
@@ -547,7 +547,7 @@ public:
             }
 
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level] {
-                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout();
                 return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, /*FIXME: pass real permit*/empty_service_permit());
             });
         });
@@ -573,7 +573,7 @@ public:
 
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level] {
                 // This mutation contains only counter tombstones so it can be applied like non-counter mutations.
-                auto timeout = db::timeout_clock::now() + _timeout_config.counter_write_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.counter_write_timeout();
                 return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, /*FIXME: pass real permit*/empty_service_permit());
             });
         });
@@ -585,7 +585,7 @@ public:
             return parallel_for_each(std::move(p.second), [this](auto&& schema) {
                 return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY);
             }).then([this, muts = std::move(p.first), consistency_level] {
-                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout();
                 return service::get_local_storage_proxy().mutate(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, /*FIXME: pass real permit*/empty_service_permit());
             });
         });
@@ -597,7 +597,7 @@ public:
             return parallel_for_each(std::move(p.second), [this](auto&& schema) {
                 return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY);
             }).then([this, muts = std::move(p.first), consistency_level] {
-                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout();
                 return service::get_local_storage_proxy().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, /*FIXME: pass real permit*/empty_service_permit());
             });
         });
@@ -671,7 +671,7 @@ public:
             auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), row_limit);
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, dk = std::move(dk), cmd, schema, column_limit = request.count, cl = request.consistency_level] {
-                auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
+                auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout();
                 return service::get_local_storage_proxy().query(schema, cmd, {dht::partition_range::make_singular(dk)}, cl_from_thrift(cl), {timeout, /* FIXME: pass real permit */empty_service_permit(), _query_state.get_client_state()}).then(
                         [schema, cmd, column_limit](service::storage_proxy::coordinator_query_result qr) {
                     return query::result_view::do_with(*qr.query_result, [schema, cmd, column_limit](query::result_view v) {

@@ -52,11 +52,11 @@ struct query_context {
             db::timeout_clock::time_point timeout,
             Args&&... args) {
         const db::timeout_clock::time_point now = db::timeout_clock::now();
-        const db::timeout_clock::duration d =
+        const utils::updateable_value<std::chrono::milliseconds> d =
             now < timeout ?
-                timeout - now :
+                    utils::updateable_value<std::chrono::milliseconds>(timeout - now) :
                 // let the `storage_proxy` time out the query down the call chain
-                db::timeout_clock::duration::zero();
+                    utils::updateable_value<std::chrono::milliseconds>(db::timeout_clock::duration::zero());
 
         return do_with(timeout_config{d, d, d, d, d, d, d}, [this, req = std::move(req), &args...] (auto& tcfg) {
             return _qp.local().process(req,

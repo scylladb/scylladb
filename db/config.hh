@@ -32,6 +32,7 @@
 
 #include "seastarx.hh"
 #include "utils/config_file.hh"
+#include "db/timeout_clock.hh"
 
 namespace seastar { class file; struct logging_settings; }
 
@@ -69,6 +70,8 @@ sstring config_value_as_json(const db::seed_provider_type& v);
 sstring config_value_as_json(const log_level& v);
 
 sstring config_value_as_json(const std::unordered_map<sstring, log_level>& v);
+
+sstring config_value_as_json(const std::chrono::milliseconds& v);
 
 }
 
@@ -189,13 +192,13 @@ public:
     named_value<uint32_t> counter_cache_keys_to_save;
     named_value<uint32_t> tombstone_warn_threshold;
     named_value<uint32_t> tombstone_failure_threshold;
-    named_value<uint32_t> range_request_timeout_in_ms;
-    named_value<uint32_t> read_request_timeout_in_ms;
-    named_value<uint32_t> counter_write_request_timeout_in_ms;
-    named_value<uint32_t> cas_contention_timeout_in_ms;
-    named_value<uint32_t> truncate_request_timeout_in_ms;
-    named_value<uint32_t> write_request_timeout_in_ms;
-    named_value<uint32_t> request_timeout_in_ms;
+    named_value<std::chrono::milliseconds> range_request_timeout_in_ms;
+    named_value<std::chrono::milliseconds> read_request_timeout_in_ms;
+    named_value<std::chrono::milliseconds> counter_write_request_timeout_in_ms;
+    named_value<std::chrono::milliseconds> cas_contention_timeout_in_ms;
+    named_value<std::chrono::milliseconds> truncate_request_timeout_in_ms;
+    named_value<std::chrono::milliseconds> write_request_timeout_in_ms;
+    named_value<std::chrono::milliseconds> request_timeout_in_ms;
     named_value<bool> cross_node_timeout;
     named_value<uint32_t> internode_send_buff_size_in_bytes;
     named_value<uint32_t> internode_recv_buff_size_in_bytes;

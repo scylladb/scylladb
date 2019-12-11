@@ -140,7 +140,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().request_timeout_in_ms()/1000.0;
+        return ctx.db.local().get_config().request_timeout_in_ms()/1s;
     });
 
     sp::set_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -151,7 +151,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_read_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().read_request_timeout_in_ms()/1000.0;
+        return ctx.db.local().get_config().read_request_timeout_in_ms()/1s;
     });
 
     sp::set_read_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -162,7 +162,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_write_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().write_request_timeout_in_ms()/1000.0;
+        return ctx.db.local().get_config().write_request_timeout_in_ms()/1s;
     });
 
     sp::set_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -173,7 +173,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_counter_write_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().counter_write_request_timeout_in_ms()/1000.0;
+        return ctx.db.local().get_config().counter_write_request_timeout_in_ms()/1s;
     });
 
     sp::set_counter_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -184,7 +184,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_cas_contention_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().cas_contention_timeout_in_ms()/1000.0;
+        return ctx.db.local().get_config().cas_contention_timeout_in_ms()/1s;
     });
 
     sp::set_cas_contention_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -195,7 +195,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_range_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().range_request_timeout_in_ms()/1000.0;
+        return ctx.db.local().get_config().range_request_timeout_in_ms()/1s;
     });
 
     sp::set_range_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -206,7 +206,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_truncate_rpc_timeout.set(r, [&ctx](const_req req)  {
-        return ctx.db.local().get_config().truncate_request_timeout_in_ms()/1000.0;
+        return ctx.db.local().get_config().truncate_request_timeout_in_ms()/1s;
     });
 
     sp::set_truncate_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {

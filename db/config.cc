@@ -34,6 +34,9 @@
 #include "extensions.hh"
 #include "log.hh"
 #include "utils/config_file_impl.hh"
+#include <chrono>
+
+using namespace std::chrono_literals;
 
 namespace utils {
 
@@ -65,6 +68,13 @@ json::json_return_type
 seed_provider_to_json(const db::seed_provider_type& spt) {
     return value_to_json("seed_provider_type");
 }
+
+static
+json::json_return_type
+duration_in_ms_json(const std::chrono::milliseconds& d) {
+    return value_to_json(std::chrono::duration_cast<std::chrono::milliseconds>(d).count());
+}
+
 
 template <>
 const config_type config_type_for<bool> = config_type("bool", value_to_json<bool>);
@@ -108,6 +118,9 @@ const config_type config_type_for<int32_t> = config_type("integer", value_to_jso
 template <>
 const config_type config_type_for<db::seed_provider_type> = config_type("seed provider", seed_provider_to_json);
 
+template <>
+const config_type config_type_for<std::chrono::milliseconds> = config_type("integer", duration_in_ms_json);
+
 }
 
 namespace YAML {
@@ -149,6 +162,18 @@ struct convert<db::config::seed_provider_type> {
                 }
             }
         }
+        return true;
+    }
+};
+
+template<>
+struct convert<std::chrono::milliseconds> {
+    static bool decode(const Node& node, std::chrono::milliseconds& v) {
+        uint32_t tmp;
+        if (!convert<uint32_t>::decode(node, tmp)) {
+            return false;
+        }
+        v = tmp * 1ms;
         return true;
     }
 };
@@ -456,20 +481,20 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , tombstone_failure_threshold(this, "tombstone_failure_threshold", value_status::Unused, 100000,
         "The maximum number of tombstones a query can scan before aborting.")
     /* Network timeout settings */
-    , range_request_timeout_in_ms(this, "range_request_timeout_in_ms", value_status::Used, 10000,
+    , range_request_timeout_in_ms(this, "range_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000ms,
         "The time in milliseconds that the coordinator waits for sequential or index scans to complete.")
-    , read_request_timeout_in_ms(this, "read_request_timeout_in_ms", value_status::Used, 5000,
+    , read_request_timeout_in_ms(this, "read_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 5000ms,
         "The time that the coordinator waits for read operations to complete")
-    , counter_write_request_timeout_in_ms(this, "counter_write_request_timeout_in_ms", value_status::Used, 5000,
+    , counter_write_request_timeout_in_ms(this, "counter_write_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 5000ms,
         "The time that the coordinator waits for counter writes to complete.")
-    , cas_contention_timeout_in_ms(this, "cas_contention_timeout_in_ms", value_status::Used, 1000,
+    , cas_contention_timeout_in_ms(this, "cas_contention_timeout_in_ms", liveness::LiveUpdate, value_status::Unused, 1000ms,
         "The time that the coordinator continues to retry a CAS (compare and set) operation that contends with other proposals for the same row.")
-    , truncate_request_timeout_in_ms(this, "truncate_request_timeout_in_ms", value_status::Used, 10000,
+    , truncate_request_timeout_in_ms(this, "truncate_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000ms,
         "The time that the coordinator waits for truncates (remove all data from a table) to complete. The long default value allows for a snapshot to be taken before removing the data. If auto_snapshot is disabled (not recommended), you can reduce this time.")
-    , write_request_timeout_in_ms(this, "write_request_timeout_in_ms", value_status::Used, 2000,
+    , write_request_timeout_in_ms(this, "write_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 2000ms,
         "The time in milliseconds that the coordinator waits for write operations to complete.\n"
         "Related information: About hinted handoff writes")
-    , request_timeout_in_ms(this, "request_timeout_in_ms", value_status::Used, 10000,
+    , request_timeout_in_ms(this, "request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000ms,
         "The default timeout for other, miscellaneous operations.\n"
         "Related information: About hinted handoff writes")
     /* Inter-node settings */
@@ -792,6 +817,20 @@ void config_file::named_value<db::config::seed_provider_type>::add_command_line_
                     desc.data());
 }
 
+template<>
+void config_file::named_value<std::chrono::milliseconds>::add_command_line_option(
+                boost::program_options::options_description_easy_init& init,
+                const std::string_view& name, const std::string_view& desc) {
+    init((hyphenate(name)).data(),
+            value_ex<uint32_t>()->notifier(
+                    [this](uint32_t new_duration) {
+        auto old_duration = operator()();
+        old_duration = new_duration * 1ms;
+        set(std::move(old_duration), config_source::CommandLine);
+    }),
+    desc.data());
+}
+
 }
 
 boost::program_options::options_description_easy_init&
@@ -883,6 +922,10 @@ sstring
 config_value_as_json(const db::seed_provider_type& v) {
     // We don't support converting this to json yet
     return "seed_provider_type";
+}
+
+sstring config_value_as_json(const std::chrono::milliseconds& v) {
+    return to_sstring(std::chrono::duration_cast<std::chrono::milliseconds>(v).count());
 }
 
 sstring

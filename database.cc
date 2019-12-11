@@ -2013,5 +2013,11 @@ std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {
 
 const timeout_config infinite_timeout_config = {
         // not really infinite, but long enough
-        1h, 1h, 1h, 1h, 1h, 1h, 1h,
+        utils::updateable_value<std::chrono::milliseconds>(1h),
+        utils::updateable_value<std::chrono::milliseconds>(1h),
+        utils::updateable_value<std::chrono::milliseconds>(1h),
+        utils::updateable_value<std::chrono::milliseconds>(1h),
+        utils::updateable_value<std::chrono::milliseconds>(1h),
+        utils::updateable_value<std::chrono::milliseconds>(1h),
+        utils::updateable_value<std::chrono::milliseconds>(1h),
 };
