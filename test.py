@@ -24,6 +24,7 @@ from abc import ABC, abstractmethod
 import argparse
 import asyncio
 import colorama
+import filecmp
 import glob
 import io
 import itertools
@@ -32,12 +33,12 @@ import multiprocessing
 import os
 import pathlib
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 import yaml
-
 
 def create_formatter(*decorators):
     """Return a function which decorates its argument with the given
@@ -174,6 +175,19 @@ class BoostTestSuite(UnitTestSuite):
         return []
 
 
+class CqlTestSuite(TestSuite):
+    """TestSuite for CQL tests"""
+
+    def add_test(self, shortname, mode, options):
+        """Create a CqlTest class and add it to the list"""
+        test = CqlTest(self.next_id, shortname, self, mode, options)
+        self.tests.append(test)
+
+    @property
+    def pattern(self):
+        return "*_test.cql"
+
+
 class Test:
     """Base class for CQL, Unit and Boost tests"""
     def __init__(self, test_no, shortname, suite, mode, options):
@@ -188,6 +202,10 @@ class Test:
         self.uname = "{}.{}".format(self.shortname, self.id)
         self.log_filename = os.path.join(options.tmpdir, self.mode, self.uname + ".log")
         self.success = None
+
+    @abstractmethod
+    async def run(self, options):
+        pass
 
     @abstractmethod
     def print_summary(self):
@@ -215,8 +233,68 @@ class UnitTest(Test):
         print(read_log(self.log_filename))
 
     async def run(self, options):
-        await run_test(self, options)
+        self.success = await run_test(self, options)
+        logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
+
+
+class CqlTest(Test):
+    """Run the sequence of CQL commands stored in the file and check
+    output"""
+
+    def __init__(self, test_no, shortname, suite, mode, options):
+        super().__init__(test_no, shortname, suite, mode, options)
+        # Path to cql_repl driver, in the given build mode
+        self.path = os.path.join("build", self.mode, "test/tools/cql_repl")
+        self.cql = os.path.join(suite.path, self.shortname + ".cql")
+        self.result = os.path.join(suite.path, self.shortname + ".result")
+        self.tmpfile = os.path.join(options.tmpdir, self.mode, self.uname + ".reject")
+        self.reject = os.path.join(suite.path, self.shortname + ".reject")
+        self.args = shlex.split("-c2 -m2G --input={} --output={} --log={}".format(
+            self.cql, self.tmpfile, self.log_filename))
+        self.args += UnitTest.standard_args
+        self.is_executed_ok = False
+        self.is_new = False
+        self.is_equal_result = None
+        self.summary = "not run"
+
+    async def run(self, options):
+        self.is_executed_ok = await run_test(self, options)
+        self.success = False
+        self.summary = "failed"
+
+        def set_summary(summary):
+            self.summary = summary
+            logging.info("Test %d %s", self.id, summary)
+
+        if not os.path.isfile(self.tmpfile):
+            set_summary("failed: no output file")
+        elif not os.path.isfile(self.result):
+            set_summary("failed: no result file")
+            self.is_new = True
+        else:
+            self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
+            if self.is_equal_result is False:
+                set_summary("failed: test output does not match expected result")
+            elif self.is_executed_ok:
+                self.success = True
+                set_summary("succeeded")
+            else:
+                set_summary("failed: correct output but non-zero return status.\nCheck test log.")
+
+        if self.is_new or self.is_equal_result is False:
+            # Put a copy of the .reject file close to the .result file
+            # so that it's easy to analyze the diff or overwrite .result
+            # with .reject. Preserve the original .reject file: in
+            # multiple modes the copy .reject file may be overwritten.
+            shutil.copyfile(self.tmpfile, self.reject)
+        elif os.path.exists(self.tmpfile):
+            pathlib.Path(self.tmpfile).unlink()
+
+        return self
+
+    def print_summary(self):
+        print("Test {} ({}) {}".format(self.name, self.mode, self.summary))
 
 
 def print_start_blurb():
@@ -252,6 +330,7 @@ def print_progress(test, cookie, verbose):
 
 
 async def run_test(test, options):
+    """Run test program, return True if success else False"""
     file = io.StringIO()
 
     def report_error(out):
@@ -275,11 +354,10 @@ async def run_test(test, options):
                 preexec_fn=os.setsid,
             )
         stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
-        test.success = process.returncode == 0
         if process.returncode != 0:
             print('  with error code {code}\n'.format(code=process.returncode), file=file)
             report_error(stdout.decode(encoding='UTF-8'))
-
+        return process.returncode == 0
     except (asyncio.TimeoutError, asyncio.CancelledError) as e:
         if process is not None:
             process.kill()
@@ -292,7 +370,7 @@ async def run_test(test, options):
     except Exception as e:
         print('  with error {e}\n'.format(e=e), file=file)
         report_error(e)
-    logging.info("Test #%d %s", test.id, "passed" if test.success else "failed")
+    return False
 
 
 def setup_signal_handlers(loop, signaled):
