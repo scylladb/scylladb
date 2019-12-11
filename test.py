@@ -20,6 +20,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
+from abc import ABC, abstractmethod
 import argparse
 import asyncio
 import glob
@@ -75,11 +76,60 @@ def status_to_string(success):
     return status
 
 
+class TestSuite(ABC):
+    """A test suite is a folder with tests of the same type.
+    E.g. it can be unit tests, boost tests, or CQL tests."""
+
+    # All existing test suites, one suite per path.
+    suites = dict()
+
+    def __init__(self, path, cfg):
+        self.path = path
+        self.name = os.path.basename(self.path)
+        self.cfg = cfg
+        self.tests = []
+
+    @staticmethod
+    def load_cfg(path):
+        with open(os.path.join(path, "suite.yaml"), "r") as cfg_file:
+            cfg = yaml.safe_load(cfg_file.read())
+            if not isinstance(cfg, dict):
+                raise RuntimeError("Failed to load tests in {}: suite.yaml is empty".format(path))
+            return cfg
+
+    @staticmethod
+    def opt_create(path):
+        """Return a subclass of TestSuite with name cfg["type"].title + TestSuite.
+        Ensures there is only one suite instance per path."""
+        suite = TestSuite.suites.get(path)
+        if not suite:
+            cfg = TestSuite.load_cfg(path)
+            kind = cfg.get("type")
+            if kind is None:
+                raise RuntimeError("Failed to load tests in {}: suite.yaml has no suite type".format(path))
+            SpecificTestSuite = globals().get(kind.title() + "TestSuite")
+            if not SpecificTestSuite:
+                raise RuntimeError("Failed to load tests in {}: suite type '{}' not found".format(path, kind))
+            suite = SpecificTestSuite(path, cfg)
+            TestSuite.suites[path] = suite
+        return suite
+
+
+class UnitTestSuite(TestSuite):
+    """TestSuite instantiation for non-boost unit tests"""
+    pass
+
+
+class BoostTestSuite(UnitTestSuite):
+    """TestSuite for boost unit tests"""
+    pass
+
+
 class UnitTest:
     standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0'.split()
     seastar_args = '-c2 -m2G'
 
-    def __init__(self, test_no, name, opts, kind, mode, options):
+    def __init__(self, test_no, name, opts, suite, mode, options):
         if opts is None:
             opts = UnitTest.seastar_args
         self.id = test_no
@@ -88,7 +138,7 @@ class UnitTest:
         # Name within the suite
         self.shortname = os.path.basename(name)
         self.mode = mode
-        self.kind = kind
+        self.suite = suite
         self.path = os.path.join("build", self.mode, "test", self.name)
         self.args = opts.split() + UnitTest.standard_args
         # Unique file name, which is also readable by human, as filename prefix
@@ -96,7 +146,7 @@ class UnitTest:
         self.log_filename = os.path.join(options.tmpdir, self.uname + ".log")
         self.success = None
 
-        if self.kind == 'boost':
+        if isinstance(suite, BoostTestSuite):
             boost_args = []
             xmlout = os.path.join(options.jenkins, self.uname + ".boost.xml")
             boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
@@ -280,14 +330,9 @@ def find_tests(options):
 
     tests_to_run = []
 
-    def load_cfg(path):
-        with open(os.path.join(path, "suite.yaml"), "r") as cfg:
-            return yaml.safe_load(cfg.read())
-
-
     def add_test_list(path, mode):
-        cfg = load_cfg(path)
-        kind = cfg["type"]
+        suite = TestSuite.opt_create(path)
+        kind = suite.cfg["type"]
         lst = glob.glob(os.path.join(path, "*_test.cc"))
         for t in lst:
             t = os.path.join(kind, os.path.splitext(os.path.basename(t))[0])
@@ -300,7 +345,7 @@ def find_tests(options):
                 patterns = options.name if options.name else [t]
                 for p in patterns:
                     if p in t:
-                        tests_to_run.append((t, a, kind, mode))
+                        tests_to_run.append((t, a, suite, mode))
 
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
@@ -387,7 +432,7 @@ def print_summary(tests, failed_tests):
 
 
 def write_xunit_report(tests, options):
-    unit_tests = [t for t in tests if t.kind == "unit"]
+    unit_tests = [t for t in tests if isinstance(t.suite, UnitTestSuite)]
     num_unit_failed = sum(1 for t in unit_tests if not t.success)
 
     xml_results = ET.Element('testsuite', name='non-boost tests',
