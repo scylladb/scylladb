@@ -288,7 +288,7 @@ def find_tests(options):
     def add_test_list(path, mode):
         cfg = load_cfg(path)
         kind = cfg["type"]
-        lst = glob.glob(os.path.join("test", kind, "*_test.cc"))
+        lst = glob.glob(os.path.join(path, "*_test.cc"))
         for t in lst:
             t = os.path.join(kind, os.path.splitext(os.path.basename(t))[0])
             if mode not in ["release", "dev"] and t in long_tests:
