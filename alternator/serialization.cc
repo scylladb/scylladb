@@ -246,4 +246,16 @@ big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
     return big_decimal(it->value.GetString());
 }
 
+const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value& v) {
+    if (!v.IsObject() || v.MemberCount() != 1) {
+        return {"", nullptr};
+    }
+    auto it = v.MemberBegin();
+    const std::string it_key = it->name.GetString();
+    if (it_key != "SS" && it_key != "BS" && it_key != "NS") {
+        return {"", nullptr};
+    }
+    return std::make_pair(it_key, &(it->value));
+}
+
 }

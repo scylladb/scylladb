@@ -958,21 +958,6 @@ static std::string get_item_type_string(const rjson::value& v) {
     return it->name.GetString();
 }
 
-// Check if a given JSON object encodes a set (i.e., it is a {"SS": [...]}, or "NS", "BS"
-// and returns set's type and a pointer to that set. If the object does not encode a set,
-// returned value is {"", nullptr}
-static const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value& v) {
-    if (!v.IsObject() || v.MemberCount() != 1) {
-        return {"", nullptr};
-    }
-    auto it = v.MemberBegin();
-    const std::string it_key = it->name.GetString();
-    if (it_key != "SS" && it_key != "BS" && it_key != "NS") {
-        return {"", nullptr};
-    }
-    return std::make_pair(it_key, &(it->value));
-}
-
 // Take two JSON-encoded list values (remember that a list value is
 // {"L": [...the actual list]}) and return the concatenation, again as
 // a list value.
@@ -991,50 +976,6 @@ static rjson::value list_concatenate(const rjson::value& v1, const rjson::value&
     return ret;
 }
 
-struct single_value_rjson_comp {
-    bool operator()(const rjson::value& r1, const rjson::value& r2) const {
-        auto r1_type = r1.GetType();
-        auto r2_type = r2.GetType();
-        switch (r1_type) {
-        case rjson::type::kNullType:
-            return r1_type < r2_type;
-        case rjson::type::kFalseType:
-            return r1_type < r2_type;
-        case rjson::type::kTrueType:
-            return r1_type < r2_type;
-        case rjson::type::kObjectType:
-            throw rjson::error("Object type comparison is not supported");
-        case rjson::type::kArrayType:
-            throw rjson::error("Array type comparison is not supported");
-        case rjson::type::kStringType: {
-            const size_t r1_len = r1.GetStringLength();
-            const size_t r2_len = r2.GetStringLength();
-            size_t len = std::min(r1_len, r2_len);
-            int result = std::strncmp(r1.GetString(), r2.GetString(), len);
-            return result < 0 || (result == 0 && r1_len < r2_len);
-        }
-        case rjson::type::kNumberType: {
-            if (r1_type != r2_type) {
-                throw rjson::error("All numbers in a set should have the same type");
-            }
-            if (r1.IsDouble()) {
-                return r1.GetDouble() < r2.GetDouble();
-            } else if (r1.IsInt()) {
-                return r1.GetInt() < r2.GetInt();
-            } else if (r1.IsUint()) {
-                return r1.GetUint() < r2.GetUint();
-            } else if (r1.IsInt64()) {
-                return r1.GetInt64() < r2.GetInt64();
-            } else {
-                return r1.GetUint64() < r2.GetUint64();
-            }
-        }
-        default:
-            return false;
-        }
-    }
-};
-
 // Take two JSON-encoded set values (e.g. {"SS": [...the actual set]}) and return the sum of both sets,
 // again as a set value.
 static rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
@@ -1047,7 +988,7 @@ static rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
         throw api_error("ValidationException", "UpdateExpression: ADD operation for sets must be given sets as arguments");
     }
     rjson::value sum = rjson::copy(*set1);
-    std::set<rjson::value, single_value_rjson_comp> set1_raw;
+    std::set<rjson::value, rjson::single_value_comp> set1_raw;
     for (auto it = sum.Begin(); it != sum.End(); ++it) {
         set1_raw.insert(rjson::copy(*it));
     }
@@ -1072,7 +1013,7 @@ static rjson::value set_diff(const rjson::value& v1, const rjson::value& v2) {
     if (!set1 || !set2) {
         throw api_error("ValidationException", "UpdateExpression: DELETE operation can only be performed on a set");
     }
-    std::set<rjson::value, single_value_rjson_comp> set1_raw;
+    std::set<rjson::value, rjson::single_value_comp> set1_raw;
     for (auto it = set1->Begin(); it != set1->End(); ++it) {
         set1_raw.insert(rjson::copy(*it));
     }

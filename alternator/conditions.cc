@@ -146,9 +146,44 @@ static void verify_operand_count(const rjson::value* array, const size_check& ex
     }
 }
 
+struct rjson_engaged_ptr_comp {
+    bool operator()(const rjson::value* p1, const rjson::value* p2) const {
+        return rjson::single_value_comp()(*p1, *p2);
+    }
+};
+
+// It's not enough to compare underlying JSON objects when comparing sets,
+// as internally they're stored in an array, and the order of elements is
+// not important in set equality. See issue #5021
+static bool check_EQ_for_sets(const rjson::value& set1, const rjson::value& set2) {
+    if (set1.Size() != set2.Size()) {
+        return false;
+    }
+    std::set<const rjson::value*, rjson_engaged_ptr_comp> set1_raw;
+    for (auto it = set1.Begin(); it != set1.End(); ++it) {
+        set1_raw.insert(&*it);
+    }
+    for (const auto& a : set2.GetArray()) {
+        if (set1_raw.count(&a) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Check if two JSON-encoded values match with the EQ relation
 static bool check_EQ(const rjson::value* v1, const rjson::value& v2) {
-    return v1 && *v1 == v2;
+    if (!v1) {
+        return false;
+    }
+    if (v1->IsObject() && v1->MemberCount() == 1 && v2.IsObject() && v2.MemberCount() == 1) {
+        auto it1 = v1->MemberBegin();
+        auto it2 = v2.MemberBegin();
+        if ((it1->name == "SS" && it2->name == "SS") || (it1->name == "NS" && it2->name == "NS") || (it1->name == "BS" && it2->name == "BS")) {
+            return check_EQ_for_sets(it1->value, it2->value);
+        }
+    }
+    return *v1 == v2;
 }
 
 // Check if two JSON-encoded values match with the NE relation

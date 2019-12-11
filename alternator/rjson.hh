@@ -152,6 +152,10 @@ void set(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type
 // Throws if base_array is not a JSON array.
 void push_back(rjson::value& base_array, rjson::value&& item);
 
+struct single_value_comp {
+    bool operator()(const rjson::value& r1, const rjson::value& r2) const;
+};
+
 } // end namespace rjson
 
 namespace std {
