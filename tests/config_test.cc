@@ -844,14 +844,20 @@ inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os
 }
 }
 
+namespace {
+
+void throw_on_error(const sstring& opt, const sstring& msg, std::optional<utils::config_file::value_status> status) {
+    if (status != config::value_status::Invalid) {
+        throw std::invalid_argument(msg + " : " + opt);
+    }
+}
+
+} // anonymous namespace
+
 SEASTAR_TEST_CASE(test_parse_yaml) {
     config cfg;
 
-    cfg.read_from_yaml(cassandra_conf, [](auto& opt, auto& msg, auto status) {
-        if (status != config::value_status::Invalid) {
-            throw std::invalid_argument(msg + " : " + opt);
-        }
-    });
+    cfg.read_from_yaml(cassandra_conf, throw_on_error);
 
     BOOST_CHECK_EQUAL(cfg.cluster_name(), "Test Cluster");
     BOOST_CHECK_EQUAL(cfg.cluster_name.is_set(), true);
@@ -916,4 +922,79 @@ SEASTAR_TEST_CASE(test_parse_broken) {
     BOOST_REQUIRE(ok);
 
     return make_ready_future<>();
+}
+
+using ef = experimental_features_t;
+using features = std::vector<enum_option<ef>>;
+
+SEASTAR_TEST_CASE(test_parse_experimental_features_cdc) {
+    config cfg;
+    cfg.read_from_yaml("experimental_features:\n    - cdc\n", throw_on_error);
+    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::CDC});
+    BOOST_CHECK(cfg.check_experimental(ef::CDC));
+    BOOST_CHECK(!cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(!cfg.check_experimental(ef::UDF));
+    return make_ready_future();
+}
+
+SEASTAR_TEST_CASE(test_parse_experimental_features_lwt) {
+    config cfg;
+    cfg.read_from_yaml("experimental_features:\n    - lwt\n", throw_on_error);
+    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::LWT});
+    BOOST_CHECK(!cfg.check_experimental(ef::CDC));
+    BOOST_CHECK(cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(!cfg.check_experimental(ef::UDF));
+    return make_ready_future();
+}
+
+SEASTAR_TEST_CASE(test_parse_experimental_features_udf) {
+    config cfg;
+    cfg.read_from_yaml("experimental_features:\n    - udf\n", throw_on_error);
+    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UDF});
+    BOOST_CHECK(!cfg.check_experimental(ef::CDC));
+    BOOST_CHECK(!cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(cfg.check_experimental(ef::UDF));
+    return make_ready_future();
+}
+
+SEASTAR_TEST_CASE(test_parse_experimental_features_multiple) {
+    config cfg;
+    cfg.read_from_yaml("experimental_features:\n    - cdc\n    - lwt\n    - cdc\n", throw_on_error);
+    BOOST_CHECK_EQUAL(cfg.experimental_features(), (features{ef::CDC, ef::LWT, ef::CDC}));
+    BOOST_CHECK(cfg.check_experimental(ef::CDC));
+    BOOST_CHECK(cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(!cfg.check_experimental(ef::UDF));
+    return make_ready_future();
+}
+
+SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
+    config cfg;
+    using value_status = utils::config_file::value_status;
+    cfg.read_from_yaml("experimental_features:\n    - invalidoptiontvaluedonotuse\n",
+                       [&cfg] (const sstring& opt, const sstring& msg, std::optional<value_status> status) {
+                           BOOST_REQUIRE_EQUAL(opt, "experimental_features");
+                           BOOST_REQUIRE_NE(msg.find("line 2, column 7"), msg.npos);
+                           BOOST_CHECK(!cfg.check_experimental(ef::CDC));
+                           BOOST_CHECK(!cfg.check_experimental(ef::LWT));
+                           BOOST_CHECK(!cfg.check_experimental(ef::UDF));
+                       });
+    return make_ready_future();
+}
+
+SEASTAR_TEST_CASE(test_parse_experimental_true) {
+    config cfg;
+    cfg.read_from_yaml("experimental: true", throw_on_error);
+    BOOST_CHECK(cfg.check_experimental(ef::CDC));
+    BOOST_CHECK(cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(cfg.check_experimental(ef::UDF));
+    return make_ready_future();
+}
+
+SEASTAR_TEST_CASE(test_parse_experimental_false) {
+    config cfg;
+    cfg.read_from_yaml("experimental: false", throw_on_error);
+    BOOST_CHECK(!cfg.check_experimental(ef::CDC));
+    BOOST_CHECK(!cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(!cfg.check_experimental(ef::UDF));
+    return make_ready_future();
 }

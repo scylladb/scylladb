@@ -381,6 +381,7 @@ scylla_tests = [
     'tests/data_listeners_test',
     'tests/truncation_migration_test',
     'tests/like_matcher_test',
+    'tests/enum_option_test',
 ]
 
 perf_tests = [
@@ -875,6 +876,7 @@ pure_boost_tests = set([
     'tests/top_k_test',
     'tests/small_vector_test',
     'tests/like_matcher_test',
+    'tests/enum_option_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
