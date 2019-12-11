@@ -82,12 +82,18 @@ class TestSuite(ABC):
 
     # All existing test suites, one suite per path.
     suites = dict()
+    _next_id = 0
 
     def __init__(self, path, cfg):
         self.path = path
         self.name = os.path.basename(self.path)
         self.cfg = cfg
         self.tests = []
+
+    @property
+    def next_id(self):
+        TestSuite._next_id += 1
+        return TestSuite._next_id
 
     @staticmethod
     def load_cfg(path):
@@ -128,7 +134,9 @@ class TestSuite(ABC):
                 for p in patterns:
                     if p in t:
                         for i in range(options.repeat):
-                            tests_to_run.append((t, a, self, mode))
+                            test = UnitTest(self.next_id, t, a, self, mode, options)
+                            tests_to_run.append(test)
+
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
@@ -357,8 +365,6 @@ def find_tests(options):
 
     logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
                  len(tests_to_run), options.repeat, options.jobs)
-
-    tests_to_run = [UnitTest(test_no, *t, options) for test_no, t in enumerate(tests_to_run)]
 
     return tests_to_run
 
