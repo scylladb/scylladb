@@ -807,13 +807,14 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr tr,
-            streamed_mutation::forwarding fwd) {
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr) {
         std::vector<flat_mutation_reader> rd;
         rd.reserve(addends.size());
         for (auto&& ms : addends) {
-            rd.emplace_back(ms.make_reader(s, pr, slice, pc, tr, fwd));
+            rd.emplace_back(ms.make_reader(s, pr, slice, pc, tr, fwd, fwd_mr));
         }
-        return make_combined_reader(s, std::move(rd), fwd);
+        return make_combined_reader(s, std::move(rd), fwd, fwd_mr);
     });
 }
 
