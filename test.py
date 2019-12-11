@@ -132,6 +132,7 @@ class UnitTestSuite(TestSuite):
         for a in args:
             test = UnitTest(self.next_id, shortname, a, self, mode, options)
             tests_to_run.append(test)
+            self.tests.append(test)
 
 
 class BoostTestSuite(UnitTestSuite):
@@ -434,19 +435,24 @@ def print_summary(tests, failed_tests):
         print("Summary: {} of the total {} tests failed".format(len(failed_tests), len(tests)))
 
 
-def write_xunit_report(tests, options):
-    unit_tests = [t for t in tests if isinstance(t.suite, UnitTestSuite)]
-    num_unit_failed = sum(1 for t in unit_tests if not t.success)
-
-    xml_results = ET.Element('testsuite', name='non-boost tests',
-            tests=str(len(unit_tests)), failures=str(num_unit_failed), errors='0')
-
-    for test in unit_tests:
-        xml_res = ET.SubElement(xml_results, 'testcase', name=test.path)
-        if not test.success:
+def write_xunit_report(options):
+    total = 0
+    failed = 0
+    xml_results = ET.Element("testsuite", name="non-boost tests", errors="0")
+    for suite in TestSuite.suites.values():
+        if isinstance(suite, BoostTestSuite):
+            continue
+        for test in suite.tests:
+            total += 1
+            xml_res = ET.SubElement(xml_results, 'testcase', name=test.uname)
+            if test.success is True:
+                continue
+            failed += 1
             xml_fail = ET.SubElement(xml_res, 'failure')
-            xml_fail.text = "Test {} {} failed:".format(test.path, " ".join(test.args))
+            xml_fail.text = "Test {} {} failed:\n".format(test.path, " ".join(test.args))
             xml_fail.text += read_log(test.log_filename)
+    xml_results.set("tests", str(total))
+    xml_results.set("failures", str(failed))
     with open(options.xunit, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
@@ -483,7 +489,7 @@ async def main():
 
     print_summary(tests, failed_tests)
 
-    write_xunit_report(tests, options)
+    write_xunit_report(options)
 
     return 0 if not failed_tests else -1
 
