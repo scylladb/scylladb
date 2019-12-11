@@ -114,46 +114,56 @@ void push_back(rjson::value& base_array, rjson::value&& item) {
 }
 
 bool single_value_comp::operator()(const rjson::value& r1, const rjson::value& r2) const {
-       auto r1_type = r1.GetType();
-       auto r2_type = r2.GetType();
-       switch (r1_type) {
-       case rjson::type::kNullType:
-           return r1_type < r2_type;
-       case rjson::type::kFalseType:
-           return r1_type < r2_type;
-       case rjson::type::kTrueType:
-           return r1_type < r2_type;
-       case rjson::type::kObjectType:
-           throw rjson::error("Object type comparison is not supported");
-       case rjson::type::kArrayType:
-           throw rjson::error("Array type comparison is not supported");
-       case rjson::type::kStringType: {
-           const size_t r1_len = r1.GetStringLength();
-           const size_t r2_len = r2.GetStringLength();
-           size_t len = std::min(r1_len, r2_len);
-           int result = std::strncmp(r1.GetString(), r2.GetString(), len);
-           return result < 0 || (result == 0 && r1_len < r2_len);
-       }
-       case rjson::type::kNumberType: {
-           if (r1_type != r2_type) {
-               throw rjson::error("All numbers in a set should have the same type");
-           }
-           if (r1.IsDouble()) {
-               return r1.GetDouble() < r2.GetDouble();
-           } else if (r1.IsInt()) {
-               return r1.GetInt() < r2.GetInt();
-           } else if (r1.IsUint()) {
-               return r1.GetUint() < r2.GetUint();
-           } else if (r1.IsInt64()) {
-               return r1.GetInt64() < r2.GetInt64();
-           } else {
-               return r1.GetUint64() < r2.GetUint64();
-           }
-       }
-       default:
-           return false;
+   auto r1_type = r1.GetType();
+   auto r2_type = r2.GetType();
+
+   // null is the smallest type and compares with every other type, nothing is lesser than null
+   if (r1_type == rjson::type::kNullType || r2_type == rjson::type::kNullType) {
+       return r1_type < r2_type;
+   }
+   // only null, true, and false are comparable with each other, other types are not compatible
+   if (r1_type != r2_type) {
+       if (r1_type > rjson::type::kTrueType || r2_type > rjson::type::kTrueType) {
+           throw rjson::error(format("Types are not comparable: {} {}", r1, r2));
        }
    }
+
+   switch (r1_type) {
+   case rjson::type::kNullType:
+       // fall-through
+   case rjson::type::kFalseType:
+       // fall-through
+   case rjson::type::kTrueType:
+       return r1_type < r2_type;
+   case rjson::type::kObjectType:
+       throw rjson::error("Object type comparison is not supported");
+   case rjson::type::kArrayType:
+       throw rjson::error("Array type comparison is not supported");
+   case rjson::type::kStringType: {
+       const size_t r1_len = r1.GetStringLength();
+       const size_t r2_len = r2.GetStringLength();
+       size_t len = std::min(r1_len, r2_len);
+       int result = std::strncmp(r1.GetString(), r2.GetString(), len);
+       return result < 0 || (result == 0 && r1_len < r2_len);
+   }
+   case rjson::type::kNumberType: {
+       if (r1.IsInt() && r2.IsInt()) {
+           return r1.GetInt() < r2.GetInt();
+       } else if (r1.IsUint() && r2.IsUint()) {
+           return r1.GetUint() < r2.GetUint();
+       } else if (r1.IsInt64() && r2.IsInt64()) {
+           return r1.GetInt64() < r2.GetInt64();
+       } else if (r1.IsUint64() && r2.IsUint64()) {
+           return r1.GetUint64() < r2.GetUint64();
+       } else {
+           // it's safe to call GetDouble() on any number type
+           return r1.GetDouble() < r2.GetDouble();
+       }
+   }
+   default:
+       return false;
+   }
+}
 
 } // end namespace rjson
 
