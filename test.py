@@ -99,12 +99,17 @@ class TestSuite(ABC):
             TestSuite.suites[path] = suite
         return suite
 
+    @property
+    @abstractmethod
+    def pattern(self):
+        pass
+
     @abstractmethod
     def add_test(self, name, args, mode, options, tests_to_run):
         pass
 
     def add_test_list(self, mode, options, tests_to_run):
-        lst = glob.glob(os.path.join(self.path, "*_test.cc"))
+        lst = glob.glob(os.path.join(self.path, self.pattern))
         long_tests = set(self.cfg.get("long", []))
         for t in lst:
             shortname = os.path.splitext(os.path.basename(t))[0]
@@ -133,6 +138,10 @@ class UnitTestSuite(TestSuite):
             test = UnitTest(self.next_id, shortname, a, self, mode, options)
             tests_to_run.append(test)
             self.tests.append(test)
+
+    @property
+    def pattern(self):
+        return "*_test.cc"
 
 
 class BoostTestSuite(UnitTestSuite):
