@@ -694,14 +694,21 @@ def test_update_expected_1_not_contains(test_table_s):
 def test_update_expected_1_begins_with_true(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
-        AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'}})
+        AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'},
+                          'd': {'Value': bytearray('hi there', 'utf-8'), 'Action': 'PUT'}})
     # Case where expected and update are on different attribute:
     test_table_s.update_item(Key={'p': p},
         AttributeUpdates={'b': {'Value': 3, 'Action': 'PUT'}},
         Expected={'a': {'ComparisonOperator': 'BEGINS_WITH',
                         'AttributeValueList': ['hell']}}
     )
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hello', 'b': 3}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 3
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'b': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'d': {'ComparisonOperator': 'BEGINS_WITH',
+                        'AttributeValueList': [bytearray('hi', 'utf-8')]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 4
     # For BEGINS_WITH, AttributeValueList must have a single element
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
