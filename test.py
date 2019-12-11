@@ -114,6 +114,20 @@ class TestSuite(ABC):
             TestSuite.suites[path] = suite
         return suite
 
+    def add_test_list(self, mode, options, tests_to_run):
+        lst = glob.glob(os.path.join(self.path, "*_test.cc"))
+        for t in lst:
+            t = os.path.join(self.name, os.path.splitext(os.path.basename(t))[0])
+            if mode not in ["release", "dev"] and t in long_tests:
+                continue
+            args = custom_test_args.get(t)
+            if isinstance(args, (str, type(None))):
+                args = [args]
+            patterns = options.name if options.name else [t]
+            for a in args:
+                for p in patterns:
+                    if p in t:
+                        tests_to_run.append((t, a, self, mode))
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
@@ -330,27 +344,11 @@ def find_tests(options):
 
     tests_to_run = []
 
-    def add_test_list(path, mode):
-        suite = TestSuite.opt_create(path)
-        kind = suite.cfg["type"]
-        lst = glob.glob(os.path.join(path, "*_test.cc"))
-        for t in lst:
-            t = os.path.join(kind, os.path.splitext(os.path.basename(t))[0])
-            if mode not in ["release", "dev"] and t in long_tests:
-                continue
-            args = custom_test_args.get(t)
-            if isinstance(args, (str, type(None))):
-                args = [args]
-            for a in args:
-                patterns = options.name if options.name else [t]
-                for p in patterns:
-                    if p in t:
-                        tests_to_run.append((t, a, suite, mode))
-
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
-                add_test_list(f, mode)
+                suite = TestSuite.opt_create(f)
+                suite.add_test_list(mode, options, tests_to_run)
 
     if not tests_to_run:
         print("Test {} not found".format(options.name))
