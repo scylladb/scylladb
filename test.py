@@ -112,6 +112,10 @@ class TestSuite(ABC):
             TestSuite.suites[path] = suite
         return suite
 
+    @abstractmethod
+    def add_test(self, name, args, mode, options, tests_to_run):
+        pass
+
     def add_test_list(self, mode, options, tests_to_run):
         lst = glob.glob(os.path.join(self.path, "*_test.cc"))
         long_tests = set(self.cfg.get("long", []))
@@ -128,13 +132,17 @@ class TestSuite(ABC):
                 for p in patterns:
                     if p in t:
                         for i in range(options.repeat):
-                            test = UnitTest(self.next_id, t, a, self, mode, options)
-                            tests_to_run.append(test)
+                            self.add_test(t, a, mode, options, tests_to_run)
 
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
-    pass
+
+    def add_test(self, name, args, mode, options, tests_to_run):
+        """Create a UnitTest class with possibly custom command line options
+        and add it to the list of tests"""
+        test = UnitTest(self.next_id, name, args, self, mode, options)
+        tests_to_run.append(test)
 
 
 class BoostTestSuite(UnitTestSuite):
