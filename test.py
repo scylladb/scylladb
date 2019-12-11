@@ -35,22 +35,6 @@ import sys
 import xml.etree.ElementTree as ET
 import yaml
 
-# Apply custom options to these tests
-custom_test_args = {
-    'boost/mutation_reader_test': '-c{} -m2G'.format(min(os.cpu_count(), 3)),
-    'boost/sstable_test': '-c1 -m2G',
-    'boost/sstable_datafile_test': '-c1 -m2G',
-    'boost/sstable_3_x_test': '-c1 -m2G',
-    'unit/lsa_async_eviction_test': '-c1 -m200M --size 1024 --batch 3000 --count 2000000',
-    'unit/lsa_sync_eviction_test': [
-        '-c1 -m100M --count 10 --standard-object-size 3000000',
-        '-c1 -m100M --count 24000 --standard-object-size 2048',
-        '-c1 -m1G --count 4000000 --standard-object-size 128'
-        ],
-    'unit/row_cache_alloc_stress_test': '-c1 -m2G',
-    'unit/row_cache_stress_test': '-c1 -m1G --seconds 10',
-}
-
 CONCOLORS = {'green': '\033[1;32m', 'red': '\033[1;31m', 'nocolor': '\033[0m'}
 
 def colorformat(msg, **kwargs):
@@ -81,6 +65,8 @@ class TestSuite(ABC):
         self.name = os.path.basename(self.path)
         self.cfg = cfg
         self.tests = []
+        # Map of custom test command line arguments, if configured
+        self.custom_args = cfg.get("custom_args", {})
 
     @property
     def next_id(self):
@@ -128,21 +114,19 @@ class TestSuite(ABC):
             for p in patterns:
                 if p in t:
                     for i in range(options.repeat):
-                        self.add_test(t, mode, options, tests_to_run)
+                        self.add_test(shortname, mode, options, tests_to_run)
 
 
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
 
-    def add_test(self, name, mode, options, tests_to_run):
-        """Create a UnitTest class with possibly custom command line options
-        and add it to the list of tests"""
-        args = custom_test_args.get(name)
-        if isinstance(args, (str, type(None))):
-            args = [args]
+    def add_test(self, shortname, mode, options, tests_to_run):
+        """Create a UnitTest class with possibly custom command line
+        arguments and add it to the list of tests"""
+        args = self.custom_args.get(shortname, [None])
         for a in args:
-            test = UnitTest(self.next_id, name, a, self, mode, options)
+            test = UnitTest(self.next_id, shortname, a, self, mode, options)
             tests_to_run.append(test)
 
 
@@ -155,14 +139,14 @@ class UnitTest:
     standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0'.split()
     seastar_args = '-c2 -m2G'
 
-    def __init__(self, test_no, name, opts, suite, mode, options):
+    def __init__(self, test_no, shortname, opts, suite, mode, options):
         if opts is None:
             opts = UnitTest.seastar_args
         self.id = test_no
         # Name with test suite name
-        self.name = name
+        self.name = os.path.join(suite.name, shortname)
         # Name within the suite
-        self.shortname = os.path.basename(name)
+        self.shortname = shortname
         self.mode = mode
         self.suite = suite
         self.path = os.path.join("build", self.mode, "test", self.name)
