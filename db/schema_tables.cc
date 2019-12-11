@@ -1050,16 +1050,19 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
 
             auto& mm = service::get_local_migration_manager();
             auto it = columns_changed.begin();
-            std::vector<future<>> notifications;
-            notifications.reserve(tables_diff.size() + views_diff.size());
-            auto notify = [&] (auto& r, auto&& f) { boost::range::transform(r, std::back_inserter(notifications), f); };
-            notify(tables_diff.created, [&] (auto&& gs) { return mm.notify_create_column_family(gs); });
-            notify(tables_diff.altered, [&] (auto&& gs) { return mm.notify_update_column_family(gs, *it++); });
-            notify(tables_diff.dropped, [&] (auto&& dt) { return mm.notify_drop_column_family(dt.schema); });
-            notify(views_diff.created, [&] (auto&& gs) { return mm.notify_create_view(view_ptr(gs)); });
-            notify(views_diff.altered, [&] (auto&& gs) { return mm.notify_update_view(view_ptr(gs), *it++); });
+            auto notify = [&] (auto& r, auto&& f) {
+                auto notifications = r | boost::adaptors::transformed(f);
+                when_all(notifications.begin(), notifications.end()).get();
+            };
+            // View drops are notified first, because a table can only be dropped if its views are already deleted
             notify(views_diff.dropped, [&] (auto&& dt) { return mm.notify_drop_view(view_ptr(dt.schema)); });
-            when_all(notifications.rbegin(), notifications.rend()).get();
+            notify(tables_diff.dropped, [&] (auto&& dt) { return mm.notify_drop_column_family(dt.schema); });
+            // Table creations are notified first, in case a view is created right after the table
+            notify(tables_diff.created, [&] (auto&& gs) { return mm.notify_create_column_family(gs); });
+            notify(views_diff.created, [&] (auto&& gs) { return mm.notify_create_view(view_ptr(gs)); });
+            // Table altering is notified first, in case new base columns appear
+            notify(tables_diff.altered, [&] (auto&& gs) { return mm.notify_update_column_family(gs, *it++); });
+            notify(views_diff.altered, [&] (auto&& gs) { return mm.notify_update_view(view_ptr(gs), *it++); });
         });
     }).get();
 }
