@@ -32,6 +32,7 @@
 
 #include "seastarx.hh"
 #include "utils/config_file.hh"
+#include "utils/enum_option.hh"
 
 namespace seastar { class file; struct logging_settings; }
 
@@ -74,14 +75,21 @@ sstring config_value_as_json(const std::unordered_map<sstring, log_level>& v);
 
 namespace db {
 
+/// Enumeration of all valid values for the `experimental` config entry.
+struct experimental_features_t {
+    enum feature { LWT, UDF, CDC };
+    static std::unordered_map<sstring, feature> map(); // See enum_option.
+};
+
 class config : public utils::config_file {
 public:
     config();
     config(std::shared_ptr<db::extensions>);
     ~config();
 
-    // Throws exception if experimental feature is disabled.
-    void check_experimental(const sstring& what) const;
+    /// True iff the feature is enabled.
+    bool check_experimental(experimental_features_t::feature f) const;
+
     void setup_directories();
 
     /**
@@ -265,6 +273,7 @@ public:
     named_value<bool> developer_mode;
     named_value<int32_t> skip_wait_for_gossip_to_settle;
     named_value<bool> experimental;
+    named_value<std::vector<enum_option<experimental_features_t>>> experimental_features;
     named_value<size_t> lsa_reclamation_step;
     named_value<uint16_t> prometheus_port;
     named_value<sstring> prometheus_address;
