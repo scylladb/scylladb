@@ -478,7 +478,7 @@ inline bool single_column_primary_key_restrictions<clustering_key>::needs_filter
     // 3. a SLICE restriction isn't on a last place
     column_id position = 0;
     for (const auto& restriction : _restrictions->restrictions() | boost::adaptors::map_values) {
-        if (restriction->is_contains() || position != restriction->get_column_def().id) {
+        if (restriction->is_contains() || restriction->is_LIKE() || position != restriction->get_column_def().id) {
             return true;
         }
         if (!restriction->is_slice()) {
