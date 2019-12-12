@@ -274,9 +274,7 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 }
 
 future<> messaging_service::unregister_handler(messaging_verb verb) {
-    // FIXME: return _rpc->return unregister_handler(verb); when seastar provides it
-    (void)_rpc->unregister_handler(verb);
-    return make_ready_future<>();
+    return _rpc->unregister_handler(verb);
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port, bool listen_now)
