@@ -56,7 +56,7 @@ boost_tests = [
     'sstable_resharding_test',
     'commitlog_test',
     'hash_test',
-    'test-serialization',
+    'serialization_test',
     'cartesian_product_test',
     'allocation_strategy_test',
     'UUID_test',
@@ -113,7 +113,7 @@ boost_tests = [
     'enum_set_test',
     'extensions_test',
     'cql_auth_syntax_test',
-    'querier_cache',
+    'querier_cache_test',
     'limiting_data_source_test',
     ('sstable_test', '-c1 -m2G'),
     ('sstable_datafile_test', '-c1 -m2G'),
@@ -137,8 +137,8 @@ boost_tests = [
     'enum_option_test',
 ]
 
-other_tests = [
-    'memory_footprint',
+unit_tests = [
+    'memory_footprint_test',
 ]
 
 long_tests = [
@@ -146,7 +146,7 @@ long_tests = [
     ('lsa_sync_eviction_test', '-c1 -m100M --count 10 --standard-object-size 3000000'),
     ('lsa_sync_eviction_test', '-c1 -m100M --count 24000 --standard-object-size 2048'),
     ('lsa_sync_eviction_test', '-c1 -m1G --count 4000000 --standard-object-size 128'),
-    ('row_cache_alloc_stress', '-c1 -m2G'),
+    ('row_cache_alloc_stress_test', '-c1 -m2G'),
     ('row_cache_stress_test', '-c1 -m1G --seconds 10'),
 ]
 
@@ -175,8 +175,8 @@ class UnitTest:
         self.id = test_no
         self.name = name
         self.mode = mode
-        self.path = os.path.join('build', self.mode, 'tests', self.name)
         self.kind = kind
+        self.path = os.path.join('build', self.mode, 'test', self.kind, self.name)
         self.args = opts.split() + UnitTest.standard_args
 
         if self.kind == 'boost':
@@ -308,10 +308,10 @@ def find_tests(options):
             for t in lst:
                 tests_to_run.append((t, None, kind, mode) if isinstance(t, str) else (*t, kind, mode))
 
-        add_test_list(other_tests, 'other')
+        add_test_list(unit_tests, 'unit')
         add_test_list(boost_tests, 'boost')
         if mode in ['release', 'dev']:
-            add_test_list(long_tests, 'other')
+            add_test_list(long_tests, 'unit')
 
     if options.name:
         tests_to_run = [t for t in tests_to_run if options.name in t[0]]
@@ -385,13 +385,13 @@ def print_summary(failed_tests, total_tests):
         print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), total_tests))
 
 def write_xunit_report(options, results):
-    other_results = [r for r in results if r[0].kind != 'boost']
-    num_other_failed = sum(1 for r in other_results if not r[1])
+    unit_results = [r for r in results if r[0].kind != 'boost']
+    num_unit_failed = sum(1 for r in unit_results if not r[1])
 
     xml_results = ET.Element('testsuite', name='non-boost tests',
-            tests=str(len(other_results)), failures=str(num_other_failed), errors='0')
+            tests=str(len(unit_results)), failures=str(num_unit_failed), errors='0')
 
-    for test, success, out in other_results:
+    for test, success, out in unit_results:
         xml_res = ET.SubElement(xml_results, 'testcase', name=test.path)
         if not success:
             xml_fail = ET.SubElement(xml_res, 'failure')
