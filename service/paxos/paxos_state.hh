@@ -63,6 +63,11 @@ class paxos_state {
     static key_semaphore& get_semaphore_for_key(const dht::token& key);
     static void release_semaphore_for_key(const dht::token& key);
 
+    utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID(0);
+    std::optional<proposal> _accepted_proposal;
+    std::optional<proposal> _most_recent_commit;
+
+public:
     //
     // A thin RAII aware wrapper around the lock map to garbage
     // collect the decorated key from the map on unlock if there
@@ -76,17 +81,6 @@ class paxos_state {
         });
     }
 
-    utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID(0);
-    std::optional<proposal> _accepted_proposal;
-    std::optional<proposal> _most_recent_commit;
-
-    static future<prepare_response> prepare_impl(tracing::trace_state_ptr tr_state, schema_ptr schema,
-            const query::read_command& cmd, const dht::token& token, const partition_key& key, utils::UUID ballot,
-            bool only_digest, query::digest_algorithm da, clock_type::time_point timeout);
-    static future<bool> accept_impl(tracing::trace_state_ptr tr_state, schema_ptr schema,
-            const dht::token& token, const proposal& proposal, clock_type::time_point timeout);
-
-public:
     static logging::logger logger;
 
     paxos_state() {}

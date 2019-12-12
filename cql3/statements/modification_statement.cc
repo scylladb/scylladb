@@ -373,6 +373,12 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     // modification in the list of CAS commands, since we're handling single-statement execution.
     request->add_row_update(*this, std::move(ranges), std::move(json_cache), options);
 
+    auto shard = proxy.get_db().local().shard_of(request->key()[0].start()->value().as_decorated_key().token());
+    if (shard != engine().cpu_id()) {
+        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
+                make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
+    }
+
     return proxy.cas(s, request, request->read_command(), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_commit, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
