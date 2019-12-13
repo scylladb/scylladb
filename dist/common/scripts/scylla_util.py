@@ -661,7 +661,9 @@ class sysconfig_parser:
         self.__load()
 
     def get(self, key):
-        return self._cfg.get('global', key).strip('"')
+        if self.has_option(key):
+            return self._cfg.get('global', key).strip('"')
+        raise Exception("The key '%s' is not present" % key)
 
     def has_option(self, key):
         return self._cfg.has_option('global', key)
