@@ -46,6 +46,11 @@ def ldd(executable):
                 # provided by kernel
                 continue
             libraries['ld.so'] = os.path.realpath(elements[0])
+        elif '//' in elements[0]:
+            # We know that the only DSO with a // in the path is the
+            # dynamic linker used by scylla, which is the same ld.so
+            # above.
+            pass
         else:
             libraries[elements[0]] = os.path.realpath(elements[2])
     return libraries

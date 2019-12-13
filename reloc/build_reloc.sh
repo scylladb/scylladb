@@ -8,7 +8,23 @@
 # force using sha1 for now. That has no impact in gold and bfd since
 # that is their default. We set it in here instead of configure.py to
 # not slow down regular builds.
-DEFAULT_FLAGS="--enable-dpdk --cflags=-ffile-prefix-map=$PWD=. --ldflags=-Wl,--build-id=sha1"
+
+# The relocatable package includes its own dynamic linker. We don't
+# know the path it will be installed to, so for now use a very long
+# path so that patchelf doesn't need to edit the program headers.  The
+# kernel imposes a limit of 4096 bytes including the null. The other
+# constraint is that the build-id has to be in the first page, so we
+# can't use all 4096 bytes for the dynamic linker.
+# In here we just guess that 2000 extra / should be enough to cover
+# any path we get installed to but not so large that the build-id is
+# pushed to the second page.
+# At the end of the build we check that the build-id is indeed in the
+# first page. At install time we check that patchelf doesn't modify
+# the program headers.
+ORIGINAL_DYNAMIC_LINKER=$(gcc -### /dev/null -o t 2>&1 | perl -n  -e '/-dynamic-linker ([^ ]*) / && print $1')
+DYNAMIC_LINKER=$(printf "%2000s$ORIGINAL_DYNAMIC_LINKER" | sed 's| |/|g')
+
+DEFAULT_FLAGS="--enable-dpdk --cflags=-ffile-prefix-map=$PWD=. --ldflags=-Wl,--build-id=sha1,--dynamic-linker=$DYNAMIC_LINKER"
 
 DEFAULT_MODE="release"
 
@@ -106,3 +122,9 @@ echo "Configuring with flags: '$FLAGS' ..."
 ./configure.py $FLAGS
 python3 -m compileall ./dist/common/scripts/ ./seastar/scripts/perftune.py ./tools/scyllatop
 $NINJA $JOBS build/$MODE/scylla-package.tar.gz
+BUILD_ID_END=$(readelf -SW build/$MODE/scylla | perl -ne '/.note.gnu.build-id *NOTE *[a-f,0-9]* *([a-f,0-9]*) *([a-f,0-9]*)/ && print ((hex $1) + (hex $2))')
+if (($BUILD_ID_END > 4096))
+then
+    echo "build-id is not in the first page. It ends at offset $BUILD_ID_END"
+    exit 1
+fi
