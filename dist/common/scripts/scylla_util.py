@@ -553,7 +553,7 @@ def create_perftune_conf(cfg):
             nic = 'eth0'
         params += '--tune net --nic "{nic}"'.format(nic=nic)
 
-    if cfg.get('SET_CLOCKSOURCE') == 'yes':
+    if cfg.has_option('SET_CLOCKSOURCE') and cfg.get('SET_CLOCKSOURCE') == 'yes':
         params += ' --tune-clock'
 
     if len(params) > 0:
