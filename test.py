@@ -29,6 +29,7 @@ import logging
 import multiprocessing
 import os
 import pathlib
+import shlex
 import signal
 import subprocess
 import sys
@@ -138,9 +139,9 @@ class BoostTestSuite(UnitTestSuite):
     pass
 
 
-class UnitTest:
-    standard_args = '--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0'.split()
-    def __init__(self, test_no, shortname, opts, suite, mode, options):
+class Test:
+    """Base class for CQL, Unit and Boost tests"""
+    def __init__(self, test_no, shortname, suite, mode, options):
         self.id = test_no
         # Name with test suite name
         self.name = os.path.join(suite.name, shortname)
@@ -148,12 +149,19 @@ class UnitTest:
         self.shortname = shortname
         self.mode = mode
         self.suite = suite
-        self.path = os.path.join("build", self.mode, "test", self.name)
-        self.args = opts.split() + UnitTest.standard_args
         # Unique file name, which is also readable by human, as filename prefix
         self.uname = "{}.{}.{}".format(self.mode, self.shortname, self.id)
         self.log_filename = os.path.join(options.tmpdir, self.uname + ".log")
         self.success = None
+
+
+class UnitTest(Test):
+    standard_args = shlex.split("--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0")
+
+    def __init__(self, test_no, shortname, args, suite, mode, options):
+        super().__init__(test_no, shortname, suite, mode, options)
+        self.path = os.path.join("build", self.mode, "test", self.name)
+        self.args = shlex.split(args) + UnitTest.standard_args
 
         if isinstance(suite, BoostTestSuite):
             boost_args = []
