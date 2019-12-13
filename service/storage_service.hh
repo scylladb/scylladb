@@ -828,7 +828,9 @@ private:
      * and start using it for CDC log writes if it's not obsolete.
      */
     void handle_cdc_generation(std::optional<db_clock::time_point>);
-    void do_handle_cdc_generation(db_clock::time_point);
+    /* Returns `true` iff we started using the generation (it was not obsolete),
+     * which means that this node might write some CDC log entries using streams from this generation. */
+    bool do_handle_cdc_generation(db_clock::time_point);
 
     /* If `handle_cdc_generation` fails, it schedules an asynchronous retry in the background
      * using `async_handle_cdc_generation`.

@@ -880,7 +880,7 @@ void storage_service::mark_existing_views_as_built() {
 }
 
 // Run inside seastar::async context.
-void storage_service::do_handle_cdc_generation(db_clock::time_point ts) {
+bool storage_service::do_handle_cdc_generation(db_clock::time_point ts) {
 
     auto gen = _sys_dist_ks.local().read_cdc_topology_description(
             ts, { _token_metadata.count_normal_token_owners() }).get0();
@@ -904,10 +904,24 @@ void storage_service::do_handle_cdc_generation(db_clock::time_point ts) {
                 gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(ts)).get();
     }
 
-    get_storage_service().invoke_on_all([ts, &gen] (storage_service& ss) {
+    class orer {
+    private:
+        bool _result = false;
+    public:
+        future<> operator()(bool value) {
+            _result = value || _result;
+            return make_ready_future<>();
+        }
+        bool get() {
+            return _result;
+        }
+    };
+
+    // Return `true` iff the generation was inserted on any of our shards.
+    return get_storage_service().map_reduce(orer(), [ts, &gen] (storage_service& ss) {
         auto gen_ = *gen;
-        ss._cdc_metadata.insert(ts, std::move(gen_));
-    }).get();
+        return ss._cdc_metadata.insert(ts, std::move(gen_));
+    }).get0();
 }
 
 class ander {
@@ -933,7 +947,11 @@ void storage_service::async_handle_cdc_generation(db_clock::time_point ts) {
         while (true) {
             sleep_abortable(std::chrono::seconds(5), ss->_abort_source).get();
             try {
-                ss->do_handle_cdc_generation(ts);
+                bool using_this_gen = ss->do_handle_cdc_generation(ts);
+                if (using_this_gen) {
+                    cdc::update_streams_description(ts, sys_dist_ks,
+                            [ss] { return ss->get_token_metadata().count_normal_token_owners(); }, ss->_abort_source);
+                }
                 return;
             } catch (...) {
                 if (get_storage_service().map_reduce(ander(), [ts] (storage_service& ss) {
@@ -967,12 +985,19 @@ void storage_service::handle_cdc_generation(std::optional<db_clock::time_point> 
         return;
     }
 
+    bool using_this_gen = false;
     try {
-        do_handle_cdc_generation(*ts);
+        using_this_gen = do_handle_cdc_generation(*ts);
     } catch(...) {
         cdc_log.warn("Could not retrieve CDC streams with timestamp {} on gossip event: {}."
                 " Will retry in the background.", *ts, std::current_exception());
         async_handle_cdc_generation(*ts);
+        return;
+    }
+
+    if (using_this_gen) {
+        cdc::update_streams_description(*ts, _sys_dist_ks.local_shared(),
+               [ss = this->shared_from_this()] { return ss->get_token_metadata().count_normal_token_owners(); }, _abort_source);
     }
 }
 

@@ -35,10 +35,15 @@
 
 #include <vector>
 #include <unordered_set>
+#include <seastar/util/noncopyable_function.hh>
 
 #include "database_fwd.hh"
 #include "db_clock.hh"
 #include "dht/i_partitioner.hh"
+
+namespace seastar {
+    class abort_source;
+} // namespace seastar
 
 namespace db {
     class system_distributed_keyspace;
@@ -150,5 +155,21 @@ db_clock::time_point make_new_cdc_generation(
  * which means it will gossip the generation's timestamp.
  */
 std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper&);
+
+/* Inform CDC users about a generation of streams (identified by the given timestamp)
+ * by inserting it into the cdc_description table.
+ *
+ * Assumes that the cdc_topology_description table contains this generation.
+ *
+ * Returning from this function does not mean that the table update was successful: the function
+ * might run an asynchronous task in the background.
+ *
+ * Run inside seastar::async context.
+ */
+void update_streams_description(
+        db_clock::time_point,
+        shared_ptr<db::system_distributed_keyspace>,
+        noncopyable_function<unsigned()> get_num_token_owners,
+        abort_source&);
 
 } // namespace cdc

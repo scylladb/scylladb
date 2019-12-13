@@ -22,6 +22,7 @@
 #include <boost/type.hpp>
 #include <random>
 #include <unordered_set>
+#include <seastar/core/sleep.hh>
 
 #include "keys.hh"
 #include "schema_builder.hh"
@@ -310,6 +311,71 @@ std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_ad
     }
 
     return db_clock::time_point(db_clock::duration(std::stoll(streams_ts_string)));
+}
+
+// Run inside seastar::async context.
+static void do_update_streams_description(
+        db_clock::time_point streams_ts,
+        db::system_distributed_keyspace& sys_dist_ks,
+        db::system_distributed_keyspace::context ctx) {
+    if (sys_dist_ks.cdc_desc_exists(streams_ts, ctx).get0()) {
+        cdc_log.debug("update_streams_description: description of generation {} already inserted", streams_ts);
+        return;
+    }
+
+    // We might race with another node also inserting the description, but that's ok. It's an idempotent operation.
+
+    auto topo = sys_dist_ks.read_cdc_topology_description(streams_ts, ctx).get0();
+    if (!topo) {
+        throw std::runtime_error(format("could not find streams data for timestamp {}", streams_ts));
+    }
+
+    auto streams_less = [] (cdc::stream_id s1, cdc::stream_id s2) {
+        return s1.first() < s2.first() || (s1.first() == s2.first() && s1.second() < s2.second());
+    };
+
+    std::set<cdc::stream_id, decltype(streams_less)> streams_set(streams_less);
+    for (auto& entry: topo->entries()) {
+        for (auto& s: entry.streams) {
+            streams_set.insert(s);
+        }
+    }
+
+    std::vector<cdc::stream_id> streams_vec(streams_set.begin(), streams_set.end());
+
+    sys_dist_ks.create_cdc_desc(streams_ts, streams_vec, ctx).get();
+    cdc_log.info("CDC description table successfully updated with generation {}.", streams_ts);
+}
+
+void update_streams_description(
+        db_clock::time_point streams_ts,
+        shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
+        noncopyable_function<unsigned()> get_num_token_owners,
+        abort_source& abort_src) {
+    try {
+        do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
+    } catch(...) {
+        cdc_log.warn(
+            "Could not update CDC description table with generation {}: {}. Will retry in the background.",
+            streams_ts, std::current_exception());
+
+        // It is safe to discard this future: we keep system distributed keyspace alive.
+        (void)seastar::async([
+            streams_ts, sys_dist_ks, get_num_token_owners = std::move(get_num_token_owners), &abort_src
+        ] {
+            while (true) {
+                sleep_abortable(std::chrono::seconds(60), abort_src).get();
+                try {
+                    do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
+                    return;
+                } catch (...) {
+                    cdc_log.warn(
+                        "Could not update CDC description table with generation {}: {}. Will try again.",
+                        streams_ts, std::current_exception());
+                }
+            }
+        });
+    }
 }
 
 } // namespace cdc
