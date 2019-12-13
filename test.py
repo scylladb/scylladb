@@ -25,6 +25,7 @@ import argparse
 import asyncio
 import glob
 import io
+import itertools
 import logging
 import multiprocessing
 import os
@@ -75,6 +76,10 @@ class TestSuite(ABC):
         return TestSuite._next_id
 
     @staticmethod
+    def test_count():
+        return TestSuite._next_id
+
+    @staticmethod
     def load_cfg(path):
         with open(os.path.join(path, "suite.yaml"), "r") as cfg_file:
             cfg = yaml.safe_load(cfg_file.read())
@@ -99,16 +104,21 @@ class TestSuite(ABC):
             TestSuite.suites[path] = suite
         return suite
 
+    @staticmethod
+    def tests():
+        return itertools.chain(*[suite.tests for suite in
+                                 TestSuite.suites.values()])
+
     @property
     @abstractmethod
     def pattern(self):
         pass
 
     @abstractmethod
-    def add_test(self, name, args, mode, options, tests_to_run):
+    def add_test(self, name, args, mode, options):
         pass
 
-    def add_test_list(self, mode, options, tests_to_run):
+    def add_test_list(self, mode, options):
         lst = glob.glob(os.path.join(self.path, self.pattern))
         long_tests = set(self.cfg.get("long", []))
         for t in lst:
@@ -120,14 +130,13 @@ class TestSuite(ABC):
             for p in patterns:
                 if p in t:
                     for i in range(options.repeat):
-                        self.add_test(shortname, mode, options, tests_to_run)
-
+                        self.add_test(shortname, mode, options)
 
 
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
 
-    def add_test(self, shortname, mode, options, tests_to_run):
+    def add_test(self, shortname, mode, options):
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
 
@@ -136,7 +145,6 @@ class UnitTestSuite(TestSuite):
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
             test = UnitTest(self.next_id, shortname, a, self, mode, options)
-            tests_to_run.append(test)
             self.tests.append(test)
 
     @property
@@ -367,26 +375,22 @@ def parse_cmd_line():
 
 def find_tests(options):
 
-    tests_to_run = []
-
     for f in glob.glob(os.path.join("test", "*")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
             for mode in options.modes:
                 suite = TestSuite.opt_create(f)
-                suite.add_test_list(mode, options, tests_to_run)
+                suite.add_test_list(mode, options)
 
-    if not tests_to_run:
+    if not TestSuite.test_count():
         print("Test {} not found".format(options.name))
         sys.exit(1)
 
     logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
-                 len(tests_to_run), options.repeat, options.jobs)
-
-    return tests_to_run
+                 TestSuite.test_count(), options.repeat, options.jobs)
 
 
-async def run_all_tests(tests_to_run, signaled, options):
-    cookie = len(tests_to_run)
+async def run_all_tests(signaled, options):
+    cookie = TestSuite.test_count()
     signaled_task = asyncio.create_task(signaled.wait())
     pending = set([signaled_task])
 
@@ -408,7 +412,7 @@ async def run_all_tests(tests_to_run, signaled, options):
             cookie = print_progress(result, cookie, options.verbose)
     print_start_blurb()
     try:
-        for test in tests_to_run:
+        for test in TestSuite.tests():
             # +1 for 'signaled' event
             if len(pending) > options.jobs:
                 # Wait for some task to finish
@@ -439,13 +443,14 @@ def read_log(log_filename):
         return "===Error reading log {}===".format(e)
 
 
-def print_summary(tests, failed_tests):
+def print_summary(failed_tests):
     if failed_tests:
         print("The following test(s) have failed: {}".format(
             " ".join([t.name for t in failed_tests])))
         for test in failed_tests:
             test.print_summary()
-        print("Summary: {} of the total {} tests failed".format(len(failed_tests), len(tests)))
+        print("Summary: {} of the total {} tests failed".format(
+            len(failed_tests), TestSuite.test_count()))
 
 
 def write_xunit_report(options):
@@ -488,19 +493,19 @@ async def main():
 
     open_log(options.tmpdir)
 
-    tests = find_tests(options)
+    find_tests(options)
     signaled = asyncio.Event()
 
     setup_signal_handlers(asyncio.get_event_loop(), signaled)
 
-    await run_all_tests(tests, signaled, options)
+    await run_all_tests(signaled, options)
 
     if signaled.is_set():
         return -signaled.signo
 
-    failed_tests = [t for t in tests if t.success is not True]
+    failed_tests = [t for t in TestSuite.tests() if t.success is not True]
 
-    print_summary(tests, failed_tests)
+    print_summary(failed_tests)
 
     write_xunit_report(options)
 
