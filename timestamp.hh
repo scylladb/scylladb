@@ -57,3 +57,6 @@ timestamp_type new_timestamp() {
 }
 
 }
+
+/* For debugging and log messages. */
+std::string format_timestamp(api::timestamp_type);
