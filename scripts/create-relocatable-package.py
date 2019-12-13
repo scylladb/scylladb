@@ -61,6 +61,7 @@ args = ap.parse_args()
 
 executables = ['build/{}/scylla'.format(args.mode),
                'build/{}/iotune'.format(args.mode),
+               '/usr/bin/readelf',
                '/usr/bin/patchelf',
                '/usr/bin/lscpu',
                '/usr/bin/gawk',
