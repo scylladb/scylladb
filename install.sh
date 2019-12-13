@@ -273,12 +273,9 @@ done
             tools/scyllatop/scyllatop.py
 
 if $nonroot; then
-    sed -i -e "s#/var/lib/scylla#$rprefix#g" $retc/scylla/scylla.yaml
-    sed -i -e "s/^# hints_directory/hints_directory/" $retc/scylla/scylla.yaml
-    sed -i -e "s/^# view_hints_directory/view_hints_directory/" $retc/scylla/scylla.yaml
-    sed -i -e "s/^# saved_caches_directory/saved_caches_directory/" $retc/scylla/scylla.yaml
     sed -i -e "s#/var/lib/scylla#$rprefix#g" $rsysconfdir/scylla-server
     sed -i -e "s#/etc/scylla#$retc/scylla#g" $rsysconfdir/scylla-server
+    sed -i -e "s#^SCYLLA_ARGS=\"#SCYLLA_ARGS=\"--workdir $rprefix #g" $rsysconfdir/scylla-server
     touch $rprefix/SCYLLA-NONROOT-FILE
     systemctl --user daemon-reload
     echo "Scylla non-root install completed."
