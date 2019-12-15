@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 ScyllaDB
+ * Copyright (C) 2019 ScyllaDB
  */
 
 /*
@@ -21,38 +21,21 @@
 
 #pragma once
 
-#include <memory>
-#include <ostream>
-#include <filesystem>
-#include <seastar/core/sstring.hh>
+#include <unordered_set>
 #include <seastar/core/future.hh>
+#include <seastar/core/smp.hh>
+#include "utils/file_lock.hh"
 
-#include "seastarx.hh"
-
-namespace fs = std::filesystem;
+using namespace seastar;
 
 namespace utils {
-    class file_lock {
-    public:
-        file_lock() = delete;
-        file_lock(const file_lock&) = delete;
-        file_lock(file_lock&&) noexcept;
-        ~file_lock();
 
-        file_lock& operator=(file_lock&&) = default;
+class directories {
+public:
+    future<> init(db::config& cfg, bool hinted_handoff_enabled);
+private:
+    future<> touch_and_lock(fs::path path);
+    std::vector<file_lock> _locks;
+};
 
-        static future<file_lock> acquire(fs::path);
-
-        fs::path path() const;
-        sstring to_string() const {
-            return path().native();
-        }
-    private:
-        class impl;
-        file_lock(fs::path);
-        std::unique_ptr<impl> _impl;
-    };
-
-    std::ostream& operator<<(std::ostream& out, const file_lock& f);
-}
-
+} // namespace utils

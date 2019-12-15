@@ -42,8 +42,8 @@
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/view/view_builder.hh"
 #include "utils/runtime.hh"
-#include "utils/file_lock.hh"
 #include "log.hh"
+#include "utils/directories.hh"
 #include "debug.hh"
 #include "init.hh"
 #include "release.hh"
@@ -212,57 +212,6 @@ public:
         _cond.broadcast();
         return std::move(_done);
     }
-};
-
-static future<> disk_sanity(sstring path, bool developer_mode) {
-    return check_direct_io_support(path).then([] {
-        return make_ready_future<>();
-    }).handle_exception([path](auto ep) {
-        startlog.error("Could not access {}: {}", path, ep);
-        return make_exception_future<>(ep);
-    });
-};
-
-class directories {
-public:
-    future<> touch_and_lock(sstring path) {
-        return io_check([path] { return recursive_touch_directory(path); }).then_wrapped([this, path] (future<> f) {
-            try {
-                f.get();
-                return utils::file_lock::acquire(path + "/.lock").then([this](utils::file_lock lock) {
-                   _locks.emplace_back(std::move(lock));
-                }).handle_exception([path](auto ep) {
-                    // only do this because "normal" unhandled exception exit in seastar
-                    // _drops_ system_error message ("what()") and thus does not quite deliver
-                    // the relevant info to the user
-                    try {
-                        std::rethrow_exception(ep);
-                    } catch (std::exception& e) {
-                        startlog.error("Could not initialize {}: {}", path, e.what());
-                        throw;
-                    } catch (...) {
-                        throw;
-                    }
-                });
-            } catch (...) {
-                startlog.error("Directory '{}' cannot be initialized. Tried to do it but failed with: {}", path, std::current_exception());
-                throw;
-            }
-        });
-    }
-    template<typename _Iter>
-    future<> touch_and_lock(_Iter i, _Iter e) {
-        return parallel_for_each(i, e, [this](sstring path) {
-           return touch_and_lock(std::move(path));
-        });
-    }
-    template<typename _Range>
-    future<> touch_and_lock(_Range&& r) {
-        return touch_and_lock(std::begin(r), std::end(r));
-    }
-private:
-    std::vector<utils::file_lock>
-        _locks;
 };
 
 static
@@ -504,7 +453,7 @@ int main(int ac, char** av) {
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy);
     httpd::http_server_control prometheus_server;
-    directories dirs;
+    utils::directories dirs;
     sharded<gms::feature_service> feature_service;
 
     return app.run(ac, av, [&] () -> future<int> {
@@ -750,45 +699,8 @@ int main(int ac, char** av) {
             });
             verify_seastar_io_scheduler(opts.count("max-io-requests"), opts.count("io-properties") || opts.count("io-properties-file"),
                                         cfg->developer_mode()).get();
-            supervisor::notify("creating data directories");
-            dirs.touch_and_lock(db.local().get_config().data_file_directories()).get();
-            supervisor::notify("creating commitlog directory");
-            dirs.touch_and_lock(db.local().get_config().commitlog_directory()).get();
-            std::unordered_set<sstring> directories;
-            directories.insert(db.local().get_config().data_file_directories().cbegin(),
-                    db.local().get_config().data_file_directories().cend());
-            directories.insert(db.local().get_config().commitlog_directory());
 
-            supervisor::notify("creating hints directories");
-            if (hinted_handoff_enabled) {
-                fs::path hints_base_dir(db.local().get_config().hints_directory());
-                dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
-                directories.insert(db.local().get_config().hints_directory());
-                for (unsigned i = 0; i < smp::count; ++i) {
-                    sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
-                    dirs.touch_and_lock(shard_dir).get();
-                    directories.insert(std::move(shard_dir));
-                }
-            }
-            fs::path view_pending_updates_base_dir = fs::path(db.local().get_config().view_hints_directory());
-            sstring view_pending_updates_base_dir_str = view_pending_updates_base_dir.native();
-            dirs.touch_and_lock(view_pending_updates_base_dir_str).get();
-            directories.insert(view_pending_updates_base_dir_str);
-            for (unsigned i = 0; i < smp::count; ++i) {
-                sstring shard_dir((view_pending_updates_base_dir / seastar::to_sstring(i).c_str()).native());
-                dirs.touch_and_lock(shard_dir).get();
-                directories.insert(std::move(shard_dir));
-            }
-
-            supervisor::notify("verifying directories");
-            parallel_for_each(directories, [&db] (sstring pathname) {
-                return disk_sanity(pathname, db.local().get_config().developer_mode()).then([dir = std::move(pathname)] {
-                    return distributed_loader::verify_owner_and_mode(fs::path(dir)).handle_exception([](auto ep) {
-                        startlog.error("Failed owner and mode verification: {}", ep);
-                        return make_exception_future<>(ep);
-                    });
-                });
-            }).get();
+            dirs.init(*cfg, bool(hinted_handoff_enabled)).get();
 
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column
