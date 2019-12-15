@@ -551,16 +551,19 @@ SEASTAR_TEST_CASE(test_allocation_failure){
             }
             return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
                         dst.fill(char(1), size);
-                    }).then_wrapped([junk](future<db::rp_handle> f) {
+                    }).then_wrapped([junk, size](future<db::rp_handle> f) {
+                        std::exception_ptr ep;
                         try {
                             f.get();
+                            throw std::runtime_error("Adding mutation of size {} succeeded unexpectedly");
                         } catch (std::bad_alloc&) {
                             // ok. this is what we expected
                             junk->clear();
                             return make_ready_future();
                         } catch (...) {
+                            ep = std::current_exception();
                         }
-                        throw std::runtime_error("Did not get expected exception from writing too large record");
+                        throw std::runtime_error(format("Got an unexpected exception from writing too large record: {}", ep));
                     });
         });
 }
