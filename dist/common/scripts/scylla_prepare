@@ -74,5 +74,9 @@ if __name__ == '__main__':
         if dist_name() == 'Ubuntu':
             run('hugeadm --create-mounts')
     else:
-        if create_perftune_conf(cfg):
+        set_nic_and_disks = get_set_nic_and_disks_config_value(cfg)
+        ifname = cfg.get('IFNAME')
+        if set_nic_and_disks == 'yes':
+            create_perftune_conf(ifname)
             run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()))
+
