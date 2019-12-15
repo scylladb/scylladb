@@ -746,50 +746,261 @@ static db::timeout_clock::time_point default_timeout() {
     return db::timeout_clock::now() + 10s;
 }
 
-static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
+static rjson::value describe_item(schema_ptr schema,
+        const query::partition_slice& slice,
+        const cql3::selection::selection& selection,
+        const query::result& query_result,
+        std::unordered_set<std::string>&& attrs_to_get);
+static future<std::unique_ptr<rjson::value>> get_previous_item(
         service::storage_proxy& proxy,
         service::client_state& client_state,
         schema_ptr schema,
-        const rjson::value& item,
-        bool need_read_before_write,
+        const partition_key& pk,
+        const clustering_key& ck,
         alternator::stats& stats);
+
+static lw_shared_ptr<query::read_command> previous_item_read_command(schema_ptr schema,
+        const clustering_key& ck,
+        shared_ptr<cql3::selection::selection> selection) {
+    std::vector<query::clustering_range> bounds;
+    if (schema->clustering_key_size() == 0) {
+        bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+    } else {
+        bounds.push_back(query::clustering_range::make_singular(ck));
+    }
+    // FIXME: We pretend to take a selection (all callers currently give us a
+    // wildcard selection...) but here we read the entire item anyway. We
+    // should take the column list from selection instead of building it here.
+    auto regular_columns = boost::copy_range<query::column_id_vector>(
+            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+    auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
+    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
+}
+
+static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr schema) {
+    // Note that because this read-nothing command has an empty slice,
+    // storage_proxy::query() returns immediately - without any networking.
+    auto partition_slice = query::partition_slice({}, {}, {}, query::partition_slice::option_set());
+    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
+}
+
+static dht::partition_range_vector to_partition_ranges(const schema& schema, const partition_key& pk) {
+    return dht::partition_range_vector{dht::partition_range(dht::global_partitioner().decorate_key(schema, pk))};
+}
+
+
+// An rmw_operation encapsulates the common logic of all the item update
+// operations which may involve a read of the item before the write
+// (so-called Read-Modify-Write operations). These operations include PutItem,
+// UpdateItem and DeleteItem: All of these may be conditional operations (the
+// "Expected" parameter) which requir a read before the write, and UpdateItem
+// may also have an update expression which refers to the item's old value.
+//
+// The code below supports running the read and the write together as one
+// transaction using LWT (this is why rmw_operation is a subclass of
+// cas_request, as required by storage_proxy::cas()), but also has optional
+// modes not using LWT.
+class rmw_operation : public service::cas_request, public enable_shared_from_this<rmw_operation> {
+protected:
+    // The full request JSON
+    rjson::value _request;
+    // All RMW operations involve a single item with a specific partition
+    // and optional clustering key, in a single table, so the following
+    // information is common to all of them:
+    schema_ptr _schema;
+    partition_key _pk = partition_key::make_empty();
+    clustering_key _ck = clustering_key::make_empty();
+public:
+    // The constructor of a rmw_operation subclass should parse the request
+    // and try to discover as many input errors as it can before really
+    // attempting the read or write operations.
+    rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
+        : _request(std::move(request))
+        , _schema(get_table(proxy, _request)) {
+        // _pk and _ck will be assigned later, by the subclass's constructor
+        // (each operation puts the key in a slightly different location in
+        // the request).
+    }
+    // rmw_operation subclasses (update_item_operation, put_item_operation
+    // and delete_item_operation) shall implement an apply() function which
+    // takes the previous value of the item (if it was read) and creates the
+    // write mutation. If the previous value of item does not pass the needed
+    // conditional expression, apply() should return an empty optional.
+    // apply() may throw if it encounters input errors not discovered during
+    // the constructor.
+    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) = 0;
+    // Convert the above apply() into the signature needed by cas_request:
+    virtual std::optional<mutation> apply(query::result& qr, const query::partition_slice& slice, api::timestamp_type ts) override {
+        if (qr.row_count()) {
+            auto selection = cql3::selection::selection::wildcard(_schema);
+            auto previous_item = describe_item(_schema, slice, *selection, qr, {});
+            return apply(std::make_unique<rjson::value>(std::move(previous_item)));
+        } else {
+            return apply(std::unique_ptr<rjson::value>());
+        }
+    }
+    virtual ~rmw_operation() = default;
+    schema_ptr schema() const { return _schema; }
+    const rjson::value& request() const { return _request; }
+    future<json::json_return_type> execute(service::storage_proxy& proxy,
+            service::client_state& client_state,
+            bool needs_read_before_write,
+            stats& stats);
+    std::optional<shard_id> shard_for_execute(bool needs_read_before_write);
+
+    // The following options choose which mechanism to use for isolating
+    // parallel write operations:
+    // * The FORBID_RMW option forbids RMW (read-modify-write) operations
+    //   such as conditional updates. For the remaining write-only
+    //   operations, ordinary quorum writes are isolated enough.
+    // * The LWT_ALWAYS option always uses LWT (lightweight transactions)
+    //   for any write operation - whether or not it also has a read.
+    // * The LWT_RMW_ONLY option uses LWT only for RMW operations, and uses
+    //   ordinary quorum writes for write-only operations.
+    //   This option is not safe if the user may send both RMW and write-only
+    //   operations on the same item.
+    // * The UNSAFE_RMW option does read-modify-write operations as separate
+    //   read and write. It is unsafe - concurrent RMW operations are not
+    //   isolated at all. This option will likely be removed in the future.
+    enum class write_isolation {
+        FORBID_RMW, LWT_ALWAYS, LWT_RMW_ONLY, UNSAFE_RMW
+    };
+    // FIXME: Currently, the write isolation option is a constant chosen
+    // during compilation. It should be a per-table configurable option.
+    const write_isolation _write_isolation = write_isolation::LWT_ALWAYS;
+};
+
+// shard_for_execute() checks whether execute() must be called on a specific
+// other shard. Running execute() on a specific shard is necessary only if it
+// will use LWT (storage_proxy::cas()). This is because cas() can only be
+// called on the specific shard owning (as per cas_shard()) _pk's token.
+// Knowing if execute() will call cas() or not may depend on whether there is
+// a read-before-write, but not just on it - depending on configuration,
+// execute() may unconditionally use cas() for every write. Unfortunately,
+// this requires duplicating here a bit of logic from execute().
+std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_write) {
+    if (_write_isolation == write_isolation::FORBID_RMW ||
+        (_write_isolation == write_isolation::LWT_RMW_ONLY && !needs_read_before_write) ||
+        _write_isolation == write_isolation::UNSAFE_RMW) {
+        return {};
+    }
+    // If we're still here, cas() *will* be called by execute(), so let's
+    // find the appropriate shard to run it on:
+    auto token = dht::global_partitioner().get_token(*_schema, _pk);
+    auto desired_shard = service::storage_proxy::cas_shard(token);
+    if (desired_shard == engine().cpu_id()) {
+        return {};
+    }
+    return desired_shard;
+}
+
+future<json::json_return_type> rmw_operation::execute(service::storage_proxy& proxy,
+        service::client_state& client_state,
+        bool needs_read_before_write,
+        stats& stats) {
+    if (needs_read_before_write) {
+        if (_write_isolation == write_isolation::FORBID_RMW) {
+            throw api_error("ValidationException", "Read-modify-write operations not supported");
+        }
+        stats.reads_before_write++;
+        if (_write_isolation == write_isolation::UNSAFE_RMW) {
+            // This is the old, unsafe, read before write which does first
+            // a read, then a write. TODO: remove this mode entirely.
+            return get_previous_item(proxy, client_state, schema(), _pk, _ck, stats).then([this, &client_state, &proxy] (std::unique_ptr<rjson::value> previous_item) mutable {
+                std::optional<mutation> m = apply(previous_item);
+                if (!m) {
+                    // FIXME: for better performance, return api_error instead of
+                    // an exception future containing it. see issue #5472.
+                    return make_exception_future<json::json_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
+                }
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
+                    // Without special options on what to return, all these
+                    // operations return nothing. FIXME: support those options
+                    return make_ready_future<json::json_return_type>(json_string(""));
+                });
+            });
+        }
+    } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
+        std::optional<mutation> m = apply(nullptr);
+        assert(m); // !needs_read_before_write, so apply() did not check a condition
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
+            return make_ready_future<json::json_return_type>(json_string(""));
+        });
+    }
+    // If we're still here, we need to do this write using LWT:
+    stats.write_using_lwt++;
+    auto timeout = default_timeout();
+    auto selection = cql3::selection::selection::wildcard(schema());
+    auto read_command = needs_read_before_write ?
+            previous_item_read_command(schema(), _ck, selection) :
+            read_nothing_read_command(schema());
+    return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
+            {timeout, empty_service_permit(), client_state, client_state.get_trace_state()},
+            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([read_command] (bool is_applied) {
+        if (!is_applied) {
+            // FIXME: for better performance, return api_error instead of
+            // an exception future containing it. see issue #5472.
+            return make_exception_future<json::json_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
+        }
+        return make_ready_future<json::json_return_type>(json_string(""));
+    });
+}
+
+class put_item_operation  : public rmw_operation {
+private:
+    rjson::value& _item;
+public:
+    put_item_operation(service::storage_proxy& proxy, rjson::value&& request)
+        : rmw_operation(proxy, std::move(request))
+        , _item(rjson::get(_request, "Item")) {
+        _pk = pk_from_json(_item, schema());
+        _ck = ck_from_json(_item, schema());
+        if (rjson::find(_request, "ConditionExpression")) {
+            throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
+        }
+        auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
+        if (return_values != "NONE") {
+            // FIXME: Need to support also the ALL_OLD option. See issue #5053.
+            throw api_error("ValidationException", format("Unsupported ReturnValues={} for PutItem operation", return_values));
+        }
+    }
+    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) override {
+        if (!verify_expected(_request, previous_item)) {
+            // If the update is to be cancelled because of an unfulfilled Expected
+            // condition, return an empty optional mutation, which is more
+            // efficient than throwing an exception.
+            return {};
+        }
+        return make_item_mutation(_item, schema());
+    }
+    virtual ~put_item_operation() = default;
+};
 
 future<json::json_return_type> executor::put_item(client_state& client_state, std::string content) {
     _stats.api_operations.put_item++;
     auto start_time = std::chrono::steady_clock::now();
-    rjson::value update_info = rjson::parse(content);
-    elogger.trace("Updating value {}", update_info);
+    rjson::value request = rjson::parse(content);
+    elogger.trace("put_item {}", request);
 
-    schema_ptr schema = get_table(_proxy, update_info);
-    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
-
-    if (rjson::find(update_info, "ConditionExpression")) {
-        throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
-    }
-    auto return_values = get_string_attribute(update_info, "ReturnValues", "NONE");
-    if (return_values != "NONE") {
-        // FIXME: Need to support also the ALL_OLD option. See issue #5053.
-        throw api_error("ValidationException", format("Unsupported ReturnValues={} for PutItem operation", return_values));
-    }
-    const bool has_expected = update_info.HasMember("Expected");
-
-    const rjson::value& item = update_info["Item"];
-
-    mutation m = make_item_mutation(item, schema);
-
-    return maybe_get_previous_item(_proxy, client_state, schema, item, has_expected, _stats).then(
-            [this, schema, has_expected,  update_info = rjson::copy(update_info), m = std::move(m),
-             &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
-        if (has_expected) {
-            verify_expected(update_info, previous_item);
-        }
-        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
-            _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
-            // Without special options on what to return, PutItem returns nothing.
-            return make_ready_future<json::json_return_type>(json_string(""));
+    auto op = make_shared<put_item_operation>(_proxy, std::move(request));
+    tracing::add_table_name(client_state.get_trace_state(), op->schema()->ks_name(), op->schema()->cf_name());
+    const bool needs_read_before_write = op->request().HasMember("Expected");
+    if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
+        _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
+        _stats.shard_bounce_for_lwt++;
+        // FIXME: create separate smp_service_group
+        return container().invoke_on(*shard, default_smp_service_group(),
+                [content = std::move(content), cs = client_state.move_to_other_shard()]
+                (executor& e) mutable {
+            return do_with(cs.get(), [&e, content = std::move(content)]
+                                     (service::client_state& client_state) {
+                return e.put_item(client_state, std::move(content));
+            });
         });
+    }
+    return op->execute(_proxy, client_state, needs_read_before_write, _stats).finally([op, start_time, this] {
+        _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
     });
-
 }
 
 // After calling pk_from_json() and ck_from_json() to extract the pk and ck
@@ -811,42 +1022,62 @@ static mutation make_delete_item_mutation(const rjson::value& key, schema_ptr sc
     return m;
 }
 
+class delete_item_operation  : public rmw_operation {
+private:
+    rjson::value& _key;
+public:
+    delete_item_operation(service::storage_proxy& proxy, rjson::value&& request)
+        : rmw_operation(proxy, std::move(request))
+        , _key(rjson::get(_request, "Key")) {
+        _pk = pk_from_json(_key, schema());
+        _ck = ck_from_json(_key, schema());
+        check_key(_key, schema());
+        if (rjson::find(_request, "ConditionExpression")) {
+            throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
+        }
+        auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
+        if (return_values != "NONE") {
+            // FIXME: Need to support also the ALL_OLD option. See issue #5053.
+            throw api_error("ValidationException", format("Unsupported ReturnValues={} for DeleteItem operation", return_values));
+        }
+    }
+    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) override {
+        if (!verify_expected(_request, previous_item)) {
+            // If the update is to be cancelled because of an unfulfilled Expected
+            // condition, return an empty optional mutation, which is more
+            // efficient than throwing an exception.
+            return {};
+        }
+        return make_delete_item_mutation(_key, schema());
+    }
+    virtual ~delete_item_operation() = default;
+};
+
 future<json::json_return_type> executor::delete_item(client_state& client_state, std::string content) {
     _stats.api_operations.delete_item++;
     auto start_time = std::chrono::steady_clock::now();
-    rjson::value update_info = rjson::parse(content);
+    rjson::value request = rjson::parse(content);
+    elogger.trace("delete_item {}", request);
 
-    schema_ptr schema = get_table(_proxy, update_info);
-    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
-
-    if (rjson::find(update_info, "ConditionExpression")) {
-        throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
-    }
-    auto return_values = get_string_attribute(update_info, "ReturnValues", "NONE");
-    if (return_values != "NONE") {
-        // FIXME: Need to support also the ALL_OLD option. See issue #5053.
-        throw api_error("ValidationException", format("Unsupported ReturnValues={} for DeleteItem operation", return_values));
-    }
-    const bool has_expected = update_info.HasMember("Expected");
-
-    const rjson::value& key = update_info["Key"];
-
-    mutation m = make_delete_item_mutation(key, schema);
-    check_key(key, schema);
-
-    return maybe_get_previous_item(_proxy, client_state, schema, key, has_expected, _stats).then(
-            [this, schema, has_expected,  update_info = rjson::copy(update_info), m = std::move(m),
-             &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
-        if (has_expected) {
-            verify_expected(update_info, previous_item);
-        }
-        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
-            _stats.api_operations.delete_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.delete_item_latency._count + 1);
-            // Without special options on what to return, DeleteItem returns nothing.
-            return make_ready_future<json::json_return_type>(json_string(""));
+    auto op = make_shared<delete_item_operation>(_proxy, std::move(request));
+    tracing::add_table_name(client_state.get_trace_state(), op->schema()->ks_name(), op->schema()->cf_name());
+    const bool needs_read_before_write = op->request().HasMember("Expected");
+    if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
+        _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
+        _stats.shard_bounce_for_lwt++;
+        // FIXME: create separate smp_service_group
+        return container().invoke_on(*shard, default_smp_service_group(),
+                [content = std::move(content), cs = client_state.move_to_other_shard()]
+                (executor& e) mutable {
+            return do_with(cs.get(), [&e, content = std::move(content)]
+                                     (service::client_state& client_state) {
+                return e.delete_item(client_state, std::move(content));
+            });
         });
+    }
+    return op->execute(_proxy, client_state, needs_read_before_write, _stats).finally([op, start_time, this] {
+        _stats.api_operations.delete_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.delete_item_latency._count + 1);
     });
-
 }
 
 static schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const rjson::value::ConstMemberIterator& batch_request) {
@@ -1254,11 +1485,15 @@ std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req) 
     return {};
 }
 
-static std::optional<rjson::value> describe_single_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
+static std::optional<rjson::value> describe_single_item(schema_ptr schema,
+        const query::partition_slice& slice,
+        const cql3::selection::selection& selection,
+        const query::result& query_result,
+        std::unordered_set<std::string>&& attrs_to_get) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
-    query::result_view::consume(*query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, selection));
+    query::result_view::consume(query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, selection));
 
     auto result_set = builder.build();
     if (result_set->empty()) {
@@ -1296,7 +1531,11 @@ static std::optional<rjson::value> describe_single_item(schema_ptr schema, const
     return item;
 }
 
-static rjson::value describe_item(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, foreign_ptr<lw_shared_ptr<query::result>> query_result, std::unordered_set<std::string>&& attrs_to_get) {
+static rjson::value describe_item(schema_ptr schema,
+        const query::partition_slice& slice,
+        const cql3::selection::selection& selection,
+        const query::result& query_result,
+        std::unordered_set<std::string>&& attrs_to_get) {
     std::optional<rjson::value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), std::move(attrs_to_get));
     if (!opt_item) {
         // If there is no matching item, we're supposed to return an empty
@@ -1324,8 +1563,8 @@ static bool check_needs_read_before_write(const parsed::value& v) {
     }, v._value);
 }
 
-static bool check_needs_read_before_write(const std::vector<parsed::update_expression::action>& actions) {
-    return boost::algorithm::any_of(actions, [](const parsed::update_expression::action& action) {
+static bool check_needs_read_before_write(const parsed::update_expression& update_expression) {
+    return boost::algorithm::any_of(update_expression.actions(), [](const parsed::update_expression::action& action) {
         return std::visit(overloaded {
             [&] (const parsed::update_expression::action::set& a) -> bool {
                 return check_needs_read_before_write(a._rhs._v1) || (a._rhs._op != 'v' && check_needs_read_before_write(a._rhs._v2));
@@ -1343,9 +1582,10 @@ static bool check_needs_read_before_write(const std::vector<parsed::update_expre
     });
 }
 
+
 // FIXME: Getting the previous item does not offer any synchronization guarantees nor linearizability.
 // It should be overridden once we can leverage a consensus protocol.
-static future<std::unique_ptr<rjson::value>> do_get_previous_item(
+static future<std::unique_ptr<rjson::value>> get_previous_item(
         service::storage_proxy& proxy,
         service::client_state& client_state,
         schema_ptr schema,
@@ -1354,222 +1594,184 @@ static future<std::unique_ptr<rjson::value>> do_get_previous_item(
         alternator::stats& stats)
 {
     stats.reads_before_write++;
-
-    dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*schema, pk))};
-    std::vector<query::clustering_range> bounds;
-    if (schema->clustering_key_size() == 0) {
-        bounds.push_back(query::clustering_range::make_open_ended_both_sides());
-    } else {
-        bounds.push_back(query::clustering_range::make_singular(ck));
-    }
-
-    auto regular_columns = boost::copy_range<query::column_id_vector>(
-            schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto selection = cql3::selection::selection::wildcard(schema);
-
-    auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
-
+    auto command = previous_item_read_command(schema, ck, selection);
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
-    return proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
-            [schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = describe_item(schema, partition_slice, *selection, std::move(qr.query_result), {});
+    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+            [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
+        auto previous_item = describe_item(schema, command->slice, *selection, *qr.query_result, {});
         return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(previous_item)));
     });
 }
 
-static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
-        service::storage_proxy& proxy,
-        service::client_state& client_state,
-        schema_ptr schema,
-        const partition_key& pk,
-        const clustering_key& ck,
-        bool has_update_expression,
-        const parsed::update_expression& expression,
-        bool has_expected,
-        alternator::stats& stats)
+class update_item_operation  : public rmw_operation {
+public:
+    // Some information parsed during the constructor to check for input
+    // errors, and cached to be used again during apply().
+    rjson::value* _attribute_updates;
+    parsed::update_expression _update_expression;
+
+    update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
+    virtual ~update_item_operation() = default;
+    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) override;
+};
+
+update_item_operation::update_item_operation(service::storage_proxy& proxy, rjson::value&& update_info)
+    : rmw_operation(proxy, std::move(update_info))
 {
-    const bool needs_read_before_write = (has_update_expression && check_needs_read_before_write(expression.actions())) ||
-                                         has_expected;
-    if (!needs_read_before_write) {
-        return make_ready_future<std::unique_ptr<rjson::value>>();
-    }
-    return do_get_previous_item(proxy, client_state, std::move(schema), pk, ck, stats);
-}
-
-static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
-        service::storage_proxy& proxy,
-        service::client_state& client_state,
-        schema_ptr schema,
-        const rjson::value& item,
-        bool needs_read_before_write,
-        alternator::stats& stats)
-{
-    if (!needs_read_before_write) {
-        return make_ready_future<std::unique_ptr<rjson::value>>();
-    }
-    partition_key pk = pk_from_json(item, schema);
-    clustering_key ck = ck_from_json(item, schema);
-    return do_get_previous_item(proxy, client_state, std::move(schema), pk, ck, stats);
-}
-
-
-future<json::json_return_type> executor::update_item(client_state& client_state, std::string content) {
-    _stats.api_operations.update_item++;
-    auto start_time = std::chrono::steady_clock::now();
-    rjson::value update_info = rjson::parse(content);
-    elogger.trace("update_item {}", update_info);
-    schema_ptr schema = get_table(_proxy, update_info);
-    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
-
-    if (rjson::find(update_info, "ConditionExpression")) {
+    if (rjson::find(_request, "ConditionExpression")) {
         throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
     }
-    auto return_values = get_string_attribute(update_info, "ReturnValues", "NONE");
+    auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
     if (return_values != "NONE") {
         // FIXME: Need to support also ALL_OLD, UPDATED_OLD, ALL_NEW and UPDATED_NEW options. See issue #5053.
         throw api_error("ValidationException", format("Unsupported ReturnValues={} for UpdateItem operation", return_values));
     }
-
-    if (!update_info.HasMember("Key")) {
+    const rjson::value* key = rjson::find(_request, "Key");
+    if (!key) {
         throw api_error("ValidationException", "UpdateItem requires a Key parameter");
     }
-    const rjson::value& key = update_info["Key"];
-    partition_key pk = pk_from_json(key, schema);
-    clustering_key ck = ck_from_json(key, schema);
-    check_key(key, schema);
+    _pk = pk_from_json(*key, _schema);
+    _ck = ck_from_json(*key, _schema);
+    check_key(*key, _schema);
 
-    mutation m(schema, pk);
-    attribute_collector attrs_collector;
-    auto ts = api::new_timestamp();
-
-    // DynamoDB forbids having both old-style AttributeUpdates or Expected
-    // and new-style UpdateExpression in the same request
-    const bool has_update_expression = update_info.HasMember("UpdateExpression");
-    const bool has_attribute_updates = update_info.HasMember("AttributeUpdates");
-    const bool has_expected = update_info.HasMember("Expected");
-    if (has_update_expression && has_attribute_updates) {
-        throw api_error("ValidationException",
-                format("UpdateItem does not allow both AttributeUpdates and UpdateExpression to be given together"));
-    }
-    if (has_update_expression && has_expected) {
-        throw api_error("ValidationException",
-                format("UpdateItem does not allow both old-style Expected and new-style UpdateExpression to be given together"));
-    }
-
-    rjson::value attribute_updates = rjson::empty_object();
-    parsed::update_expression expression;
-    if (update_info.HasMember("UpdateExpression")) {
-        const rjson::value& update_expression = update_info["UpdateExpression"];
+    const rjson::value* update_expression = rjson::find(_request, "UpdateExpression");
+    if (update_expression) {
+        if (!update_expression->IsString()) {
+            throw api_error("ValidationException", "UpdateExpression must be a string");
+        }
         try {
-            expression = parse_update_expression(update_expression.GetString());
+            _update_expression = parse_update_expression(update_expression->GetString());
         } catch(expressions_syntax_error& e) {
             throw api_error("ValidationException", e.what());
         }
-        if (expression.empty()) {
+        if (_update_expression.empty()) {
             throw api_error("ValidationException", "Empty expression in UpdateExpression is not allowed");
         }
-    } else if (has_attribute_updates) {
-        attribute_updates = update_info["AttributeUpdates"];
+    }
+    _attribute_updates = rjson::find(_request, "AttributeUpdates");
+    if (_attribute_updates) {
+        if (!_attribute_updates->IsObject()) {
+            throw api_error("ValidationException", "AttributeUpdates must be an object");
+        }
     }
 
-    return maybe_get_previous_item(_proxy, client_state, schema, pk, ck, has_update_expression, expression, has_expected, _stats).then(
-            [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck), has_expected,
-             update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector),
-             attribute_updates = rjson::copy(attribute_updates), ts, &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
-        if (has_expected) {
-            verify_expected(update_info, previous_item);
-        }
-        auto& row = m.partition().clustered_row(*schema, ck);
-        auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
-            const column_definition* cdef = schema->get_column_definition(column_name);
-            if (cdef) {
-                bytes column_value = get_key_from_typed_value(json_value, *cdef, type_to_string(cdef->type));
-                row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
-            } else {
-                attrs_collector.put(std::move(column_name), serialize_item(json_value), ts);
-            }
-        };
-        auto do_delete = [&] (bytes&& column_name) {
-            const column_definition* cdef = schema->get_column_definition(column_name);
-            if (cdef) {
-                row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
-            } else {
-                attrs_collector.del(std::move(column_name), ts);
-            }
-        };
+    // DynamoDB forbids having both old-style AttributeUpdates or Expected
+    // and new-style UpdateExpression in the same request
+    const rjson::value* expected = rjson::find(_request, "Expected");
+    if (update_expression && _attribute_updates) {
+        throw api_error("ValidationException",
+                format("UpdateItem does not allow both AttributeUpdates and UpdateExpression to be given together"));
+    }
+    if (update_expression && expected) {
+        throw api_error("ValidationException",
+                format("UpdateItem does not allow both old-style Expected and new-style UpdateExpression to be given together"));
+    }
+}
 
-        if (has_update_expression) {
-            std::unordered_set<std::string> seen_column_names;
-            std::unordered_set<std::string> used_attribute_values;
-            std::unordered_set<std::string> used_attribute_names;
-            rjson::value empty_attribute_values = rjson::empty_object();
-            const rjson::value* attr_values_raw = rjson::find(update_info, "ExpressionAttributeValues");
-            const rjson::value& attr_values = attr_values_raw ? *attr_values_raw : empty_attribute_values;
-            for (auto& action : expression.actions()) {
-                std::string column_name = resolve_update_path(action._path, update_info, schema, used_attribute_names, allow_key_columns::no);
-                // DynamoDB forbids multiple updates in the same expression to
-                // modify overlapping document paths. Updates of one expression
-                // have the same timestamp, so it's unclear which would "win".
-                // FIXME: currently, without full support for document paths,
-                // we only check if the paths' roots are the same.
-                if (!seen_column_names.insert(column_name).second) {
-                    throw api_error("ValidationException",
-                            format("Invalid UpdateExpression: two document paths overlap with each other: {} and {}.",
-                                    column_name, column_name));
-                }
-                std::visit(overloaded {
-                    [&] (const parsed::update_expression::action::set& a) {
-                        auto value = calculate_value(a._rhs, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                        do_update(to_bytes(column_name), value);
-                    },
-                    [&] (const parsed::update_expression::action::remove& a) {
-                        do_delete(to_bytes(column_name));
-                    },
-                    [&] (const parsed::update_expression::action::add& a) {
-                        parsed::value base;
-                        parsed::value addition;
-                        base.set_path(action._path);
-                        addition.set_valref(a._valref);
-                        rjson::value v1 = calculate_value(base, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                        rjson::value v2 = calculate_value(addition, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                        rjson::value result;
-                        std::string v1_type = get_item_type_string(v1);
-                        if (v1_type == "N") {
-                            if (get_item_type_string(v2) != "N") {
-                                throw api_error("ValidationException", format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
-                            }
-                            result = number_add(v1, v2);
-                        } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
-                            if (get_item_type_string(v2) != v1_type) {
-                                throw api_error("ValidationException", format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
-                            }
-                            result = set_sum(v1, v2);
-                        } else {
-                            throw api_error("ValidationException", format("An operand in the update expression has an incorrect data type: {}", v1));
-                        }
-                        do_update(to_bytes(column_name), result);
-                    },
-                    [&] (const parsed::update_expression::action::del& a) {
-                        parsed::value base;
-                        parsed::value subset;
-                        base.set_path(action._path);
-                        subset.set_valref(a._valref);
-                        rjson::value v1 = calculate_value(base, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                        rjson::value v2 = calculate_value(subset, attr_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                        rjson::value result  = set_diff(v1, v2);
-                        do_update(to_bytes(column_name), result);
-                    }
-                }, action._action);
-            }
-            verify_all_are_used(update_info, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
-            verify_all_are_used(update_info, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
+std::optional<mutation>
+update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item) {
+    if (!verify_expected(_request, previous_item)) {
+        // If the update is to be cancelled because of an unfulfilled Expected
+        // condition, return an empty optional mutation, which is more
+        // efficient than throwing an exception.
+        return {};
+    }
+
+    mutation m(_schema, _pk);
+    auto& row = m.partition().clustered_row(*_schema, _ck);
+    attribute_collector attrs_collector;
+    auto ts = api::new_timestamp();
+    auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
+        const column_definition* cdef = _schema->get_column_definition(column_name);
+        if (cdef) {
+            bytes column_value = get_key_from_typed_value(json_value, *cdef, type_to_string(cdef->type));
+            row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
+        } else {
+            attrs_collector.put(std::move(column_name), serialize_item(json_value), ts);
         }
-        for (auto it = attribute_updates.MemberBegin(); it != attribute_updates.MemberEnd(); ++it) {
+    };
+    auto do_delete = [&] (bytes&& column_name) {
+        const column_definition* cdef = _schema->get_column_definition(column_name);
+        if (cdef) {
+            row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
+        } else {
+            attrs_collector.del(std::move(column_name), ts);
+        }
+    };
+
+    if (!_update_expression.empty()) {
+        std::unordered_set<std::string> seen_column_names;
+        std::unordered_set<std::string> used_attribute_values;
+        std::unordered_set<std::string> used_attribute_names;
+        rjson::value empty_attribute_values = rjson::empty_object();
+        const rjson::value* attr_values_raw = rjson::find(_request, "ExpressionAttributeValues");
+        const rjson::value& attr_values = attr_values_raw ? *attr_values_raw : empty_attribute_values;
+        for (auto& action : _update_expression.actions()) {
+            std::string column_name = resolve_update_path(action._path, _request, _schema, used_attribute_names, allow_key_columns::no);
+            // DynamoDB forbids multiple updates in the same expression to
+            // modify overlapping document paths. Updates of one expression
+            // have the same timestamp, so it's unclear which would "win".
+            // FIXME: currently, without full support for document paths,
+            // we only check if the paths' roots are the same.
+            if (!seen_column_names.insert(column_name).second) {
+                throw api_error("ValidationException",
+                        format("Invalid UpdateExpression: two document paths overlap with each other: {} and {}.",
+                                column_name, column_name));
+            }
+            std::visit(overloaded {
+                [&] (const parsed::update_expression::action::set& a) {
+                    auto value = calculate_value(a._rhs, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    do_update(to_bytes(column_name), value);
+                },
+                [&] (const parsed::update_expression::action::remove& a) {
+                    do_delete(to_bytes(column_name));
+                },
+                [&] (const parsed::update_expression::action::add& a) {
+                    parsed::value base;
+                    parsed::value addition;
+                    base.set_path(action._path);
+                    addition.set_valref(a._valref);
+                    rjson::value v1 = calculate_value(base, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value v2 = calculate_value(addition, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value result;
+                    std::string v1_type = get_item_type_string(v1);
+                    if (v1_type == "N") {
+                        if (get_item_type_string(v2) != "N") {
+                            throw api_error("ValidationException", format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
+                        }
+                        result = number_add(v1, v2);
+                    } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
+                        if (get_item_type_string(v2) != v1_type) {
+                            throw api_error("ValidationException", format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
+                        }
+                        result = set_sum(v1, v2);
+                    } else {
+                        throw api_error("ValidationException", format("An operand in the update expression has an incorrect data type: {}", v1));
+                    }
+                    do_update(to_bytes(column_name), result);
+                },
+                [&] (const parsed::update_expression::action::del& a) {
+                    parsed::value base;
+                    parsed::value subset;
+                    base.set_path(action._path);
+                    subset.set_valref(a._valref);
+                    rjson::value v1 = calculate_value(base, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value v2 = calculate_value(subset, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value result  = set_diff(v1, v2);
+                    do_update(to_bytes(column_name), result);
+                }
+            }, action._action);
+        }
+        verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
+        verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
+    }
+    if (_attribute_updates) {
+        for (auto it = _attribute_updates->MemberBegin(); it != _attribute_updates->MemberEnd(); ++it) {
             // Note that it.key() is the name of the column, *it is the operation
             bytes column_name = to_bytes(it->name.GetString());
-            const column_definition* cdef = schema->get_column_definition(column_name);
+            const column_definition* cdef = _schema->get_column_definition(column_name);
             if (cdef && cdef->is_primary_key()) {
                 throw api_error("ValidationException",
                         format("UpdateItem cannot update key column {}", it->name.GetString()));
@@ -1595,24 +1797,46 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
             } else {
                 // FIXME: need to support "ADD" as well.
                 throw api_error("ValidationException",
-                    format("Unknown Action value '{}' in AttributeUpdates", action));
+                        format("Unknown Action value '{}' in AttributeUpdates", action));
             }
         }
-        if (!attrs_collector.empty()) {
-            auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
-            row.cells().apply(attrs_column(*schema), std::move(serialized_map));
-        }
-        // To allow creation of an item with no attributes, we need a row marker.
-        // Note that unlike Scylla, even an "update" operation needs to add a row
-        // marker. TODO: a row marker isn't really needed for a DELETE operation.
-        row.apply(row_marker(ts));
+    }
+    if (!attrs_collector.empty()) {
+        auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
+        row.cells().apply(attrs_column(*_schema), std::move(serialized_map));
+    }
+    // To allow creation of an item with no attributes, we need a row marker.
+    // Note that unlike Scylla, even an "update" operation needs to add a row
+    // marker. TODO: a row marker isn't really needed for a DELETE operation.
+    row.apply(row_marker(ts));
+    return m;
+}
 
-        elogger.trace("Applying mutation {}", m);
-        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
-            // Without special options on what to return, UpdateItem returns nothing.
-            _stats.api_operations.update_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.update_item_latency._count + 1);
-            return make_ready_future<json::json_return_type>(json_string(""));
+future<json::json_return_type> executor::update_item(client_state& client_state, std::string content) {
+    _stats.api_operations.update_item++;
+    auto start_time = std::chrono::steady_clock::now();
+    rjson::value update_info = rjson::parse(content);
+    elogger.trace("update_item {}", update_info);
+
+    auto op = make_shared<update_item_operation>(_proxy, std::move(update_info));
+    tracing::add_table_name(client_state.get_trace_state(), op->schema()->ks_name(), op->schema()->cf_name());
+    const bool needs_read_before_write = check_needs_read_before_write(op->_update_expression) ||
+                    op->request().HasMember("Expected");
+    if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
+        _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
+        _stats.shard_bounce_for_lwt++;
+        // FIXME: create separate smp_service_group
+        return container().invoke_on(*shard, default_smp_service_group(),
+                [content = std::move(content), cs = client_state.move_to_other_shard()]
+                (executor& e) mutable {
+            return do_with(cs.get(), [&e, content = std::move(content)]
+                                     (service::client_state& client_state) {
+                return e.update_item(client_state, std::move(content));
+            });
         });
+    }
+    return op->execute(_proxy, client_state, needs_read_before_write, _stats).finally([op, start_time, this] {
+        _stats.api_operations.update_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.update_item_latency._count + 1);
     });
 }
 
@@ -1674,7 +1898,7 @@ future<json::json_return_type> executor::get_item(client_state& client_state, st
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.get_item_latency._count + 1);
-        return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get))));
+        return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
     });
 }
 
@@ -1736,7 +1960,7 @@ future<json::json_return_type> executor::batch_get_item(client_state& client_sta
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
             future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
-                std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, std::move(qr.query_result), std::move(attrs_to_get));
+                std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get));
                 return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(
                         std::make_tuple(schema->cf_name(), std::move(json)));
             });

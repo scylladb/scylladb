@@ -505,16 +505,15 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
     }
 }
 
-// Verify that the existing values of the item (previous_item) match the
+// Check if the existing values of the item (previous_item) match the
 // conditions given by the Expected and ConditionalOperator parameters
 // (if they exist) in the request (an UpdateItem, PutItem or DeleteItem).
-// This function will throw a ConditionalCheckFailedException API error
-// if the values do not match the condition, or ValidationException if there
+// This function can throw an ValidationException API error if there
 // are errors in the format of the condition itself.
-void verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value>& previous_item) {
+bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value>& previous_item) {
     const rjson::value* expected = rjson::find(req, "Expected");
     if (!expected) {
-        return;
+        return true;
     }
     if (!expected->IsObject()) {
         throw api_error("ValidationException", "'Expected' parameter, if given, must be an object");
@@ -548,17 +547,15 @@ void verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value
         bool success = verify_expected_one(it->value, got);
         if (success && !require_all) {
             // When !require_all, one success is enough!
-            return;
+            return true;
         } else if (!success && require_all) {
             // When require_all, one failure is enough!
-            throw api_error("ConditionalCheckFailedException", "Failed condition.");
+            return false;
         }
     }
     // If we got here and require_all, none of the checks failed, so succeed.
     // If we got here and !require_all, all of the checks failed, so fail.
-    if (!require_all) {
-        throw api_error("ConditionalCheckFailedException", "None of ORed Expect conditions were successful.");
-    }
+    return require_all;
 }
 
 }
