@@ -1960,8 +1960,9 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     });
     pending_endpoints.erase(itend, pending_endpoints.end());
 
-    size_t participants = pending_endpoints.size() + natural_endpoints.size();
-    size_t required_participants = db::quorum_for(ks) + pending_endpoints.size();
+    const size_t participants = pending_endpoints.size() + natural_endpoints.size();
+    const size_t quorum_size = natural_endpoints.size() / 2 + 1;
+    const size_t required_participants = quorum_size + pending_endpoints.size();
 
     std::vector<gms::inet_address> live_endpoints;
     live_endpoints.reserve(participants);
