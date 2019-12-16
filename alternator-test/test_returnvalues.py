@@ -22,6 +22,39 @@ import pytest
 from botocore.exceptions import ClientError
 from util import random_string
 
+# Test trivial support for the ReturnValues parameter in PutItem, UpdateItem
+# and DeleteItem - test that "NONE" works (and changes nothing), while a
+# completely unsupported value gives an error.
+# This test is useful to check that before the ReturnValues parameter is fully
+# implemented, it returns an error when a still-unsupported ReturnValues
+# option is attempted in the request - instead of simply being ignored.
+def test_trivial_returnvalues(test_table_s):
+    # PutItem:
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hi'})
+    ret=test_table_s.put_item(Item={'p': p, 'a': 'hello'}, ReturnValues='NONE')
+    assert not 'Attributes' in ret
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.put_item(Item={'p': p, 'a': 'hello'}, ReturnValues='DOG')
+    # UpdateItem:
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hi', 'b': 'dog'})
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='NONE',
+        UpdateExpression='SET b = :val',
+        ExpressionAttributeValues={':val': 'cat'})
+    assert not 'Attributes' in ret
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p}, ReturnValues='DOG',
+            UpdateExpression='SET a = a + :val',
+            ExpressionAttributeValues={':val': 1})
+    # DeleteItem:
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hi'})
+    ret=test_table_s.delete_item(Key={'p': p}, ReturnValues='NONE')
+    assert not 'Attributes' in ret
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.delete_item(Key={'p': p}, ReturnValues='DOG')
+
 # Test the ReturnValues parameter on a PutItem operation. Only two settings
 # are supported for this parameter for this operation: NONE (the default)
 # and ALL_OLD.

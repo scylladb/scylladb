@@ -747,6 +747,11 @@ future<json::json_return_type> executor::put_item(client_state& client_state, st
     if (rjson::find(update_info, "ConditionExpression")) {
         throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
     }
+    auto return_values = get_string_attribute(update_info, "ReturnValues", "NONE");
+    if (return_values != "NONE") {
+        // FIXME: Need to support also the ALL_OLD option. See issue #5053.
+        throw api_error("ValidationException", format("Unsupported ReturnValues={} for PutItem operation", return_values));
+    }
     const bool has_expected = update_info.HasMember("Expected");
 
     const rjson::value& item = update_info["Item"];
@@ -797,6 +802,11 @@ future<json::json_return_type> executor::delete_item(client_state& client_state,
 
     if (rjson::find(update_info, "ConditionExpression")) {
         throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
+    }
+    auto return_values = get_string_attribute(update_info, "ReturnValues", "NONE");
+    if (return_values != "NONE") {
+        // FIXME: Need to support also the ALL_OLD option. See issue #5053.
+        throw api_error("ValidationException", format("Unsupported ReturnValues={} for DeleteItem operation", return_values));
     }
     const bool has_expected = update_info.HasMember("Expected");
 
@@ -1396,6 +1406,11 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
 
     if (rjson::find(update_info, "ConditionExpression")) {
         throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
+    }
+    auto return_values = get_string_attribute(update_info, "ReturnValues", "NONE");
+    if (return_values != "NONE") {
+        // FIXME: Need to support also ALL_OLD, UPDATED_OLD, ALL_NEW and UPDATED_NEW options. See issue #5053.
+        throw api_error("ValidationException", format("Unsupported ReturnValues={} for UpdateItem operation", return_values));
     }
 
     if (!update_info.HasMember("Key")) {
