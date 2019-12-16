@@ -72,6 +72,7 @@ static future<> populate_desc(db_context ctx, const schema& s);
 }
 
 class cdc::cdc_service::impl : service::migration_listener::empty_listener {
+    friend cdc_service;
     db_context _ctxt;
 public:
     impl(db_context ctxt)
@@ -194,7 +195,9 @@ cdc::cdc_service::cdc_service(service::storage_proxy& proxy)
 
 cdc::cdc_service::cdc_service(db_context ctxt)
     : _impl(std::make_unique<impl>(std::move(ctxt)))
-{}
+{
+    _impl->_ctxt._proxy.set_cdc_service(this);
+}
 
 cdc::cdc_service::~cdc_service() = default;
 
