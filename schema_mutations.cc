@@ -23,6 +23,7 @@
 #include "canonical_mutation.hh"
 #include "db/schema_tables.hh"
 #include "hashers.hh"
+#include "service/storage_service.hh"
 
 schema_mutations::schema_mutations(canonical_mutation columnfamilies,
                                    canonical_mutation columns,
@@ -106,7 +107,7 @@ table_schema_version schema_mutations::digest() const {
 }
 
 std::optional<std::map<sstring, sstring>> schema_mutations::cdc_options() const {
-    if (_scylla_tables) {
+    if (_scylla_tables && service::get_local_storage_service().cluster_supports_cdc()) {
         auto rs = query::result_set(*_scylla_tables);
         if (!rs.empty()) {
             auto map = db::schema_tables::get_map<sstring, sstring>(rs.row(0), "cdc");
