@@ -164,13 +164,25 @@ void stream_manager::remove_progress(UUID plan_id) {
 }
 
 stream_bytes stream_manager::get_progress(UUID plan_id, gms::inet_address peer) const {
-    auto const& sbytes = _stream_bytes.at(plan_id);
-    return sbytes.at(peer);
+    auto it = _stream_bytes.find(plan_id);
+    if (it == _stream_bytes.end()) {
+        return stream_bytes();
+    }
+    auto const& sbytes = it->second;
+    auto i = sbytes.find(peer);
+    if (i == sbytes.end()) {
+        return stream_bytes();
+    }
+    return i->second;
 }
 
 stream_bytes stream_manager::get_progress(UUID plan_id) const {
+    auto it = _stream_bytes.find(plan_id);
+    if (it == _stream_bytes.end()) {
+        return stream_bytes();
+    }
     stream_bytes ret;
-    for (auto const& x : _stream_bytes.at(plan_id)) {
+    for (auto const& x : it->second) {
         ret += x.second;
     }
     return ret;
