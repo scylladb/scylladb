@@ -107,7 +107,7 @@ MAVEN_LOCAL_REPO="$HOME/.m2"
 
 mkdir -p "$MAVEN_LOCAL_REPO"
 
-is_podman="$(docker --version | grep -o podman)"
+is_podman="$(docker --help | grep -o podman)"
 
 docker_common_args=()
 
@@ -152,7 +152,7 @@ if [[ -n "$interactive" || -n "$is_podman" ]]; then
     docker run --rm "${docker_common_args[@]}"
     ret=$?
     rm -rf "$tmpdir"
-    exit $?
+    exit $ret
 fi
 
 container=$(
