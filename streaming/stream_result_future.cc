@@ -131,7 +131,7 @@ void stream_result_future::maybe_complete() {
             }
             *stats = format("tx={:d} KiB, {} KiB/s, rx={:d} KiB, {} KiB/s", sbytes.bytes_sent / 1024, tx_bw, sbytes.bytes_received / 1024, rx_bw);
         }).handle_exception([plan_id] (auto ep) {
-            sslog.warn("[Stream #{}] Fail to get progess on all shards: {}", plan_id, ep);
+            sslog.warn("[Stream #{}] Fail to get progress on all shards: {}", plan_id, ep);
         }).finally([this, plan_id, stats, &sm] () {
             sm.remove_stream(plan_id);
             auto final_state = get_current_state();
