@@ -86,6 +86,10 @@ class one_or_two_partition_ranges;
 
 }
 
+namespace cdc {
+    class cdc_service;    
+}
+
 namespace service {
 
 class abstract_write_response_handler;
@@ -268,6 +272,7 @@ private:
     class view_update_handlers_list;
     std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
 
+    cdc::cdc_service* _cdc = nullptr;
 private:
     future<> uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
@@ -399,6 +404,13 @@ public:
     }
     distributed<database>& get_db() {
         return _db;
+    }
+
+    void set_cdc_service(cdc::cdc_service* cdc) {
+        _cdc = cdc;
+    }
+    cdc::cdc_service* get_cdc_service() const {
+        return _cdc;
     }
 
     view_update_handlers_list& get_view_update_handlers_list() {
