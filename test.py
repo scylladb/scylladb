@@ -23,6 +23,7 @@
 from abc import ABC, abstractmethod
 import argparse
 import asyncio
+import colorama
 import glob
 import io
 import itertools
@@ -37,21 +38,30 @@ import sys
 import xml.etree.ElementTree as ET
 import yaml
 
-CONCOLORS = {'green': '\033[1;32m', 'red': '\033[1;31m', 'nocolor': '\033[0m'}
 
-def colorformat(msg, **kwargs):
-    fmt = dict(CONCOLORS)
-    fmt.update(kwargs)
-    return msg.format(**fmt)
+def create_formatter(*decorators):
+    """Return a function which decorates its argument with the given
+    color/style if stdout is a tty, and leaves intact otherwise."""
+    def color(arg):
+        return "".join(decorators) + str(arg) + colorama.Style.RESET_ALL
+
+    def nocolor(arg):
+        return str(arg)
+    return color if os.isatty(sys.stdout.fileno()) else nocolor
 
 
-def status_to_string(success):
-    if success:
-        status = colorformat("{green}[ PASS ]{nocolor}") if os.isatty(sys.stdout.fileno()) else "[ PASS ]"
-    else:
-        status = colorformat("{red}[ FAIL ]{nocolor}") if os.isatty(sys.stdout.fileno()) else "[ FAIL ]"
-
-    return status
+class palette:
+    """Color palette for formatting terminal output"""
+    ok = create_formatter(colorama.Fore.GREEN, colorama.Style.BRIGHT)
+    fail = create_formatter(colorama.Fore.RED, colorama.Style.BRIGHT)
+    new = create_formatter(colorama.Fore.BLUE)
+    skip = create_formatter(colorama.Style.DIM)
+    path = create_formatter(colorama.Style.BRIGHT)
+    diff_in = create_formatter(colorama.Fore.GREEN)
+    diff_out = create_formatter(colorama.Fore.RED)
+    diff_mark = create_formatter(colorama.Fore.MAGENTA)
+    warn = create_formatter(colorama.Fore.YELLOW)
+    crit = create_formatter(colorama.Fore.RED, colorama.Style.BRIGHT)
 
 
 class TestSuite(ABC):
@@ -229,7 +239,7 @@ def print_progress(test, cookie, verbose):
     msg = "{:9s} {:50s} {:^8s} {:8s}".format(
         "[{}/{}]".format(n, n_total),
         test.name, test.mode[:8],
-        status_to_string(test.success)
+        palette.ok("[ PASS ]") if test.success else palette.fail("[ FAIL ]")
     )
     if verbose is False:
         print('\r' + ' ' * last_len, end='')
@@ -376,7 +386,7 @@ def find_tests(options):
                 suite.add_test_list(mode, options)
 
     if not TestSuite.test_count():
-        print("Test {} not found".format(options.name))
+        print("Test {} not found".format(palette.path(options.name[0])))
         sys.exit(1)
 
     logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
@@ -440,7 +450,7 @@ def read_log(log_filename):
 def print_summary(failed_tests):
     if failed_tests:
         print("The following test(s) have failed: {}".format(
-            " ".join([t.name for t in failed_tests])))
+            palette.path(" ".join([t.name for t in failed_tests]))))
         for test in failed_tests:
             test.print_summary()
         print("Summary: {} of the total {} tests failed".format(
@@ -511,6 +521,8 @@ async def main():
     return 0 if not failed_tests else -1
 
 if __name__ == "__main__":
+    colorama.init()
+
     if sys.version_info < (3, 7):
         print("Python 3.7 or newer is required to run this program")
         sys.exit(-1)
