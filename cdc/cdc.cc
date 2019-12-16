@@ -758,35 +758,6 @@ transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_siz
         .then([&muts] () mutable { return std::move(muts); });
 }
 
-future<std::vector<mutation>> append_log_mutations(
-        db_context ctx,
-        schema_ptr s,
-        service::storage_proxy::clock_type::time_point timeout,
-        service::query_state& qs,
-        std::vector<mutation> muts) {
-    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), muts = std::move(muts), &qs](::shared_ptr<transformer::streams_type> streams) mutable {
-        return do_with(std::move(muts), transformer(ctx, s, std::move(streams)), [&qs, s] (std::vector<mutation>& muts, transformer& trans) {
-            muts.reserve(2 * muts.size());
-            if (!s->cdc_options().preimage()) {
-                constexpr int batch_size = 100;
-                int muts_len = muts.size();
-                return transform_mutations(muts, batch_size, [&muts, &trans, batch_size, muts_len] (int idx) {
-                    for (int len = std::min(idx + batch_size, muts_len); idx < len; ++idx) {
-                        muts.push_back(trans.transform(muts[idx]));
-                    }
-                    return make_ready_future<>();
-                });
-            } else {
-                return transform_mutations(muts, 1, [&qs, &trans, &muts] (int idx) mutable {
-                    return trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, muts[idx]).then([&trans, &muts, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
-                        muts.push_back(trans.transform(muts[idx], rs.get()));
-                    });
-                });
-           }
-        });
-    });
-}
-
 } // namespace cdc
 
 future<std::tuple<std::vector<mutation>, cdc::result_callback>>
