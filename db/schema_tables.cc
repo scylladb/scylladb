@@ -1154,7 +1154,7 @@ template <typename T> static std::vector<user_type> create_types(keyspace_metada
     // of system.types is the same for them. The runtime objects in
     // the other hand now point to out of date types, so we need to
     // recreate them.
-    for (const auto& p : ks.user_types()->get_all_types()) {
+    for (const auto& p : ks.user_types().get_all_types()) {
         const user_type& t = p.second;
         if (names.count(t->_name) != 0) {
             continue;
@@ -1413,7 +1413,7 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
     mutations.emplace_back(std::move(m));
 
     if (with_tables_and_types_and_functions) {
-        for (auto&& kv : keyspace->user_types()->get_all_types()) {
+        for (const auto& kv : keyspace->user_types().get_all_types()) {
             add_type_to_schema_mutation(kv.second, timestamp, mutations);
         }
         for (auto&& s : keyspace->cf_meta_data() | boost::adaptors::map_values) {

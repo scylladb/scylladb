@@ -23,12 +23,11 @@
 
 #include <unordered_map>
 #include <ostream>
-#include <seastar/core/shared_ptr.hh>
 
 #include "bytes.hh"
 #include "types/user.hh"
 
-class user_types_metadata : public enable_lw_shared_from_this<user_types_metadata> {
+class user_types_metadata {
     std::unordered_map<bytes, user_type> _user_types;
 public:
     user_type get_type(const bytes& name) const {

@@ -24,11 +24,13 @@
 
 #include "tests/test_services.hh"
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "schema_registry.hh"
 #include "schema_builder.hh"
 #include "mutation_source_test.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
+#include "types/list.hh"
 
 static bytes random_column_name() {
     return to_bytes(to_hex(make_blob(32)));
@@ -48,6 +50,20 @@ struct dummy_init {
         local_schema_registry().init(config);
     }
 };
+
+SEASTAR_THREAD_TEST_CASE(test_load_with_non_nantive_type) {
+    dummy_init dummy;
+    auto my_list_type = list_type_impl::get_instance(utf8_type, true);
+
+    auto s = schema_builder("ks", "cf")
+           .with_column("pk", bytes_type, column_kind::partition_key)
+           .with_column("val", my_list_type)
+           .build();
+
+    local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) {
+        return make_ready_future<frozen_schema>(frozen_schema(s));
+    }).get();
+}
 
 SEASTAR_TEST_CASE(test_async_loading) {
     return seastar::async([] {

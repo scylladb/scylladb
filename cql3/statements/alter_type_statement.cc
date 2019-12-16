@@ -80,7 +80,7 @@ const sstring& alter_type_statement::keyspace() const
 
 void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, bool is_local_only) const
 {
-    auto&& all_types = ks.metadata()->user_types()->get_all_types();
+    auto&& all_types = ks.metadata()->user_types().get_all_types();
     auto to_update = all_types.find(_name.get_user_type_name());
     // Shouldn't happen, unless we race with a drop
     if (to_update == all_types.end()) {

@@ -92,6 +92,7 @@
 #include <unordered_set>
 #include "disk-error-handler.hh"
 #include "utils/updateable_value.hh"
+#include "user_types_metadata.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -1045,23 +1046,13 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
 
 class user_types_metadata;
 
-// Customize deleter so that lw_shared_ptr can work with an incomplete user_types_metadata class
-namespace seastar {
-
-template <>
-struct lw_shared_ptr_deleter<user_types_metadata> {
-    static void dispose(user_types_metadata* o);
-};
-
-}
-
 class keyspace_metadata final {
     sstring _name;
     sstring _strategy_name;
     std::map<sstring, sstring> _strategy_options;
     std::unordered_map<sstring, schema_ptr> _cf_meta_data;
     bool _durable_writes;
-    lw_shared_ptr<user_types_metadata> _user_types;
+    user_types_metadata _user_types;
 public:
     keyspace_metadata(sstring name,
                  sstring strategy_name,
@@ -1073,7 +1064,7 @@ public:
                  std::map<sstring, sstring> strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs,
-                 lw_shared_ptr<user_types_metadata> user_types);
+                 user_types_metadata user_types);
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(sstring name,
                  sstring strategy_name,
@@ -1096,7 +1087,12 @@ public:
     bool durable_writes() const {
         return _durable_writes;
     }
-    const lw_shared_ptr<user_types_metadata>& user_types() const;
+    user_types_metadata& user_types() {
+        return _user_types;
+    }
+    const user_types_metadata& user_types() const {
+        return _user_types;
+    }
     void add_or_update_column_family(const schema_ptr& s) {
         _cf_meta_data[s->cf_name()] = s;
     }

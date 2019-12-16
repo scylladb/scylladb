@@ -56,7 +56,7 @@ static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {
         });
 }
 
-data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str, lw_shared_ptr<user_types_metadata> user_types) {
+data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str) {
     static const thread_local std::unordered_map<sstring, cql3::cql3_type> native_types = []{
         std::unordered_map<sstring, cql3::cql3_type> res;
         for (auto& nt : cql3::cql3_type::values()) {
@@ -70,25 +70,12 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
         return i->second.get_type();
     }
 
-    if (!user_types && service::get_storage_proxy().local_is_initialized()) {
-        user_types = service::get_storage_proxy().local().get_db().local().find_keyspace(keyspace).metadata()->user_types();
-    }
-    // special-case top-level UDTs
-    if (user_types) {
-        auto& map = user_types->get_all_types();
-        auto i = map.find(utf8_type->decompose(str));
-        if (i != map.end()) {
-            return i->second;
-        }
-    }
-
+    const auto& sp = service::get_storage_proxy();
+    const user_types_metadata& user_types =
+            sp.local_is_initialized() ? sp.local().get_db().local().find_keyspace(keyspace).metadata()->user_types()
+                                      : user_types_metadata{};
     auto raw = parse_raw(str);
-    auto cql = raw->prepare_internal(keyspace, *user_types);
-    return cql.get_type();
-}
-
-data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& type) {
-    return parse(keyspace, type, {});
+    return raw->prepare_internal(keyspace, user_types).get_type();
 }
 
 class db::cql_type_parser::raw_builder::impl {
@@ -164,7 +151,7 @@ public:
         // Create a copy of the existing types, so that we don't
         // modify the one in the keyspace. It is up to the caller to
         // do that.
-        user_types_metadata types = *_ks.user_types();
+        user_types_metadata types = _ks.user_types();
 
         const auto &ks_name = _ks.name();
         std::vector<user_type> created;

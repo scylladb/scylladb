@@ -97,19 +97,6 @@ using namespace db;
 
 logging::logger dblog("database");
 
-namespace seastar {
-
-void
-lw_shared_ptr_deleter<user_types_metadata>::dispose(user_types_metadata* o) {
-    delete o;
-}
-
-}
-
-template
-user_types_metadata*
-seastar::internal::lw_shared_ptr_accessors<user_types_metadata, void>::to_value(seastar::lw_shared_ptr_counter_base*);
-
 sstables::sstable::version_types get_highest_supported_format() {
     return service::get_local_storage_service().sstables_format();
 }
@@ -136,10 +123,6 @@ make_compaction_manager(const db::config& cfg, database_config& dbcfg) {
     return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory);
 }
 
-const lw_shared_ptr<user_types_metadata>& keyspace_metadata::user_types() const {
-    return _user_types;
-}
-
 lw_shared_ptr<keyspace_metadata>
 keyspace_metadata::new_keyspace(sstring name,
                                 sstring strategy_name,
@@ -151,11 +134,11 @@ keyspace_metadata::new_keyspace(sstring name,
 }
 
 void keyspace_metadata::add_user_type(const user_type ut) {
-    _user_types->add_type(ut);
+    _user_types.add_type(ut);
 }
 
 void keyspace_metadata::remove_user_type(const user_type ut) {
-    _user_types->remove_type(ut);
+    _user_types.remove_type(ut);
 }
 
 keyspace::keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg)
@@ -687,7 +670,7 @@ future<> database::update_keyspace(const sstring& name) {
 
         auto tmp_ksm = db::schema_tables::create_keyspace_from_schema_partition(v);
         auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm->name(), tmp_ksm->strategy_name(), tmp_ksm->strategy_options(), tmp_ksm->durable_writes(),
-                        boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), ks.metadata()->user_types());
+                        boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
         ks.update_from(std::move(new_ksm));
         return service::get_local_migration_manager().notify_update_keyspace(ks.metadata());
     });
@@ -1012,14 +995,14 @@ keyspace_metadata::keyspace_metadata(sstring name,
                         std::move(strategy_options),
                         durable_writes,
                         std::move(cf_defs),
-                        make_lw_shared<user_types_metadata>()) { }
+                        user_types_metadata{}) { }
 
 keyspace_metadata::keyspace_metadata(sstring name,
              sstring strategy_name,
              std::map<sstring, sstring> strategy_options,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs,
-             lw_shared_ptr<user_types_metadata> user_types)
+             user_types_metadata user_types)
     : _name{std::move(name)}
     , _strategy_name{strategy_class_registry::to_qualified_class_name(strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name)}
     , _strategy_options{std::move(strategy_options)}

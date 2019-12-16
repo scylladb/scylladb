@@ -72,7 +72,7 @@ void drop_type_statement::validate(service::storage_proxy& proxy, const service:
 {
     try {
         auto&& ks = proxy.get_db().local().find_keyspace(keyspace());
-        auto&& all_types = ks.metadata()->user_types()->get_all_types();
+        auto&& all_types = ks.metadata()->user_types().get_all_types();
         auto old = all_types.find(_name.get_user_type_name());
         if (old == all_types.end()) {
             if (_if_exists) {
@@ -149,7 +149,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::ann
     // Keyspace exists or we wouldn't have validated otherwise
     auto&& ks = db.find_keyspace(keyspace());
 
-    auto&& all_types = ks.metadata()->user_types()->get_all_types();
+    const auto& all_types = ks.metadata()->user_types().get_all_types();
     auto to_drop = all_types.find(_name.get_user_type_name());
 
     // Can happen with if_exists
