@@ -24,6 +24,7 @@ from abc import ABC, abstractmethod
 import argparse
 import asyncio
 import colorama
+import difflib
 import filecmp
 import glob
 import io
@@ -37,6 +38,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 import yaml
 
@@ -294,7 +296,10 @@ class CqlTest(Test):
         return self
 
     def print_summary(self):
-        print("Test {} ({}) {}".format(self.name, self.mode, self.summary))
+        print("Test {} ({}) {}".format(palette.path(self.name), self.mode,
+                                       self.summary))
+        if self.is_equal_result is False:
+            print_unidiff(self.result, self.reject)
 
 
 def print_start_blurb():
@@ -531,8 +536,32 @@ def print_summary(failed_tests):
             palette.path(" ".join([t.name for t in failed_tests]))))
         for test in failed_tests:
             test.print_summary()
+            print("-"*78)
         print("Summary: {} of the total {} tests failed".format(
             len(failed_tests), TestSuite.test_count()))
+
+
+def print_unidiff(fromfile, tofile):
+    with open(fromfile, "r") as frm, open(tofile, "r") as to:
+        diff = difflib.unified_diff(
+            frm.readlines(),
+            to.readlines(),
+            fromfile=fromfile,
+            tofile=tofile,
+            fromfiledate=time.ctime(os.stat(fromfile).st_mtime),
+            tofiledate=time.ctime(os.stat(tofile).st_mtime),
+            n=10)           # Number of context lines
+
+        for i, line in enumerate(diff):
+            if i > 60:
+                break
+            if line.startswith('+'):
+                line = palette.diff_in(line)
+            elif line.startswith('-'):
+                line = palette.diff_out(line)
+            elif line.startswith('@'):
+                line = palette.diff_mark(line)
+            sys.stdout.write(line)
 
 
 def write_junit_report(tmpdir, mode):
