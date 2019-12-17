@@ -97,7 +97,7 @@ scan_scylla_source_directories(
           service
           sstables
           streaming
-          tests
+          test
           thrift
           tracing
           transport

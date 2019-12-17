@@ -21,6 +21,7 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
 import asyncio
+import glob
 import os
 import sys
 import signal
@@ -30,125 +31,29 @@ import io
 import multiprocessing
 import xml.etree.ElementTree as ET
 
-boost_tests = [
-    'bytes_ostream_test',
-    'chunked_vector_test',
-    'compress_test',
-    'continuous_data_consumer_test',
-    'types_test',
-    'keys_test',
-    'mutation_test',
-    'mvcc_test',
-    'schema_registry_test',
-    'range_test',
-    ('mutation_reader_test', '-c{} -m2G'.format(min(os.cpu_count(), 3))),
-    'serialized_action_test',
-    'cdc_test',
-    'cql_query_test',
-    'user_types_test',
-    'user_function_test',
-    'secondary_index_test',
-    'json_cql_query_test',
-    'filtering_test',
-    'storage_proxy_test',
-    'schema_change_test',
-    'sstable_mutation_test',
-    'sstable_resharding_test',
-    'commitlog_test',
-    'hash_test',
-    'test-serialization',
-    'cartesian_product_test',
-    'allocation_strategy_test',
-    'UUID_test',
-    'compound_test',
-    'murmur_hash_test',
-    'partitioner_test',
-    'frozen_mutation_test',
-    'canonical_mutation_test',
-    'gossiping_property_file_snitch_test',
-    'row_cache_test',
-    'cache_flat_mutation_reader_test',
-    'network_topology_strategy_test',
-    'query_processor_test',
-    'batchlog_manager_test',
-    'logalloc_test',
-    'log_heap_test',
-    'crc_test',
-    'checksum_utils_test',
-    'flush_queue_test',
-    'config_test',
-    'dynamic_bitset_test',
-    'gossip_test',
-    'managed_vector_test',
-    'map_difference_test',
-    'memtable_test',
-    'mutation_query_test',
-    'snitch_reset_test',
-    'auth_test',
-    'idl_test',
-    'range_tombstone_list_test',
-    'mutation_fragment_test',
-    'flat_mutation_reader_test',
-    'anchorless_list_test',
-    'database_test',
-    'input_stream_test',
-    'nonwrapping_range_test',
-    'virtual_reader_test',
-    'counter_test',
-    'cell_locker_test',
-    'view_schema_test',
-    'view_build_test',
-    'view_complex_test',
-    'clustering_ranges_walker_test',
-    'vint_serialization_test',
-    'duration_test',
-    'loading_cache_test',
-    'castas_fcts_test',
-    'big_decimal_test',
-    'aggregate_fcts_test',
-    'role_manager_test',
-    'caching_options_test',
-    'auth_resource_test',
-    'cql_auth_query_test',
-    'enum_set_test',
-    'extensions_test',
-    'cql_auth_syntax_test',
-    'querier_cache',
-    'limiting_data_source_test',
-    ('sstable_test', '-c1 -m2G'),
-    ('sstable_datafile_test', '-c1 -m2G'),
-    'broken_sstable_test',
-    ('sstable_3_x_test', '-c1 -m2G'),
-    'meta_test',
-    'reusable_buffer_test',
-    'mutation_writer_test',
-    'observable_test',
-    'transport_test',
-    'fragmented_temporary_buffer_test',
-    'auth_passwords_test',
-    'multishard_mutation_query_test',
-    'top_k_test',
-    'utf8_test',
-    'small_vector_test',
-    'data_listeners_test',
-    'truncation_migration_test',
-    'like_matcher_test',
-    'linearizing_input_stream_test',
-    'enum_option_test',
-]
+# Apply custom options to these tests
+custom_test_args = {
+    'boost/mutation_reader_test': '-c{} -m2G'.format(min(os.cpu_count(), 3)),
+    'boost/sstable_test': '-c1 -m2G',
+    'boost/sstable_datafile_test': '-c1 -m2G',
+    'boost/sstable_3_x_test': '-c1 -m2G',
+    'unit/lsa_async_eviction_test': '-c1 -m200M --size 1024 --batch 3000 --count 2000000',
+    'unit/lsa_sync_eviction_test': [
+        '-c1 -m100M --count 10 --standard-object-size 3000000',
+        '-c1 -m100M --count 24000 --standard-object-size 2048',
+        '-c1 -m1G --count 4000000 --standard-object-size 128'
+        ],
+    'unit/row_cache_alloc_stress_test': '-c1 -m2G',
+    'unit/row_cache_stress_test': '-c1 -m1G --seconds 10',
+}
 
-other_tests = [
-    'memory_footprint',
-]
-
-long_tests = [
-    ('lsa_async_eviction_test', '-c1 -m200M --size 1024 --batch 3000 --count 2000000'),
-    ('lsa_sync_eviction_test', '-c1 -m100M --count 10 --standard-object-size 3000000'),
-    ('lsa_sync_eviction_test', '-c1 -m100M --count 24000 --standard-object-size 2048'),
-    ('lsa_sync_eviction_test', '-c1 -m1G --count 4000000 --standard-object-size 128'),
-    ('row_cache_alloc_stress', '-c1 -m2G'),
-    ('row_cache_stress_test', '-c1 -m1G --seconds 10'),
-]
+# Only run in dev, release configurations, skip in others
+long_tests = set([
+    'unit/lsa_async_eviction_test',
+    'unit/lsa_sync_eviction_test',
+    'unit/row_cache_alloc_stress_test',
+    'unit/row_cache_stress_test'
+])
 
 CONCOLORS = {'green': '\033[1;32m', 'red': '\033[1;31m', 'nocolor': '\033[0m'}
 
@@ -175,8 +80,8 @@ class UnitTest:
         self.id = test_no
         self.name = name
         self.mode = mode
-        self.path = os.path.join('build', self.mode, 'tests', self.name)
         self.kind = kind
+        self.path = os.path.join('build', self.mode, 'test', self.kind, self.name)
         self.args = opts.split() + UnitTest.standard_args
 
         if self.kind == 'boost':
@@ -303,15 +208,21 @@ def find_tests(options):
 
     tests_to_run = []
 
-    for mode in options.modes:
-        def add_test_list(lst, kind):
-            for t in lst:
-                tests_to_run.append((t, None, kind, mode) if isinstance(t, str) else (*t, kind, mode))
+    def add_test_list(kind, mode):
+        lst = glob.glob(os.path.join("test", kind, "*_test.cc"))
+        for t in lst:
+            t = os.path.splitext(os.path.basename(t))[0]
+            if mode not in ['release', 'dev'] and os.path.join(kind, t) in long_tests:
+                continue
+            args = custom_test_args.get(os.path.join(kind, t))
+            if isinstance(args, (str, type(None))):
+                args = [ args ]
+            for a in args:
+                tests_to_run.append((t, a, kind, mode))
 
-        add_test_list(other_tests, 'other')
-        add_test_list(boost_tests, 'boost')
-        if mode in ['release', 'dev']:
-            add_test_list(long_tests, 'other')
+    for mode in options.modes:
+        add_test_list('unit', mode)
+        add_test_list('boost', mode)
 
     if options.name:
         tests_to_run = [t for t in tests_to_run if options.name in t[0]]
@@ -385,13 +296,13 @@ def print_summary(failed_tests, total_tests):
         print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), total_tests))
 
 def write_xunit_report(options, results):
-    other_results = [r for r in results if r[0].kind != 'boost']
-    num_other_failed = sum(1 for r in other_results if not r[1])
+    unit_results = [r for r in results if r[0].kind != 'boost']
+    num_unit_failed = sum(1 for r in unit_results if not r[1])
 
     xml_results = ET.Element('testsuite', name='non-boost tests',
-            tests=str(len(other_results)), failures=str(num_other_failed), errors='0')
+            tests=str(len(unit_results)), failures=str(num_unit_failed), errors='0')
 
-    for test, success, out in other_results:
+    for test, success, out in unit_results:
         xml_res = ET.SubElement(xml_results, 'testcase', name=test.path)
         if not success:
             xml_fail = ET.SubElement(xml_res, 'failure')
