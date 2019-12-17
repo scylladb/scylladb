@@ -271,7 +271,7 @@ async def run_all_tests(tests_to_run, signaled, options):
         for coro in done:
             result = coro.result()
             if isinstance(result, bool):
-                continue # skip signaled task result
+                continue    # skip signaled task result
             results.append(result)
             test, success, out = result
             cookie = print_progress(test, success, cookie, options.verbose)
