@@ -28,7 +28,6 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
-#include <seastar/core/sharded.hh>
 
 #include "auth/authenticator.hh"
 #include "auth/authorizer.hh"
@@ -77,9 +76,7 @@ public:
 ///
 /// All state associated with access-control is stored externally to any particular instance of this class.
 ///
-/// peering_sharded_service inheritance is needed to be able to access shard local authentication service
-/// given an object from another shard. Used for bouncing lwt requests to correct shard.
-class service final : public seastar::peering_sharded_service<service> {
+class service final {
     permissions_cache_config _permissions_cache_config;
     std::unique_ptr<permissions_cache> _permissions_cache;
 

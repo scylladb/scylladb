@@ -723,7 +723,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_qu
 
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, &query_state, skip_metadata] (auto msg) {
          tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
-         return make_result(stream, *msg, query_state.get_trace_state(), skip_metadata);
+         return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
     }).finally([q_state = std::move(q_state)] {});
 }
 
@@ -750,55 +750,51 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
             tracing::trace(client_state.get_trace_state(), "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
                 return messages::result_message::prepared::cql::get_id(msg);
             }));
-            return this->make_result(stream, *msg, client_state.get_trace_state());
+            return this->make_result(stream, msg, client_state.get_trace_state());
         });
     });
 }
 
-static future<std::pair<foreign_ptr<::shared_ptr<messages::result_message>>, bool>>
-process_execute_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
-        cql_protocol_version_type version, cql_serialization_format serialization_format,
-        const cql3::cql_config& cql_config, const ::timeout_config& timeout_config, bool init_trace) {
+future<std::unique_ptr<cql_server::response>> cql_server::connection::process_execute(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit)
+{
     cql3::prepared_cache_key_type cache_key(in.read_short_bytes());
     auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
     bool needs_authorization = false;
 
     // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
     // look for the prepared statement and then authorize it.
-    auto prepared = qp.local().get_prepared(client_state.user(), cache_key);
+    auto prepared = _server._query_processor.local().get_prepared(client_state.user(), cache_key);
     if (!prepared) {
         needs_authorization = true;
-        prepared = qp.local().get_prepared(cache_key);
+        prepared = _server._query_processor.local().get_prepared(cache_key);
     }
 
     if (!prepared) {
         throw exceptions::prepared_query_not_found_exception(id);
     }
 
-    auto q_state = std::make_unique<cql_query_state>(client_state, /*FIXME*/ nullptr, /*FIXME*/empty_service_permit());
+    auto q_state = std::make_unique<cql_query_state>(client_state, std::move(permit));
     auto& query_state = q_state->query_state;
-    if (version == 1) {
+    if (_version == 1) {
         std::vector<cql3::raw_value_view> values;
-        in.read_value_view_list(version, values);
+        in.read_value_view_list(_version, values);
         auto consistency = in.read_consistency();
-        q_state->options = std::make_unique<cql3::query_options>(cql_config, consistency, timeout_config, std::nullopt, values, false,
-                                                                 cql3::query_options::specific_options::DEFAULT, serialization_format);
+        q_state->options = std::make_unique<cql3::query_options>(_server._cql_config, consistency, timeout_config(), std::nullopt, values, false,
+                                                                 cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
     } else {
-        q_state->options = in.read_options(version, serialization_format, timeout_config, cql_config);
+        q_state->options = in.read_options(_version, _cql_serialization_format, this->timeout_config(), _server._cql_config);
     }
     auto& options = *q_state->options;
     auto skip_metadata = options.skip_metadata();
 
-    if (init_trace) {
-        tracing::set_page_size(client_state.get_trace_state(), options.get_page_size());
-        tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
-        tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
-        tracing::add_query(client_state.get_trace_state(), prepared->raw_cql_statement);
-        tracing::add_prepared_statement(client_state.get_trace_state(), prepared);
+    tracing::set_page_size(client_state.get_trace_state(), options.get_page_size());
+    tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
+    tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
+    tracing::add_query(client_state.get_trace_state(), prepared->raw_cql_statement);
+    tracing::add_prepared_statement(client_state.get_trace_state(), prepared);
 
-        tracing::begin(client_state.get_trace_state(), seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
-                client_state.get_client_address());
-    }
+    tracing::begin(client_state.get_trace_state(), seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
+                   client_state.get_client_address());
 
     auto stmt = prepared->statement;
     tracing::trace(query_state.get_trace_state(), "Checking bounds");
@@ -812,48 +808,14 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
 
     options.prepare(prepared->bound_names);
 
-    if (init_trace) {
-        tracing::add_prepared_query_options(client_state.get_trace_state(), options);
-    }
+    tracing::add_prepared_query_options(client_state.get_trace_state(), options);
 
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return qp.local().process_statement_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
-            .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state)] (auto msg) {
+    return _server._query_processor.local().process_statement_prepared(std::move(prepared), std::move(cache_key),
+            query_state, options, needs_authorization)
+            .then([this, stream, trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state)] (auto msg) {
         tracing::trace(trace_state, "Done processing - preparing a result");
-        return std::make_pair(make_foreign(std::move(msg)), skip_metadata);
-    });
-}
-
-future<std::pair<foreign_ptr<::shared_ptr<messages::result_message>>, bool>>
-cql_server::connection::process_execute_on_shard(unsigned shard, fragmented_temporary_buffer::istream is, service::client_state& cs) {
-    return smp::submit_to(shard, _server._config.bounce_request_smp_service_group,
-            [this, s = std::ref(_server.container()), is = std::move(is), cs = cs.move_to_other_shard()] () {
-        service::client_state client_state = cs.get();
-        cql_server& server = s.get().local();
-        return do_with(bytes_ostream(), std::move(client_state), [this, &server, is = std::move(is)]
-                                              (bytes_ostream& linearization_buffer, service::client_state& client_state) {
-            request_reader in(is, linearization_buffer);
-            return process_execute_internal(client_state, server._query_processor, in, _version, _cql_serialization_format,
-                    server._cql_config, server.timeout_config(), false);
-        });
-    });
-}
-
-future<std::unique_ptr<cql_server::response>> cql_server::connection::process_execute(uint16_t stream, request_reader in,
-        service::client_state& client_state, service_permit permit)
-{
-    fragmented_temporary_buffer::istream is = in.get_stream();
-
-    return process_execute_internal(client_state, _server._query_processor, in,
-            _version, _cql_serialization_format,  _server._cql_config, _server.timeout_config(), true)
-            .then([stream, &client_state, this, is] (std::pair<foreign_ptr<::shared_ptr<messages::result_message>>, bool> msg) mutable {
-        if (msg.first->move_to_shard()) {
-            return process_execute_on_shard(*msg.first->move_to_shard(), is, client_state)
-                    .then([stream, &client_state, this] (std::pair<foreign_ptr<::shared_ptr<messages::result_message>>, bool> msg) {
-                return make_result(stream, *msg.first, client_state.get_trace_state(), msg.second);
-            });
-        }
-        return make_ready_future<std::unique_ptr<cql_server::response>>(make_result(stream, *msg.first, client_state.get_trace_state(), msg.second));
+        return this->make_result(stream, msg, trace_state, skip_metadata);
     });
 }
 
@@ -951,7 +913,7 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
     return _server._query_processor.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries))
             .then([this, stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state()] (auto msg) {
-        return this->make_result(stream, *msg, trace_state);
+        return this->make_result(stream, msg, trace_state);
     });
 }
 
@@ -1178,15 +1140,15 @@ public:
 };
 
 std::unique_ptr<cql_server::response>
-cql_server::connection::make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata) const
+cql_server::connection::make_result(int16_t stream, shared_ptr<messages::result_message> msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata) const
 {
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
-    if (__builtin_expect(!msg.warnings().empty() && _version > 3, false)) {
+    if (__builtin_expect(!msg->warnings().empty() && _version > 3, false)) {
         response->set_frame_flag(cql_frame_flags::warning);
-        response->write_string_list(msg.warnings());
+        response->write_string_list(msg->warnings());
     }
     fmt_visitor fmt{_version, *response, skip_metadata};
-    msg.accept(fmt);
+    msg->accept(fmt);
     return response;
 }
 

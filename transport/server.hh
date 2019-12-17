@@ -38,7 +38,6 @@
 #include <seastar/core/metrics_registration.hh>
 #include "utils/fragmented_temporary_buffer.hh"
 #include "service_permit.hh"
-#include <seastar/core/sharded.hh>
 
 namespace scollectd {
 
@@ -98,9 +97,6 @@ struct cql_query_state {
     cql_query_state(service::client_state& client_state, service_permit permit)
         : query_state(client_state, std::move(permit))
     { }
-    cql_query_state(service::client_state& client_state, tracing::trace_state_ptr trace_state_ptr, service_permit permit)
-        : query_state(client_state, std::move(trace_state_ptr), std::move(permit))
-    { }
 };
 
 struct cql_server_config {
@@ -108,10 +104,9 @@ struct cql_server_config {
     size_t max_request_size;
     std::function<semaphore& ()> get_service_memory_limiter_semaphore;
     bool allow_shard_aware_drivers = true;
-    smp_service_group bounce_request_smp_service_group = default_smp_service_group();
 };
 
-class cql_server : public seastar::peering_sharded_service<cql_server> {
+class cql_server {
 private:
     class event_notifier;
 
@@ -209,16 +204,13 @@ private:
         std::unique_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state) const;
-        std::unique_ptr<cql_server::response> make_result(int16_t stream, cql_transport::messages::result_message& msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata = false) const;
+        std::unique_ptr<cql_server::response> make_result(int16_t stream, shared_ptr<cql_transport::messages::result_message> msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata = false) const;
         std::unique_ptr<cql_server::response> make_topology_change_event(const cql_transport::event::topology_change& event) const;
         std::unique_ptr<cql_server::response> make_status_change_event(const cql_transport::event::status_change& event) const;
         std::unique_ptr<cql_server::response> make_schema_change_event(const cql_transport::event::schema_change& event) const;
         std::unique_ptr<cql_server::response> make_autheticate(int16_t, const sstring&, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
-
-        future<std::pair<foreign_ptr<::shared_ptr<messages::result_message>>, bool>>
-        process_execute_on_shard(unsigned shard, fragmented_temporary_buffer::istream is, service::client_state& cs);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
 
