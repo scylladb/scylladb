@@ -35,12 +35,14 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
+#include "service/migration_listener.hh"
 #include "service/storage_service.hh"
 #include "types/tuple.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/multi_column_relation.hh"
 #include "cql3/tuples.hh"
 #include "log.hh"
+#include "json.hh"
 
 using locator::snitch_ptr;
 using locator::token_metadata;
@@ -64,6 +66,171 @@ using namespace std::chrono_literals;
 static logging::logger cdc_log("cdc");
 
 namespace cdc {
+static schema_ptr create_log_schema(const schema&, std::optional<utils::UUID> = {});
+static schema_ptr create_stream_description_table_schema(const schema&, std::optional<utils::UUID> = {});
+static future<> populate_desc(db_context ctx, const schema& s);
+}
+
+class cdc::cdc_service::impl : service::migration_listener::empty_listener {
+    db_context _ctxt;
+public:
+    impl(db_context ctxt)
+        : _ctxt(std::move(ctxt))
+    {
+        if (engine().cpu_id() == 0) {
+            _ctxt._migration_manager.register_listener(this);
+        }
+    }
+    ~impl() {
+        if (engine().cpu_id() == 0) {
+            _ctxt._migration_manager.unregister_listener(this);
+        }
+    }
+
+    void on_before_create_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
+        if (schema.cdc_options().enabled()) {
+            auto& db = _ctxt._proxy.get_db().local();
+            auto logname = log_name(schema.cf_name());
+            if (!db.has_schema(schema.ks_name(), logname)) {
+                // in seastar thread
+                auto log_schema = create_log_schema(schema);
+                auto stream_desc_schema = create_stream_description_table_schema(schema);
+                auto& keyspace = db.find_keyspace(schema.ks_name());
+
+                auto log_mut = db::schema_tables::make_create_table_mutations(keyspace.metadata(), log_schema, timestamp);
+                auto stream_mut = db::schema_tables::make_create_table_mutations(keyspace.metadata(), stream_desc_schema, timestamp);
+
+                mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+                mutations.insert(mutations.end(), std::make_move_iterator(stream_mut.begin()), std::make_move_iterator(stream_mut.end()));
+            }
+        }
+    }
+
+    void on_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
+        bool is_cdc = new_schema.cdc_options().enabled();
+        bool was_cdc = old_schema.cdc_options().enabled();
+
+        // we need to create or modify the log & stream schemas iff either we changed cdc status (was != is)
+        // or if cdc is on now unconditionally, since then any actual base schema changes will affect the column 
+        // etc.
+        if (was_cdc || is_cdc) {
+            auto logname = log_name(old_schema.cf_name());
+            auto descname = desc_name(old_schema.cf_name());
+            auto& db = _ctxt._proxy.get_db().local();
+            auto& keyspace = db.find_keyspace(old_schema.ks_name());
+            auto log_schema = was_cdc ? db.find_column_family(old_schema.ks_name(), logname).schema() : nullptr;
+            auto stream_desc_schema = was_cdc ? db.find_column_family(old_schema.ks_name(), descname).schema() : nullptr;
+
+            if (!is_cdc) {
+                auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
+                auto stream_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), stream_desc_schema, timestamp);
+
+                mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+                mutations.insert(mutations.end(), std::make_move_iterator(stream_mut.begin()), std::make_move_iterator(stream_mut.end()));
+                return;
+            }
+
+            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt);
+            auto new_stream_desc_schema = create_stream_description_table_schema(new_schema, stream_desc_schema ? std::make_optional(stream_desc_schema->id()) : std::nullopt);
+
+            auto log_mut = log_schema 
+                ? db::schema_tables::make_update_table_mutations(keyspace.metadata(), log_schema, new_log_schema, timestamp, false)
+                : db::schema_tables::make_create_table_mutations(keyspace.metadata(), new_log_schema, timestamp)
+                ;
+            auto stream_mut = stream_desc_schema 
+                ? db::schema_tables::make_update_table_mutations(keyspace.metadata(), stream_desc_schema, new_stream_desc_schema, timestamp, false)
+                : db::schema_tables::make_create_table_mutations(keyspace.metadata(), new_stream_desc_schema, timestamp)
+                ;
+
+            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+            mutations.insert(mutations.end(), std::make_move_iterator(stream_mut.begin()), std::make_move_iterator(stream_mut.end()));
+        }
+    }
+
+    void on_before_drop_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
+        if (schema.cdc_options().enabled()) {
+            auto logname = log_name(schema.cf_name());
+            auto descname = desc_name(schema.cf_name());
+            auto& db = _ctxt._proxy.get_db().local();
+            auto& keyspace = db.find_keyspace(schema.ks_name());
+            auto log_schema = db.find_column_family(schema.ks_name(), logname).schema();
+            auto stream_desc_schema = db.find_column_family(schema.ks_name(), descname).schema();
+
+            auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
+            auto stream_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), stream_desc_schema, timestamp);
+
+            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+            mutations.insert(mutations.end(), std::make_move_iterator(stream_mut.begin()), std::make_move_iterator(stream_mut.end()));
+        }
+    }
+
+    void on_create_column_family(const sstring& ks_name, const sstring& cf_name) override {
+        auto& db = _ctxt._proxy.get_db().local();
+        auto& cf = db.find_column_family(ks_name, cf_name);
+        auto schema = cf.schema();
+        if (schema->cdc_options().enabled()) {
+            populate_desc(_ctxt, *schema).get();
+        }
+    }
+
+    void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) override {
+        on_create_column_family(ks_name, cf_name);
+    }
+
+    void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {}
+};
+
+cdc::cdc_service::cdc_service(service::storage_proxy& proxy)
+    : cdc_service(db_context::builder(proxy).build())
+{}
+
+cdc::cdc_service::cdc_service(db_context ctxt)
+    : _impl(std::make_unique<impl>(std::move(ctxt)))
+{}
+
+cdc::cdc_service::~cdc_service() = default;
+
+cdc::options::options(const std::map<sstring, sstring>& map) {
+    if (map.find("enabled") == std::end(map)) {
+        throw exceptions::configuration_exception("Missing enabled CDC option");
+    }
+
+    for (auto& p : map) {
+        if (p.first == "enabled") {
+            _enabled = p.second == "true";
+        } else if (p.first == "preimage") {
+            _preimage = p.second == "true";
+        } else if (p.first == "postimage") {
+            _postimage = p.second == "true";
+        } else if (p.first == "ttl") {
+            _ttl = std::stoi(p.second);
+        } else {
+            throw exceptions::configuration_exception("Invalid CDC option: " + p.first);
+        }
+    }
+}
+
+std::map<sstring, sstring> cdc::options::to_map() const {
+    return {
+        { "enabled", _enabled ? "true" : "false" },
+        { "preimage", _preimage ? "true" : "false" },
+        { "postimage", _postimage ? "true" : "false" },
+        { "ttl", std::to_string(_ttl) },
+    };
+}
+
+sstring cdc::options::to_sstring() const {
+    return json::to_json(to_map());
+}
+
+bool cdc::options::operator==(const options& o) const {
+    return _enabled == o._enabled && _preimage == o._preimage && _postimage == o._postimage && _ttl == o._ttl;
+}
+bool cdc::options::operator!=(const options& o) const {
+    return !(*this == o);
+}
+
+namespace cdc {
 
 using operation_native_type = std::underlying_type_t<operation>;
 using column_op_native_type = std::underlying_type_t<column_op>;
@@ -78,39 +245,7 @@ sstring desc_name(const sstring& table_name) {
     return table_name + cdc_desc_suffix;
 }
 
-static future<>
-remove_log(db_context ctx, const sstring& ks_name, const sstring& table_name) {
-    try {
-        return ctx._migration_manager.announce_column_family_drop(
-                ks_name, log_name(table_name), false);
-    } catch (exceptions::configuration_exception& e) {
-        // It's fine if the table does not exist.
-        return make_ready_future<>();
-    } catch (...) {
-        return make_exception_future<>(std::current_exception());
-    }
-}
-
-static future<>
-remove_desc(db_context ctx, const sstring& ks_name, const sstring& table_name) {
-    try {
-        return ctx._migration_manager.announce_column_family_drop(
-                ks_name, desc_name(table_name), false);
-    } catch (exceptions::configuration_exception& e) {
-        // It's fine if the table does not exist.
-        return make_ready_future<>();
-    } catch (...) {
-        return make_exception_future<>(std::current_exception());
-    }
-}
-
-future<>
-remove(db_context ctx, const sstring& ks_name, const sstring& table_name) {
-    return when_all(remove_log(ctx, ks_name, table_name),
-                    remove_desc(ctx, ks_name, table_name)).discard_result();
-}
-
-static future<> setup_log(db_context ctx, const schema& s) {
+static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> uuid) {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.set_default_time_to_live(gc_clock::duration{s.cdc_options().ttl()});
     b.set_comment(sprint("CDC log for %s.%s", s.ks_name(), s.cf_name()));
@@ -132,17 +267,27 @@ static future<> setup_log(db_context ctx, const schema& s) {
     add_columns(s.clustering_key_columns());
     add_columns(s.static_columns(), true);
     add_columns(s.regular_columns(), true);
-    return ctx._migration_manager.announce_new_column_family(b.build(), false);
+
+    if (uuid) {
+        b.set_uuid(*uuid);
+    }
+    
+    return b.build();
 }
 
-static future<> setup_stream_description_table(db_context ctx, const schema& s) {
+static schema_ptr create_stream_description_table_schema(const schema& s, std::optional<utils::UUID> uuid) {
     schema_builder b(s.ks_name(), desc_name(s.cf_name()));
     b.set_comment(sprint("CDC description for %s.%s", s.ks_name(), s.cf_name()));
     b.with_column("node_ip", inet_addr_type, column_kind::partition_key);
     b.with_column("shard_id", int32_type, column_kind::partition_key);
     b.with_column("created_at", timestamp_type, column_kind::clustering_key);
     b.with_column("stream_id", uuid_type);
-    return ctx._migration_manager.announce_new_column_family(b.build(), false);
+
+    if (uuid) {
+        b.set_uuid(*uuid);
+    }
+
+    return b.build();
 }
 
 // This function assumes setup_stream_description_table was called on |s| before the call to this
@@ -202,16 +347,28 @@ static future<> populate_desc(db_context ctx, const schema& s) {
                              empty_service_permit());
 }
 
-future<> setup(db_context ctx, schema_ptr s) {
-    return seastar::async([ctx = std::move(ctx), s = std::move(s)] {
-        setup_log(ctx, *s).get();
-        auto log_guard = seastar::defer([&] { remove_log(ctx, s->ks_name(), s->cf_name()).get(); });
-        setup_stream_description_table(ctx, *s).get();
-        auto desc_guard = seastar::defer([&] { remove_desc(ctx, s->ks_name(), s->cf_name()).get(); });
-        populate_desc(ctx, *s).get();
-        desc_guard.cancel();
-        log_guard.cancel();
-    });
+db_context::builder::builder(service::storage_proxy& proxy) 
+    : _proxy(proxy) 
+{}
+
+db_context::builder& db_context::builder::with_migration_manager(service::migration_manager& migration_manager) {
+    _migration_manager = migration_manager;
+    return *this;
+}
+
+db_context::builder& db_context::builder::with_token_metadata(locator::token_metadata& token_metadata) {
+    _token_metadata = token_metadata;
+    return *this;
+}
+
+db_context::builder& db_context::builder::with_snitch(locator::snitch_ptr& snitch) {
+    _snitch = snitch;
+    return *this;
+}
+
+db_context::builder& db_context::builder::with_partitioner(dht::i_partitioner& partitioner) {
+    _partitioner = partitioner;
+    return *this;
 }
 
 db_context db_context::builder::build() {

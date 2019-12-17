@@ -71,6 +71,7 @@
 
 #include "alternator/server.hh"
 #include "redis/service.hh"
+#include "cdc/cdc.hh"
 
 namespace fs = std::filesystem;
 
@@ -802,6 +803,12 @@ int main(int ac, char** av) {
             supervisor::notify("loading system sstables");
 
             distributed_loader::ensure_system_table_directories(db).get();
+
+            static sharded<cdc::cdc_service> cdc;
+            cdc.start(std::ref(proxy)).get();
+            auto stop_cdc_service = defer_verbose_shutdown("cdc", [] {
+                cdc.stop().get();
+            });
 
             supervisor::notify("loading non-system sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy).get();

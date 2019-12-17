@@ -135,6 +135,13 @@ static void sort_by_time(const cql_transport::messages::result_message::rows& ro
             });
 }
 
+static auto select_log(cql_test_env& e, const sstring& table_name) {
+    auto msg = e.execute_cql(format("SELECT * FROM ks.{}", cdc::log_name(table_name))).get0();
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+    BOOST_REQUIRE(rows);
+    return rows;
+};
+
 SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
@@ -208,14 +215,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
             cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true', 'preimage':'"s + (enabled ? "true" : "false") + "'}");
             cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)");
 
-            auto select_log = [&] {
-                auto msg = e.execute_cql(format("SELECT * FROM ks.{}", cdc::log_name("tbl"))).get0();
-                auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-                BOOST_REQUIRE(rows);
-                return rows;
-            };
-
-            auto rows = select_log();
+            auto rows = select_log(e, "tbl");
 
             BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
 
@@ -235,7 +235,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
                 auto nv = last + 1;
                 cquery_nofail(e, "UPDATE ks.tbl SET val=" + std::to_string(nv) +" where pk=1 AND pk2=11 AND ck=111 AND ck2=1111");
 
-                rows = select_log();
+                rows = select_log(e, "tbl");
 
                 auto pre_image = to_bytes_filtered(*rows, cdc::operation::pre_image);
                 auto second = to_bytes_filtered(*rows, cdc::operation::update);
@@ -259,3 +259,28 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
         test(false);
     }).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_add_columns) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)");
+
+        auto rows = select_log(e, "tbl");
+
+        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::update).empty());
+
+        cquery_nofail(e, "ALTER TABLE ks.tbl ADD kokos text");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val, kokos) VALUES(1, 11, 111, 1111, 11111, 'kaka')");
+
+        rows = select_log(e, "tbl");
+        auto updates = to_bytes_filtered(*rows, cdc::operation::update);
+        sort_by_time(*rows, updates);
+
+        auto kokos_index = column_index(*rows, "_kokos");
+        auto kokos_type = tuple_type_impl::get_instance({ data_type_for<std::underlying_type_t<cdc::column_op>>(), utf8_type, long_type});
+        auto kokos = *updates.back()[kokos_index];
+
+        BOOST_REQUIRE_EQUAL(data_value("kaka"), value_cast<tuple_type_impl::native_type>(kokos_type->deserialize(bytes_view(kokos))).at(1));
+    }).get();
+}
+

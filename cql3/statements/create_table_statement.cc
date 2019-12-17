@@ -51,7 +51,6 @@
 
 #include "auth/resource.hh"
 #include "auth/service.hh"
-#include "cdc/cdc.hh"
 #include "schema_builder.hh"
 #include "service/storage_service.hh"
 #include "db/extensions.hh"
@@ -98,52 +97,26 @@ std::vector<column_definition> create_table_statement::get_columns() const
     return column_defs;
 }
 
-template <typename CreateTable>
-future<shared_ptr<cql_transport::event::schema_change>>
-create_table_statement::create_table_with_cdc(service::storage_proxy& proxy,
-                                              schema_ptr schema,
-                                              CreateTable&& create_table) const {
-    if (_if_not_exists) {
-        throw exceptions::invalid_request_exception(
-                "Can't create table with CDC support using IF NOT EXISTS");
-    }
-    cdc::db_context ctx = cdc::db_context::builder(proxy).build();
-    return cdc::setup(ctx, schema).then([ctx, create_table = std::move(create_table), schema = std::move(schema)] () mutable{
-        return create_table().handle_exception([ctx, schema = std::move(schema)](std::exception_ptr ep) mutable {
-            return cdc::remove(ctx, schema->ks_name(), schema->cf_name()).then([ep = std::move(ep)] () -> shared_ptr<cql_transport::event::schema_change> {
-                std::rethrow_exception(ep);
-            });
-        });
-    });
-}
-
 future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const {
     auto schema = get_cf_meta_data(proxy.get_db().local());
-    auto create_table = [this, is_local_only, schema] () mutable {
-        return make_ready_future<>().then([this, is_local_only, schema = std::move(schema)] {
-            return service::get_local_migration_manager().announce_new_column_family(std::move(schema), is_local_only);
-        }).then_wrapped([this] (auto&& f) {
-            try {
-                f.get();
-                using namespace cql_transport;
-                return make_shared<event::schema_change>(
-                        event::schema_change::change_type::CREATED,
-                        event::schema_change::target_type::TABLE,
-                        this->keyspace(),
-                        this->column_family());
-            } catch (const exceptions::already_exists_exception& e) {
-                if (_if_not_exists) {
-                    return ::shared_ptr<cql_transport::event::schema_change>();
-                }
-                throw e;
+    return make_ready_future<>().then([this, is_local_only, schema = std::move(schema)] {
+        return service::get_local_migration_manager().announce_new_column_family(std::move(schema), is_local_only);
+    }).then_wrapped([this] (auto&& f) {
+        try {
+            f.get();
+            using namespace cql_transport;
+            return make_shared<event::schema_change>(
+                    event::schema_change::change_type::CREATED,
+                    event::schema_change::target_type::TABLE,
+                    this->keyspace(),
+                    this->column_family());
+        } catch (const exceptions::already_exists_exception& e) {
+            if (_if_not_exists) {
+                return ::shared_ptr<cql_transport::event::schema_change>();
             }
-        });
-    };
-    bool cdc_enabled = _properties->get_cdc_options() && cdc::options(*_properties->get_cdc_options()).enabled();
-    return cdc_enabled
-            ? create_table_with_cdc(
-                    proxy, std::move(schema), std::move(create_table))
-            : create_table();
+            throw e;
+        }
+    });
 }
 
 /**
