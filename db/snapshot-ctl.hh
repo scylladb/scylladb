@@ -48,7 +48,7 @@ using namespace seastar;
 
 namespace db {
 
-class snapshot_ctl {
+class snapshot_ctl : public peering_sharded_service<snapshot_ctl> {
 public:
     struct snapshot_details {
         int64_t live;
@@ -105,12 +105,13 @@ public:
     future<int64_t> true_snapshots_size();
 private:
     sharded<database>& _db;
+    seastar::rwlock _lock;
 
     template <typename Func>
-    static std::result_of_t<Func()> run_snapshot_modify_operation(Func&&);
+    std::result_of_t<Func()> run_snapshot_modify_operation(Func&&);
 
     template <typename Func>
-    static std::result_of_t<Func()> run_snapshot_list_operation(Func&&);
+    std::result_of_t<Func()> run_snapshot_list_operation(Func&&);
 };
 
 }

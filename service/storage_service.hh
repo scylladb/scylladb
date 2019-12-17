@@ -233,7 +233,6 @@ private:
     bool _joined = false;
 
 public:
-    seastar::rwlock _snapshot_lock;
     seastar::gate _snapshot_ops;
 
     enum class mode { STARTING, NORMAL, JOINING, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };

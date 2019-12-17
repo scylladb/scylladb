@@ -39,7 +39,6 @@
  */
 
 #include <boost/range/adaptors.hpp>
-#include <seastar/core/smp.hh>
 #include "db/snapshot-ctl.hh"
 #include "service/storage_service.hh"
 
@@ -60,9 +59,9 @@ future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
 template <typename Func>
 std::result_of_t<Func()> snapshot_ctl::run_snapshot_modify_operation(Func&& f) {
     auto& ss = service::get_storage_service();
-    return with_gate(ss.local()._snapshot_ops, [f = std::move(f), &ss] () {
-        return ss.invoke_on(0, [f = std::move(f)] (auto& ss) mutable {
-            return with_lock(ss._snapshot_lock.for_write(), std::move(f));
+    return with_gate(ss.local()._snapshot_ops, [f = std::move(f), this] () {
+        return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
+            return with_lock(snap._lock.for_write(), std::move(f));
         });
     });
 }
@@ -70,9 +69,9 @@ std::result_of_t<Func()> snapshot_ctl::run_snapshot_modify_operation(Func&& f) {
 template <typename Func>
 std::result_of_t<Func()> snapshot_ctl::run_snapshot_list_operation(Func&& f) {
     auto& ss = service::get_storage_service();
-    return with_gate(ss.local()._snapshot_ops, [f = std::move(f), &ss] () {
-        return ss.invoke_on(0, [f = std::move(f)] (auto& ss) mutable {
-            return with_lock(ss._snapshot_lock.for_read(), std::move(f));
+    return with_gate(ss.local()._snapshot_ops, [f = std::move(f), this] () {
+        return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
+            return with_lock(snap._lock.for_read(), std::move(f));
         });
     });
 }
