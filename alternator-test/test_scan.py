@@ -233,3 +233,20 @@ def test_scan_select(filled_test_table):
     # Select with some unknown string generates a validation exception:
     with pytest.raises(ClientError, match='ValidationException'):
         full_scan(test_table, Select='UNKNOWN')
+
+# Test parallel scan, i.e., the Segments and TotalSegments options.
+# In the following test we check that these parameters allow splitting
+# a scan into multiple parts, and that these parts are in fact disjoint,
+# and their union is the entire contents of the table. We do not actually
+# try to run these queries in *parallel* in this test.
+@pytest.mark.xfail(reason="parallel scan not supported yet")
+def test_scan_parallel(filled_test_table):
+    test_table, items = filled_test_table
+    for nsegments in [1, 2, 17]:
+        print('Testing TotalSegments={}'.format(nsegments))
+        got_items = []
+        for segment in range(nsegments):
+            got_items.extend(full_scan(test_table, TotalSegments=nsegments, Segment=segment))
+        # The following comparison verifies that each of the expected item
+        # in items was returned in one - and just one - of the segments.
+        assert multiset(items) == multiset(got_items)

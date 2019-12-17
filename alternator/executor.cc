@@ -241,6 +241,20 @@ static std::string get_string_attribute(const rjson::value& value, rjson::string
 
 }
 
+// Convenience function for getting the value of an integer attribute, or
+// an empty optional if it is missing. If the attribute exists, but is not
+// an integer, a descriptive api_error is thrown.
+static std::optional<int> get_int_attribute(const rjson::value& value, rjson::string_ref_type attribute_name) {
+    const rjson::value* attribute_value = rjson::find(value, attribute_name);
+    if (!attribute_value)
+        return {};
+    if (!attribute_value->IsInt()) {
+        throw api_error("ValidationException", format("Expected integer value for attribute {}, got: {}",
+                attribute_name, value));
+    }
+    return attribute_value->GetInt();
+}
+
 // Sets a KeySchema object inside the given JSON parent describing the key
 // attributes of the the given schema as being either HASH or RANGE keys.
 // Additionally, adds to a given map mappings between the key attribute
@@ -1885,6 +1899,10 @@ future<json::json_return_type> executor::scan(client_state& client_state, std::s
 
     if (rjson::find(request_info, "FilterExpression")) {
         throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
+    }
+    if (get_int_attribute(request_info, "Segment") || get_int_attribute(request_info, "TotalSegments")) {
+        // FIXME: need to support parallel scan. See issue #5059.
+        throw api_error("ValidationException", "Scan Segment/TotalSegments is not yet implemented in alternator");
     }
 
     rjson::value* exclusive_start_key = rjson::find(request_info, "ExclusiveStartKey");
