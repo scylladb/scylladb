@@ -2472,15 +2472,29 @@ table::make_reader_excluding_sstable(schema_ptr s,
     return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
 }
 
-void table::move_sstable_from_staging_in_thread(sstables::shared_sstable sst) {
-    try {
-        sst->move_to_new_dir_in_thread(dir(), sst->generation());
-    } catch (...) {
-        tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
-        return;
-    }
-    _sstables_staging.erase(sst->generation());
-    _compaction_strategy.get_backlog_tracker().add_sstable(sst);
+future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
+    return with_semaphore(_sstable_deletion_sem, 1, [this, sstables = std::move(sstables)] {
+        return do_with(std::set<sstring>({dir()}), [this, sstables = std::move(sstables)] (std::set<sstring>& dirs_to_sync) {
+            return do_for_each(std::move(sstables), [this, &dirs_to_sync] (sstables::shared_sstable sst) {
+                dirs_to_sync.emplace(sst->get_dir());
+                return sst->move_to_new_dir(dir(), sst->generation(), false).then_wrapped([this, sst, &dirs_to_sync] (future<> f) {
+                    if (!f.failed()) {
+                        _sstables_staging.erase(sst->generation());
+                        _compaction_strategy.get_backlog_tracker().add_sstable(sst);
+                        return make_ready_future<>();
+                    } else {
+                        auto ep = f.get_exception();
+                        tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), ep);
+                        return make_exception_future<>(ep);
+                    }
+                });
+            }).finally([&dirs_to_sync] {
+                return parallel_for_each(dirs_to_sync, [] (sstring dir) {
+                    return sync_directory(dir);
+                });
+            });
+        });
+    });
 }
 
 /**

@@ -21,6 +21,8 @@
 
 #include "view_update_generator.hh"
 
+static logging::logger vug_logger("view_update_generator");
+
 namespace db::view {
 
 future<> view_update_generator::start() {
@@ -32,16 +34,38 @@ future<> view_update_generator::start() {
                 _pending_sstables.wait().get();
             }
             while (!_sstables_with_tables.empty()) {
-                auto& entry = _sstables_with_tables.front();
-                schema_ptr s = entry.t->schema();
-                flat_mutation_reader staging_sstable_reader = entry.sst->read_rows_flat(s);
-                auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, _proxy, entry.sst, _as), db::no_timeout);
-                if (result == stop_iteration::yes) {
+                auto& [sst, t] = _sstables_with_tables.front();
+                try {
+                    schema_ptr s = t->schema();
+                    flat_mutation_reader staging_sstable_reader = sst->read_rows_flat(s);
+                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, _proxy, sst, _as), db::no_timeout);
+                    if (result == stop_iteration::yes) {
+                        break;
+                    }
+                } catch (...) {
+                    vug_logger.warn("Processing {} failed: {}. Will retry...", sst->get_filename(), std::current_exception());
                     break;
                 }
-                entry.t->move_sstable_from_staging_in_thread(entry.sst);
+                try {
+                    // collect all staging sstables to move in a map, grouped by table.
+                    _sstables_to_move[t].push_back(sst);
+                } catch (...) {
+                    // Move from staging will be retried upon restart.
+                    vug_logger.warn("Moving {} from staging failed: {}. Ignoring...", sst->get_filename(), std::current_exception());
+                }
                 _registration_sem.signal();
                 _sstables_with_tables.pop_front();
+            }
+            // For each table, move the processed staging sstables into the table's base dir.
+            for (auto it = _sstables_to_move.begin(); it != _sstables_to_move.end(); ) {
+                auto& [t, sstables] = *it;
+                try {
+                    t->move_sstables_from_staging(sstables).get();
+                } catch (...) {
+                    // Move from staging will be retried upon restart.
+                    vug_logger.warn("Moving some sstable from staging failed: {}. Ignoring...", std::current_exception());
+                }
+                it = _sstables_to_move.erase(it);
             }
         }
     });
