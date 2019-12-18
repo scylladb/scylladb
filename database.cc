@@ -672,7 +672,7 @@ future<> database::update_keyspace(const sstring& name) {
         auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm->name(), tmp_ksm->strategy_name(), tmp_ksm->strategy_options(), tmp_ksm->durable_writes(),
                         boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
         ks.update_from(std::move(new_ksm));
-        return service::get_local_migration_manager().get_notifier().update_keyspace(ks.metadata());
+        return get_notifier().update_keyspace(ks.metadata());
     });
 }
 
@@ -1981,3 +1981,12 @@ const timeout_config infinite_timeout_config = {
         // not really infinite, but long enough
         1h, 1h, 1h, 1h, 1h, 1h, 1h,
 };
+
+service::migration_notifier& database::get_notifier() {
+    return service::get_local_migration_manager().get_notifier();
+}
+
+const service::migration_notifier& database::get_notifier() const {
+    return service::get_local_migration_manager().get_notifier();
+}
+

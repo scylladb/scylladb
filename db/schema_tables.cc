@@ -952,7 +952,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
            // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
            return do_for_each(keyspaces_to_drop, [&db] (sstring keyspace_to_drop) {
                db.drop_keyspace(keyspace_to_drop);
-               return service::get_local_migration_manager().get_notifier().drop_keyspace(keyspace_to_drop);
+               return db.get_notifier().drop_keyspace(keyspace_to_drop);
             });
        }).get0();
    });
@@ -994,8 +994,8 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
             return proxy.local().get_db().invoke_on_all([&created, &altered] (database& db) {
                 return do_for_each(created, [&db](auto&& val) {
                     auto ksm = create_keyspace_from_schema_partition(val);
-                    return db.create_keyspace(ksm).then([ksm] {
-                        return service::get_local_migration_manager().get_notifier().create_keyspace(ksm);
+                    return db.create_keyspace(ksm).then([&db, ksm] {
+                        return db.get_notifier().create_keyspace(ksm);
                     });
                 }).then([&altered, &db]() {
                     return do_for_each(altered, [&db](auto& name) {
@@ -1087,21 +1087,20 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
                 columns_changed.push_back(db.update_column_family(gs));
             }
 
-            auto& mm = service::get_local_migration_manager();
             auto it = columns_changed.begin();
             auto notify = [&] (auto& r, auto&& f) {
                 auto notifications = r | boost::adaptors::transformed(f);
                 when_all(notifications.begin(), notifications.end()).get();
             };
             // View drops are notified first, because a table can only be dropped if its views are already deleted
-            notify(views_diff.dropped, [&] (auto&& dt) { return mm.get_notifier().drop_view(view_ptr(dt.schema)); });
-            notify(tables_diff.dropped, [&] (auto&& dt) { return mm.get_notifier().drop_column_family(dt.schema); });
+            notify(views_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_view(view_ptr(dt.schema)); });
+            notify(tables_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_column_family(dt.schema); });
             // Table creations are notified first, in case a view is created right after the table
-            notify(tables_diff.created, [&] (auto&& gs) { return mm.get_notifier().create_column_family(gs); });
-            notify(views_diff.created, [&] (auto&& gs) { return mm.get_notifier().create_view(view_ptr(gs)); });
+            notify(tables_diff.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
+            notify(views_diff.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
             // Table altering is notified first, in case new base columns appear
-            notify(tables_diff.altered, [&] (auto&& gs) { return mm.get_notifier().update_column_family(gs, *it++); });
-            notify(views_diff.altered, [&] (auto&& gs) { return mm.get_notifier().update_view(view_ptr(gs), *it++); });
+            notify(tables_diff.altered, [&] (auto&& gs) { return db.get_notifier().update_column_family(gs, *it++); });
+            notify(views_diff.altered, [&] (auto&& gs) { return db.get_notifier().update_view(view_ptr(gs), *it++); });
         });
     }).get();
 }
@@ -1243,11 +1242,11 @@ static std::vector<user_type> create_types(database& db, const std::vector<const
         return seastar::async([&] {
             for (auto&& user_type : create_types(db, diff.created)) {
                 db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-                service::get_local_migration_manager().get_notifier().create_user_type(user_type).get();
+                db.get_notifier().create_user_type(user_type).get();
             }
             for (auto&& user_type : create_types(db, diff.altered)) {
                 db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-                service::get_local_migration_manager().get_notifier().update_user_type(user_type).get();
+                db.get_notifier().update_user_type(user_type).get();
             }
         });
     }).get();
@@ -1257,7 +1256,7 @@ static std::vector<user_type> create_types(database& db, const std::vector<const
             return do_with(create_types(db, rows), [&db] (auto &dropped) {
                 return do_for_each(dropped, [&db](auto& user_type) {
                     db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
-                    return service::get_local_migration_manager().get_notifier().drop_user_type(user_type);
+                    return db.get_notifier().drop_user_type(user_type);
                 });
             });
         }).get();

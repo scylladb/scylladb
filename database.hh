@@ -103,6 +103,7 @@ class reconcilable_result;
 
 namespace service {
 class storage_proxy;
+class migration_notifier;
 }
 
 namespace netw {
@@ -1371,6 +1372,9 @@ public:
     const compaction_manager& get_compaction_manager() const {
         return *_compaction_manager;
     }
+
+    service::migration_notifier& get_notifier();
+    const service::migration_notifier& get_notifier() const;
 
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
     future<> add_column_family_and_make_directory(schema_ptr schema);
