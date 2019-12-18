@@ -118,6 +118,10 @@ class TestSuite(ABC):
     def add_test(self, name, args, mode, options):
         pass
 
+    def junit_tests(self):
+        """Tests which participate in a consolidated junit report"""
+        return self.tests
+
     def add_test_list(self, mode, options):
         lst = glob.glob(os.path.join(self.path, self.pattern))
         long_tests = set(self.cfg.get("long", []))
@@ -154,7 +158,10 @@ class UnitTestSuite(TestSuite):
 
 class BoostTestSuite(UnitTestSuite):
     """TestSuite for boost unit tests"""
-    pass
+
+    def junit_tests(self):
+        """Boost tests produce an own XML output, so are not included in a junit report"""
+        return []
 
 
 class Test:
@@ -168,8 +175,8 @@ class Test:
         self.mode = mode
         self.suite = suite
         # Unique file name, which is also readable by human, as filename prefix
-        self.uname = "{}.{}.{}".format(self.mode, self.shortname, self.id)
-        self.log_filename = os.path.join(options.tmpdir, self.uname + ".log")
+        self.uname = "{}.{}".format(self.shortname, self.id)
+        self.log_filename = os.path.join(options.tmpdir, self.mode, self.uname + ".log")
         self.success = None
 
     @abstractmethod
@@ -187,7 +194,8 @@ class UnitTest(Test):
 
         if isinstance(suite, BoostTestSuite):
             boost_args = []
-            xmlout = os.path.join(options.jenkins, self.uname + ".boost.xml")
+            xmlout = os.path.join(options.tmpdir, self.mode, "xml",
+                                  self.uname + ".xunit.xml")
             boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
             boost_args += ['--']
             self.args = boost_args + self.args
@@ -327,21 +335,10 @@ def parse_cmd_line():
                         help="number of times to repeat test execution")
     parser.add_argument('--timeout', action="store", default="3000", type=int,
                         help="timeout value for test execution")
-    parser.add_argument(
-        "--jenkins",
-        action="store",
-        help="""Jenkins output file prefix. Default: ${tmpdir}/xml"""
-    )
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
     parser.add_argument('--jobs', '-j', action="store", default=default_num_jobs, type=int,
                         help="Number of jobs to use for running the tests")
-    parser.add_argument(
-        "--xunit",
-        action="store",
-        help="""Name of a file to write results of non-boost tests to in
-        xunit format. Default: ${tmpdir}/xml/xunit.xml"""
-    )
     args = parser.parse_args()
 
     if not sys.stdout.isatty():
@@ -362,13 +359,10 @@ def parse_cmd_line():
 
     args.tmpdir = os.path.abspath(args.tmpdir)
     prepare_dir(args.tmpdir, "*.log")
-    if not args.jenkins or not args.xunit:
-        xmldir = os.path.join(args.tmpdir, "xml")
-        prepare_dir(xmldir, "*.xml")
-        if args.jenkins is None:
-            args.jenkins = xmldir
-        if args.xunit is None:
-            args.xunit = os.path.join(xmldir, "xunit.xml")
+
+    for mode in args.modes:
+        prepare_dir(os.path.join(args.tmpdir, mode), "*.{log,reject}")
+        prepare_dir(os.path.join(args.tmpdir, mode, "xml"), "*.xml")
 
     return args
 
@@ -453,25 +447,29 @@ def print_summary(failed_tests):
             len(failed_tests), TestSuite.test_count()))
 
 
-def write_xunit_report(options):
+def write_junit_report(tmpdir, mode):
+    junit_filename = os.path.join(tmpdir, mode, "xml", "junit.xml")
     total = 0
     failed = 0
     xml_results = ET.Element("testsuite", name="non-boost tests", errors="0")
     for suite in TestSuite.suites.values():
-        if isinstance(suite, BoostTestSuite):
-            continue
-        for test in suite.tests:
+        for test in suite.junit_tests():
+            if test.mode != mode:
+                continue
             total += 1
-            xml_res = ET.SubElement(xml_results, 'testcase', name=test.uname)
+            xml_res = ET.SubElement(xml_results, 'testcase',
+                                    name="{}.{}.{}".format(test.shortname, mode, test.id))
             if test.success is True:
                 continue
             failed += 1
             xml_fail = ET.SubElement(xml_res, 'failure')
             xml_fail.text = "Test {} {} failed:\n".format(test.path, " ".join(test.args))
             xml_fail.text += read_log(test.log_filename)
+    if total == 0:
+        return
     xml_results.set("tests", str(total))
     xml_results.set("failures", str(failed))
-    with open(options.xunit, "w") as f:
+    with open(junit_filename, "w") as f:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
 
@@ -507,7 +505,8 @@ async def main():
 
     print_summary(failed_tests)
 
-    write_xunit_report(options)
+    for mode in options.modes:
+        write_junit_report(options.tmpdir, mode)
 
     return 0 if not failed_tests else -1
 
