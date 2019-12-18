@@ -279,9 +279,12 @@ class static_vector:
         t = self.ref.type.strip_typedefs()
         value_type = t.template_argument(0)
         try:
-            data = self.ref['m_holder']['storage']['dummy']['dummy'].cast(value_type.pointer())
-        except gdb.error:
-            data = self.ref['m_holder']['storage']['dummy'].cast(value_type.pointer()) # Scylla 3.0 compatibility
+            data = self.ref['m_holder']['storage']['data'].cast(value_type.pointer())
+        except:
+            try:
+                data = self.ref['m_holder']['storage']['dummy']['dummy'].cast(value_type.pointer()) # Scylla 3.1 compatibility
+            except gdb.error:
+                data = self.ref['m_holder']['storage']['dummy'].cast(value_type.pointer()) # Scylla 3.0 compatibility
         for i in range(self.__len__()):
             yield data[i]
 
