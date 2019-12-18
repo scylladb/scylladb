@@ -710,6 +710,9 @@ int main(int ac, char** av) {
             }();
             supervisor::notify("starting API server");
             ctx.http_server.start("API").get();
+            auto stop_http_server = defer_verbose_shutdown("API server", [&ctx] {
+                ctx.http_server.stop().get();
+            });
             api::set_server_init(ctx).get();
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ctx.http_server.listen(socket_address{ip, api_port});
