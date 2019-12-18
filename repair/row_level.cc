@@ -1098,14 +1098,14 @@ private:
         _working_row_buf_combined_hash.clear();
 
         if (_row_buf.empty()) {
-            return make_ready_future<get_combined_row_hash_response>(get_combined_row_hash_response{repair_hash(), 0});
+            return make_ready_future<get_combined_row_hash_response>(get_combined_row_hash_response());
         }
         return move_row_buf_to_working_row_buf().then([this] {
             return do_for_each(_working_row_buf, [this] (repair_row& r) {
                 _working_row_buf_combined_hash.add(r.hash());
                 return make_ready_future<>();
             }).then([this] {
-                return get_combined_row_hash_response{_working_row_buf_combined_hash, _working_row_buf.size()};
+                return get_combined_row_hash_response{_working_row_buf_combined_hash};
             });
         });
     }
@@ -2296,8 +2296,8 @@ private:
             // are identical, there is no need to transfer each and every
             // row hashes to the repair master.
             return master.get_combined_row_hash(_common_sync_boundary, _all_nodes[idx]).then([&, this, idx] (get_combined_row_hash_response resp) {
-                rlogger.debug("Calling master.get_combined_row_hash for node {}, got combined_hash={}, rows_nr={}", _all_nodes[idx], resp.working_row_buf_combined_csum, resp.working_row_buf_nr);
-                combined_hashes[idx]= std::move(resp.working_row_buf_combined_csum);
+                rlogger.debug("Calling master.get_combined_row_hash for node {}, got combined_hash={}", _all_nodes[idx], resp);
+                combined_hashes[idx]= std::move(resp);
             });
         }).get();
 
