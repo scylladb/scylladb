@@ -870,7 +870,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
 ]
 
 deps = {
-    'scylla': idls + ['main.cc', 'release.cc'] + scylla_core + api + alternator + redis,
+    'scylla': idls + ['main.cc', 'release.cc', 'build_id.cc'] + scylla_core + api + alternator + redis,
 }
 
 pure_boost_tests = set([
