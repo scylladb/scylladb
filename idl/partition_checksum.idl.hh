@@ -69,11 +69,6 @@ struct get_sync_boundary_response {
     uint64_t new_rows_nr;
 };
 
-struct get_combined_row_hash_response {
-    repair_hash working_row_buf_combined_csum;
-    uint64_t working_row_buf_nr;
-};
-
 enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set,
     send_full_set_rpc_stream,

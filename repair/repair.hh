@@ -321,11 +321,7 @@ struct get_sync_boundary_response {
 };
 
 // Return value of the REPAIR_GET_COMBINED_ROW_HASH RPC verb
-struct get_combined_row_hash_response {
-    repair_hash working_row_buf_combined_csum;
-    // The number of rows in the working row buf
-    uint64_t working_row_buf_nr;
-};
+using get_combined_row_hash_response = repair_hash;
 
 struct node_repair_meta_id {
     gms::inet_address ip;
