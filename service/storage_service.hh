@@ -198,6 +198,14 @@ public:
         return _token_metadata;
     }
 
+    const service::migration_notifier& get_migration_notifier() const {
+        return _mnotifier.local();
+    }
+
+    service::migration_notifier& get_migration_notifier() {
+        return _mnotifier.local();
+    }
+
     future<> gossip_snitch_info();
 
     distributed<database>& db() {
