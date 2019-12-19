@@ -1132,7 +1132,7 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
     // If we're still here, cas() *will* be called by execute(), so let's
     // find the appropriate shard to run it on:
     auto token = dht::global_partitioner().get_token(*_schema, _pk);
-    auto desired_shard = service::storage_proxy::cas_shard(token);
+    auto desired_shard = service::storage_proxy::cas_shard(*_schema, token);
     if (desired_shard == engine().cpu_id()) {
         return {};
     }
@@ -1496,7 +1496,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         }
         return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state] (auto& e) {
             stats.write_using_lwt++;
-            auto desired_shard = service::storage_proxy::cas_shard(e.first.dk.token());
+            auto desired_shard = service::storage_proxy::cas_shard(*e.first.schema, e.first.dk.token());
             if (desired_shard == engine().cpu_id()) {
                 return cas_write(proxy, e.first.schema, e.first.dk, std::move(e.second), client_state, trace_state);
             } else {

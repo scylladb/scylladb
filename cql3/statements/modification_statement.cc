@@ -51,7 +51,6 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "db/config.hh"
-#include "dht/murmur3_partitioner.hh"
 #include "service/storage_service.hh"
 #include "transport/messages/result_message.hh"
 #include "database.hh"
@@ -359,7 +358,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     // modification in the list of CAS commands, since we're handling single-statement execution.
     request->add_row_update(*this, std::move(ranges), std::move(json_cache), options);
 
-    auto shard = service::storage_proxy::cas_shard(request->key()[0].start()->value().as_decorated_key().token());
+    auto shard = service::storage_proxy::cas_shard(*s, request->key()[0].start()->value().as_decorated_key().token());
     if (shard != engine().cpu_id()) {
         proxy.get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(

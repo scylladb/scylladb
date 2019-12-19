@@ -190,8 +190,8 @@ std::ostream& operator<<(std::ostream& out, const i_partitioner& p) {
     return out << "}";
 }
 
-unsigned shard_of(const token& t) {
-    return global_partitioner().shard_of(t);
+unsigned shard_of(const schema& s, const token& t) {
+    return s.get_partitioner().shard_of(t);
 }
 
 std::optional<dht::token_range>

@@ -663,7 +663,7 @@ std::ostream& operator<<(std::ostream& out, partition_ranges_view v);
 void set_global_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
 i_partitioner& global_partitioner();
 
-unsigned shard_of(const token&);
+unsigned shard_of(const schema&, const token&);
 
 dht::partition_range to_partition_range(dht::token_range);
 

@@ -568,7 +568,7 @@ public:
         return _stats_key;
     }
 
-    static unsigned cas_shard(dht::token token);
+    static unsigned cas_shard(const schema& s, dht::token token);
 
     virtual void on_join_cluster(const gms::inet_address& endpoint) override;
     virtual void on_leave_cluster(const gms::inet_address& endpoint) override;
