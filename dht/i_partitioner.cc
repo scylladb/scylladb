@@ -248,10 +248,6 @@ ring_position_exponential_sharder::ring_position_exponential_sharder(const i_par
     }
 }
 
-ring_position_exponential_sharder::ring_position_exponential_sharder(partition_range pr)
-        : ring_position_exponential_sharder(global_partitioner(), std::move(pr)) {
-}
-
 std::optional<ring_position_exponential_sharder_result>
 ring_position_exponential_sharder::next(const schema& s) {
     auto ret = ring_position_exponential_sharder_result{};
