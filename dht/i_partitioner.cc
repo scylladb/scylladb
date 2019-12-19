@@ -349,7 +349,7 @@ split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, c
 
 future<utils::chunked_vector<partition_range>>
 split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
-    return split_range_to_single_shard(global_partitioner(), s, pr, shard);
+    return split_range_to_single_shard(s.get_partitioner(), s, pr, shard);
 }
 
 
