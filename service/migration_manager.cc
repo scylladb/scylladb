@@ -548,6 +548,31 @@ future<> migration_manager::notify_drop_view(const view_ptr& view) {
     });
 }
 
+void migration_manager::notify_before_create_column_family(const schema& schema,
+        std::vector<mutation>& mutations, api::timestamp_type timestamp) {
+    for (auto&& listener : _listeners) {
+        // allow exceptions. so a listener can effectively kill a create-table
+        listener->on_before_create_column_family(schema, mutations, timestamp);
+    }
+}
+
+void migration_manager::notify_before_update_column_family(const schema& new_schema,
+        const schema& old_schema, std::vector<mutation>& mutations, api::timestamp_type ts) {
+    for (auto&& listener : _listeners) {
+        // allow exceptions. so a listener can effectively kill an update-column
+        listener->on_before_update_column_family(new_schema, old_schema, mutations, ts);
+    }
+}
+
+void migration_manager::notify_before_drop_column_family(const schema& schema,
+        std::vector<mutation>& mutations, api::timestamp_type ts) {
+    for (auto&& listener : _listeners) {
+        // allow exceptions. so a listener can effectively kill a drop-column
+        listener->on_before_drop_column_family(schema, mutations, ts);
+    }
+}
+
+
 #if 0
 public void notifyDropFunction(UDFunction udf)
 {
@@ -628,10 +653,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::time
         auto ksm = keyspace.metadata();
         return seastar::async([this, cfm, timestamp, ksm] {
             auto mutations = db::schema_tables::make_create_table_mutations(ksm, cfm, timestamp);
-            for (auto&& listener : _listeners) {
-                // allow exceptions. so a listener can effectively kill a create table etc. 
-                listener->on_before_create_column_family(*cfm, mutations, timestamp);
-            }
+            notify_before_create_column_family(*cfm, mutations, timestamp);
             return mutations;
         }).then([announce_locally, ksm](std::vector<mutation> mutations) {
             return include_keyspace_and_announce(*ksm, std::move(mutations), announce_locally);
@@ -669,10 +691,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
                     return std::move(result);
                 }).get0();
 
-            for (auto&& listener : _listeners) {
-                // allow exceptions. so a listener can effectively kill a create table etc. 
-                listener->on_before_update_column_family(*cfm, *old_schema, mutations, ts);
-            }
+            notify_before_update_column_family(*cfm, *old_schema, mutations, ts);
             return mutations;
         }).then([keyspace, announce_locally] (auto&& mutations) {
             return include_keyspace_and_announce(*keyspace, std::move(mutations), announce_locally);
@@ -816,11 +835,8 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
                     mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
                 }
             }
-            for (auto&& listener : _listeners) {
-                // allow exceptions. so a listener can effectively kill a create table etc. 
-                listener->on_before_drop_column_family(*schema, mutations, ts);
-            }
 
+            notify_before_drop_column_family(*schema, mutations, ts);
             return mutations;
         }).then([this, keyspace, announce_locally](std::vector<mutation> mutations) {
             return include_keyspace_and_announce(*keyspace, std::move(mutations), announce_locally);

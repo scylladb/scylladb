@@ -103,6 +103,10 @@ public:
     future<> notify_drop_user_type(const user_type& type);
     future<> notify_drop_view(const view_ptr& view);
 
+    void notify_before_create_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
+    void notify_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);
+    void notify_before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
+
     bool should_pull_schema_from(const gms::inet_address& endpoint);
     bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
 
