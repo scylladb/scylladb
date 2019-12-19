@@ -78,20 +78,20 @@ static std::vector<ss::token_range> describe_ring(const sstring& keyspace) {
     return res;
 }
 
-void set_storage_service(http_context& ctx, routes& r) {
-    using ks_cf_func = std::function<future<json::json_return_type>(std::unique_ptr<request>, sstring, std::vector<sstring>)>;
+using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<request>, sstring, std::vector<sstring>)>;
 
-    auto wrap_ks_cf = [&ctx](ks_cf_func f) {
-        return [&ctx, f = std::move(f)](std::unique_ptr<request> req) {
-            auto keyspace = validate_keyspace(ctx, req->param);
-            auto column_families = split_cf(req->get_query_param("cf"));
-            if (column_families.empty()) {
-                column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
-            }
-            return f(std::move(req), std::move(keyspace), std::move(column_families));
-        };
+static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
+    return [&ctx, f = std::move(f)](std::unique_ptr<request> req) {
+        auto keyspace = validate_keyspace(ctx, req->param);
+        auto column_families = split_cf(req->get_query_param("cf"));
+        if (column_families.empty()) {
+            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+        }
+        return f(ctx, std::move(req), std::move(keyspace), std::move(column_families));
     };
+}
 
+void set_storage_service(http_context& ctx, routes& r) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {
             return make_ready_future<json::json_return_type>(id.to_sstring());
@@ -326,7 +326,7 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::scrub.set(r, wrap_ks_cf([&ctx](std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+    ss::scrub.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
         // TODO: respect this
         auto skip_corrupted = req->get_query_param("skip_corrupted");
 
@@ -351,7 +351,7 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     }));
 
-    ss::upgrade_sstables.set(r, wrap_ks_cf([&ctx](std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+    ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         return ctx.db.invoke_on_all([=] (database& db) {
