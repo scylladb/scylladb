@@ -227,6 +227,13 @@ public:
     unsigned sharding_ignore_msb() const {
         return _sharding_ignore_msb_bits;
     }
+    bool operator==(const i_partitioner& o) const {
+        return name() == o.name()
+                && sharding_ignore_msb() == o.sharding_ignore_msb();
+    }
+    bool operator!=(const i_partitioner& o) const {
+        return !(*this == o);
+    }
 };
 
 //
