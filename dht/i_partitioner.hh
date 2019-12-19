@@ -641,6 +641,8 @@ std::ostream& operator<<(std::ostream& out, const token& t);
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& t);
 
+std::ostream& operator<<(std::ostream& out, const i_partitioner& p);
+
 class partition_ranges_view {
     const dht::partition_range* _data = nullptr;
     size_t _size = 0;

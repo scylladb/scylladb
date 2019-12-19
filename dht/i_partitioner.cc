@@ -184,6 +184,12 @@ std::ostream& operator<<(std::ostream& out, ring_position_view pos) {
     return out << "}";
 }
 
+std::ostream& operator<<(std::ostream& out, const i_partitioner& p) {
+    out << "{partitioner name = " << p.name();
+    out << ", sharding_ignore_msb = " << p.sharding_ignore_msb();
+    return out << "}";
+}
+
 unsigned shard_of(const token& t) {
     return global_partitioner().shard_of(t);
 }
