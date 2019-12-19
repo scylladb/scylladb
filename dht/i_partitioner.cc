@@ -289,38 +289,6 @@ ring_position_exponential_sharder::next(const schema& s) {
     return std::make_optional(std::move(ret));
 }
 
-
-ring_position_exponential_vector_sharder::ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>&& ranges) {
-    std::move(ranges.begin(), ranges.end(), std::back_inserter(_ranges));
-    if (!_ranges.empty()) {
-        _current_sharder.emplace(_ranges.front());
-        _ranges.pop_front();
-        ++_element;
-    }
-}
-
-std::optional<ring_position_exponential_vector_sharder_result>
-ring_position_exponential_vector_sharder::next(const schema& s) {
-    if (!_current_sharder) {
-        return std::nullopt;
-    }
-    while (true) {  // yuch
-        auto ret = _current_sharder->next(s);
-        if (ret) {
-            auto augmented = ring_position_exponential_vector_sharder_result{std::move(*ret), _element};
-            return std::make_optional(std::move(augmented));
-        }
-        if (_ranges.empty()) {
-            _current_sharder = std::nullopt;
-            return std::nullopt;
-        }
-        _current_sharder.emplace(_ranges.front());
-        _ranges.pop_front();
-        ++_element;
-    }
-}
-
-
 ring_position_range_vector_sharder::ring_position_range_vector_sharder(dht::partition_range_vector ranges)
         : _ranges(std::move(ranges))
         , _current_range(_ranges.begin()) {
