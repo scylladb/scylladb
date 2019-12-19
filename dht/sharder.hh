@@ -97,8 +97,6 @@ class selective_token_range_sharder {
     dht::token _start_token;
     std::optional<range_bound<dht::token>> _start_boundary;
 public:
-    explicit selective_token_range_sharder(dht::token_range range, shard_id shard)
-            : selective_token_range_sharder(global_partitioner(), std::move(range), shard) {}
     selective_token_range_sharder(const i_partitioner& partitioner, dht::token_range range, shard_id shard)
             : _partitioner(partitioner)
             , _range(std::move(range))

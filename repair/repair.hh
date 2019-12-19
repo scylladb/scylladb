@@ -152,6 +152,7 @@ public:
 class repair_info {
 public:
     seastar::sharded<database>& db;
+    const dht::i_partitioner& partitioner;
     sstring keyspace;
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;
