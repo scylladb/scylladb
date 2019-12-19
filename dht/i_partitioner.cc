@@ -20,6 +20,7 @@
  */
 
 #include "i_partitioner.hh"
+#include "sharder.hh"
 #include <seastar/core/reactor.hh>
 #include "dht/murmur3_partitioner.hh"
 #include "dht/token-sharding.hh"

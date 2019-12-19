@@ -35,6 +35,7 @@
 #include <seastar/core/byteorder.hh>
 #include <iterator>
 
+#include "dht/sharder.hh"
 #include "types.hh"
 #include "mc/writer.hh"
 #include "writer.hh"

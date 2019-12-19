@@ -43,6 +43,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/make_random_string.hh"
 
+#include "dht/sharder.hh"
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "cell_locking.hh"

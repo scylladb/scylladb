@@ -25,6 +25,7 @@
 #include "mutation_fragment.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/sharder.hh"
 #include "to_string.hh"
 #include "xx_hasher.hh"
 #include "dht/i_partitioner.hh"

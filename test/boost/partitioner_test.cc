@@ -23,6 +23,7 @@
 #include <seastar/testing/thread_test_case.hh>
 
 #include "dht/i_partitioner.hh"
+#include "dht/sharder.hh"
 #include "dht/murmur3_partitioner.hh"
 #include "schema.hh"
 #include "types.hh"

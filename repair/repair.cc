@@ -24,6 +24,7 @@
 #include "range_split.hh"
 
 #include "atomic_cell_hash.hh"
+#include "dht/sharder.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
