@@ -87,32 +87,13 @@ patchelf() {
     LD_LIBRARY_PATH="$PWD/libreloc" libreloc/ld.so libexec/patchelf "$@"
 }
 
-readelf() {
-   # we use readelf to check patchelf's output, so invoke it with ld.so too.
-   LD_LIBRARY_PATH="$PWD/libreloc" libreloc/ld.so libexec/readelf "$@"
-}
-
 adjust_bin() {
     local bin="$1"
     # We could add --set-rpath too, but then debugedit (called by rpmbuild) barfs
     # on the result. So use LD_LIBRARY_PATH in the thunk, below.
-
-    readelf -lW "$root/$prefix/libexec/$bin" | grep LOAD > "$root/$prefix/libexec/$bin.before"
     patchelf \
 	--set-interpreter "$prefix/libreloc/ld.so" \
 	"$root/$prefix/libexec/$bin"
-    readelf -lW "$root/$prefix/libexec/$bin" | grep LOAD > "$root/$prefix/libexec/$bin.after"
-
-    # For the binaries we build ourselves, check that patchelf didn't
-    # modify the program headers, as doing so would exclude the
-    # build-id from the core dumps.
-    if [ "$bin" = scylla -o "$bin" = iotune ] && ! cmp "$root/$prefix/libexec/$bin.before" "$root/$prefix/libexec/$bin.after"
-    then
-        echo "patchelf modified the LOAD program headers. Core files would be missing build-id"
-        exit 1
-    fi
-    rm "$root/$prefix/libexec/$bin.before" "$root/$prefix/libexec/$bin.after"
-
     cat > "$root/$prefix/bin/$bin" <<EOF
 #!/bin/bash -e
 export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
