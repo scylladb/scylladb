@@ -947,6 +947,8 @@ int main(int ac, char** av) {
             api::set_server_messaging_service(ctx).get();
             api::set_server_storage_service(ctx).get();
             ss.init_server_without_the_messaging_service_part().get();
+            api::set_server_snapshot(ctx).get();
+
             supervisor::notify("starting batchlog manager");
             db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
                 return b.start();

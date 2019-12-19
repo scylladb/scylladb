@@ -2019,11 +2019,6 @@ future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspa
     };
 
     return run_snapshot_modify_operation([tag = std::move(tag), keyspace_names = std::move(keyspace_names), this] {
-        auto mode = get_local_storage_service()._operation_mode;
-        if (mode == storage_service::mode::JOINING) {
-            throw std::runtime_error("Cannot snapshot until bootstrap completes");
-        }
-
         return parallel_for_each(keyspace_names, [tag, this] (auto& ks_name) {
             return check_snapshot_not_exist(_db.local(), ks_name, tag);
         }).then([this, tag, keyspace_names] {
@@ -2057,10 +2052,6 @@ future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring c
     }
 
     return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), cf_name = std::move(cf_name), tag = std::move(tag)] {
-        auto mode = get_local_storage_service()._operation_mode;
-        if (mode == storage_service::mode::JOINING) {
-            throw std::runtime_error("Cannot snapshot until bootstrap completes");
-        }
         return check_snapshot_not_exist(_db.local(), ks_name, tag).then([this, ks_name, cf_name, tag] {
             return _db.invoke_on_all([ks_name, cf_name, tag] (database &db) {
                 auto& cf = db.find_column_family(ks_name, cf_name);
