@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "build_id.hh"
+#include "utils/build_id.hh"
 #include "supervisor.hh"
 #include "database.hh"
 #include <seastar/core/reactor.hh>
