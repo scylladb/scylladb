@@ -332,6 +332,7 @@ future<> tracker::run(int id, std::function<future<> ()> func) {
         }).handle_exception([this, id] (std::exception_ptr ep) {
             rlogger.info("repair id {} failed: {}", id, ep);
             done(id, false);
+            return make_exception_future(std::move(ep));
         });
     });
 }
