@@ -448,6 +448,7 @@ int main(int ac, char** av) {
     auto init = app.get_options_description().add_options();
 
     init("version", bpo::bool_switch(), "print version number and exit");
+    init("build-id", bpo::bool_switch(), "print build-id and exit");
 
     bpo::options_description deprecated("Deprecated options - ignored");
     deprecated.add_options()
@@ -468,6 +469,11 @@ int main(int ac, char** av) {
     bpo::store(parsed_opts, vm);
     if (vm["version"].as<bool>()) {
         fmt::print("{}\n", scylla_version());
+        return 0;
+    }
+
+    if (vm["build-id"].as<bool>()) {
+        fmt::print("{}\n", get_build_id());
         return 0;
     }
 
