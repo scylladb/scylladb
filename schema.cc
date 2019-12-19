@@ -36,6 +36,7 @@
 #include "partition_slice_builder.hh"
 #include "database.hh"
 #include "service/storage_service.hh"
+#include "dht/i_partitioner.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -98,6 +99,10 @@ std::ostream& operator<<(std::ostream& out, const column_mapping& cm) {
 std::ostream& operator<<(std::ostream& os, ordinal_column_id id)
 {
     return os << static_cast<column_count_type>(id);
+}
+
+dht::i_partitioner& schema::get_partitioner() const {
+    return dht::global_partitioner();
 }
 
 ::shared_ptr<cql3::column_specification>
