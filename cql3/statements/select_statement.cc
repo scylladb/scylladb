@@ -861,8 +861,7 @@ static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_
     if (_index.metadata().local()) {
         exploded_index_ck.push_back(bytes_view(*indexed_column_value));
     } else {
-        dht::i_partitioner& partitioner = dht::global_partitioner();
-        token_bytes = partitioner.get_token(*_schema, last_base_pk).data();
+        token_bytes = dht::get_token(*_schema, last_base_pk).data();
         exploded_index_ck.push_back(bytes_view(token_bytes));
         append_base_key_to_index_ck<partition_key>(exploded_index_ck, last_base_pk, *cdef);
     }
