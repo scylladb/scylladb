@@ -149,7 +149,6 @@ fi
 install -m755 -d "$rsysconfdir"
 install -m755 -d "$retc/scylla.d"
 install -m644 dist/common/sysconfig/* -Dt "$rsysconfdir"
-install -m644 dist/common/limits.d/scylla.conf -Dt "$retc"/security/limits.d
 install -m644 dist/common/scylla.d/*.conf -Dt "$retc"/scylla.d
 
 install -d -m755 "$retc"/scylla "$rsystemd" "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts" "$rprefix/bin"
