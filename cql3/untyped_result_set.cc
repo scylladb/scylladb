@@ -84,8 +84,8 @@ cql3::untyped_result_set::untyped_result_set(::shared_ptr<result_message> msg)
     public:
         std::optional<untyped_result_set> res;
         void visit(const result_message::rows& rmrs) override {
-            auto& rs = rmrs.rs();
-            auto set = rs.result_set(); // accessor by value.
+            const auto& rs = rmrs.rs();
+            const auto& set = rs.result_set();
             res.emplace(set); // construct untyped_result_set by const ref.
         }
     };

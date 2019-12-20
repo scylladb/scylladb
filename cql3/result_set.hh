@@ -172,6 +172,9 @@ public:
 
     result_set(::shared_ptr<metadata> metadata);
 
+    result_set(result_set&& other) = default;
+    result_set(const result_set& other) = delete;
+
     size_t size() const;
 
     bool empty() const;
@@ -235,7 +238,7 @@ public:
 };
 
 class result {
-    std::unique_ptr<cql3::result_set> _result_set;
+    mutable std::unique_ptr<cql3::result_set> _result_set;
     result_generator _result_generator;
     shared_ptr<const cql3::metadata> _metadata;
 public:
@@ -250,16 +253,17 @@ public:
     { }
 
     const cql3::metadata& get_metadata() const { return *_metadata; }
-    cql3::result_set result_set() const {
+    const cql3::result_set& result_set() const {
         if (_result_set) {
             return *_result_set;
-        } else {
-            auto builder = result_set::builder(make_shared<cql3::metadata>(*_metadata));
-            _result_generator.visit(builder);
-            return std::move(builder).get_result_set();
         }
+        auto builder = result_set::builder(make_shared<cql3::metadata>(*_metadata));
+        _result_generator.visit(builder);
+        auto tmp_rs = std::make_unique<cql3::result_set>(std::move(builder).get_result_set());
+        _result_set.swap(tmp_rs);
+        return *_result_set;
     }
-    
+
     template<typename Visitor>
     GCC6_CONCEPT(requires ResultVisitor<Visitor>)
     void visit(Visitor&& visitor) const {

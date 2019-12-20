@@ -1036,7 +1036,7 @@ static
 table_config read_config(cql_test_env& env, const sstring& name) {
     auto msg = env.execute_cql(format("select n_rows, value_size from ks.config where name = '{}'", name)).get0();
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-    auto rs = rows->rs().result_set();
+    const auto& rs = rows->rs().result_set();
     if (rs.size() < 1) {
         throw std::runtime_error("config not found. Did you run --populate ?");
     }
