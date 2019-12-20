@@ -1131,7 +1131,7 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
     }
     // If we're still here, cas() *will* be called by execute(), so let's
     // find the appropriate shard to run it on:
-    auto token = dht::global_partitioner().get_token(*_schema, _pk);
+    auto token = dht::get_token(*_schema, _pk);
     auto desired_shard = service::storage_proxy::cas_shard(*_schema, token);
     if (desired_shard == engine().cpu_id()) {
         return {};

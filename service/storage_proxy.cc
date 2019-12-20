@@ -4819,7 +4819,7 @@ void storage_proxy::init_messaging_service() {
 
         return get_schema_for_read(cmd.schema_version, src_addr).then([this, cmd = std::move(cmd), key = std::move(key), ballot,
                          only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
-            dht::token token = dht::global_partitioner().get_token(*schema, key);
+            dht::token token = dht::get_token(*schema, key);
             unsigned shard = dht::shard_of(*schema, token);
             bool local = shard == engine().cpu_id();
             get_stats().replica_cross_shard_ops += !local;

@@ -421,7 +421,7 @@ single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query
         }
         ranges.emplace_back(std::move(r).transform(
             [this] (partition_key&& k) -> query::ring_position {
-                auto token = dht::global_partitioner().get_token(*_schema, k);
+                auto token = dht::get_token(*_schema, k);
                 return { std::move(token), std::move(k) };
             }));
     }

@@ -172,7 +172,7 @@ topology_description generate_topology_description(
     repeat([&] {
         for (int i = 0; i < 500; ++i) {
             auto stream_id = make_random_stream_id();
-            auto token = partitioner.get_token(*schema, stream_id.to_partition_key(*schema));
+            auto token = dht::get_token(*schema, stream_id.to_partition_key(*schema));
 
             // Find the token range into which our stream_id's token landed.
             auto it = std::lower_bound(tokens.begin(), tokens.end(), token);

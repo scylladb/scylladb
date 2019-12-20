@@ -1041,7 +1041,7 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
             // Computed token column needs to be added to index view restrictions
             const column_definition& token_cdef = *_view_schema->clustering_key_columns().begin();
             auto base_pk = partition_key::from_optional_exploded(*_schema, _restrictions->get_partition_key_restrictions()->values(options));
-            bytes token_value = dht::global_partitioner().get_token(*_schema, base_pk).data();
+            bytes token_value = dht::get_token(*_schema, base_pk).data();
             auto token_restriction = ::make_shared<restrictions::single_column_restriction::EQ>(token_cdef, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value)));
             clustering_restrictions->merge_with(token_restriction);
 

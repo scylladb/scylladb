@@ -76,8 +76,8 @@ partition_key_view::legacy_tri_compare(const schema& s, partition_key_view o) co
 
 int
 partition_key_view::ring_order_tri_compare(const schema& s, partition_key_view k2) const {
-    auto t1 = dht::global_partitioner().get_token(s, *this);
-    auto t2 = dht::global_partitioner().get_token(s, k2);
+    auto t1 = dht::get_token(s, *this);
+    auto t2 = dht::get_token(s, k2);
     if (t1 != t2) {
         return t1 < t2 ? -1 : 1;
     }

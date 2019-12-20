@@ -50,7 +50,7 @@ void paxos_state::key_lock_map::release_semaphore_for_key(const dht::token& key)
 future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
-    dht::token token = dht::global_partitioner().get_token(*schema, key);
+    dht::token token = dht::get_token(*schema, key);
     utils::latency_counter lc;
     lc.start();
     return with_locked_key(token, timeout, [&cmd, token, &key, ballot, tr_state, schema, only_digest, da, timeout] () mutable {

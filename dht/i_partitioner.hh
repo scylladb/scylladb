@@ -671,6 +671,10 @@ inline decorated_key decorate_key(const schema& s, partition_key&& key) {
     return s.get_partitioner().decorate_key(s, std::move(key));
 }
 
+inline token get_token(const schema& s, partition_key_view key) {
+    return s.get_partitioner().get_token(s, key);
+}
+
 dht::partition_range to_partition_range(dht::token_range);
 
 // Each shard gets a sorted, disjoint vector of ranges

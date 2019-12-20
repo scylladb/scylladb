@@ -651,7 +651,7 @@ database::shard_of(const frozen_mutation& m) {
     // sent the partition key in legacy form or together
     // with token.
     schema_ptr schema = find_schema(m.column_family_id());
-    return dht::shard_of(*schema, dht::global_partitioner().get_token(*schema, m.key(*schema)));
+    return dht::shard_of(*schema, dht::get_token(*schema, m.key(*schema)));
 }
 
 void database::add_keyspace(sstring name, keyspace k) {
