@@ -773,7 +773,7 @@ static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_re
 }
 
 static dht::decorated_key make_pkey(const schema& s, int n) {
-    return dht::global_partitioner().decorate_key(s, partition_key::from_singular(s, n));
+    return dht::decorate_key(s, partition_key::from_singular(s, n));
 }
 
 std::vector<dht::decorated_key> make_pkeys(schema_ptr s, int n) {

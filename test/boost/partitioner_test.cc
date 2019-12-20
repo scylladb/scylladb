@@ -97,9 +97,9 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
         .build();
 
     std::vector<dht::decorated_key> keys = {
-        dht::global_partitioner().decorate_key(*s,
+        dht::decorate_key(*s,
             partition_key::from_single_value(*s, "key1")),
-        dht::global_partitioner().decorate_key(*s,
+        dht::decorate_key(*s,
             partition_key::from_single_value(*s, "key2")),
     };
 

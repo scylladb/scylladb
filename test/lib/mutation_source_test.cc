@@ -1050,7 +1050,7 @@ static void test_clustering_slices(populate_fn_ex populate) {
     };
 
     auto make_pk = [&] (sstring key) {
-        return dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes(key)));
+        return dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes(key)));
     };
 
     auto partition_count = 3;
@@ -1959,7 +1959,7 @@ public:
         auto local_keys = _local_shard_only ? make_local_keys(n, _schema) : make_keys(n, _schema);
         return boost::copy_range<std::vector<dht::decorated_key>>(local_keys | boost::adaptors::transformed([this] (sstring& key) {
             auto pkey = partition_key::from_single_value(*_schema, to_bytes(key));
-            return dht::global_partitioner().decorate_key(*_schema, std::move(pkey));
+            return dht::decorate_key(*_schema, std::move(pkey));
         }));
     }
 

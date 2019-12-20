@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
             std::default_random_engine random_engine(random());
 
             for (int i = 0; i < 10; i++) {
-                auto key = dht::global_partitioner().decorate_key(*s, new_key(s));
+                auto key = dht::decorate_key(*s, new_key(s));
 
                 mutation m1(s, key);
                 m1.set_clustered_cell(new_ckey(s), "v", data_value(bytes(bytes::initialized_later(), cell_size)), 1);

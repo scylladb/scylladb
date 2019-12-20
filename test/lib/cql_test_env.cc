@@ -259,7 +259,7 @@ public:
         auto pkey = partition_key::from_deeply_exploded(*schema, pk);
         auto ckey = clustering_key::from_deeply_exploded(*schema, ck);
         auto exp = expected.type()->decompose(expected);
-        auto dk = dht::global_partitioner().decorate_key(*schema, pkey);
+        auto dk = dht::decorate_key(*schema, pkey);
         auto shard = dht::shard_of(*schema, dk._token);
         return _db->invoke_on(shard, [pkey = std::move(pkey),
                                       ckey = std::move(ckey),

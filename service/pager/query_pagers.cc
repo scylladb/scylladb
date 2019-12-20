@@ -100,7 +100,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
         qlogger.trace("fetch_page query id {}", _cmd->query_uuid);
 
         if (_last_pkey) {
-            auto dpk = dht::global_partitioner().decorate_key(*_schema, *_last_pkey);
+            auto dpk = dht::decorate_key(*_schema, *_last_pkey);
             dht::ring_position lo(dpk);
 
             auto reversed = _cmd->slice.options.contains<query::partition_slice::option::reversed>();

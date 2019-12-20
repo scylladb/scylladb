@@ -425,7 +425,7 @@ private:
             if (sstlog.is_enabled(seastar::log_level::trace)) {
                 sstlog.trace("index {} bound {}: page:", this, &bound);
                 for (const index_entry& e : *bound.current_list) {
-                    auto dk = dht::global_partitioner().decorate_key(*_sstable->_schema,
+                    auto dk = dht::decorate_key(*_sstable->_schema,
                         e.get_key().to_partition_key(*_sstable->_schema));
                     sstlog.trace("  {} -> {}", dk, e.position());
                 }

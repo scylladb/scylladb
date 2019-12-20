@@ -123,7 +123,7 @@ static std::vector<sstring> get_keyspaces(const schema& s, const database& db, d
         keyspace_less_comparator(const schema& s) : _s(s) { }
         dht::ring_position as_ring_position(const sstring& ks) {
             auto pkey = partition_key::from_single_value(_s, utf8_type->decompose(ks));
-            return dht::global_partitioner().decorate_key(_s, std::move(pkey));
+            return dht::decorate_key(_s, std::move(pkey));
         }
         bool operator()(const sstring& ks1, const sstring& ks2) {
             return as_ring_position(ks1).less_compare(_s, as_ring_position(ks2));

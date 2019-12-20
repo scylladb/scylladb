@@ -2706,7 +2706,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
             .build();
         clustering_key::equality ck_eq(*s);
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
-        auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
+        auto dkey = dht::decorate_key(*s, std::move(pkey));
 
         auto sst = env.make_sstable(s, get_test_dir("wrong_range_tombstone_order", s), 1, version, big);
         sst->load().get0();
@@ -3304,7 +3304,7 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
         sst->load().get0();
 
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
-        auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
+        auto dkey = dht::decorate_key(*s, std::move(pkey));
 
         auto rd = make_normalizing_sstable_reader(sst, s);
         using kind = mutation_fragment::kind;
@@ -3587,7 +3587,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
         std::vector<dht::decorated_key> keys;
         for (int i = 0; i < 10; i++) {
             auto pk = partition_key::from_single_value(*s, int32_type->decompose(i));
-            keys.emplace_back(dht::global_partitioner().decorate_key(*s, std::move(pk)));
+            keys.emplace_back(dht::decorate_key(*s, std::move(pk)));
         }
         dht::decorated_key::less_comparator cmp(s);
         std::sort(keys.begin(), keys.end(), cmp);
@@ -3887,7 +3887,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
             key_and_token_pair | boost::adaptors::transformed([&s] (const std::pair<sstring, dht::token>& key_and_token) {
                 auto value = bytes(reinterpret_cast<const signed char*>(key_and_token.first.data()), key_and_token.first.size());
                 auto pk = sstables::key::from_bytes(value).to_partition_key(*s);
-                return dht::global_partitioner().decorate_key(*s, std::move(pk));
+                return dht::decorate_key(*s, std::move(pk));
             }));
 
     auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<int64_t> expected_gens) {
@@ -4525,7 +4525,7 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
                 sst->load().get0();
 
                 auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
-                auto dk = dht::global_partitioner().decorate_key(*s, pk);
+                auto dk = dht::decorate_key(*s, pk);
                 auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
                 mutation m(s, dk);
                 m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(1), { }));
@@ -4934,7 +4934,7 @@ SEASTAR_TEST_CASE(test_reads_cassandra_static_compact) {
         sst->load().get0();
 
         auto pkey = partition_key::from_exploded(*s, { utf8_type->decompose("a") });
-        auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
+        auto dkey = dht::decorate_key(*s, std::move(pkey));
         mutation m(s, dkey);
         m.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("c1"),
                     atomic_cell::make_live(*utf8_type, 1551785032379079, utf8_type->decompose("abc"), {}));

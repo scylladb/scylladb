@@ -258,7 +258,7 @@ insert_prepared_json_statement::build_partition_keys(const query_options& option
         exploded.emplace_back(json_value->second);
     }
     auto pkey = partition_key::from_optional_exploded(*s, std::move(exploded));
-    auto k = query::range<query::ring_position>::make_singular(dht::global_partitioner().decorate_key(*s, std::move(pkey)));
+    auto k = query::range<query::ring_position>::make_singular(dht::decorate_key(*s, std::move(pkey)));
     ranges.emplace_back(std::move(k));
     return ranges;
 }

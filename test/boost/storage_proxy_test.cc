@@ -37,7 +37,7 @@ static std::vector<dht::ring_position> make_ring(schema_ptr s, int n_keys) {
     std::vector<dht::ring_position> ring;
     for (int i = 0; i < 10; ++i) {
         auto pk = partition_key::from_single_value(*s, to_bytes(format("key{:d}", i)));
-        ring.emplace_back(dht::global_partitioner().decorate_key(*s, pk));
+        ring.emplace_back(dht::decorate_key(*s, pk));
     }
     std::sort(ring.begin(), ring.end(), dht::ring_position_less_comparator(*s));
     return ring;

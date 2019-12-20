@@ -2833,7 +2833,7 @@ void sstable::set_first_and_last_keys() {
             throw std::runtime_error(format("{} key of summary of {} is empty", m, get_filename()));
         }
         auto pk = key::from_bytes(value).to_partition_key(*_schema);
-        return dht::global_partitioner().decorate_key(*_schema, std::move(pk));
+        return dht::decorate_key(*_schema, std::move(pk));
     };
     _first = decorate_key("first", _components->summary.first_key.value);
     _last = decorate_key("last", _components->summary.last_key.value);
@@ -3176,7 +3176,7 @@ std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const 
     if (index_range) {
         for (auto idx = index_range->first; idx < index_range->second; ++idx) {
             auto pkey = _components->summary.entries[idx].get_key().to_partition_key(s);
-            res.push_back(dht::global_partitioner().decorate_key(s, std::move(pkey)));
+            res.push_back(dht::decorate_key(s, std::move(pkey)));
         }
     }
     return res;

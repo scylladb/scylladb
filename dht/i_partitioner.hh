@@ -664,6 +664,12 @@ void set_global_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
 i_partitioner& global_partitioner();
 
 unsigned shard_of(const schema&, const token&);
+inline decorated_key decorate_key(const schema& s, const partition_key& key) {
+    return s.get_partitioner().decorate_key(s, key);
+}
+inline decorated_key decorate_key(const schema& s, partition_key&& key) {
+    return s.get_partitioner().decorate_key(s, std::move(key));
+}
 
 dht::partition_range to_partition_range(dht::token_range);
 

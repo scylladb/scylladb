@@ -191,7 +191,7 @@ memtable::find_or_create_partition_slow(partition_key_view key) {
     // We could switch to boost::intrusive_map<> similar to what we have for row keys.
     auto& outer = current_allocator();
     return with_allocator(standard_allocator(), [&, this] () -> partition_entry& {
-        auto dk = dht::global_partitioner().decorate_key(*_schema, key);
+        auto dk = dht::decorate_key(*_schema, key);
         return with_allocator(outer, [&dk, this] () -> partition_entry& {
           return with_linearized_managed_bytes([&] () -> partition_entry& {
             return find_or_create_partition(dk);

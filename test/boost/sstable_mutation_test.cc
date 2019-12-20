@@ -852,9 +852,9 @@ SEASTAR_THREAD_TEST_CASE(buffer_overflow) {
     auto sstp = ka_sst(s, "test/resource/sstables/buffer_overflow", 5).get0();
     auto r = sstp->read_rows_flat(s, no_reader_permit());
     auto pk1 = partition_key::from_exploded(*s, { int32_type->decompose(4) });
-    auto dk1 = dht::global_partitioner().decorate_key(*s, pk1);
+    auto dk1 = dht::decorate_key(*s, pk1);
     auto pk2 = partition_key::from_exploded(*s, { int32_type->decompose(3) });
-    auto dk2 = dht::global_partitioner().decorate_key(*s, pk2);
+    auto dk2 = dht::decorate_key(*s, pk2);
     auto ck1 = clustering_key::from_exploded(*s, {int32_type->decompose(2), int32_type->decompose(2)});
     auto ck2 = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(2)});
     tombstone tomb(api::new_timestamp(), gc_clock::now());
@@ -946,14 +946,14 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
                                     version,
                                     sstables::sstable::format_types::big);
             write_memtable_to_sstable_for_test(*mt, sst).get();
-            dht::decorated_key dk(dht::global_partitioner().decorate_key(*s, k));
+            dht::decorated_key dk(dht::decorate_key(*s, k));
             auto hk = sstables::sstable::make_hashed_key(*s, dk.key());
             sst->load().get();
             auto mr = sst->read_rows_flat(s, no_reader_permit());
             auto res =  sst->has_partition_key(hk, dk).get0();
             BOOST_REQUIRE(bool(res));
 
-            auto dk2 = dht::global_partitioner().decorate_key(*s, partition_key::from_nodetool_style_string(s, "xx"));
+            auto dk2 = dht::decorate_key(*s, partition_key::from_nodetool_style_string(s, "xx"));
             auto hk2 = sstables::sstable::make_hashed_key(*s, dk2.key());
             res =  sst->has_partition_key(hk2, dk2).get0();
             BOOST_REQUIRE(! bool(res));
@@ -1030,7 +1030,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
+        auto dk = dht::decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(88), { });
         mutation m(s, dk);
 
@@ -1093,7 +1093,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
+        auto dk = dht::decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(88), { });
         mutation m(s, dk);
 
@@ -1156,7 +1156,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
             builder.with_column("v", int32_type);
             auto s = builder.build(compact);
 
-            auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
+            auto dk = dht::decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
             auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(88), { });
             mutation m(s, dk);
 
@@ -1207,7 +1207,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
+        auto dk = dht::decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         mutation m(s, dk);
 
         m.partition().apply_row_tombstone(*s, range_tombstone(
@@ -1250,7 +1250,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
+        auto dk = dht::decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         mutation m(s, dk);
         for (auto&& v : { 1, 2, 3, 4 }) {
             auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(v), { });
@@ -1287,7 +1287,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
+        auto dk = dht::decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         mutation m(s, dk);
 
         m.partition().apply_row_tombstone(*s, range_tombstone(
@@ -1783,13 +1783,13 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
                     .build(schema_builder::compact_storage::yes);
 
                 auto pk1 = partition_key::from_exploded(*s, {int32_type->decompose(1)});
-                auto dk1 = dht::global_partitioner().decorate_key(*s, pk1);
+                auto dk1 = dht::decorate_key(*s, pk1);
                 mutation m1(s, dk1);
                 m1.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v1"),
                     atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(4), {}));
 
                 auto pk2 = partition_key::from_exploded(*s, {int32_type->decompose(2)});
-                auto dk2 = dht::global_partitioner().decorate_key(*s, pk2);
+                auto dk2 = dht::decorate_key(*s, pk2);
                 mutation m2(s, dk2);
                 m2.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v1"),
                     atomic_cell::make_live(*int32_type, 1511270919978348, int32_type->decompose(5), {}));

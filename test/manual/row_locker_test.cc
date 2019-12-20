@@ -39,7 +39,7 @@ static schema_ptr make_schema()
 }
 
 dht::decorated_key make_pk(const schema_ptr& s, const sstring& pk) {
-    return dht::global_partitioner().decorate_key(*s,
+    return dht::decorate_key(*s,
             partition_key::from_single_value(*s, to_bytes(pk)));
 }
 

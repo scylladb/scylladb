@@ -1022,7 +1022,7 @@ dht::partition_range_vector indexed_table_select_statement::get_partition_ranges
     bytes_opt value = _used_index_restrictions->value_for(*cdef, options);
     if (value) {
         auto pk = partition_key::from_single_value(*_view_schema, *value);
-        auto dk = dht::global_partitioner().decorate_key(*_view_schema, pk);
+        auto dk = dht::decorate_key(*_view_schema, pk);
         auto range = dht::partition_range::make_singular(dk);
         partition_ranges.emplace_back(range);
     }
@@ -1178,7 +1178,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
                 pk_columns.push_back(row.get_blob(column->name->to_string()));
             }
             auto pk = partition_key::from_exploded(*_schema, pk_columns);
-            auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+            auto dk = dht::decorate_key(*_schema, pk);
             if (last_dk && last_dk->equal(*_schema, dk)) {
                 // Another row of the same partition, no need to output the
                 // same partition key again.
@@ -1212,7 +1212,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
                 return row.get_blob(cdef.name_as_text());
             });
             auto pk = partition_key::from_range(pk_columns);
-            auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+            auto dk = dht::decorate_key(*_schema, pk);
             auto ck_columns = _schema->clustering_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
                 return row.get_blob(cdef.name_as_text());
             });

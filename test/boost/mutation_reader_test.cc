@@ -216,7 +216,7 @@ static mutation make_mutation_with_key(schema_ptr s, dht::decorated_key dk) {
 }
 
 static mutation make_mutation_with_key(schema_ptr s, const char* key) {
-    return make_mutation_with_key(s, dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, bytes(key))));
+    return make_mutation_with_key(s, dht::decorate_key(*s, partition_key::from_single_value(*s, bytes(key))));
 }
 
 SEASTAR_TEST_CASE(test_filtering) {
@@ -320,7 +320,7 @@ std::vector<dht::decorated_key> generate_keys(schema_ptr s, int count) {
     auto keys = boost::copy_range<std::vector<dht::decorated_key>>(
         boost::irange(0, count) | boost::adaptors::transformed([s] (int key) {
             auto pk = partition_key::from_single_value(*s, int32_type->decompose(data_value(key)));
-            return dht::global_partitioner().decorate_key(*s, std::move(pk));
+            return dht::decorate_key(*s, std::move(pk));
         }));
     return std::move(boost::range::sort(keys, dht::decorated_key::less_comparator(s)));
 }

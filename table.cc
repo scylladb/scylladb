@@ -411,7 +411,7 @@ table::find_partition(schema_ptr s, const dht::decorated_key& key) const {
 
 future<table::const_mutation_partition_ptr>
 table::find_partition_slow(schema_ptr s, const partition_key& key) const {
-    return find_partition(s, dht::global_partitioner().decorate_key(*s, key));
+    return find_partition(s, dht::decorate_key(*s, key));
 }
 
 future<table::const_row_ptr>
@@ -1453,7 +1453,7 @@ future<std::unordered_set<sstring>> table::get_sstables_by_partition_key(const s
     return do_with(std::unordered_set<sstring>(), lw_shared_ptr<sstables::sstable_set::incremental_selector>(make_lw_shared(get_sstable_set().make_incremental_selector())),
             partition_key(partition_key::from_nodetool_style_string(_schema, key)),
             [this] (std::unordered_set<sstring>& filenames, lw_shared_ptr<sstables::sstable_set::incremental_selector>& sel, partition_key& pk) {
-        return do_with(dht::decorated_key(dht::global_partitioner().decorate_key(*_schema, pk)),
+        return do_with(dht::decorated_key(dht::decorate_key(*_schema, pk)),
                 [this, &filenames, &sel, &pk](dht::decorated_key& dk) mutable {
             auto sst = sel->select(dk).sstables;
             auto hk = sstables::sstable::make_hashed_key(*_schema, dk.key());

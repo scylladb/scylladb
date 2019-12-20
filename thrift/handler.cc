@@ -443,7 +443,7 @@ public:
             } else {
                 start_key = key_from_thrift(*schema, to_bytes_view(output.back().key));
             }
-            auto start = dht::global_partitioner().decorate_key(*schema, std::move(*start_key));
+            auto start = dht::decorate_key(*schema, std::move(*start_key));
             range[0] = dht::partition_range(dht::partition_range::bound(std::move(start), false), std::move(end));
             return do_get_paged_slice(schema, column_limit - columns, std::move(range), nullptr, consistency_level, timeout_config, output, qs);
         });
@@ -631,7 +631,7 @@ public:
             }
             auto& s = *schema;
             auto pk = key_from_thrift(s, to_bytes(request.key));
-            auto dk = dht::global_partitioner().decorate_key(s, pk);
+            auto dk = dht::decorate_key(s, pk);
             query::column_id_vector regular_columns;
             std::vector<query::clustering_range> clustering_ranges;
             auto opts = query_opts(s);
@@ -1534,7 +1534,7 @@ private:
         dht::partition_range_vector ranges;
         for (auto&& key : keys) {
             auto pk = key_from_thrift(s, to_bytes_view(key));
-            auto dk = dht::global_partitioner().decorate_key(s, pk);
+            auto dk = dht::decorate_key(s, pk);
             ranges.emplace_back(dht::partition_range::make_singular(std::move(dk)));
         }
         return ranges;

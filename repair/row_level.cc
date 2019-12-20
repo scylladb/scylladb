@@ -1257,7 +1257,7 @@ private:
         return do_with(std::move(rows), std::list<repair_row>(), lw_shared_ptr<const decorated_key_with_hash>(), lw_shared_ptr<mutation_fragment>(), position_in_partition::tri_compare(*_schema),
           [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list, lw_shared_ptr<const decorated_key_with_hash>& dk_ptr, lw_shared_ptr<mutation_fragment>& last_mf, position_in_partition::tri_compare& cmp) mutable {
             return do_for_each(rows, [this, &dk_ptr, &row_list, &last_mf, &cmp] (partition_key_and_mutation_fragments& x) mutable {
-                dht::decorated_key dk = dht::global_partitioner().decorate_key(*_schema, x.get_key());
+                dht::decorated_key dk = dht::decorate_key(*_schema, x.get_key());
                 if (!(dk_ptr && dk_ptr->dk.equal(*_schema, dk))) {
                     dk_ptr = make_lw_shared<const decorated_key_with_hash>(*_schema, dk, _seed);
                 }

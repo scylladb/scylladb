@@ -186,7 +186,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA, pk);
     };
 
     auto to_ck = [] (int ck) {
@@ -433,7 +433,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA, pk);
     };
 
     auto to_ck = [] (int ck) {
@@ -677,7 +677,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombst
     auto to_pkey = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_FILTERING_AND_FORWARDING_RANGE_TOMBSTONES_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_FILTERING_AND_FORWARDING_RANGE_TOMBSTONES_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_FILTERING_AND_FORWARDING_RANGE_TOMBSTONES_SCHEMA, pk);
     };
     auto to_non_full_ck = [] (int ck) {
         return clustering_key_prefix::from_single_value(
@@ -1005,7 +1005,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
     auto to_pkey = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA, pk);
     };
     auto to_non_full_ck = [] (int ck) {
         return clustering_key_prefix::from_single_value(
@@ -1207,7 +1207,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_static_row_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_STATIC_ROW_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_STATIC_ROW_SCHEMA, pk);
     };
 
     auto s_cdef = UNCOMPRESSED_STATIC_ROW_SCHEMA->get_column_definition(to_bytes("s"));
@@ -1331,7 +1331,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_static_row_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA, pk);
     };
 
     auto s_int_cdef = UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA->get_column_definition(to_bytes("s_int"));
@@ -1422,7 +1422,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_only_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, pk);
     };
     assert_that(sst.read_rows_flat())
         .produces_partition_start(to_key(5))
@@ -1474,7 +1474,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA, pk);
     };
 
     auto cdef = UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA->get_column_definition(to_bytes("val"));
@@ -1538,7 +1538,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_COUNTERS_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_COUNTERS_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_COUNTERS_SCHEMA, pk);
     };
 
     auto cdef = UNCOMPRESSED_COUNTERS_SCHEMA->get_column_definition(to_bytes("val"));
@@ -1704,7 +1704,7 @@ static void test_partition_key_with_values_of_different_types_read(const sstring
     auto to_key = [&s] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*s, bytes);
-        return dht::global_partitioner().decorate_key(*s, pk);
+        return dht::decorate_key(*s, pk);
     };
 
     assert_that(sst.read_rows_flat())
@@ -1808,7 +1808,7 @@ SEASTAR_THREAD_TEST_CASE(test_zstd_compression) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, pk);
+        return dht::decorate_key(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, pk);
     };
 
     flat_reader_assertions assertions(sst.read_rows_flat());
@@ -1879,7 +1879,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_subset_of_columns_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA, pk);
     };
 
     auto bool_cdef =
@@ -2105,7 +2105,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) 
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA, pk);
     };
 
     std::vector<const column_definition*> column_defs(64);
@@ -2317,7 +2317,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_DENSE_SCHEMA, pk);
     };
 
     std::vector<const column_definition*> column_defs(64);
@@ -2419,7 +2419,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_deleted_cells_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_DELETED_CELLS_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_DELETED_CELLS_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_DELETED_CELLS_SCHEMA, pk);
     };
 
     auto int_cdef =
@@ -2502,7 +2502,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA, pk);
     };
 
     auto to_ck = [] (int ck) {
@@ -2573,7 +2573,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_partial_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, pk);
     };
 
     auto to_ck = [] (int ck) {
@@ -2695,7 +2695,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_SIMPLE_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_SIMPLE_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_SIMPLE_SCHEMA, pk);
     };
 
     auto int_cdef =
@@ -2777,7 +2777,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_ck_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_COMPOUND_CK_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_COMPOUND_CK_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_COMPOUND_CK_SCHEMA, pk);
     };
 
     auto int_cdef =
@@ -2871,7 +2871,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*UNCOMPRESSED_COLLECTIONS_SCHEMA, bytes);
-        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_COLLECTIONS_SCHEMA, pk);
+        return dht::decorate_key(*UNCOMPRESSED_COLLECTIONS_SCHEMA, pk);
     };
 
     auto set_cdef = UNCOMPRESSED_COLLECTIONS_SCHEMA->get_column_definition(to_bytes("set_val"));
@@ -4657,7 +4657,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_table_empty_clustering_key) {
     std::vector<dht::decorated_key> keys;
     for (int i = 0; i < 10; i++) {
         auto pk = partition_key::from_single_value(*s, int32_type->decompose(i));
-        keys.emplace_back(dht::global_partitioner().decorate_key(*s, std::move(pk)));
+        keys.emplace_back(dht::decorate_key(*s, std::move(pk)));
     }
     dht::decorated_key::less_comparator cmp(s);
     std::sort(keys.begin(), keys.end(), cmp);
@@ -4691,7 +4691,7 @@ SEASTAR_THREAD_TEST_CASE(test_complex_column_zero_subcolumns_read) {
     auto to_pkey = [&s] (const UUID& key) {
         auto bytes = uuid_type->decompose(key);
         auto pk = partition_key::from_single_value(*s, bytes);
-        return dht::global_partitioner().decorate_key(*s, pk);
+        return dht::decorate_key(*s, pk);
     };
 
     std::vector<UUID> keys {
@@ -4738,7 +4738,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
     auto to_pkey = [&] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
         auto pk = partition_key::from_single_value(*s, bytes);
-        return dht::global_partitioner().decorate_key(*s, pk);
+        return dht::decorate_key(*s, pk);
     };
 
     auto to_ckey = [&] (int key) {
@@ -5079,7 +5079,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
     };
     auto bytes = int32_type->decompose(int32_t(0));
     auto pk = partition_key::from_single_value(*write_schema, bytes);
-    auto dk = dht::global_partitioner().decorate_key(*write_schema, pk);
+    auto dk = dht::decorate_key(*write_schema, pk);
     mutation partition(write_schema, pk);
     for (int i = 0; i < 3; ++i) {
         clustering_key ckey = to_ck(i);

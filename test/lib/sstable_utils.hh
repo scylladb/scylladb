@@ -48,7 +48,7 @@ static std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t
     while (generated < n) {
         auto raw_key = sstring(std::max(min_key_size, sizeof(key_id)), int8_t(0));
         std::copy_n(reinterpret_cast<int8_t*>(&key_id), sizeof(key_id), raw_key.begin());
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes(raw_key)));
+        auto dk = dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes(raw_key)));
         key_id++;
         if (lso) {
             if (engine_is_ready() && engine().cpu_id() != dht::global_partitioner().shard_of(dk.token())) {
