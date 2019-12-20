@@ -921,12 +921,27 @@ void flat_mutation_reader::do_upgrade_schema(const schema_ptr& s) {
     *this = transform(std::move(*this), schema_upgrader(s));
 }
 
+invalid_mutation_fragment_stream::invalid_mutation_fragment_stream(std::runtime_error e) : std::runtime_error(std::move(e)) {
+}
+
+namespace {
+
+[[noreturn]] void on_validation_error(seastar::logger& l, const seastar::sstring& reason) {
+    try {
+        on_internal_error(l, reason);
+    } catch (std::runtime_error& e) {
+        throw invalid_mutation_fragment_stream(e);
+    }
+}
+
+}
+
 bool mutation_fragment_stream_validator::operator()(const dht::decorated_key& dk) {
     if (_compare_keys) {
         if (_prev_partition_key.less_compare(_schema, dk)) {
             _prev_partition_key = dk;
         } else {
-            on_internal_error(fmr_logger, format("[validator {}] Unexpected partition key: previous {}, current {}", _prev_partition_key, dk));
+            on_validation_error(fmr_logger, format("[validator {}] Unexpected partition key: previous {}, current {}", _prev_partition_key, dk));
         }
     }
     return true;
@@ -971,7 +986,7 @@ bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mv)
         sstring msg = _compare_keys ?
                 format(fmt, static_cast<void*>(this), _prev_kind, _prev_pos, kind, pos) :
                 format(fmt, static_cast<void*>(this), _prev_kind, _prev_region, kind, pos);
-        on_internal_error(fmr_logger, msg);
+        on_validation_error(fmr_logger, msg);
     }
 
     _prev_kind = mv.mutation_fragment_kind();
@@ -985,6 +1000,6 @@ bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mv)
 
 void mutation_fragment_stream_validator::on_end_of_stream() const {
     if (_prev_kind != mutation_fragment::kind::partition_end) {
-        on_internal_error(fmr_logger, format("[validator {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _prev_kind));
+        on_validation_error(fmr_logger, format("[validator {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _prev_kind));
     }
 }

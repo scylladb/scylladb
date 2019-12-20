@@ -747,7 +747,14 @@ future<> consume_partitions(flat_mutation_reader& reader, Consumer consumer, db:
 flat_mutation_reader
 make_generating_reader(schema_ptr s, std::function<future<mutation_fragment_opt> ()> get_next_fragment);
 
+struct invalid_mutation_fragment_stream : public std::runtime_error {
+    explicit invalid_mutation_fragment_stream(std::runtime_error e);
+};
+
 // Track position_in_partition transitions and validate monotonicity.
+// Will throw `invalid_mutation_fragment_stream` if any violation is found.
+// If the `abort_on_internal_error` configuration option is set, it will
+// abort instead.
 class mutation_fragment_stream_validator {
     const schema& _schema;
     mutation_fragment::kind _prev_kind;
