@@ -1997,15 +1997,21 @@ future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
 
 template <typename Func>
 std::result_of_t<Func()> storage_service::run_snapshot_modify_operation(Func&& f) {
-    return smp::submit_to(0, [f = std::move(f)] () mutable {
-        return with_lock(get_local_storage_service()._snapshot_lock.for_write(), std::move(f));
+    auto& ss = get_storage_service();
+    return with_gate(ss.local()._snapshot_ops, [f = std::move(f), &ss] () {
+        return ss.invoke_on(0, [f = std::move(f)] (auto& ss) mutable {
+            return with_lock(ss._snapshot_lock.for_write(), std::move(f));
+        });
     });
 }
 
 template <typename Func>
 std::result_of_t<Func()> storage_service::run_snapshot_list_operation(Func&& f) {
-    return smp::submit_to(0, [f = std::move(f)] () mutable {
-        return with_lock(get_local_storage_service()._snapshot_lock.for_read(), std::move(f));
+    auto& ss = get_storage_service();
+    return with_gate(ss.local()._snapshot_ops, [f = std::move(f), &ss] () {
+        return ss.invoke_on(0, [f = std::move(f)] (auto& ss) mutable {
+            return with_lock(ss._snapshot_lock.for_read(), std::move(f));
+        });
     });
 }
 

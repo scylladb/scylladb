@@ -52,6 +52,7 @@
 #include "gms/application_state.hh"
 #include "db/system_distributed_keyspace.hh"
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/gate.hh>
 #include "utils/fb_utilities.hh"
 #include "utils/serialized_action.hh"
 #include "database_fwd.hh"
@@ -265,6 +266,7 @@ private:
     bool _joined = false;
 
     seastar::rwlock _snapshot_lock;
+    seastar::gate _snapshot_ops;
 
     template <typename Func>
     static std::result_of_t<Func()> run_snapshot_modify_operation(Func&&);
@@ -273,6 +275,11 @@ private:
     static std::result_of_t<Func()> run_snapshot_list_operation(Func&&);
 public:
     enum class mode { STARTING, NORMAL, JOINING, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
+
+    future<> snapshots_close() {
+        return _snapshot_ops.close();
+    }
+
 private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
