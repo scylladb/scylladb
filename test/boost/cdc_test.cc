@@ -23,13 +23,98 @@
 #include <string>
 
 #include "cdc/log.hh"
+#include "schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "transport/messages/result_message.hh"
+
 #include "types.hh"
 #include "types/tuple.hh"
+#include "types/map.hh"
+#include "types/user.hh"
 
 using namespace std::string_literals;
+
+namespace cdc {
+api::timestamp_type find_timestamp(const schema&, const mutation&);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TYPE ut (a int, b int)");
+        cquery_nofail(e, "CREATE TABLE ks.t (pk int, ck int, vstatic int static, vint int, "
+                "vmap map<int, int>, vfmap frozen<map<int, int>>, vut ut, vfut frozen<ut>, primary key (pk, ck))");
+
+        auto schema = schema_builder("ks", "t")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("vstatic", int32_type, column_kind::static_column)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("vint", int32_type)
+            .with_column("vmap", map_type_impl::get_instance(int32_type, int32_type, true))
+            .with_column("vfmap", map_type_impl::get_instance(int32_type, int32_type, false))
+            .with_column("vut", user_type_impl::get_instance("ks", "ut", {to_bytes("a"), to_bytes("b")}, {int32_type, int32_type}, true))
+            .with_column("vfut", user_type_impl::get_instance("ks", "ut", {to_bytes("a"), to_bytes("b")}, {int32_type, int32_type}, false))
+            .build();
+
+        auto check_stmt = [&] (const sstring& query) {
+            auto muts = e.get_modification_mutations(query).get0();
+            BOOST_REQUIRE(!muts.empty());
+
+            for (auto& m: muts) {
+                /* We want to check if `find_timestamp` truly returns this mutation's timestamp.
+                 * The mutation was created very recently (in the `get_modification_mutations` call),
+                 * so we can do it by comparing the returned timestamp with the current time
+                 * -- the difference should be small.
+                 */
+                auto ts = cdc::find_timestamp(*schema, m);
+                BOOST_REQUIRE(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        api::timestamp_clock::duration(api::new_timestamp() - ts))
+                    < std::chrono::milliseconds(5000));
+            }
+        };
+
+        check_stmt("INSERT INTO ks.t (pk, ck) VALUES (0, 0)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vint) VALUES (0,0,0)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vmap) VALUES (0,0,{0:0})");
+        check_stmt("INSERT INTO ks.t (pk, ck, vfmap) VALUES (0,0,{0:0})");
+        check_stmt("INSERT INTO ks.t (pk, ck, vut) VALUES (0,0,{b:0})");
+        check_stmt("INSERT INTO ks.t (pk, ck, vfut) VALUES (0,0,{b:0})");
+        check_stmt("INSERT INTO ks.t (pk, ck, vint) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vmap) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vfmap) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vut) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vfut) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, vstatic) VALUES (0, 0)");
+        check_stmt("UPDATE ks.t SET vint = 0 WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vmap = {0:0} WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vmap[0] = 0 WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vfmap = {0:0} WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vut = {b:0} WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vut.b = 0 WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vfut = {b:0} WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vint = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vmap = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vmap[0] = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vfmap = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vut = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vut.b = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vfut = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vstatic = 0 WHERE pk = 0");
+        check_stmt("DELETE FROM ks.t WHERE pk = 0 and ck = 0");
+        check_stmt("DELETE FROM ks.t WHERE pk = 0 and ck > 0");
+        check_stmt("DELETE FROM ks.t WHERE pk = 0 and ck > 0 and ck <= 1");
+        check_stmt("DELETE FROM ks.t WHERE pk = 0");
+        check_stmt("DELETE vint FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vmap FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vmap[0] FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vfmap FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vut FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vut.b FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vfut FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vstatic FROM t WHERE pk = 0");
+    }).get();
+}
 
 SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
     do_with_cql_env_thread([](cql_test_env& e) {

@@ -298,7 +298,8 @@ db_context db_context::builder::build() {
 // - in the code that calls `augument_mutation_call`, or inside `augument_mutation_call`,
 //   split each mutation to a set of mutations, each with a single timestamp.
 // - optionally: here, throw error if multiple timestamps are encountered (may degrade performance).
-static api::timestamp_type find_timestamp(const schema& s, const mutation& m) {
+// external linkage for testing
+api::timestamp_type find_timestamp(const schema& s, const mutation& m) {
     auto& p = m.partition();
     api::timestamp_type t = api::missing_timestamp;
 

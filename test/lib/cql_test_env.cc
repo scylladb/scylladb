@@ -201,6 +201,20 @@ public:
             .finally([options, qs] {});
     }
 
+    virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) override {
+        auto qs = make_query_state();
+        auto cql_stmt = local_qp().get_statement(text, qs->get_client_state())->statement;
+        auto modif_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(std::move(cql_stmt));
+        if (!modif_stmt) {
+            throw std::runtime_error(format("get_stmt_mutations: not a modification statement: {}", text));
+        }
+        auto& qo = cql3::query_options::DEFAULT;
+        auto timeout = db::timeout_clock::now() + qo.get_timeout_config().write_timeout;
+
+        return modif_stmt->get_mutations(local_qp().proxy(), qo, timeout, false, qo.get_timestamp(*qs), *qs)
+            .finally([qs, modif_stmt = std::move(modif_stmt)] {});
+    }
+
     virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) override {
         auto id = utils::UUID_gen::get_time_UUID();
         schema_builder builder(make_lw_shared(schema_maker(ks_name)));
