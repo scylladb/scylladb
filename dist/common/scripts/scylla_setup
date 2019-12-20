@@ -128,6 +128,10 @@ def get_unused_disks():
         unused.append(dev)
     return unused
 
+def swap_exists():
+    swaps = out('swapon --noheadings --raw')
+    return True if swaps != '' else False
+
 def run_setup_script(name, script):
     global interactive
     res = run('{}/{}'.format(scriptsdir(), script), exception=False)
@@ -408,6 +412,9 @@ if __name__ == '__main__':
         args.no_fstrim_setup = not fstrim_setup
         if fstrim_setup:
             run_setup_script('fstrim', 'scylla_fstrim_setup')
+
+        if not swap_exists():
+            colorprint('{red}No swap is configured, it is highly recommended to setup swap on Scylla node.{nocolor}')
 
     print('ScyllaDB setup finished.')
 
