@@ -932,7 +932,7 @@ void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
 file_writer sstable::make_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags)
 {
     auto f = new_sstable_component_file(_write_error_handler, c, oflags).get0();
-    return file_writer(std::move(f), std::move(options));
+    return file_writer(std::move(f), std::move(options), filename(c));
 }
 
 void sstable::write_toc(const io_priority_class& pc) {
@@ -1994,7 +1994,7 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
     options.buffer_size = sst.sstable_buffer_size;
     options.io_priority_class = pc;
     options.write_behind = 10;
-    return file_writer(std::move(sst._index_file), std::move(options));
+    return file_writer(std::move(sst._index_file), std::move(options), sst.filename(component_type::Index));
 }
 
 // Get the currently loaded configuration, or the default configuration in
@@ -2285,10 +2285,11 @@ void sstable_writer_k_l::prepare_file_writer()
     options.write_behind = 10;
 
     if (!_compression_enabled) {
-        _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(_sst._data_file), std::move(options));
+        _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(_sst._data_file), std::move(options), _sst.get_filename());
     } else {
-        _writer = std::make_unique<file_writer>(make_compressed_file_k_l_format_output_stream(
-                std::move(_sst._data_file), std::move(options), &_sst._components->compression, _schema.get_compressor_params()));
+        auto out = make_compressed_file_k_l_format_output_stream(
+                std::move(_sst._data_file), std::move(options), &_sst._components->compression, _schema.get_compressor_params());
+        _writer = std::make_unique<file_writer>(std::move(out), _sst.get_filename());
     }
 }
 
@@ -3312,7 +3313,7 @@ delete_atomically(std::vector<shared_sstable> ssts) {
             // Write all toc names into the log file.
             file_output_stream_options options;
             options.buffer_size = 4096;
-            auto w = file_writer(std::move(f), options);
+            auto w = file_writer(f, options, tmp_pending_delete_log);
 
             for (const auto& sst : ssts) {
                 auto toc = sst->component_basename(component_type::TOC);

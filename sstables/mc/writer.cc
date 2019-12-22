@@ -832,16 +832,16 @@ void writer::init_file_writers() {
     options.write_behind = 10;
 
     if (!_compression_enabled) {
-        _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(_sst._data_file), options);
+        _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(_sst._data_file), options, _sst.filename(component_type::Data));
     } else {
-        _data_writer = std::make_unique<file_writer>(
-            make_compressed_file_m_format_output_stream(
+        auto out = make_compressed_file_m_format_output_stream(
                 std::move(_sst._data_file),
                 options,
                 &_sst._components->compression,
-                _schema.get_compressor_params()));
+                _schema.get_compressor_params());
+        _data_writer = std::make_unique<file_writer>(std::move(out), _sst.filename(component_type::Data));
     }
-    _index_writer = std::make_unique<file_writer>(std::move(_sst._index_file), options);
+    _index_writer = std::make_unique<file_writer>(std::move(_sst._index_file), std::move(options), _sst.filename(component_type::Index));
 }
 
 std::unique_ptr<file_writer> writer::close_writer(std::unique_ptr<file_writer>& w) {
