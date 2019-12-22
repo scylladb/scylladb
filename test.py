@@ -328,7 +328,8 @@ async def main():
 
     if options.xunit:
         write_xunit_report(options, results)
-    return 0
+
+    return 0 if not failed_tests else -1
 
 if __name__ == "__main__":
     if sys.version_info < (3, 7):
