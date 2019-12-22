@@ -34,7 +34,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--builddir")
-            builddir="$2"
+            BUILDDIR="$2"
             shift 2
             ;;
         *)
