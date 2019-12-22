@@ -42,15 +42,20 @@ class metadata_collector;
 class file_writer {
     output_stream<char> _out;
     writer_offset_tracker _offset;
+    std::optional<sstring> _filename;
 public:
     // Closes the file if file_writer creation fails
-    static future<file_writer> make(file f, file_output_stream_options options) noexcept;
+    static future<file_writer> make(file f, file_output_stream_options options, sstring filename) noexcept;
 
-    file_writer(output_stream<char>&& out)
-        : _out(std::move(out)) {}
+    file_writer(output_stream<char>&& out, sstring filename) noexcept
+        : _out(std::move(out))
+        , _filename(std::move(filename))
+    {}
 
-    virtual ~file_writer() = default;
-    file_writer(file_writer&&) = default;
+    file_writer(output_stream<char>&& out) noexcept
+        : _out(std::move(out))
+    {}
+
     // Must be called in a seastar thread.
     void write(const char* buf, size_t n) {
         _offset.offset += n;
@@ -66,9 +71,8 @@ public:
         _out.flush().get();
     }
     // Must be called in a seastar thread.
-    void close() {
-        _out.close().get();
-    }
+    void close();
+
     uint64_t offset() const {
         return _offset.offset;
     }
@@ -76,6 +80,8 @@ public:
     const writer_offset_tracker& offset_tracker() const {
         return _offset;
     }
+
+    const char* get_filename() const noexcept;
 };
 
 
@@ -185,8 +191,8 @@ class checksummed_file_writer : public file_writer {
     checksum _c;
     uint32_t _full_checksum;
 public:
-    checksummed_file_writer(data_sink out, size_t buffer_size)
-            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(out), _c, _full_checksum, buffer_size))
+    checksummed_file_writer(data_sink out, size_t buffer_size, sstring filename)
+            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(out), _c, _full_checksum, buffer_size), std::move(filename))
             , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size))})
             , _full_checksum(ChecksumType::init_checksum()) {}
 

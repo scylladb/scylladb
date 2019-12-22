@@ -939,11 +939,27 @@ void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
     _recognized_components.insert(component_type::Scylla);
 }
 
+void file_writer::close() {
+    try {
+        _out.close().get();
+    } catch (...) {
+        auto e = std::current_exception();
+        sstlog.error("Error while closing {}: {}", get_filename(), e);
+        std::rethrow_exception(e);
+    }
+}
+
+const char* file_writer::get_filename() const noexcept {
+    return _filename ? _filename->c_str() : "<anonymous output_stream>";
+}
+
 future<file_writer> sstable::make_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags) noexcept {
     // Note: file_writer::make closes the file if file_writer creation fails
     // so we don't need to use with_file_close_on_failure here.
-    return new_sstable_component_file(_write_error_handler, c, oflags).then([options = std::move(options)] (file f) {
-        return file_writer::make(std::move(f), std::move(options));
+    return futurize_invoke([this, c] { return filename(c); }).then([this, c, options = std::move(options), oflags] (sstring filename) mutable {
+        return new_sstable_component_file(_write_error_handler, c, oflags).then([options = std::move(options), filename = std::move(filename)] (file f) mutable {
+            return file_writer::make(std::move(f), std::move(options), std::move(filename));
+        });
     });
 }
 
@@ -1981,7 +1997,7 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
     options.buffer_size = sst.sstable_buffer_size;
     options.io_priority_class = pc;
     options.write_behind = 10;
-    return file_writer::make(std::move(sst._index_file), std::move(options)).get0();
+    return file_writer::make(std::move(sst._index_file), std::move(options), sst.filename(component_type::Index)).get0();
 }
 
 // Returns the cost for writing a byte to summary such that the ratio of summary
@@ -2265,11 +2281,11 @@ void sstable_writer_k_l::prepare_file_writer()
 
     if (!_compression_enabled) {
         auto out = make_file_data_sink(std::move(_sst._data_file), options).get0();
-        _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(out), options.buffer_size);
+        _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(out), options.buffer_size, _sst.get_filename());
     } else {
         auto out = make_file_output_stream(std::move(_sst._data_file), std::move(options)).get0();
         _writer = std::make_unique<file_writer>(make_compressed_file_k_l_format_output_stream(
-                std::move(out), &_sst._components->compression, _schema.get_compressor_params()));
+                std::move(out), &_sst._components->compression, _schema.get_compressor_params()), _sst.get_filename());
     }
 }
 
@@ -3325,7 +3341,7 @@ delete_atomically(std::vector<shared_sstable> ssts) {
             // Write all toc names into the log file.
             file_output_stream_options options;
             options.buffer_size = 4096;
-            auto w = file_writer::make(std::move(f), options).get0();
+            auto w = file_writer::make(std::move(f), options, tmp_pending_delete_log).get0();
 
             for (const auto& sst : ssts) {
                 auto toc = sst->component_basename(component_type::TOC);
@@ -3523,11 +3539,11 @@ sstable::sstable(schema_ptr schema,
     tracker.add(*this);
 }
 
-future<file_writer> file_writer::make(file f, file_output_stream_options options) noexcept {
+future<file_writer> file_writer::make(file f, file_output_stream_options options, sstring filename) noexcept {
     // note: make_file_output_stream closes the file if the stream creation fails
     return make_file_output_stream(std::move(f), std::move(options))
-        .then([](output_stream<char>&& out) {
-            return file_writer(std::move(out));
+        .then([filename = std::move(filename)] (output_stream<char>&& out) {
+            return file_writer(std::move(out), std::move(filename));
         });
 }
 
