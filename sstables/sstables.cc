@@ -939,6 +939,14 @@ void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
     _recognized_components.insert(component_type::Scylla);
 }
 
+future<file_writer> sstable::make_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags) noexcept {
+    // Note: file_writer::make closes the file if file_writer creation fails
+    // so we don't need to use with_file_close_on_failure here.
+    return new_sstable_component_file(_write_error_handler, c, oflags).then([options = std::move(options)] (file f) {
+        return file_writer::make(std::move(f), std::move(options));
+    });
+}
+
 void sstable::write_toc(const io_priority_class& pc) {
     touch_temp_dir().get0();
     auto file_path = filename(component_type::TemporaryTOC);
@@ -949,21 +957,19 @@ void sstable::write_toc(const io_priority_class& pc) {
     // If creation of temporary TOC failed, it implies that that boot failed to
     // delete a sstable with temporary for this column family, or there is a
     // sstable being created in parallel with the same generation.
-    file f = new_sstable_component_file(_write_error_handler, component_type::TemporaryTOC, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file_output_stream_options options;
+    options.buffer_size = 4096;
+    options.io_priority_class = pc;
+    auto w = make_component_file_writer(component_type::TemporaryTOC, std::move(options)).get0();
 
     bool toc_exists = file_exists(filename(component_type::TOC)).get0();
     if (toc_exists) {
         // TOC will exist at this point if write_components() was called with
         // the generation of a sstable that exists.
-        f.close().get();
+        w.close();
         remove_file(file_path).get();
         throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {:d} of {}.{}", _generation, _schema->ks_name(), _schema->cf_name()));
     }
-
-    file_output_stream_options options;
-    options.buffer_size = 4096;
-    options.io_priority_class = pc;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
 
     for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
@@ -1014,12 +1020,9 @@ void sstable::write_crc(const checksum& c) {
     auto file_path = filename(component_type::CRC);
     sstlog.debug("Writing CRC file {} ", file_path);
 
-    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    file f = new_sstable_component_file(_write_error_handler, component_type::CRC, oflags).get0();
-
     file_output_stream_options options;
     options.buffer_size = 4096;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
+    auto w = make_component_file_writer(component_type::CRC, std::move(options)).get0();
     write(get_version(), w, c);
     w.close();
 }
@@ -1029,12 +1032,9 @@ void sstable::write_digest(uint32_t full_checksum) {
     auto file_path = filename(component_type::Digest);
     sstlog.debug("Writing Digest file {} ", file_path);
 
-    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    auto f = new_sstable_component_file(_write_error_handler, component_type::Digest, oflags).get0();
-
     file_output_stream_options options;
     options.buffer_size = 4096;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
+    auto w = make_component_file_writer(component_type::Digest, std::move(options)).get0();
 
     auto digest = to_sstring<bytes>(full_checksum);
     write(get_version(), w, digest);
@@ -1077,12 +1077,11 @@ void sstable::do_write_simple(component_type type, const io_priority_class& pc,
         noncopyable_function<void (version_types version, file_writer& writer)> write_component) {
     auto file_path = filename(type);
     sstlog.debug(("Writing " + sstable_version_constants::get_component_map(_version).at(type) + " file {} ").c_str(), file_path);
-    file f = new_sstable_component_file(_write_error_handler, type, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
+    auto w = make_component_file_writer(type, std::move(options)).get0();
     std::exception_ptr eptr;
     try {
         write_component(_version, w);
@@ -1250,12 +1249,12 @@ void sstable::write_statistics(const io_priority_class& pc) {
 void sstable::rewrite_statistics(const io_priority_class& pc) {
     auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
-    file f = new_sstable_component_file(_write_error_handler, component_type::TemporaryStatistics, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
+    auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
+            open_flags::wo | open_flags::create | open_flags::truncate).get0();
     write(_version, w, _components->statistics);
     w.flush();
     w.close();
@@ -3525,6 +3524,7 @@ sstable::sstable(schema_ptr schema,
 }
 
 future<file_writer> file_writer::make(file f, file_output_stream_options options) noexcept {
+    // note: make_file_output_stream closes the file if the stream creation fails
     return make_file_output_stream(std::move(f), std::move(options))
         .then([](output_stream<char>&& out) {
             return file_writer(std::move(out));

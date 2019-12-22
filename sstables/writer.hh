@@ -43,6 +43,7 @@ class file_writer {
     output_stream<char> _out;
     writer_offset_tracker _offset;
 public:
+    // Closes the file if file_writer creation fails
     static future<file_writer> make(file f, file_output_stream_options options) noexcept;
 
     file_writer(output_stream<char>&& out)

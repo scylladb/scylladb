@@ -563,6 +563,9 @@ private:
     future<> rename_new_sstable_component_file(sstring from_file, sstring to_file);
     future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {}) noexcept;
 
+    future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
+            open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
+
     future<> touch_temp_dir();
     future<> remove_temp_dir();
 
