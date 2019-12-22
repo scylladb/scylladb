@@ -43,6 +43,7 @@ class file_writer {
     output_stream<char> _out;
     writer_offset_tracker _offset;
     std::optional<sstring> _filename;
+    bool _closed = false;
 public:
     // Closes the file if file_writer creation fails
     static future<file_writer> make(file f, file_output_stream_options options, sstring filename) noexcept;
@@ -56,6 +57,17 @@ public:
         : _out(std::move(out))
     {}
 
+    // Must be called in a seastar thread.
+    virtual ~file_writer();
+    file_writer(const file_writer&) = delete;
+    file_writer(file_writer&& x) noexcept
+        : _out(std::move(x._out))
+        , _offset(std::move(x._offset))
+        , _filename(std::move(x._filename))
+        , _closed(x._closed)
+    {
+        x._closed = true;   // don't auto-close in destructor
+    }
     // Must be called in a seastar thread.
     void write(const char* buf, size_t n) {
         _offset.offset += n;
