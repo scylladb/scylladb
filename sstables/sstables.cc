@@ -928,6 +928,31 @@ void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
     _recognized_components.insert(component_type::Scylla);
 }
 
+file_writer::~file_writer() {
+    if (_closed) {
+        return;
+    }
+    try {
+        // close() should be called by the owner of the file_writer.
+        // However it may not be called on exception handling paths
+        // so auto-close the output_stream so it won't be destructed while open.
+        _out.close().get();
+    } catch (...) {
+        sstlog.warn("Error while auto-closing {}: {}. Ignored.", get_filename(), std::current_exception());
+    }
+}
+
+void file_writer::close() {
+    try {
+        _out.close().get();
+        _closed = true;
+    } catch (...) {
+        auto e = std::current_exception();
+        sstlog.error("Error while closing {}: {}", get_filename(), e);
+        std::rethrow_exception(e);
+    }
+}
+
 // Must be called in a seastar thread
 file_writer sstable::make_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags)
 {

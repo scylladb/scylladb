@@ -43,6 +43,7 @@ class file_writer {
     output_stream<char> _out;
     writer_offset_tracker _offset;
     std::string _filename;
+    bool _closed = false;
 public:
     // It is the responsiblity of the caller to close file f
     // if the constructor throws
@@ -63,7 +64,7 @@ public:
         , _filename("output_stream")
     {}
 
-    virtual ~file_writer() = default;
+    virtual ~file_writer();
     file_writer(file_writer&&) = default;
     // Must be called in a seastar thread.
     void write(const char* buf, size_t n) {
@@ -80,9 +81,8 @@ public:
         _out.flush().get();
     }
     // Must be called in a seastar thread.
-    void close() {
-        _out.close().get();
-    }
+    void close();
+
     uint64_t offset() const {
         return _offset.offset;
     }
