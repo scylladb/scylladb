@@ -677,7 +677,7 @@ public:
                     _cf,
                     _schema,
                     _range,
-                    dht::global_partitioner(),
+                    _schema->get_partitioner(),
                     *_remote_partitioner,
                     _master_node_shard_config.shard,
                     _seed,
@@ -944,9 +944,9 @@ private:
     bool is_same_sharding_config() {
         rlogger.debug("is_same_sharding_config: remote_partitioner_name={}, remote_shard={}, remote_shard_count={}, remote_ignore_msb={}",
                 _master_node_shard_config.partitioner_name, _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb);
-        return dht::global_partitioner().name() == _master_node_shard_config.partitioner_name
-               && dht::global_partitioner().shard_count() == _master_node_shard_config.shard_count
-               && dht::global_partitioner().sharding_ignore_msb() == _master_node_shard_config.ignore_msb
+        return _schema->get_partitioner().name() == _master_node_shard_config.partitioner_name
+               && _schema->get_partitioner().shard_count() == _master_node_shard_config.shard_count
+               && _schema->get_partitioner().sharding_ignore_msb() == _master_node_shard_config.ignore_msb
                && engine().cpu_id() == _master_node_shard_config.shard;
     }
 
@@ -2437,9 +2437,9 @@ public:
             auto max_row_buf_size = get_max_row_buf_size(algorithm);
             auto master_node_shard_config = shard_config {
                     engine().cpu_id(),
-                    dht::global_partitioner().shard_count(),
-                    dht::global_partitioner().sharding_ignore_msb(),
-                    dht::global_partitioner().name()
+                    _ri.partitioner.shard_count(),
+                    _ri.partitioner.sharding_ignore_msb(),
+                    _ri.partitioner.name()
             };
             auto s = _cf.schema();
             auto schema_version = s->version();
