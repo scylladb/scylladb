@@ -71,7 +71,7 @@ elif [[ "$1" = -* ]]; then
                 image="$2"
                 shift 2
                 if [[ -z "$image" ]]; then
-                    exec docker image ls
+                    die "Expected docker image identifier to follow the --image option"
                 fi
                 if ! docker image inspect "$image" >/dev/null; then
                     die
