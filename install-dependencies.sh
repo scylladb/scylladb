@@ -24,6 +24,7 @@ bash seastar/install-dependencies.sh
 debian_base_packages=(
     liblua5.3-dev
     python3-pyparsing
+    python3-colorama
     libsnappy-dev
     libjsoncpp-dev
     rapidjson-dev
@@ -66,6 +67,7 @@ fedora_packages=(
     python3-magic
     python3-psutil
     python3-cassandra-driver
+    python3-colorama
     dnf-utils
     pigz
     net-tools
