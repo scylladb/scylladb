@@ -73,7 +73,7 @@ elif [[ "$1" = -* ]]; then
                 if [[ -z "$image" ]]; then
                     die "Expected docker image identifier to follow the --image option"
                 fi
-                if ! docker image inspect "$image" >/dev/null; then
+                if ! docker image inspect "$image" >/dev/null && ! docker image pull "$image"; then
                     die
                 fi
                 continue
