@@ -55,6 +55,11 @@ def ldd(executable):
             libraries[elements[0]] = os.path.realpath(elements[2])
     return libraries
 
+def filter_dist(info):
+    for x in ['dist/ami/files/', 'dist/ami/packer', 'dist/ami/variables.json']:
+        if info.name.startswith(x):
+            return None
+    return info
 
 ap = argparse.ArgumentParser(description='Create a relocatable scylla package.')
 ap.add_argument('dest',
@@ -111,7 +116,7 @@ if have_gnutls:
     gnutls_config_nolink = os.path.realpath('/etc/crypto-policies/back-ends/gnutls.config')
     ar.add(gnutls_config_nolink, arcname='libreloc/gnutls.config')
 ar.add('conf')
-ar.add('dist')
+ar.add('dist', filter=filter_dist)
 ar.add('build/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
 ar.add('build/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
 ar.add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
