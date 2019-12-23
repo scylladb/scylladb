@@ -217,7 +217,7 @@ public:
                                    promoted_index_size, _num_pi_blocks);
                 }
             }
-            _consumer.consume_entry(index_entry{std::move(_key), _position, std::move(index)}, _entry_offset);
+            _consumer.consume_entry(index_entry{_s, std::move(_key), _position, std::move(index)}, _entry_offset);
             _deletion_time = std::nullopt;
             _num_pi_blocks = 0;
             _state = state::START;
