@@ -97,7 +97,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
 }
 
 static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
-    const auto& partitioner = dht::global_partitioner();
+    const auto& partitioner = s->get_partitioner();
     std::vector<mutation> results;
     results.reserve(pkeys.size());
 
