@@ -3097,7 +3097,7 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ran
         auto kind = before ? key::kind::before_all_keys : key::kind::after_all_keys;
         key k(kind);
         // Binary search will never returns positive values.
-        return uint64_t((binary_search(_components->summary.entries, k, token) + 1) * -1);
+        return uint64_t((binary_search(_schema->get_partitioner(), _components->summary.entries, k, token) + 1) * -1);
     };
     uint64_t left = 0;
     if (range.start()) {

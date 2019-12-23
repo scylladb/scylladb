@@ -142,8 +142,8 @@ public:
     }
 
     template <typename T>
-    int binary_search(const T& entries, const key& sk) {
-        return sstables::binary_search(entries, sk);
+    int binary_search(dht::i_partitioner& p, const T& entries, const key& sk) {
+        return sstables::binary_search(p, entries, sk);
     }
 
     void change_generation_number(int64_t generation) {
