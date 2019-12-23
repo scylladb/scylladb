@@ -1687,7 +1687,7 @@ private:
             throw make_exception<InvalidRequestException>("Start token + end key is not a supported key range");
         }
 
-        auto&& partitioner = dht::global_partitioner();
+        auto&& partitioner = s.get_partitioner();
 
         if (range.__isset.start_key && range.__isset.end_key) {
             auto start = range.start_key.empty()
