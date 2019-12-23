@@ -46,9 +46,12 @@ EOF
     exit 0
 }
 
-function usage () {
+function die () {
+    msg="$1"
+    if [[ -n "$msg" ]]; then
+        echo "$(basename $0): $msg." 1>&2
+    fi
     cat <<EOF 1>&2
-$1
 
 Run \`$0 --help' to print the full help message.
 EOF
@@ -71,7 +74,7 @@ elif [[ "$1" = -* ]]; then
                     exec docker image ls
                 fi
                 if ! docker image inspect "$image" >/dev/null; then
-                    usage
+                    die
                 fi
                 continue
                 ;;
@@ -92,7 +95,7 @@ elif [[ "$1" = -* ]]; then
 	shift
     done
     if [[ "$1" != "--" ]]; then
-	usage "Expected '--' to terminate docker flag list"
+        die "Expected '--' to terminate docker flag list"
     fi
     shift
 fi
