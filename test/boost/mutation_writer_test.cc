@@ -68,7 +68,6 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                 schema_ptr s = gen.schema();
                 auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(muts) : make_empty_flat_reader(s);
                 size_t partitions_received = distribute_reader_and_consume_on_shards(s,
-                    dht::global_partitioner(),
                     std::move(source_reader),
                     [&shards_after, error] (flat_mutation_reader reader) mutable {
                         if (error) {
