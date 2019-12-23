@@ -55,4 +55,5 @@ fi
 mkdir -p $BUILDDIR/scylla-package
 tar -C $BUILDDIR/scylla-package -xpf $RELOC_PKG SCYLLA-RELOCATABLE-FILE SCYLLA-RELEASE-FILE SCYLLA-VERSION-FILE SCYLLA-PRODUCT-FILE dist/redhat
 cd $BUILDDIR/scylla-package
+echo "Running ./dist/redhat/build_rpm.sh on $BUILDDIR/scylla-package OPTS: $OPTS"
 exec ./dist/redhat/build_rpm.sh $OPTS
