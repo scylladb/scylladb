@@ -2942,10 +2942,9 @@ void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_
 } // anonymous namespace
 
 SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
-    auto& partitioner = dht::global_partitioner();
     auto spec = tests::make_random_schema_specification(get_name());
 
-    tests::random_schema random_schema(tests::random::get_int<uint32_t>(), *spec, partitioner);
+    tests::random_schema random_schema(tests::random::get_int<uint32_t>(), *spec);
     const auto& schema = *random_schema.schema();
 
     tlog.info("Random schema:\n{}", random_schema.cql());

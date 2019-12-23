@@ -237,7 +237,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
             std::uniform_int_distribution<size_t>(2, 4),
             std::uniform_int_distribution<size_t>(2, 8),
             std::uniform_int_distribution<size_t>(2, 8));
-    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec, dht::global_partitioner()};
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
 
     tlog.info("Random schema:\n{}", random_schema.cql());
 

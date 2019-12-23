@@ -933,9 +933,8 @@ data_model::mutation_description::key random_schema::make_clustering_key(uint32_
     return make_key(n, gen, _schema->clustering_key_columns(), std::numeric_limits<clustering_key::compound::element_type::size_type>::max());
 }
 
-random_schema::random_schema(uint32_t seed, random_schema_specification& spec, dht::i_partitioner& partitioner)
-    : _schema(build_random_schema(seed, spec))
-    , _partitioner(partitioner) {
+random_schema::random_schema(uint32_t seed, random_schema_specification& spec)
+    : _schema(build_random_schema(seed, spec)) {
 }
 
 sstring random_schema::cql() const {
@@ -981,7 +980,7 @@ std::vector<data_model::mutation_description::key> random_schema::make_pkeys(siz
 
     uint32_t i{0};
     while (keys.size() < n) {
-        keys.emplace(_partitioner.decorate_key(*_schema, partition_key::from_exploded(make_partition_key(i, val_gen))));
+        keys.emplace(dht::decorate_key(*_schema, partition_key::from_exploded(make_partition_key(i, val_gen))));
         ++i;
     }
 
