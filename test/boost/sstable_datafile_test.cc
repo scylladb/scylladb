@@ -1719,11 +1719,12 @@ static std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(un
 
     key_and_token_pair.reserve(tokens_to_generate);
     dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp_count, ignore_msb);
+    dht::murmur3_partitioner partitioner(smp_count, ignore_msb);
 
     while (tokens < tokens_to_generate) {
         sstring key = to_sstring(key_id++);
         dht::token token = create_token_from_key(key);
-        if (shard != dht::global_partitioner().shard_of(token)) {
+        if (shard != partitioner.shard_of(token)) {
             continue;
         }
         tokens++;
