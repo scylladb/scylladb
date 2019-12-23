@@ -79,7 +79,6 @@ static void add(std::vector<sstring> paths, std::vector<fs::path>& to) {
 static void add_sharded(sstring p, std::vector<fs::path>& to) {
     fs::path path(p);
 
-    add(path, to);
     for (unsigned i = 0; i < smp::count; i++) {
          add(path / seastar::to_sstring(i).c_str(), to);
     }
