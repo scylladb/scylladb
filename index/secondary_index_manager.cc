@@ -50,6 +50,7 @@
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/algorithm/string/predicate.hpp>
 
 namespace secondary_index {
 
@@ -98,6 +99,13 @@ void secondary_index_manager::add_index(const index_metadata& im) {
 
 sstring index_table_name(const sstring& index_name) {
     return format("{}_index", index_name);
+}
+
+sstring index_name_from_table_name(const sstring& table_name) {
+    if (table_name.size() < 7 || !boost::algorithm::ends_with(table_name, "_index")) {
+        throw std::runtime_error(format("Table {} does not have _index suffix", table_name));
+    }
+    return table_name.substr(0, table_name.size() - 6); // remove the _index suffix from an index name;
 }
 
 static bytes get_available_token_column_name(const schema& schema) {
