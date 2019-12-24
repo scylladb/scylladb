@@ -932,7 +932,15 @@ void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
 file_writer sstable::make_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags)
 {
     auto f = new_sstable_component_file(_write_error_handler, c, oflags).get0();
-    return file_writer(std::move(f), std::move(options), filename(c));
+    try {
+        return file_writer(f, std::move(options), filename(c));
+    } catch (...) {
+        f.close().handle_exception([this, c] (auto ep) {
+            sstlog.warn("Error while closing {}: {}", filename(c), ep);
+        }).get();
+
+        throw;
+    }
 }
 
 void sstable::write_toc(const io_priority_class& pc) {
@@ -3311,18 +3319,26 @@ delete_atomically(std::vector<shared_sstable> ssts) {
             // Create temporary pending_delete log file.
             auto f = open_file_dma(tmp_pending_delete_log, oflags).get0();
             // Write all toc names into the log file.
-            file_output_stream_options options;
-            options.buffer_size = 4096;
-            auto w = file_writer(f, options, tmp_pending_delete_log);
+            try {
+                file_output_stream_options options;
+                options.buffer_size = 4096;
+                auto w = file_writer(f, std::move(options), tmp_pending_delete_log);
 
-            for (const auto& sst : ssts) {
-                auto toc = sst->component_basename(component_type::TOC);
-                w.write(toc.c_str(), toc.size());
-                w.write("\n", 1);
+                for (const auto& sst : ssts) {
+                    auto toc = sst->component_basename(component_type::TOC);
+                    w.write(toc.c_str(), toc.size());
+                    w.write("\n", 1);
+                }
+
+                w.flush();
+                w.close();
+            } catch (...) {
+                f.close().handle_exception([tmp_pending_delete_log] (auto ep) {
+                    sstlog.warn("Error while closing {}: {}", tmp_pending_delete_log, ep);
+                }).get();
+
+                throw;
             }
-
-            w.flush();
-            w.close();
 
             auto dir_f = open_directory(pending_delete_dir).get0();
             // Once flushed and closed, the temporary log file can be renamed.
