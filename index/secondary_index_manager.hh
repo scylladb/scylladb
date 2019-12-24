@@ -52,6 +52,13 @@ namespace secondary_index {
 
 sstring index_table_name(const sstring& index_name);
 
+/*!
+ * \brief a reverse of index_table_name
+ * It gets a table_name and return the index name that was used
+ * to create that table.
+ */
+sstring index_name_from_table_name(const sstring& table_name);
+
 class index {
     sstring _target_column;
     index_metadata _im;
