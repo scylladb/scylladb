@@ -1723,7 +1723,7 @@ static std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(un
 
     while (tokens < tokens_to_generate) {
         sstring key = to_sstring(key_id++);
-        dht::token token = create_token_from_key(key);
+        dht::token token = create_token_from_key(partitioner, key);
         if (shard != partitioner.shard_of(token)) {
             continue;
         }
@@ -1768,9 +1768,10 @@ static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_p
 
 // ranges: [a,b] and [c,d]
 // returns true if token ranges overlap.
-static bool key_range_overlaps(sstring a, sstring b, sstring c, sstring d) {
-    auto range1 = create_token_range_from_keys(a, b);
-    auto range2 = create_token_range_from_keys(c, d);
+static bool key_range_overlaps(column_family_for_tests& cf, sstring a, sstring b, sstring c, sstring d) {
+    dht::i_partitioner& p = cf->schema()->get_partitioner();
+    auto range1 = create_token_range_from_keys(p, a, b);
+    auto range2 = create_token_range_from_keys(p, c, d);
     return range1.overlaps(range2, dht::token_comparator());
 }
 
@@ -1807,7 +1808,7 @@ SEASTAR_TEST_CASE(leveled_01) {
     add_sstable_for_leveled_test(env, cf, /*gen*/2, max_sstable_size, /*level*/0, key_and_token_pair[1].first, max_key);
     BOOST_REQUIRE(cf->get_sstables()->size() == 2);
 
-    BOOST_REQUIRE(key_range_overlaps(min_key, max_key, key_and_token_pair[1].first, max_key) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, max_key, key_and_token_pair[1].first, max_key) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
@@ -1854,9 +1855,9 @@ SEASTAR_TEST_CASE(leveled_02) {
     add_sstable_for_leveled_test(env, cf, /*gen*/3, max_sstable_size, /*level*/0, key_and_token_pair[30].first, max_key);
     BOOST_REQUIRE(cf->get_sstables()->size() == 3);
 
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[20].first, key_and_token_pair[30].first, max_key) == false);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, key_and_token_pair[30].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[20].first, key_and_token_pair[30].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, key_and_token_pair[30].first, max_key) == false);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 2, 1) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 3) == false);
@@ -1902,11 +1903,11 @@ SEASTAR_TEST_CASE(leveled_03) {
 
     BOOST_REQUIRE(cf->get_sstables()->size() == 4);
 
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[30].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[20].first, min_key, key_and_token_pair[30].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, key_and_token_pair[40].first, max_key) == false);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[30].first, key_and_token_pair[40].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[30].first) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[20].first, min_key, key_and_token_pair[30].first) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, key_and_token_pair[40].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[30].first, key_and_token_pair[40].first, max_key) == false);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 3) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 2, 3) == true);
@@ -1966,7 +1967,7 @@ SEASTAR_TEST_CASE(leveled_04) {
 
     BOOST_REQUIRE(cf->get_sstables()->size() == 4);
 
-    BOOST_REQUIRE(key_range_overlaps(min_key, max_key, min_key, max_key) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, max_key, min_key, max_key) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 3) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 2, 3) == false);
