@@ -300,9 +300,11 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 slogger.info("Alternator HTTPS server listening on {} port {}", addr, *https_port);
             }
         } catch (...) {
-            slogger.warn("Failed to set up Alternator HTTP server on {} port {}, TLS port {}: {}",
+            slogger.error("Failed to set up Alternator HTTP server on {} port {}, TLS port {}: {}",
                     addr, port ? std::to_string(*port) : "OFF", https_port ? std::to_string(*https_port) : "OFF", std::current_exception());
-            throw;
+            std::throw_with_nested(std::runtime_error(
+                    format("Failed to set up Alternator HTTP server on {} port {}, TLS port {}",
+                            addr, port ? std::to_string(*port) : "OFF", https_port ? std::to_string(*https_port) : "OFF")));
         }
     });
 }
