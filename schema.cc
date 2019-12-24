@@ -1461,8 +1461,7 @@ bytes token_column_computation::serialize() const {
 }
 
 bytes_opt token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
-    dht::i_partitioner& partitioner = dht::global_partitioner();
-    return partitioner.get_token(schema, key).data();
+    return dht::get_token(schema, key).data();
 }
 
 bool operator==(const raw_view_info& x, const raw_view_info& y) {
