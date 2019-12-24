@@ -58,6 +58,10 @@ public:
     };
     explicit snapshot_ctl(sharded<database>& db) : _db(db) {}
 
+    future<> stop() {
+        return _ops.close();
+    }
+
     /**
      * Takes the snapshot for all keyspaces. A snapshot name must be specified.
      *
@@ -106,6 +110,7 @@ public:
 private:
     sharded<database>& _db;
     seastar::rwlock _lock;
+    seastar::gate _ops;
 
     template <typename Func>
     std::result_of_t<Func()> run_snapshot_modify_operation(Func&&);

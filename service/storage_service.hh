@@ -233,14 +233,7 @@ private:
     bool _joined = false;
 
 public:
-    seastar::gate _snapshot_ops;
-
     enum class mode { STARTING, NORMAL, JOINING, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
-
-    future<> snapshots_close() {
-        return _snapshot_ops.close();
-    }
-
 private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);

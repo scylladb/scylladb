@@ -1060,9 +1060,6 @@ int main(int ac, char** av) {
                 auth_service.stop().get();
             });
 
-            auto stop_snapshots = defer_verbose_shutdown("snapshots", [] {
-                service::get_storage_service().invoke_on_all(&service::storage_service::snapshots_close).get();
-            });
 
             snapshot_ctl.start(std::ref(db)).get();
             auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
