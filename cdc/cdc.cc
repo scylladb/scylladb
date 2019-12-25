@@ -192,7 +192,7 @@ cdc::cdc_service::~cdc_service() = default;
 
 cdc::options::options(const std::map<sstring, sstring>& map) {
     if (map.find("enabled") == std::end(map)) {
-        throw exceptions::configuration_exception("Missing enabled CDC option");
+        return;
     }
 
     for (auto& p : map) {
@@ -211,6 +211,9 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
 }
 
 std::map<sstring, sstring> cdc::options::to_map() const {
+    if (!_enabled) {
+        return {};
+    }
     return {
         { "enabled", _enabled ? "true" : "false" },
         { "preimage", _preimage ? "true" : "false" },
