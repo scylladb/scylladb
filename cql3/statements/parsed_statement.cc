@@ -52,13 +52,13 @@ namespace raw {
 parsed_statement::~parsed_statement()
 { }
 
-shared_ptr<variable_specifications> parsed_statement::get_bound_variables() {
+lw_shared_ptr<variable_specifications> parsed_statement::get_bound_variables() {
     return _variables;
 }
 
 // Used by the parser and preparable statement
 void parsed_statement::set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names) {
-    _variables = ::make_shared<variable_specifications>(bound_names);
+    _variables = make_lw_shared<variable_specifications>(bound_names);
 }
 
 bool parsed_statement::uses_function(const sstring& ks_name, const sstring& function_name) const {

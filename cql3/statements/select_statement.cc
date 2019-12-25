@@ -1317,7 +1317,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
 ::shared_ptr<restrictions::statement_restrictions>
 select_statement::prepare_restrictions(database& db,
                                        schema_ptr schema,
-                                       ::shared_ptr<variable_specifications> bound_names,
+                                       lw_shared_ptr<variable_specifications> bound_names,
                                        ::shared_ptr<selection::selection> selection,
                                        bool for_view,
                                        bool allow_filtering)
@@ -1335,7 +1335,7 @@ select_statement::prepare_restrictions(database& db,
 
 /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
 ::shared_ptr<term>
-select_statement::prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names, ::shared_ptr<term::raw> limit)
+select_statement::prepare_limit(database& db, lw_shared_ptr<variable_specifications> bound_names, ::shared_ptr<term::raw> limit)
 {
     if (!limit) {
         return {};

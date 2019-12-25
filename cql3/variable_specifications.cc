@@ -49,8 +49,8 @@ variable_specifications::variable_specifications(const std::vector<::shared_ptr<
     , _target_columns{variable_names.size()}
 { }
 
-::shared_ptr<variable_specifications> variable_specifications::empty() {
-    return ::make_shared<variable_specifications>(std::vector<::shared_ptr<column_identifier>>{});
+lw_shared_ptr<variable_specifications> variable_specifications::empty() {
+    return make_lw_shared<variable_specifications>(std::vector<::shared_ptr<column_identifier>>{});
 }
 
 size_t variable_specifications::size() const {

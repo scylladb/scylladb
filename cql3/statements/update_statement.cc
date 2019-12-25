@@ -307,7 +307,7 @@ insert_statement::insert_statement(            ::shared_ptr<cf_name> name,
 
 ::shared_ptr<cql3::statements::modification_statement>
 insert_statement::prepare_internal(database& db, schema_ptr schema,
-    ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
+    lw_shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
 {
     auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::INSERT, bound_names->size(), schema, std::move(attrs), stats);
 
@@ -367,7 +367,7 @@ insert_json_statement::insert_json_statement(  ::shared_ptr<cf_name> name,
 
 ::shared_ptr<cql3::statements::modification_statement>
 insert_json_statement::prepare_internal(database& db, schema_ptr schema,
-    ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
+    lw_shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
 {
     assert(dynamic_pointer_cast<constants::literal>(_json_value) || dynamic_pointer_cast<abstract_marker::raw>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
@@ -390,7 +390,7 @@ update_statement::update_statement(            ::shared_ptr<cf_name> name,
 
 ::shared_ptr<cql3::statements::modification_statement>
 update_statement::prepare_internal(database& db, schema_ptr schema,
-    ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
+    lw_shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
 {
     auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, bound_names->size(), schema, std::move(attrs), stats);
 

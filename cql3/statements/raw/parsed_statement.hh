@@ -61,13 +61,13 @@ namespace raw {
 
 class parsed_statement {
 protected:
-    ::shared_ptr<variable_specifications> _variables;
+    lw_shared_ptr<variable_specifications> _variables;
 
 public:
     using prepared = statements::prepared_statement;
     virtual ~parsed_statement();
 
-    shared_ptr<variable_specifications> get_bound_variables();
+    lw_shared_ptr<variable_specifications> get_bound_variables();
 
     void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names);
 

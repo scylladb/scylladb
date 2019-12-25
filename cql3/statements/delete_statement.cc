@@ -80,7 +80,7 @@ void delete_statement::add_update_for_key(mutation& m, const query::clustering_r
 namespace raw {
 
 ::shared_ptr<cql3::statements::modification_statement>
-delete_statement::prepare_internal(database& db, schema_ptr schema, shared_ptr<variable_specifications> bound_names,
+delete_statement::prepare_internal(database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names,
         std::unique_ptr<attributes> attrs, cql_stats& stats) {
     auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, bound_names->size(), schema, std::move(attrs), stats);
 

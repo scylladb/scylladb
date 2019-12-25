@@ -120,7 +120,7 @@ int32_t attributes::get_time_to_live(const query_options& options) {
     return ttl;
 }
 
-void attributes::collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
+void attributes::collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names) {
     if (_timestamp) {
         _timestamp->collect_marker_specification(bound_names);
     }

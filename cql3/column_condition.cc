@@ -131,7 +131,7 @@ column_condition::uses_function(const sstring& ks_name, const sstring& function_
     return false;
 }
 
-void column_condition::collect_marker_specificaton(::shared_ptr<variable_specifications> bound_names) {
+void column_condition::collect_marker_specificaton(lw_shared_ptr<variable_specifications> bound_names) {
     if (_collection_element) {
         _collection_element->collect_marker_specification(bound_names);
     }

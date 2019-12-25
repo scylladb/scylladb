@@ -85,7 +85,7 @@ public:
      * @param boundNames the list of column specification where to collect the
      * bind variables of this term in.
      */
-    void collect_marker_specificaton(::shared_ptr<variable_specifications> bound_names);
+    void collect_marker_specificaton(lw_shared_ptr<variable_specifications> bound_names);
 
     bool uses_function(const sstring& ks_name, const sstring& function_name) const;
 

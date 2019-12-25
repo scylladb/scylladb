@@ -93,7 +93,7 @@ public:
         delayed_value(user_type type, std::vector<shared_ptr<term>> values);
         virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
         virtual bool contains_bind_marker() const override;
-        virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names);
+        virtual void collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names);
     private:
         std::vector<bytes_opt> bind_internal(const query_options& options);
     public:

@@ -57,7 +57,7 @@ public:
             : _fun(std::move(fun)), _terms(std::move(terms)) {
     }
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
-    virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override;
+    virtual void collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names) override;
     virtual shared_ptr<terminal> bind(const query_options& options) override;
     virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
 private:

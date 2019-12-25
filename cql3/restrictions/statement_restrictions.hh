@@ -114,7 +114,7 @@ public:
         schema_ptr schema,
         statements::statement_type type,
         const std::vector<::shared_ptr<relation>>& where_clause,
-        ::shared_ptr<variable_specifications> bound_names,
+        lw_shared_ptr<variable_specifications> bound_names,
         bool selects_only_static_columns,
         bool select_a_collection,
         bool for_view = false,

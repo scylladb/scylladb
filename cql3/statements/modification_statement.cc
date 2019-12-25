@@ -472,7 +472,7 @@ void modification_statement::build_cas_result_set_metadata() {
 }
 
 void
-modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
+modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, lw_shared_ptr<variable_specifications> names) {
     _restrictions = restrictions::statement_restrictions(db, s, type, where_clause, std::move(names),
             applies_only_to_static_columns(), _selects_a_collection, false);
     /*
@@ -550,7 +550,7 @@ modification_statement::prepare(database& db, cql_stats& stats) {
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
-modification_statement::prepare(database& db, ::shared_ptr<variable_specifications> bound_names, cql_stats& stats) {
+modification_statement::prepare(database& db, lw_shared_ptr<variable_specifications> bound_names, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
@@ -560,7 +560,7 @@ modification_statement::prepare(database& db, ::shared_ptr<variable_specificatio
 }
 
 void
-modification_statement::prepare_conditions(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names,
+modification_statement::prepare_conditions(database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names,
         cql3::statements::modification_statement& stmt)
 {
     if (_if_not_exists || _if_exists || !_conditions.empty()) {

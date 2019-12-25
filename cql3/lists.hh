@@ -104,7 +104,7 @@ public:
                 : _elements(std::move(elements)) {
         }
         virtual bool contains_bind_marker() const override;
-        virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names);
+        virtual void collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names);
         virtual shared_ptr<terminal> bind(const query_options& options) override;
     };
 
@@ -159,7 +159,7 @@ public:
             : operation(column, std::move(t)), _idx(std::move(idx)) {
         }
         virtual bool requires_read() const override;
-        virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names);
+        virtual void collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names);
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 

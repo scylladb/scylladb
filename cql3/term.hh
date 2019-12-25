@@ -72,7 +72,7 @@ public:
      * @param boundNames the variables specification where to collect the
      * bind variables of this term in.
      */
-    virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) = 0;
+    virtual void collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names) = 0;
 
     /**
      * Bind the values in this term to the values contained in {@code values}.
@@ -167,7 +167,7 @@ public:
  */
 class terminal : public term {
 public:
-    virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
+    virtual void collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names) {
     }
 
     virtual ::shared_ptr<terminal> bind(const query_options& options) override {

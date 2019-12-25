@@ -97,26 +97,26 @@ public:
 
     ::shared_ptr<restrictions::restriction> new_EQ_restriction(database& db,
             schema_ptr schema,
-            ::shared_ptr<variable_specifications> bound_names) override;
+            lw_shared_ptr<variable_specifications> bound_names) override;
 
     ::shared_ptr<restrictions::restriction> new_IN_restriction(database& db,
             schema_ptr schema,
-            ::shared_ptr<variable_specifications> bound_names) override;
+            lw_shared_ptr<variable_specifications> bound_names) override;
 
     ::shared_ptr<restrictions::restriction> new_slice_restriction(database& db,
             schema_ptr schema,
-            ::shared_ptr<variable_specifications> bound_names,
+            lw_shared_ptr<variable_specifications> bound_names,
             statements::bound bound,
             bool inclusive) override;
 
     ::shared_ptr<restrictions::restriction> new_contains_restriction(
             database& db, schema_ptr schema,
-            ::shared_ptr<variable_specifications> bound_names, bool isKey)
+            lw_shared_ptr<variable_specifications> bound_names, bool isKey)
                     override;
 
     ::shared_ptr<restrictions::restriction> new_LIKE_restriction(database& db,
             schema_ptr schema,
-            ::shared_ptr<variable_specifications> bound_names) override;
+            lw_shared_ptr<variable_specifications> bound_names) override;
 
     ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) override;
 
@@ -127,7 +127,7 @@ protected:
                                        ::shared_ptr<term::raw> raw,
                                        database& db,
                                        const sstring& keyspace,
-                                       ::shared_ptr<variable_specifications> bound_names) override;
+                                       lw_shared_ptr<variable_specifications> bound_names) override;
 };
 
 }

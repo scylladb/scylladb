@@ -57,7 +57,7 @@ single_column_relation::to_term(const std::vector<::shared_ptr<column_specificat
                                 ::shared_ptr<term::raw> raw,
                                 database& db,
                                 const sstring& keyspace,
-                                ::shared_ptr<variable_specifications> bound_names) {
+                                lw_shared_ptr<variable_specifications> bound_names) {
     // TODO: optimize vector away, accept single column_specification
     assert(receivers.size() == 1);
     auto term = raw->prepare(db, keyspace, receivers[0]);
@@ -66,7 +66,7 @@ single_column_relation::to_term(const std::vector<::shared_ptr<column_specificat
 }
 
 ::shared_ptr<restrictions::restriction>
-single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) {
+single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names) {
     const column_definition& column_def = to_column_definition(schema, _entity);
     if (!_map_key) {
         auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), bound_names);
@@ -79,7 +79,7 @@ single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, ::sh
 }
 
 ::shared_ptr<restrictions::restriction>
-single_column_relation::new_IN_restriction(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) {
+single_column_relation::new_IN_restriction(database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names) {
     const column_definition& column_def = to_column_definition(schema, _entity);
     auto receivers = to_receivers(schema, column_def);
     assert(_in_values.empty() || !_value);
@@ -97,7 +97,7 @@ single_column_relation::new_IN_restriction(database& db, schema_ptr schema, ::sh
 
 ::shared_ptr<restrictions::restriction>
 single_column_relation::new_LIKE_restriction(
-        database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) {
+        database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names) {
     const column_definition& column_def = to_column_definition(schema, _entity);
     if (!column_def.type->is_string()) {
         throw exceptions::invalid_request_exception(
