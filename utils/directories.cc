@@ -62,21 +62,21 @@ future<> directories::touch_and_lock(fs::path path) {
     });
 }
 
-static void add(fs::path path, std::vector<fs::path>& to) {
-    to.push_back(path);
+static void add(fs::path path, std::set<fs::path>& to) {
+    to.insert(path);
 }
 
-static void add(sstring path, std::vector<fs::path>& to) {
+static void add(sstring path, std::set<fs::path>& to) {
     add(fs::path(path), to);
 }
 
-static void add(std::vector<sstring> paths, std::vector<fs::path>& to) {
+static void add(std::vector<sstring> paths, std::set<fs::path>& to) {
     for (auto& path : paths) {
         add(path, to);
     }
 }
 
-static void add_sharded(sstring p, std::vector<fs::path>& to) {
+static void add_sharded(sstring p, std::set<fs::path>& to) {
     fs::path path(p);
 
     for (unsigned i = 0; i < smp::count; i++) {
@@ -85,7 +85,7 @@ static void add_sharded(sstring p, std::vector<fs::path>& to) {
 }
 
 future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
-    std::vector<fs::path> paths;
+    std::set<fs::path> paths;
 
     add(cfg.data_file_directories(), paths);
     add(cfg.commitlog_directory(), paths);
