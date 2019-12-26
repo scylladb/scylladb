@@ -56,16 +56,49 @@ constexpr std::chrono::milliseconds load_broadcaster::BROADCAST_INTERVAL;
 logging::logger llogger("load_broadcaster");
 
 future<> load_meter::init(distributed<database>& db, gms::gossiper& gms) {
+    _lb = std::make_unique<load_broadcaster>(db, gms);
+    _lb->start_broadcasting();
     return make_ready_future<>();
 }
 
 future<> load_meter::exit() {
-    return make_ready_future<>();
+    return _lb->stop_broadcasting();
 }
 
 future<std::map<sstring, double>> load_meter::get_load_map() {
-    // This dependency on storage_service will be removed instantly
-    return service::get_local_storage_service().get_load_map();
+    return smp::submit_to(0, [this] () {
+        std::map<sstring, double> load_map;
+        if (_lb) {
+            for (auto& x : _lb->get_load_info()) {
+                load_map.emplace(format("{}", x.first), x.second);
+                llogger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
+            }
+        } else {
+            llogger.debug("load_broadcaster is not set yet!");
+        }
+        load_map.emplace(format("{}",
+                utils::fb_utilities::get_broadcast_address()), get_load());
+        return load_map;
+    });
+}
+
+double load_meter::get_load() const {
+    double bytes = 0;
+#if 0
+    for (String keyspaceName : Schema.instance.getKeyspaces())
+    {
+        Keyspace keyspace = Schema.instance.getKeyspaceInstance(keyspaceName);
+        if (keyspace == null)
+            continue;
+        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
+            bytes += cfs.getLiveDiskSpaceUsed();
+    }
+#endif
+    return bytes;
+}
+
+sstring load_meter::get_load_string() const {
+    return format("{:f}", get_load());
 }
 
 void load_broadcaster::start_broadcasting() {

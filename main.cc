@@ -944,15 +944,7 @@ int main(int ac, char** av) {
             db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
                 return b.start();
             }).get();
-            supervisor::notify("starting load broadcaster");
-            // should be unique_ptr, but then lambda passed to at_exit will be non copieable and
-            // casting to std::function<> will fail to compile
-            auto lb = make_shared<service::load_broadcaster>(db, gms::get_local_gossiper());
-            lb->start_broadcasting();
-            service::get_local_storage_service().set_load_broadcaster(lb);
-            auto stop_load_broadcater = defer_verbose_shutdown("broadcaster", [lb = std::move(lb)] () {
-                lb->stop_broadcasting().get();
-            });
+
             supervisor::notify("starting load meter");
             load_meter.init(db, gms::get_local_gossiper()).get();
             auto stop_load_meter = defer_verbose_shutdown("load meter", [&load_meter] {

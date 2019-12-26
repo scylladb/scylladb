@@ -2569,43 +2569,6 @@ future<> storage_service::drain() {
     });
 }
 
-double storage_service::get_load() const {
-    double bytes = 0;
-#if 0
-    for (String keyspaceName : Schema.instance.getKeyspaces())
-    {
-        Keyspace keyspace = Schema.instance.getKeyspaceInstance(keyspaceName);
-        if (keyspace == null)
-            continue;
-        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-            bytes += cfs.getLiveDiskSpaceUsed();
-    }
-#endif
-    return bytes;
-}
-
-sstring storage_service::get_load_string() const {
-    return format("{:f}", get_load());
-}
-
-future<std::map<sstring, double>> storage_service::get_load_map() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        std::map<sstring, double> load_map;
-        auto& lb = ss.get_load_broadcaster();
-        if (lb) {
-            for (auto& x : lb->get_load_info()) {
-                load_map.emplace(format("{}", x.first), x.second);
-                slogger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
-            }
-        } else {
-            slogger.debug("load_broadcaster is not set yet!");
-        }
-        load_map.emplace(format("{}", ss.get_broadcast_address()), ss.get_load());
-        return load_map;
-    });
-}
-
-
 future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
@@ -3016,14 +2979,6 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
     }).finally([this] {
         _loading_new_sstables = false;
     });
-}
-
-void storage_service::set_load_broadcaster(shared_ptr<load_broadcaster> lb) {
-    _lb = lb;
-}
-
-shared_ptr<load_broadcaster>& storage_service::get_load_broadcaster() {
-    return _lb;
 }
 
 future<> storage_service::shutdown_client_servers() {
