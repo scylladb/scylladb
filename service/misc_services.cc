@@ -38,6 +38,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "load_meter.hh"
 #include "load_broadcaster.hh"
 #include "cache_hitrate_calculator.hh"
 #include "db/system_keyspace.hh"
@@ -53,6 +54,19 @@ namespace service {
 constexpr std::chrono::milliseconds load_broadcaster::BROADCAST_INTERVAL;
 
 logging::logger llogger("load_broadcaster");
+
+future<> load_meter::init(distributed<database>& db, gms::gossiper& gms) {
+    return make_ready_future<>();
+}
+
+future<> load_meter::exit() {
+    return make_ready_future<>();
+}
+
+future<std::map<sstring, double>> load_meter::get_load_map() {
+    // This dependency on storage_service will be removed instantly
+    return service::get_local_storage_service().get_load_map();
+}
 
 void load_broadcaster::start_broadcasting() {
     _done = make_ready_future<>();

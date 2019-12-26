@@ -27,6 +27,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include "service/storage_service.hh"
+#include "service/load_meter.hh"
 #include "db/commitlog/commitlog.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
@@ -195,8 +196,8 @@ void set_storage_service(http_context& ctx, routes& r) {
         return get_cf_stats(ctx, &column_family_stats::live_disk_space_used);
     });
 
-    ss::get_load_map.set(r, [] (std::unique_ptr<request> req) {
-        return service::get_local_storage_service().get_load_map().then([] (auto&& load_map) {
+    ss::get_load_map.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return ctx.lmeter.get_load_map().then([] (auto&& load_map) {
             std::vector<ss::map_string_double> res;
             for (auto i : load_map) {
                 ss::map_string_double val;
