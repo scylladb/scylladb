@@ -88,7 +88,7 @@ future<> load_broadcaster::stop_broadcasting() {
 
 
 // cache_hitrate_calculator implementation
-cache_hitrate_calculator::cache_hitrate_calculator(seastar::sharded<database>& db, seastar::sharded<cache_hitrate_calculator>& me) : _db(db), _me(me),
+cache_hitrate_calculator::cache_hitrate_calculator(seastar::sharded<database>& db) : _db(db),
         _timer(std::bind(std::mem_fn(&cache_hitrate_calculator::recalculate_timer), this))
 {}
 
@@ -107,7 +107,7 @@ void cache_hitrate_calculator::recalculate_timer() {
 void cache_hitrate_calculator::run_on(size_t master, lowres_clock::duration d) {
     if (!_stopped) {
         // Do it in the background.
-        (void)_me.invoke_on(master, [d] (cache_hitrate_calculator& local) {
+        (void)container().invoke_on(master, [d] (cache_hitrate_calculator& local) {
             local._timer.arm(d);
         }).handle_exception_type([] (seastar::no_sharded_instance_exception&) { /* ignore */ });
     }
