@@ -281,8 +281,8 @@ void server::set_routes(routes& r) {
         return handle_api_request(std::move(req));
     });
 
-    r.add(operation_type::POST, url("/"), req_handler);
-    r.add(operation_type::GET, url("/"), new health_handler);
+    r.put(operation_type::POST, "/", req_handler);
+    r.put(operation_type::GET, "/", new health_handler);
     // The "/localnodes" request is a new Alternator feature, not supported by
     // DynamoDB and not required for DynamoDB compatibility. It allows a
     // client to enquire - using a trivial HTTP request without requiring
@@ -294,7 +294,7 @@ void server::set_routes(routes& r) {
     // consider this to be a security risk, because an attacker can already
     // scan an entire subnet for nodes responding to the health request,
     // or even just scan for open ports.
-    r.add(operation_type::GET, url("/localnodes"), new local_nodelist_handler);
+    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler);
 }
 
 //FIXME: A way to immediately invalidate the cache should be considered,
