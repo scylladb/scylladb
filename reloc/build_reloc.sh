@@ -24,14 +24,14 @@
 ORIGINAL_DYNAMIC_LINKER=$(gcc -### /dev/null -o t 2>&1 | perl -n  -e '/-dynamic-linker ([^ ]*) / && print $1')
 DYNAMIC_LINKER=$(printf "%2000s$ORIGINAL_DYNAMIC_LINKER" | sed 's| |/|g')
 
-DEFAULT_FLAGS="--enable-dpdk --cflags=-ffile-prefix-map=$PWD=. --ldflags=-Wl,--build-id=sha1,--dynamic-linker=$DYNAMIC_LINKER"
+COMMON_FLAGS="--enable-dpdk --cflags=-ffile-prefix-map=$PWD=. --ldflags=-Wl,--build-id=sha1,--dynamic-linker=$DYNAMIC_LINKER"
 
 DEFAULT_MODE="release"
 
 print_usage() {
     echo "Usage: build_reloc.sh [OPTION]..."
     echo ""
-    echo "  --configure-flags FLAGS specify build flags passed to 'configure.py' (default: '$DEFAULT_FLAGS')"
+    echo "  --configure-flags FLAGS specify extra build flags passed to 'configure.py' (common: '$COMMON_FLAGS')"
     echo "  --mode MODE             specify build mode (default: '$DEFAULT_MODE')"
     echo "  --jobs JOBS             specify number of jobs"
     echo "  --clean                 clean build directory"
@@ -40,7 +40,7 @@ print_usage() {
     exit 1
 }
 
-FLAGS="$DEFAULT_FLAGS"
+FLAGS=""
 MODE="$DEFAULT_MODE"
 JOBS=
 CLEAN=
@@ -80,6 +80,8 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+FLAGS="$COMMON_FLAGS $FLAGS"
 
 is_redhat_variant() {
     [ -f /etc/redhat-release ]
