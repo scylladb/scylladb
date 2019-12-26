@@ -151,7 +151,6 @@ private:
     gms::gossiper& _gossiper;
     sharded<auth::service>& _auth_service;
     sharded<cql3::cql_config>& _cql_config;
-    int _update_jobs{0};
     // Note that this is obviously only valid for the current shard. Users of
     // this facility should elect a shard to be the coordinator based on any
     // given objective criteria

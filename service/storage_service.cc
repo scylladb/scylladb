@@ -3165,12 +3165,9 @@ future<> storage_service::do_update_pending_ranges() {
 
 future<> storage_service::update_pending_ranges() {
     return get_storage_service().invoke_on(0, [] (auto& ss){
-        ss._update_jobs++;
         return ss._update_pending_ranges_action.trigger_later().then([&ss] {
             // calculate_pending_ranges will modify token_metadata, we need to repliate to other cores
-            return ss.replicate_to_all_cores().finally([&ss, ss0 = ss.shared_from_this()] {
-                ss._update_jobs--;
-            });
+            return ss.replicate_to_all_cores().then([s = ss.shared_from_this()] { });
         });
     });
 }
