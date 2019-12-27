@@ -10,37 +10,33 @@
 
 using namespace seastar;
 
-static const Elf64_Phdr* get_pt_note(dl_phdr_info* info) {
+static const Elf64_Nhdr* get_nt_build_id(dl_phdr_info* info) {
+    auto base = info->dlpi_addr;
     const auto* h = info->dlpi_phdr;
     auto num_headers = info->dlpi_phnum;
     for (int i = 0; i != num_headers; ++i, ++h) {
-        if (h->p_type == PT_NOTE) {
-            return h;
-        }
-    }
-    assert(0 && "no PT_NOTE programe header");
-}
-
-static const Elf64_Nhdr* get_nt_build_id(dl_phdr_info* info) {
-    auto* h = get_pt_note(info);
-    auto base = info->dlpi_addr;
-
-    auto* p = reinterpret_cast<const char*>(base) + h->p_vaddr;
-    auto* e = p + h->p_memsz;
-    while (p != e) {
-        const auto* n = reinterpret_cast<const Elf64_Nhdr*>(p);
-        if (n->n_type == NT_GNU_BUILD_ID) {
-            return n;
+        if (h->p_type != PT_NOTE) {
+            continue;
         }
 
-        p += sizeof(Elf64_Nhdr);
+        auto* p = reinterpret_cast<const char*>(base) + h->p_vaddr;
+        auto* e = p + h->p_memsz;
+        while (p != e) {
+            const auto* n = reinterpret_cast<const Elf64_Nhdr*>(p);
+            if (n->n_type == NT_GNU_BUILD_ID) {
+                return n;
+            }
 
-        p += n->n_namesz;
-        p = align_up(p, 4);
+            p += sizeof(Elf64_Nhdr);
 
-        p += n->n_descsz;
-        p = align_up(p, 4);
+            p += n->n_namesz;
+            p = align_up(p, 4);
+
+            p += n->n_descsz;
+            p = align_up(p, 4);
+        }
     }
+
     assert(0 && "no NT_GNU_BUILD_ID note");
 }
 
