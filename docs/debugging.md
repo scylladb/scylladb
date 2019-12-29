@@ -373,9 +373,8 @@ that the core was generated with. Again, you can use `file` to obtain the
 build-id of the executable, then compare it with the build-id obtained from the
 `eu-unstrip` listing.
 For more information on how to obtain the correct version of libraries and how
-to override the path GDB loads them from, see [Collecting
-libraries](#collecting-libraries) and [Opening the core on another
-OS](#opening-the-core-on-another-os).
+to override the path GDB loads them from, see [Collecting libraries](#collecting-libraries)
+and [Opening the core on another OS](#opening-the-core-on-another-os).
 
 It is also possible to make GDB print additional information about why thread
 debugging is not working. To enable execute:
@@ -386,13 +385,11 @@ Right after starting GDB, *before* the core and the executable are loaded.
 
 #### GDB crashes when priting the backtrace or some variable
 
-See [Avoid (some) symbol parsing related
-crashes](#avoid-some-symbol-parsing-related-crashes).
+See [Avoid (some) symbol parsing related crashes](#avoid-some-symbol-parsing-related-crashes).
 
 #### GDB keeps stopping on some signals
 
-See [Tell GDB to not stop on signals used by
-seastar](#tell-gdb-to-not-stop-on-signals-used-by-seastar).
+See [Tell GDB to not stop on signals used by seastar](#tell-gdb-to-not-stop-on-signals-used-by-seastar).
 
 ### Advanced guides
 
