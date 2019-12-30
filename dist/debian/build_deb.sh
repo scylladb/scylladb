@@ -132,9 +132,9 @@ ln -fv $RELOC_PKG_FULLPATH ../$PRODUCT-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.or
 
 cp -al dist/debian/debian debian
 if [ "$PRODUCT" != "scylla" ]; then
-    for i in debian/scylla-*;do
-        mv $i ${i/scylla-/$PRODUCT-}
-    done
+    # rename all 'scylla-' prefixed artifacts in the debian folder to have the 
+    # product name as a prefix
+    find debian -maxdepth 1 -name "scylla-*" -exec bash -c 'mv $1 ${1/scylla-/$PRODUCT-}' _ {} \;
 fi
 ln -fv dist/common/sysconfig/scylla-server debian/$PRODUCT-server.default
 REVISION="1"

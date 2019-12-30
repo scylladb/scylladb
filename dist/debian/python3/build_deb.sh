@@ -126,9 +126,9 @@ ln -fv $RELOC_PKG_FULLPATH ../$PRODUCT-python3_$SCYLLA_VERSION-$SCYLLA_RELEASE.o
 
 cp -al dist/debian/python3/debian debian
 if [ "$PRODUCT" != "scylla" ]; then
-    for i in debian/scylla-*;do
-        mv $i ${i/scylla-/$PRODUCT-}
-    done
+    # rename all 'scylla-' prefixed artifacts in the debian folder to have the 
+    # product name as a prefix
+    find debian -maxdepth 1 -name "scylla-*" -exec bash -c 'mv $1 ${1/scylla-/$PRODUCT-}' _ {} \;
 fi
 REVISION="1"
 MUSTACHE_DIST="\"debian\": true, \"product\": \"$PRODUCT\", \"$PRODUCT\": true"
