@@ -24,10 +24,6 @@ if [ "$1" = configure ]; then
 fi
 
 ln -sfT /etc/scylla /var/lib/scylla/conf
-if [ -d /usr/lib/scylla ]; then
-    mv /usr/lib/scylla /usr/lib/scylla.old
-fi
-ln -sfT /opt/scylladb/scripts /usr/lib/scylla
 
 grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
 echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> /tmp/scylla.yaml
