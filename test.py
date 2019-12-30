@@ -127,7 +127,7 @@ async def run_test(test, options):
             stderr=asyncio.subprocess.STDOUT,
             stdout=asyncio.subprocess.PIPE,
             env=dict(os.environ,
-                UBSAN_OPTIONS='print_stacktrace=1',
+                UBSAN_OPTIONS='halt_on_error=1:abort_on_error=1',
                 BOOST_TEST_CATCH_SYSTEM_ERRORS='no'),
                 preexec_fn=os.setsid,
             )
