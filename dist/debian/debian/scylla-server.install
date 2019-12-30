@@ -21,6 +21,7 @@ opt/scylladb/scripts/libexec/*
 opt/scylladb/bin/*
 opt/scylladb/libreloc/*
 opt/scylladb/libexec/*
+usr/lib/scylla/*
 var/lib/scylla/data
 var/lib/scylla/commitlog
 var/lib/scylla/hints

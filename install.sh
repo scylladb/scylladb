@@ -218,6 +218,20 @@ EOS
     for i in $SBINFILES; do
         ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
     done
+
+    # we need keep /usr/lib/scylla directory to support upgrade/downgrade
+    # without error, so we need to create symlink for each script on the
+    # directory
+    install -m755 -d "$rusr"/lib/scylla/scyllatop/views
+    for i in $(find "$rprefix"/scripts/ -maxdepth 1 -type f); do
+        ln -srf $i "$rusr"/lib/scylla/
+    done
+    for i in $(find "$rprefix"/scyllatop/ -maxdepth 1 -type f); do
+        ln -srf $i "$rusr"/lib/scylla/scyllatop
+    done
+    for i in $(find "$rprefix"/scyllatop/views -maxdepth 1 -type f); do
+        ln -srf $i "$rusr"/lib/scylla/scyllatop/views
+    done
 else
     install -m755 -d "$rdata"/saved_caches
     install -d -m755 "$retc"/systemd/system/scylla-server.service.d
