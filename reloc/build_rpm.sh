@@ -34,7 +34,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--builddir")
-            builddir="$2"
+            BUILDDIR="$2"
             shift 2
             ;;
         *)
@@ -55,4 +55,5 @@ fi
 mkdir -p $BUILDDIR/scylla-package
 tar -C $BUILDDIR/scylla-package -xpf $RELOC_PKG SCYLLA-RELOCATABLE-FILE SCYLLA-RELEASE-FILE SCYLLA-VERSION-FILE SCYLLA-PRODUCT-FILE dist/redhat
 cd $BUILDDIR/scylla-package
+echo "Running './dist/redhat/build_rpm.sh $OPTS' under $BUILDDIR/scylla-package directory"
 exec ./dist/redhat/build_rpm.sh $OPTS
