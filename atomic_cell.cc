@@ -214,6 +214,25 @@ size_t atomic_cell_or_collection::external_memory_usage(const abstract_type& t) 
         + imr_object_type::size_overhead + external_value_size;
 }
 
+std::ostream&
+operator<<(std::ostream& os, const atomic_cell_view& acv) {
+    if (acv.is_live()) {
+        return fmt_print(os, "atomic_cell{{{};ts={:d};expiry={:d},ttl={:d}}}",
+            to_hex(acv.value().linearize()),
+            acv.timestamp(),
+            acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
+            acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);
+    } else {
+        return fmt_print(os, "atomic_cell{{DEAD;ts={:d};deletion_time={:d}}}",
+            acv.timestamp(), acv.deletion_time().time_since_epoch().count());
+    }
+}
+
+std::ostream&
+operator<<(std::ostream& os, const atomic_cell& ac) {
+    return os << atomic_cell_view(ac);
+}
+
 std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection::printer& p) {
     if (!p._cell._data.get()) {
         return os << "{ null atomic_cell_or_collection }";
