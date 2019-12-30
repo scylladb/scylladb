@@ -137,6 +137,8 @@ class TestSuite(ABC):
 
     def add_test_list(self, mode, options):
         lst = glob.glob(os.path.join(self.path, self.pattern))
+        if lst:
+            lst.sort()
         long_tests = set(self.cfg.get("long", []))
         for t in lst:
             shortname = os.path.splitext(os.path.basename(t))[0]
