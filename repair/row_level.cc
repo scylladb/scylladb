@@ -1475,7 +1475,7 @@ class row_level_repair {
 
     // If the total size of the `_row_buf` on either of the nodes is zero,
     // we set this flag, which is an indication that rows are not synced.
-    bool _zero_rows;
+    bool _zero_rows = false;
 
     // Sum of estimated_partitions on all peers
     uint64_t _estimated_partitions = 0;
