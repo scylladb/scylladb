@@ -38,7 +38,7 @@ namespace po = boost::program_options;
 namespace {
 
 struct days {
-    enum enumeration { Mo, Tu, We, Th, Fr, Sa, Su };
+    enum enumeration : uint8_t { Mo, Tu, We, Th, Fr, Sa, Su };
     static std::unordered_map<std::string, enumeration> map() {
         return {{"Mon", Mo}, {"Tue", Tu}, {"Wed", We}, {"Thu", Th}, {"Fri", Fr}, {"Sat", Sa}, {"Sun", Su}};
     }
