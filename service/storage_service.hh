@@ -256,9 +256,9 @@ private:
     std::optional<inet_address> _removing_node;
 
     /* Are we starting this node in bootstrap mode? */
-    bool _is_bootstrap_mode;
+    bool _is_bootstrap_mode = false;
 
-    bool _initialized;
+    bool _initialized = false;
 
     bool _joined = false;
 
