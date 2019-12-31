@@ -2089,7 +2089,7 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
 future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
 {
     auto tables = make_lw_shared<std::map<sstring, schema_ptr>>();
-    return parallel_for_each(result->rows().begin(), result->rows().end(), [&proxy, tables] (auto&& row) {
+    return parallel_for_each(result->rows().begin(), result->rows().end(), [&proxy, tables] (const query::result_set_row& row) {
         return create_table_from_table_row(proxy, row).then([tables] (schema_ptr&& cfm) {
             tables->emplace(cfm->cf_name(), std::move(cfm));
         });
