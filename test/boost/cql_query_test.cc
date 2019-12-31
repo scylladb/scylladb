@@ -4408,3 +4408,28 @@ SEASTAR_TEST_CASE(test_int_sum_with_cast) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_int_avg) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "create table cf (pk text, val int, primary key(pk));");
+        cquery_nofail(e, "insert into cf (pk, val) values ('a', 2147483647);");
+        cquery_nofail(e, "insert into cf (pk, val) values ('b', 2147483647);");
+        auto result = e.execute_cql("select avg(val) from cf;").get0();
+        assert_that(result)
+            .is_rows()
+            .with_size(1)
+            .with_row({int32_type->decompose(int32_t(2147483647))});
+    });
+}
+
+SEASTAR_TEST_CASE(test_bigint_avg) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "create table cf (pk text, val bigint, primary key(pk));");
+        cquery_nofail(e, "insert into cf (pk, val) values ('x', 9223372036854775807);");
+        cquery_nofail(e, "insert into cf (pk, val) values ('y', 9223372036854775807);");
+        assert_that(e.execute_cql("select avg(val) from cf;").get0())
+            .is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(9223372036854775807))});
+    });
+}
