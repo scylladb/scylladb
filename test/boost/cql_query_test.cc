@@ -4313,3 +4313,98 @@ SEASTAR_TEST_CASE(test_rf_expand) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_int_sum_overflow) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "create table cf (pk text, ck text, val int, primary key(pk, ck));");
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p1', 'c1', 2147483647);");
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p1', 'c2', 1);");
+        auto sum_query = "select sum(val) from cf;";
+        BOOST_REQUIRE_THROW(e.execute_cql(sum_query).get(), exceptions::overflow_error_exception);
+
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p2', 'c1', -1);");
+        auto result = e.execute_cql(sum_query).get0();
+        assert_that(result)
+            .is_rows()
+            .with_size(1)
+            .with_row({int32_type->decompose(int32_t(2147483647))});
+
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p3', 'c1', 2147483647);");
+        BOOST_REQUIRE_THROW(e.execute_cql(sum_query).get(), exceptions::overflow_error_exception);
+
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p3', 'c2', -2147483648);");
+        result = e.execute_cql(sum_query).get0();
+        assert_that(result)
+            .is_rows()
+            .with_size(1)
+            .with_row({int32_type->decompose(int32_t(2147483646))});
+    });
+}
+
+SEASTAR_TEST_CASE(test_bigint_sum_overflow) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "create table cf (pk text, ck text, val bigint, primary key(pk, ck));");
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p1', 'c1', 9223372036854775807);");
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p1', 'c2', 1);");
+        auto sum_query = "select sum(val) from cf;";
+        BOOST_REQUIRE_THROW(e.execute_cql(sum_query).get(), exceptions::overflow_error_exception);
+
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p2', 'c1', -1);");
+        auto result = e.execute_cql(sum_query).get0();
+        assert_that(result)
+            .is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(9223372036854775807))});
+
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p3', 'c1', 9223372036854775807);");
+        BOOST_REQUIRE_THROW(e.execute_cql(sum_query).get(), exceptions::overflow_error_exception);
+
+        cquery_nofail(e, "insert into cf (pk, ck, val) values ('p3', 'c2', -9223372036854775808);");
+        result = e.execute_cql(sum_query).get0();
+        assert_that(result)
+            .is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(9223372036854775806))});
+    });
+}
+
+SEASTAR_TEST_CASE(test_bigint_sum) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "create table cf (pk text, val bigint, primary key(pk));");
+        cquery_nofail(e, "insert into cf (pk, val) values ('x', 2147483647);");
+        cquery_nofail(e, "insert into cf (pk, val) values ('y', 2147483647);");
+        auto sum_query = "select sum(val) from cf;";
+        assert_that(e.execute_cql(sum_query).get0())
+            .is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(4294967294))});
+
+        cquery_nofail(e, "insert into cf (pk, val) values ('z', -4294967295);");
+        assert_that(e.execute_cql(sum_query).get0())
+            .is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(-1))});
+    });
+}
+
+SEASTAR_TEST_CASE(test_int_sum_with_cast) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        return do_with_cql_env_thread([] (cql_test_env& e) {
+            cquery_nofail(e, "create table cf (pk text, val int, primary key(pk));");
+            cquery_nofail(e, "insert into cf (pk, val) values ('a', 2147483647);");
+            cquery_nofail(e, "insert into cf (pk, val) values ('b', 2147483647);");
+            auto sum_as_bigint_query = "select sum(val as bigint) from cf;";
+            assert_that(e.execute_cql(sum_as_bigint_query).get0())
+                .is_rows()
+                .with_size(1)
+                .with_row({long_type->decompose(int64_t(4294967294))});
+
+            cquery_nofail(e, "insert into cf (pk, val) values ('a', -2147483648);");
+            cquery_nofail(e, "insert into cf (pk, val) values ('b', -2147483647);");
+            assert_that(e.execute_cql(sum_as_bigint_query).get0())
+                .is_rows()
+                .with_size(1)
+                .with_row({long_type->decompose(int64_t(-4294967296))});
+        });
+    });
+}
