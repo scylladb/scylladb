@@ -263,9 +263,9 @@ std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection::prin
     if (dc::structure::get_member<dc::tags::flags>(p._cell._data.get()).get<dc::tags::collection>()) {
         os << "collection ";
         auto cmv = p._cell.as_collection_mutation();
-        os << to_hex(cmv.data.linearize());
+        os << collection_mutation_view::printer(*p._cdef.type, cmv);
     } else {
-        os << p._cell.as_atomic_cell(p._cdef);
+        os << atomic_cell_view::printer(*p._cdef.type, p._cell.as_atomic_cell(p._cdef));
     }
     return os << " }";
 }
