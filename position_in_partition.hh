@@ -199,6 +199,15 @@ public:
         return bound_view(*_ck, _bound_weight == bound_weight::before_all_prefixed ? bound_kind::excl_end : bound_kind::incl_end);
     }
 
+    class printer {
+        const schema& _schema;
+        const position_in_partition_view& _pipv;
+    public:
+        printer(const schema& schema, const position_in_partition_view& pipv) : _schema(schema), _pipv(pipv) {}
+        friend std::ostream& operator<<(std::ostream& os, printer p);
+    };
+
+    friend std::ostream& operator<<(std::ostream& os, printer p);
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
     friend bool no_clustering_row_between(const schema&, position_in_partition_view, position_in_partition_view);
 };
