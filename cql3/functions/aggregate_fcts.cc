@@ -44,6 +44,7 @@
 #include "aggregate_fcts.hh"
 #include "functions.hh"
 #include "native_aggregate_function.hh"
+#include "exceptions/exceptions.hh"
 
 using namespace cql3;
 using namespace functions;
@@ -75,59 +76,8 @@ public:
     }
 };
 
-template <typename Type>
-class impl_sum_function_for final : public aggregate_function::aggregate {
-   Type _sum{};
-public:
-    virtual void reset() override {
-        _sum = {};
-    }
-    virtual opt_bytes compute(cql_serialization_format sf) override {
-        return data_type_for<Type>()->decompose(_sum);
-    }
-    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
-        if (!values[0]) {
-            return;
-        }
-        _sum += value_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
-    }
-};
-
-template <typename Type>
-class sum_function_for final : public native_aggregate_function {
-public:
-    sum_function_for() : native_aggregate_function("sum", data_type_for<Type>(), { data_type_for<Type>() }) {}
-    virtual std::unique_ptr<aggregate> new_aggregate() override {
-        return std::make_unique<impl_sum_function_for<Type>>();
-    }
-};
-
-
-template <typename Type>
-static
-shared_ptr<aggregate_function>
-make_sum_function() {
-    return make_shared<sum_function_for<Type>>();
-}
-
-template <typename Type>
-class impl_div_for_avg {
-public:
-    static Type div(const Type& x, const int64_t y) {
-        return x/y;
-    }
-};
-
-template <>
-class impl_div_for_avg<big_decimal> {
-public:
-    static big_decimal div(const big_decimal& x, const int64_t y) {
-        return x.div(y, big_decimal::rounding_mode::HALF_EVEN);
-    }
-};
-
-// We need a wider accumulator for average, since summing the inputs can overflow
-// the input type
+// We need a wider accumulator for sum and average,
+// since summing the inputs can overflow the input type
 template <typename T>
 struct accumulator_for;
 
@@ -169,6 +119,63 @@ struct accumulator_for<boost::multiprecision::cpp_int> {
 template <>
 struct accumulator_for<big_decimal> {
     using type = big_decimal;
+};
+
+template <typename Type>
+class impl_sum_function_for final : public aggregate_function::aggregate {
+    using accumulator_type = typename accumulator_for<Type>::type;
+    accumulator_type _sum{};
+public:
+    virtual void reset() override {
+        _sum = {};
+    }
+    virtual opt_bytes compute(cql_serialization_format sf) override {
+        Type ret = static_cast<Type>(_sum);
+        if (static_cast<accumulator_type>(ret) != _sum) {
+            throw exceptions::overflow_error_exception("Sum overflow. Values should be casted to a wider type.");
+        }
+        return data_type_for<Type>()->decompose(ret);
+
+    }
+    virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
+        if (!values[0]) {
+            return;
+        }
+        _sum += value_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
+    }
+};
+
+template <typename Type>
+class sum_function_for final : public native_aggregate_function {
+public:
+    sum_function_for() : native_aggregate_function("sum", data_type_for<Type>(), { data_type_for<Type>() }) {}
+    virtual std::unique_ptr<aggregate> new_aggregate() override {
+        return std::make_unique<impl_sum_function_for<Type>>();
+    }
+};
+
+
+template <typename Type>
+static
+shared_ptr<aggregate_function>
+make_sum_function() {
+    return make_shared<sum_function_for<Type>>();
+}
+
+template <typename Type>
+class impl_div_for_avg {
+public:
+    static Type div(const Type& x, const int64_t y) {
+        return x/y;
+    }
+};
+
+template <>
+class impl_div_for_avg<big_decimal> {
+public:
+    static big_decimal div(const big_decimal& x, const int64_t y) {
+        return x.div(y, big_decimal::rounding_mode::HALF_EVEN);
+    }
 };
 
 template <typename Type>
