@@ -431,6 +431,8 @@ public:
         return _large_data_handler;
     }
 
+    void assert_large_data_handler_is_running();
+
     /**
      * Note. This is using the Origin definition of
      * max_data_age, which is load time. This could maybe

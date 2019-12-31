@@ -2445,6 +2445,12 @@ encoding_stats sstable::get_encoding_stats_for_compaction() const {
     return enc_stats;
 }
 
+void sstable::assert_large_data_handler_is_running() {
+    if (get_large_data_handler().stopped()) {
+        on_internal_error(sstlog, "The large data handler was stopped too soon");
+    }
+}
+
 future<> sstable::write_components(
         flat_mutation_reader mr,
         uint64_t estimated_partitions,
@@ -2452,6 +2458,7 @@ future<> sstable::write_components(
         const sstable_writer_config& cfg,
         encoding_stats stats,
         const io_priority_class& pc) {
+    assert_large_data_handler_is_running();
     if (cfg.replay_position) {
         _collector.set_replay_position(cfg.replay_position.value());
     }
@@ -2459,6 +2466,8 @@ future<> sstable::write_components(
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
         auto validator = mutation_fragment_stream_validator(*schema, get_config().enable_sstable_key_validation());
         mr.consume_in_thread(std::move(wr), std::move(validator), db::no_timeout);
+    }).finally([this] {
+        assert_large_data_handler_is_running();
     });
 }
 
