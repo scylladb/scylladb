@@ -194,16 +194,16 @@ if [ ! -f variables.json ]; then
 fi
 
 if [ ! -d packer ]; then
-    EXPECTED="5e51808299135fee7a2e664b09f401b5712b5ef18bd4bad5bc50f4dcd8b149a1  packer_1.3.2_linux_amd64.zip"
-    wget -nv https://releases.hashicorp.com/packer/1.3.2/packer_1.3.2_linux_amd64.zip -O packer_1.3.2_linux_amd64.zip
-    CSUM=`sha256sum packer_1.3.2_linux_amd64.zip`
+    EXPECTED="3305ede8886bc3fd83ec0640fb87418cc2a702b2cb1567b48c8cb9315e80047d"
+    wget -nv https://releases.hashicorp.com/packer/1.5.1/packer_1.5.1_linux_amd64.zip -O packer_1.5.1_linux_amd64.zip
+    CSUM=$(sha256sum packer_1.5.1_linux_amd64.zip|cut -d ' ' -f 1)
     if [ "$CSUM" != "$EXPECTED" ]; then
         echo "Error while downloading packer. Checksum doesn't match! ($CSUM)"
         exit 1
     fi
     mkdir packer
     cd packer
-    unzip -x ../packer_1.3.2_linux_amd64.zip
+    unzip -x ../packer_1.5.1_linux_amd64.zip
     cd -
 fi
 
