@@ -165,7 +165,7 @@ make_sum_function() {
 template <typename Type>
 class impl_div_for_avg {
 public:
-    static Type div(const Type& x, const int64_t y) {
+    static Type div(const typename accumulator_for<Type>::type& x, const int64_t y) {
         return x/y;
     }
 };
