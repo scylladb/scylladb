@@ -36,7 +36,7 @@
           "virtual_name": "ephemeral7"
         }
       ],
-      "ami_name": "{{user `ami_prefix`}}scylla_{{isotime | clean_ami_name}}",
+      "ami_name": "{{user `ami_prefix`}}scylla_{{isotime | clean_resource_name}}",
       "associate_public_ip_address": "{{user `associate_public_ip_address`}}",
       "sriov_support": true,
       "ena_support": true,
