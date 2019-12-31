@@ -303,8 +303,8 @@ public:
     future<> init();
     future<sseg_ptr> new_segment();
     future<sseg_ptr> active_segment(db::timeout_clock::time_point timeout);
-    future<sseg_ptr> allocate_segment(bool active);
-    future<sseg_ptr> allocate_segment_ex(const descriptor&, sstring filename, open_flags, bool active);
+    future<sseg_ptr> allocate_segment();
+    future<sseg_ptr> allocate_segment_ex(const descriptor&, sstring filename, open_flags);
 
     sstring filename(const descriptor& d) const {
         return cfg.commit_log_location + "/" + d.filename();
@@ -503,13 +503,13 @@ public:
     // TODO : tune initial / default size
     static constexpr size_t default_size = align_up<size_t>(128 * 1024, alignment);
 
-    segment(::shared_ptr<segment_manager> m, const descriptor& d, file && f, bool active)
+    segment(::shared_ptr<segment_manager> m, const descriptor& d, file && f)
             : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)),
         _file_name(_segment_manager->cfg.commit_log_location + "/" + _desc.filename()), _sync_time(
                     clock_type::now()), _pending_ops(true) // want exception propagation
     {
         ++_segment_manager->totals.segments_created;
-        clogger.debug("Created new {} segment {}", active ? "active" : "reserve", *this);
+        clogger.debug("Created new segment {}", *this);
     }
     ~segment() {
         if (!_closed_file) {
@@ -1060,7 +1060,7 @@ future<> db::commitlog::segment_manager::replenish_reserve() {
                 return make_ready_future<>();
             }
             return with_gate(_gate, [this] {
-                return this->allocate_segment(false).then([this](sseg_ptr s) {
+                return this->allocate_segment().then([this](sseg_ptr s) {
                     auto ret = _reserve_segments.push(std::move(s));
                     if (!ret) {
                         clogger.error("Segment reserve is full! Ignoring and trying to continue, but shouldn't happen");
@@ -1280,7 +1280,7 @@ static auto close_on_failure(future<file> file_fut, Func func) {
     });
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(const descriptor& d, sstring filename, open_flags flags, bool active) {
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(const descriptor& d, sstring filename, open_flags flags) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
     auto fut = do_io_check(commit_error_handler, [=] {
@@ -1297,7 +1297,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         return fut;
     });
 
-    return close_on_failure(std::move(fut), [this, d, active, filename, flags] (file f) {
+    return close_on_failure(std::move(fut), [this, d, filename, flags] (file f) {
         f = make_checked_file(commit_error_handler, f);
         // xfs doesn't like files extended betond eof, so enlarge the file
         auto fut = make_ready_future<>();
@@ -1337,8 +1337,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         } else {
             fut = f.truncate(max_size);
         }
-        return fut.then([this, d, active, f, filename] () mutable {
-            auto s = make_shared<segment>(this->shared_from_this(), d, std::move(f), active);
+        return fut.then([this, d, f, filename] () mutable {
+            auto s = make_shared<segment>(this->shared_from_this(), d, std::move(f));
             return make_ready_future<sseg_ptr>(s);
         });
     });
@@ -1352,7 +1352,7 @@ future<> db::commitlog::segment_manager::rename_file(sstring from, sstring to) c
     });
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment() {
     descriptor d(next_id(), cfg.fname_prefix);
     auto dst = filename(d);
     auto flags = open_flags::wo;
@@ -1369,11 +1369,11 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         // out-of-order files. (Sort does not help).
         clogger.debug("Using recycled segment file {} -> {}", src, dst);
         return rename_file(std::move(src), dst).then([=] {
-            return allocate_segment_ex(d, dst, flags, false);
+            return allocate_segment_ex(d, dst, flags);
         });
     }
 
-    return allocate_segment_ex(d, dst, flags|open_flags::create, active);
+    return allocate_segment_ex(d, dst, flags|open_flags::create);
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
