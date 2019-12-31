@@ -448,6 +448,10 @@ class repair_writer {
     std::vector<std::optional<seastar::queue<mutation_fragment_opt>>> _mq;
     // Current partition written to disk
     std::vector<lw_shared_ptr<const decorated_key_with_hash>> _current_dk_written_to_sstable;
+    // Is current partition still open. A partition is opened when a
+    // partition_start is written and is closed when a partition_end is
+    // written.
+    std::vector<bool> _partition_opened;
 public:
     repair_writer(
             schema_ptr schema,
@@ -462,10 +466,13 @@ public:
     future<> write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf, unsigned node_idx)  {
         _current_dk_written_to_sstable[node_idx] = dk;
         if (mf.is_partition_start()) {
-            return _mq[node_idx]->push_eventually(mutation_fragment_opt(std::move(mf)));
+            return _mq[node_idx]->push_eventually(mutation_fragment_opt(std::move(mf))).then([this, node_idx] {
+                _partition_opened[node_idx] = true;
+            });
         } else {
             auto start = mutation_fragment(partition_start(dk->dk, tombstone()));
             return _mq[node_idx]->push_eventually(mutation_fragment_opt(std::move(start))).then([this, node_idx, mf = std::move(mf)] () mutable {
+                _partition_opened[node_idx] = true;
                 return _mq[node_idx]->push_eventually(mutation_fragment_opt(std::move(mf)));
             });
         }
@@ -475,6 +482,7 @@ public:
         _writer_done.resize(_nr_peer_nodes);
         _mq.resize(_nr_peer_nodes);
         _current_dk_written_to_sstable.resize(_nr_peer_nodes);
+        _partition_opened.resize(_nr_peer_nodes, false);
     }
 
     void create_writer(unsigned node_idx) {
@@ -519,12 +527,21 @@ public:
         t.stream_in_progress());
     }
 
+    future<> write_partition_end(unsigned node_idx) {
+        if (_partition_opened[node_idx]) {
+            return _mq[node_idx]->push_eventually(mutation_fragment(partition_end())).then([this, node_idx] {
+                _partition_opened[node_idx] = false;
+            });
+        }
+        return make_ready_future<>();
+    }
+
     future<> do_write(unsigned node_idx, lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
         if (_current_dk_written_to_sstable[node_idx]) {
             if (_current_dk_written_to_sstable[node_idx]->dk.equal(*_schema, dk->dk)) {
                 return _mq[node_idx]->push_eventually(mutation_fragment_opt(std::move(mf)));
             } else {
-                return _mq[node_idx]->push_eventually(mutation_fragment(partition_end())).then([this,
+                return write_partition_end(node_idx).then([this,
                         node_idx, dk = std::move(dk), mf = std::move(mf)] () mutable {
                     return write_start_and_mf(std::move(dk), std::move(mf), node_idx);
                 });
@@ -538,7 +555,7 @@ public:
         return parallel_for_each(boost::irange(unsigned(0), unsigned(_nr_peer_nodes)), [this] (unsigned node_idx) {
             if (_writer_done[node_idx] && _mq[node_idx]) {
                 // Partition_end is never sent on wire, so we have to write one ourselves.
-                return _mq[node_idx]->push_eventually(mutation_fragment(partition_end())).then([this, node_idx] () mutable {
+                return write_partition_end(node_idx).then([this, node_idx] () mutable {
                     // Empty mutation_fragment_opt means no more data, so the writer can seal the sstables.
                     return _mq[node_idx]->push_eventually(mutation_fragment_opt()).then([this, node_idx] () mutable {
                         return (*_writer_done[node_idx]).then([] (uint64_t partitions) {
