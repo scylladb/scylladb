@@ -30,6 +30,7 @@
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "cql3/cql3_type.hh"
+#include "cql3/type_json.hh"
 #include "utils/big_decimal.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -825,6 +826,17 @@ BOOST_AUTO_TEST_CASE(test_map_to_string) {
     auto ptr = std::make_unique<native_type>(std::move(native));
     auto v = data_value::make(m, std::move(ptr));
     BOOST_REQUIRE_EQUAL(m->to_string(v.serialize()), "{42 : 42}, {42 : 42}");
+}
+
+BOOST_AUTO_TEST_CASE(test_map_to_json) {
+    auto k = data_value(int32_t(42));
+    auto v = data_value("abc");
+    auto m = map_type_impl::get_instance(int32_type, utf8_type, true);
+    using native_type = std::vector<std::pair<data_value, data_value>>;
+    native_type native{std::pair(k, v), std::pair(k, v)};
+    auto ptr = std::make_unique<native_type>(std::move(native));
+    auto map_v = data_value::make(m, std::move(ptr));
+    BOOST_REQUIRE_EQUAL(to_json_string(*m, map_v.serialize()), "{\"42\": \"abc\", \"42\": \"abc\"}");
 }
 
 BOOST_AUTO_TEST_CASE(test_set_to_string) {

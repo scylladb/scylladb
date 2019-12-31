@@ -233,7 +233,7 @@ template <typename T> static T compose_value(const integer_type_impl<T>& t, byte
     if (bv.size() != sizeof(T)) {
         throw marshal_exception(format("Size mismatch for type {}: got {:d} bytes", t.name(), bv.size()));
     }
-    return (T)net::ntoh(*reinterpret_cast<const T*>(bv.data()));
+    return read_be<T>(reinterpret_cast<const char*>(bv.data()));
 }
 
 static sstring to_json_string_aux(const map_type_impl& t, bytes_view bv) {
