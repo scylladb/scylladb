@@ -1026,11 +1026,10 @@ struct schema_diff {
     }
 };
 
-template<typename CreateSchema>
 static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy,
     std::map<utils::UUID, schema_mutations>&& before,
     std::map<utils::UUID, schema_mutations>&& after,
-    CreateSchema&& create_schema)
+    noncopyable_function<schema_ptr (schema_mutations sm)> create_schema)
 {
     schema_diff d;
     auto diff = difference(before, after);
