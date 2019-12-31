@@ -371,10 +371,8 @@ SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
             muts2.push_back(db::schema_tables::make_scylla_tables_mutation(s0, api::new_timestamp()));
             mm.announce(muts2).get();
 
-            // SCYLLA_TABLES have additional columns so announcing its mutation
-            // changes the tables
-            BOOST_REQUIRE(s1 != find_table().schema());
-            BOOST_REQUIRE(legacy_version != find_table().schema()->version());
+            BOOST_REQUIRE(s1 == find_table().schema());
+            BOOST_REQUIRE_EQUAL(legacy_version, find_table().schema()->version());
         });
     });
 }

@@ -1753,7 +1753,19 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
     mutation m(scylla_tables(), pkey);
     m.set_clustered_cell(ckey, "version", utils::UUID(table->version()), timestamp);
-    store_map(m, ckey, "cdc", timestamp, table->cdc_options().to_map());
+    auto cdc_options = table->cdc_options().to_map();
+    if (!cdc_options.empty()) {
+        store_map(m, ckey, "cdc", timestamp, cdc_options);
+    } else {
+        // Avoid storing anything for cdc disabled, so we don't end up with
+        // different digests on different nodes due to the other node redacting
+        // the cdc column when the cdc cluster feature is disabled.
+        //
+        // Tombstones are not considered for schema digest, so this is okay (and
+        // needed in order for disabling of cdc to have effect).
+        auto& cdc_cdef = *scylla_tables()->get_column_definition("cdc");
+        m.set_clustered_cell(ckey, cdc_cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
+    }
     return m;
 }
 
