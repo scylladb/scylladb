@@ -102,98 +102,10 @@ functions::init() {
         declare(make_to_blob_function(type.get_type()));
         declare(make_from_blob_function(type.get_type()));
     }
-    declare(aggregate_fcts::make_count_function<int8_t>());
-    declare(aggregate_fcts::make_max_function<int8_t>());
-    declare(aggregate_fcts::make_min_function<int8_t>());
-
-    declare(aggregate_fcts::make_count_function<int16_t>());
-    declare(aggregate_fcts::make_max_function<int16_t>());
-    declare(aggregate_fcts::make_min_function<int16_t>());
-
-    declare(aggregate_fcts::make_count_function<int32_t>());
-    declare(aggregate_fcts::make_max_function<int32_t>());
-    declare(aggregate_fcts::make_min_function<int32_t>());
-
-    declare(aggregate_fcts::make_count_function<int64_t>());
-    declare(aggregate_fcts::make_max_function<int64_t>());
-    declare(aggregate_fcts::make_min_function<int64_t>());
-
-    declare(aggregate_fcts::make_count_function<boost::multiprecision::cpp_int>());
-    declare(aggregate_fcts::make_max_function<boost::multiprecision::cpp_int>());
-    declare(aggregate_fcts::make_min_function<boost::multiprecision::cpp_int>());
-
-    declare(aggregate_fcts::make_count_function<big_decimal>());
-    declare(aggregate_fcts::make_max_function<big_decimal>());
-    declare(aggregate_fcts::make_min_function<big_decimal>());
-
-    declare(aggregate_fcts::make_count_function<float>());
-    declare(aggregate_fcts::make_max_function<float>());
-    declare(aggregate_fcts::make_min_function<float>());
-
-    declare(aggregate_fcts::make_count_function<double>());
-    declare(aggregate_fcts::make_max_function<double>());
-    declare(aggregate_fcts::make_min_function<double>());
-
-    declare(aggregate_fcts::make_count_function<sstring>());
-    declare(aggregate_fcts::make_max_function<sstring>());
-    declare(aggregate_fcts::make_min_function<sstring>());
-
-    declare(aggregate_fcts::make_count_function<ascii_native_type>());
-    declare(aggregate_fcts::make_max_function<ascii_native_type>());
-    declare(aggregate_fcts::make_min_function<ascii_native_type>());
-
-    declare(aggregate_fcts::make_count_function<simple_date_native_type>());
-    declare(aggregate_fcts::make_max_function<simple_date_native_type>());
-    declare(aggregate_fcts::make_min_function<simple_date_native_type>());
-
-    declare(aggregate_fcts::make_count_function<db_clock::time_point>());
-    declare(aggregate_fcts::make_max_function<db_clock::time_point>());
-    declare(aggregate_fcts::make_min_function<db_clock::time_point>());
-
-    declare(aggregate_fcts::make_count_function<timeuuid_native_type>());
-    declare(aggregate_fcts::make_max_function<timeuuid_native_type>());
-    declare(aggregate_fcts::make_min_function<timeuuid_native_type>());
-
-    declare(aggregate_fcts::make_count_function<time_native_type>());
-    declare(aggregate_fcts::make_max_function<time_native_type>());
-    declare(aggregate_fcts::make_min_function<time_native_type>());
-
-    declare(aggregate_fcts::make_count_function<utils::UUID>());
-    declare(aggregate_fcts::make_max_function<utils::UUID>());
-    declare(aggregate_fcts::make_min_function<utils::UUID>());
-
-    declare(aggregate_fcts::make_count_function<bytes>());
-    declare(aggregate_fcts::make_max_function<bytes>());
-    declare(aggregate_fcts::make_min_function<bytes>());
-
-    declare(aggregate_fcts::make_count_function<bool>());
-    declare(aggregate_fcts::make_max_function<bool>());
-    declare(aggregate_fcts::make_min_function<bool>());
-
-    declare(aggregate_fcts::make_count_function<net::inet_address>());
-    declare(aggregate_fcts::make_max_function<net::inet_address>());
-    declare(aggregate_fcts::make_min_function<net::inet_address>());
-
-    // FIXME: more count/min/max
 
     declare(make_varchar_as_blob_fct());
     declare(make_blob_as_varchar_fct());
-    declare(aggregate_fcts::make_sum_function<int8_t>());
-    declare(aggregate_fcts::make_sum_function<int16_t>());
-    declare(aggregate_fcts::make_sum_function<int32_t>());
-    declare(aggregate_fcts::make_sum_function<int64_t>());
-    declare(aggregate_fcts::make_sum_function<float>());
-    declare(aggregate_fcts::make_sum_function<double>());
-    declare(aggregate_fcts::make_sum_function<boost::multiprecision::cpp_int>());
-    declare(aggregate_fcts::make_sum_function<big_decimal>());
-    declare(aggregate_fcts::make_avg_function<int8_t>());
-    declare(aggregate_fcts::make_avg_function<int16_t>());
-    declare(aggregate_fcts::make_avg_function<int32_t>());
-    declare(aggregate_fcts::make_avg_function<int64_t>());
-    declare(aggregate_fcts::make_avg_function<float>());
-    declare(aggregate_fcts::make_avg_function<double>());
-    declare(aggregate_fcts::make_avg_function<boost::multiprecision::cpp_int>());
-    declare(aggregate_fcts::make_avg_function<big_decimal>());
+    add_agg_functions(ret);
 
     // also needed for smp:
 #if 0
