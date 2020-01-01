@@ -107,10 +107,18 @@ MUSTACHE_DIST="\"$TARGET\": true, \"target\": \"$TARGET\""
 RPMBUILD=$(readlink -f ../)
 mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
+xz_thread_param=
+if xz --help | grep -q thread; then
+    # use as many threads as there are CPUs
+    xz_thread_param="T$(nproc)"
+fi
+
+rpm_payload_opts=(--define "_binary_payload w2${xz_thread_param}.xzdio")
+
 ln -fv $RELOC_PKG $RPMBUILD/SOURCES/
 pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST, \"product\": \"$PRODUCT\", \"$PRODUCT\": true, \"reloc_pkg\": \"$RELOC_PKG_BASENAME\", $MUSTACHE_DIST }" > $RPMBUILD/SPECS/scylla.spec
 if [ "$TARGET" = "centos7" ]; then
-    rpmbuild -ba --define '_binary_payload w2.xzdio' --define "_topdir $RPMBUILD" --define "dist .el7" $RPMBUILD/SPECS/scylla.spec
+    rpmbuild -ba "${rpm_payload_opts[@]}" --define "_topdir $RPMBUILD" --define "dist .el7" $RPMBUILD/SPECS/scylla.spec
 else
-    rpmbuild -ba --define '_binary_payload w2.xzdio' --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla.spec
+    rpmbuild -ba "${rpm_payload_opts[@]}" --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla.spec
 fi
