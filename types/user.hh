@@ -58,6 +58,7 @@ public:
     bool is_multi_cell() const { return _is_multi_cell; }
     virtual data_type freeze() const override;
     sstring get_name_as_string() const;
+    sstring get_name_as_cql_string() const;
 
 private:
     static sstring make_name(sstring keyspace,

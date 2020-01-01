@@ -582,3 +582,20 @@ SEASTAR_TEST_CASE(test_nonfrozen_user_types_prepared) {
             exception_predicate::message_equals("User Defined Type value contained too many fields (expected 3, got 4)"));
     });
 }
+
+// This test reproduces issue #5544: user-defined types with case-sensitive
+// (quoted) names were unusable:
+// As with other identifiers in CQL, user type names also have their case
+// folded to lowercase - unless quoted. In this test we create a type called
+// "PHone" (like this, with the quotes), and then try to use it in a
+// CREATE TABLE command. The bug was that CREATE TABLE failed - with an
+// exception "Unknown type ks.phone".
+SEASTAR_TEST_CASE(test_user_type_quoted) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TYPE \"PHone\" (country_code int, number text)").get();
+        e.execute_cql("CREATE TABLE cf (pk blob, pn \"PHone\", PRIMARY KEY (pk))").get();
+        e.execute_cql("CREATE TABLE cf2 (pk blob, pn frozen<\"PHone\">, PRIMARY KEY (pk))").get();
+        e.execute_cql("CREATE TABLE cf3 (pk blob, pn frozen<list<\"PHone\">>, PRIMARY KEY (pk))").get();
+        // Pass if the above CREATE TABLE completes without an exception.
+    });
+}

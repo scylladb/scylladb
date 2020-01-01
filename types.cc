@@ -26,6 +26,7 @@
 #include "cql3/lists.hh"
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
+#include "cql3/util.hh"
 #include "concrete_types.hh"
 #include <seastar/core/print.hh>
 #include <seastar/net/ip.hh>
@@ -869,7 +870,7 @@ static sstring cql3_type_name_impl(const abstract_type& t) {
             return format("tuple<{}>", ::join(", ", t.all_types() | boost::adaptors::transformed(std::mem_fn(
                                                                             &abstract_type::as_cql3_type))));
         }
-        sstring operator()(const user_type_impl& u) { return u.get_name_as_string(); }
+        sstring operator()(const user_type_impl& u) { return u.get_name_as_cql_string(); }
         sstring operator()(const utf8_type_impl&) { return "text"; }
         sstring operator()(const uuid_type_impl&) { return "uuid"; }
         sstring operator()(const varint_type_impl&) { return "varint"; }
@@ -2631,6 +2632,10 @@ sstring
 user_type_impl::get_name_as_string() const {
     auto real_utf8_type = static_cast<const utf8_type_impl*>(utf8_type.get());
     return ::deserialize_value(*real_utf8_type, _name);
+}
+
+sstring user_type_impl::get_name_as_cql_string() const {
+    return cql3::util::maybe_quote(get_name_as_string());
 }
 
 data_type
