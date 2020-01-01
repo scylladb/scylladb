@@ -44,10 +44,10 @@ if __name__ == '__main__':
 
     if os.path.exists('/etc/default/grub'):
         cfg = sysconfig_parser('/etc/default/grub')
-        cmdline_linux = cfg.get('GRUB_CMDLINE_LINUX')
+        cmdline_linux = cfg.get('GRUB_CMDLINE_LINUX_DEFAULT')
         if len(re.findall(r'.*clocksource', cmdline_linux)) == 0:
             cmdline_linux += ' clocksource=tsc tsc=reliable'
-            cfg.set('GRUB_CMDLINE_LINUX', cmdline_linux)
+            cfg.set('GRUB_CMDLINE_LINUX_DEFAULT', cmdline_linux)
             cfg.commit()
             if is_debian_variant():
                 run('update-grub')

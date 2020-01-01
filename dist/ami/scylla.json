@@ -44,14 +44,20 @@
       "launch_block_device_mappings": [
         {
           "delete_on_termination": true,
-          "device_name": "/dev/sda1",
+          "device_name": "/dev/xvda",
           "volume_size": 10
         }
       ],
       "region": "{{user `region`}}",
       "secret_key": "{{user `secret_key`}}",
       "security_group_id": "{{user `security_group_id`}}",
-      "source_ami": "{{user `source_ami`}}",
+      "source_ami_filter": {
+          "filters": {
+              "name": "amzn2-ami-hvm-*-x86_64-gp2"
+          },
+          "owners": ["137112412989"],
+          "most_recent": true
+      },
       "ssh_timeout": "5m",
       "ssh_username": "{{user `ssh_username`}}",
       "subnet_id": "{{user `subnet_id`}}",
@@ -89,7 +95,6 @@
     "region": "",
     "secret_key": "",
     "security_group_id": "",
-    "source_ami": "",
     "ssh_username": "",
     "subnet_id": ""
   }
