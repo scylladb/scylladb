@@ -311,7 +311,8 @@ public:
     }
 
     future<> clear();
-    future<> sync_all_segments(bool shutdown = false);
+    future<> sync_all_segments();
+    future<> shutdown_all_segments();
     future<> shutdown();
 
     void create_counters(const sstring& metrics_category_name);
@@ -568,32 +569,31 @@ public:
     void reset_sync_time() {
         _sync_time = clock_type::now();
     }
-    // See class comment for info
-    future<sseg_ptr> sync(bool shutdown = false) {
+    future<sseg_ptr> shutdown() {
         /**
-         * If we are shutting down, we first
+         * When we are shutting down, we first
          * close the allocation gate, thus no new
          * data can be appended. Then we just issue a
          * flush, which will wait for any queued ops
          * to complete as well. Then we close the ops
          * queue, just to be sure.
          */
-        if (shutdown) {
-            auto me = shared_from_this();
-            return _gate.close().then([me] {
-                me->_closed = true;
-                return me->sync().finally([me] {
-                    // When we get here, nothing should add ops,
-                    // and we should have waited out all pending.
-                    return me->_pending_ops.close().finally([me] {
-                        return me->_file.truncate(me->_flush_pos).then([me] {
-                            return me->_file.close().finally([me] { me->_closed_file = true; });
-                        });
+        auto me = shared_from_this();
+        return _gate.close().then([me] {
+            me->_closed = true;
+            return me->sync().finally([me] {
+                // When we get here, nothing should add ops,
+                // and we should have waited out all pending.
+                return me->_pending_ops.close().finally([me] {
+                    return me->_file.truncate(me->_flush_pos).then([me] {
+                        return me->_file.close().finally([me] { me->_closed_file = true; });
                     });
                 });
             });
-        }
-
+        });
+    }
+    // See class comment for info
+    future<sseg_ptr> sync() {
         // Note: this is not a marker for when sync was finished.
         // It is when it was initiated
         reset_sync_time();
@@ -1514,11 +1514,20 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
     });
 }
 
-future<> db::commitlog::segment_manager::sync_all_segments(bool shutdown) {
-    clogger.debug("Issuing sync for all segments ({})", shutdown ? "shutdown" : "active");
-    return parallel_for_each(_segments, [this, shutdown](sseg_ptr s) {
-        return s->sync(shutdown).then([](sseg_ptr s) {
+future<> db::commitlog::segment_manager::sync_all_segments() {
+    clogger.debug("Issuing sync for all segments");
+    return parallel_for_each(_segments, [] (sseg_ptr s) {
+        return s->sync().then([](sseg_ptr s) {
             clogger.debug("Synced segment {}", *s);
+        });
+    });
+}
+
+future<> db::commitlog::segment_manager::shutdown_all_segments() {
+    clogger.debug("Issuing shutdown for all segments");
+    return parallel_for_each(_segments, [] (sseg_ptr s) {
+        return s->shutdown().then([](sseg_ptr s) {
+            clogger.debug("Shutdown segment {}", *s);
         });
     });
 }
@@ -1530,13 +1539,13 @@ future<> db::commitlog::segment_manager::shutdown() {
         // Wait for all pending requests to finish. Need to sync first because segments that are
         // alive may be holding semaphore permits.
         auto block_new_requests = get_units(_request_controller, max_request_controller_units());
-        return sync_all_segments(false).then([this, block_new_requests = std::move(block_new_requests)] () mutable {
+        return sync_all_segments().then([this, block_new_requests = std::move(block_new_requests)] () mutable {
             return std::move(block_new_requests).then([this] (auto permits) {
                 _timer.cancel(); // no more timer calls
                 _shutdown = true; // no re-arm, no create new segments.
                 // Now first wait for periodic task to finish, then sync and close all
                 // segments, flushing out any remaining data.
-                return _gate.close().then(std::bind(&segment_manager::sync_all_segments, this, true)).finally([permits = std::move(permits)] { });
+                return _gate.close().then(std::bind(&segment_manager::shutdown_all_segments, this)).finally([permits = std::move(permits)] { });
             });
         }).finally([this] {
             discard_unused_segments();
