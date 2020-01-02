@@ -601,12 +601,10 @@ public:
         return _closed ? f.then([](sseg_ptr s) { return s->flush(); }) : std::move(f);
     }
     // See class comment for info
-    future<sseg_ptr> flush(uint64_t pos = 0) {
+    future<sseg_ptr> flush() {
         auto me = shared_from_this();
         assert(me.use_count() > 1);
-        if (pos == 0) {
-            pos = _file_pos;
-        }
+        uint64_t pos = _file_pos;
 
         clogger.trace("Syncing {} {} -> {}", *this, _flush_pos, pos);
 
