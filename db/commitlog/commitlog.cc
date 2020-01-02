@@ -597,7 +597,8 @@ public:
         // Note: this is not a marker for when sync was finished.
         // It is when it was initiated
         reset_sync_time();
-        return _closed ? cycle(true).then([](sseg_ptr s) { return s->flush(); }) : cycle(true);
+        auto f = cycle(true);
+        return _closed ? f.then([](sseg_ptr s) { return s->flush(); }) : std::move(f);
     }
     // See class comment for info
     future<sseg_ptr> flush(uint64_t pos = 0) {
