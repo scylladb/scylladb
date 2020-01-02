@@ -561,9 +561,8 @@ public:
      * Finalize this segment and get a new one
      */
     future<sseg_ptr> finish_and_get_new(db::timeout_clock::time_point timeout) {
-        _closed = true;
         //FIXME: discarded future.
-        (void)sync();
+        (void)close();
         return _segment_manager->active_segment(timeout);
     }
     void reset_sync_time() {
@@ -580,8 +579,7 @@ public:
          */
         auto me = shared_from_this();
         return _gate.close().then([me] {
-            me->_closed = true;
-            return me->sync().finally([me] {
+            return me->close().finally([me] {
                 // When we get here, nothing should add ops,
                 // and we should have waited out all pending.
                 return me->_pending_ops.close().finally([me] {
@@ -597,8 +595,7 @@ public:
         // Note: this is not a marker for when sync was finished.
         // It is when it was initiated
         reset_sync_time();
-        auto f = cycle(true);
-        return _closed ? f.then([](sseg_ptr s) { return s->flush(); }) : std::move(f);
+        return cycle(true);
     }
     // See class comment for info
     future<sseg_ptr> flush() {
@@ -613,24 +610,26 @@ public:
         replay_position rp(_desc.id, position_type(pos));
 
         // Run like this to ensure flush ordering, and making flushes "waitable"
-        auto f = _pending_ops.run_with_ordered_post_op(rp, [] { return make_ready_future<>(); }, [this, pos, me, rp] {
+        return _pending_ops.run_with_ordered_post_op(rp, [] { return make_ready_future<>(); }, [this, pos, me, rp] {
             assert(_pending_ops.has_operation(rp));
             return do_flush(pos);
         });
-
-        if (_closed && !std::exchange(_terminated, true)) {
-            f = f.then([this](sseg_ptr s) {
-                clogger.trace("{} is closed but not terminated.", *this);
-                if (_buffer.empty()) {
-                    new_buffer(0);
-                }
-                return cycle(true, true);
-            });
-        }
-
-        return f;
     }
-
+    future<sseg_ptr> terminate() {
+        assert(_closed);
+        if (!std::exchange(_terminated, true)) {
+            clogger.trace("{} is closed but not terminated.", *this);
+            if (_buffer.empty()) {
+                new_buffer(0);
+            }
+            return cycle(true, true);
+        }
+        return make_ready_future<sseg_ptr>(shared_from_this());
+    }
+    future<sseg_ptr> close() {
+        _closed = true;
+        return sync().then([] (sseg_ptr s) { return s->flush(); }).then([] (sseg_ptr s) { return s->terminate(); });
+    }
     future<sseg_ptr> do_flush(uint64_t pos) {
         auto me = shared_from_this();
         return begin_flush().then([this, pos]() {
