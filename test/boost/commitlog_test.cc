@@ -555,7 +555,7 @@ SEASTAR_TEST_CASE(test_allocation_failure){
                         std::exception_ptr ep;
                         try {
                             f.get();
-                            throw std::runtime_error("Adding mutation of size {} succeeded unexpectedly");
+                            throw std::runtime_error(format("Adding mutation of size {} succeeded unexpectedly", size));
                         } catch (std::bad_alloc&) {
                             // ok. this is what we expected
                             junk->clear();
