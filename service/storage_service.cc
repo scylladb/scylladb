@@ -1811,22 +1811,23 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info(cons
     // make magic happen
     slogger.info("Checking remote features with gossip");
     return _gossiper.do_shadow_round().then([this, loaded_peer_features, replace_address] {
-        auto local_features = get_known_features();
-        _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+        _gossiper.check_knows_remote_features(get_known_features(), loaded_peer_features);
+
         // now that we've gossiped at least once, we should be able to find the node we're replacing
         auto* state = _gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
         if (!state) {
             throw std::runtime_error(format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
         }
-        auto host_id = _gossiper.get_host_id(replace_address);
-        auto* value = state->get_application_state_ptr(application_state::TOKENS);
-        if (!value) {
+
+        auto tokens = get_tokens_for(replace_address);
+        if (tokens.empty()) {
             throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
         }
-        auto tokens = get_tokens_for(replace_address);
+
         // use the replacee's host Id as our own so we receive hints, etc
-        return db::system_keyspace::set_local_host_id(host_id).discard_result().then([this, replace_address, tokens = std::move(tokens)] {
-            return _gossiper.reset_endpoint_state_map().then([tokens = std::move(tokens)] { // clean up since we have what we need
+        auto host_id = _gossiper.get_host_id(replace_address);
+        return db::system_keyspace::set_local_host_id(host_id).discard_result().then([this, tokens = std::move(tokens)] () mutable {
+            return _gossiper.reset_endpoint_state_map().then([tokens = std::move(tokens)] () mutable { // clean up since we have what we need
                 return make_ready_future<std::unordered_set<token>>(std::move(tokens));
             });
         });
