@@ -997,7 +997,7 @@ db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, sha
         totals.requests_blocked_memory++;
     }
     return fut.then([this, id, writer = std::move(writer), timeout] (auto permit) mutable {
-        return this->active_segment(timeout).then([this, timeout, id, writer = std::move(writer), permit = std::move(permit)] (auto s) mutable {
+        return active_segment(timeout).then([this, timeout, id, writer = std::move(writer), permit = std::move(permit)] (auto s) mutable {
             return s->allocate(id, std::move(writer), std::move(permit), timeout);
         });
     });
@@ -1060,7 +1060,7 @@ future<> db::commitlog::segment_manager::replenish_reserve() {
                 return make_ready_future<>();
             }
             return with_gate(_gate, [this] {
-                return this->allocate_segment().then([this](sseg_ptr s) {
+                return allocate_segment().then([this](sseg_ptr s) {
                     auto ret = _reserve_segments.push(std::move(s));
                     if (!ret) {
                         clogger.error("Segment reserve is full! Ignoring and trying to continue, but shouldn't happen");
@@ -1150,8 +1150,8 @@ future<> db::commitlog::segment_manager::init() {
         clogger.trace("Delaying timer loop {} ms", delay);
         // We need to wait until we have scanned all other segments to actually start serving new
         // segments. We are ready now
-        this->_reserve_replenisher = replenish_reserve();
-        this->arm(delay);
+        _reserve_replenisher = replenish_reserve();
+        arm(delay);
     });
 }
 
@@ -1338,7 +1338,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             fut = f.truncate(max_size);
         }
         return fut.then([this, d, f, filename] () mutable {
-            auto s = make_shared<segment>(this->shared_from_this(), d, std::move(f));
+            auto s = make_shared<segment>(shared_from_this(), d, std::move(f));
             return make_ready_future<sseg_ptr>(s);
         });
     });
@@ -2056,7 +2056,7 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
                     }
 
                     return s.produce({std::move(buf), rp}).handle_exception([this](auto ep) {
-                        return this->fail();
+                        return fail();
                     });
                 });
             });
