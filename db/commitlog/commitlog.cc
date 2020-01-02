@@ -459,7 +459,6 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     fragmented_temporary_buffer::ostream _buffer_ostream;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     time_point _sync_time;
-    seastar::gate _gate;
     uint64_t _write_waiters = 0;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
@@ -571,21 +570,19 @@ public:
     future<sseg_ptr> shutdown() {
         /**
          * When we are shutting down, we first
-         * close the allocation gate, thus no new
+         * close the segment, thus no new
          * data can be appended. Then we just issue a
          * flush, which will wait for any queued ops
          * to complete as well. Then we close the ops
          * queue, just to be sure.
          */
         auto me = shared_from_this();
-        return _gate.close().then([me] {
-            return me->close().finally([me] {
-                // When we get here, nothing should add ops,
-                // and we should have waited out all pending.
-                return me->_pending_ops.close().finally([me] {
-                    return me->_file.truncate(me->_flush_pos).then([me] {
-                        return me->_file.close().finally([me] { me->_closed_file = true; });
-                    });
+        return close().finally([me] {
+            // When we get here, nothing should add ops,
+            // and we should have waited out all pending.
+            return me->_pending_ops.close().finally([me] {
+                return me->_file.truncate(me->_flush_pos).then([me] {
+                    return me->_file.close().finally([me] { me->_closed_file = true; });
                 });
             });
         });
@@ -872,7 +869,10 @@ public:
             buf_memory += buffer_position();
         }
 
-        _gate.enter(); // this might throw. I guess we accept this?
+        if (_closed) {
+            return make_exception_future<rp_handle>(std::runtime_error("commitlog: Cannot add data to a closed segment"));
+        }
+
         buf_memory -= permit.release();
         _segment_manager->account_memory_usage(buf_memory);
 
@@ -900,8 +900,6 @@ public:
 
         ++_segment_manager->totals.allocation_count;
         ++_num_allocs;
-
-        _gate.leave();
 
         if (_segment_manager->cfg.mode == sync_mode::BATCH) {
             return batch_cycle(timeout).then([h = std::move(h)](auto s) mutable {
