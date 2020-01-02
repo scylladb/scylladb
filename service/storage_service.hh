@@ -462,9 +462,12 @@ public:
         daemon.deactivate();
     }
 #endif
-public:
-    future<std::unordered_set<token>> prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
+private:
+    // Tokens and the CDC streams timestamp of the replaced node.
+    using replacement_info = std::pair<std::unordered_set<token>, std::optional<db_clock::time_point>>;
+    future<replacement_info> prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
+public:
     future<> check_for_endpoint_collision(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 #if 0
 

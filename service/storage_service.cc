@@ -452,8 +452,12 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         if (!is_auto_bootstrap()) {
             throw std::runtime_error("Trying to replace_address with auto_bootstrap disabled will not work, check your configuration");
         }
-        _bootstrap_tokens = prepare_replacement_info(loaded_peer_features).get0();
+
+        std::tie(_bootstrap_tokens, _cdc_streams_ts) = prepare_replacement_info(loaded_peer_features).get0();
+        // kbraun: I think we don't have to gossip tokens nor streams timestmap when HIBERNATEd
+        // (any state for this node will be ignored by other nodes anyway), but since TOKENS was already there, I added CDC_STREAMS_TIMESTAMP too.
         app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens));
+        app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(_cdc_streams_ts));
         app_states.emplace(gms::application_state::STATUS, value_factory.hibernate(true));
     } else if (should_bootstrap()) {
         check_for_endpoint_collision(loaded_peer_features).get();
@@ -791,22 +795,27 @@ void storage_service::join_token_ring(int delay) {
     _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
 
     if (!db::system_keyspace::bootstrap_complete()) {
-        // If we're not bootstrapping, then we shouldn't have chosen a CDC streams timestamp yet.
-        assert(should_bootstrap() || !_cdc_streams_ts);
+        // If we're not bootstrapping nor replacing, then we shouldn't have chosen a CDC streams timestamp yet.
+        assert(should_bootstrap() || db().local().is_replacing() || !_cdc_streams_ts);
     }
 
     if (!_cdc_streams_ts && db().local().get_config().check_experimental(db::experimental_features_t::CDC)) {
         // If we didn't choose a CDC streams timestamp at this point, then either
-        // 1. we already bootstrapped, but are upgrading from a non-CDC version (or previous version of CDC),
-        // 2. or we didn't, but we're skipping the streaming phase (seed node/auto_bootstrap=off)
+        // 1. we're replacing a node which didn't gossip a CDC streams timestamp for whatever reason,
+        // 2. we've already bootstrapped, but are upgrading from a non-CDC version,
+        // 3. we're starting for the first time, but we're skipping the streaming phase (seed node/auto_bootstrap=off)
         //    and directly joining the token ring.
 
-        // In the first case (updating), we'll propose the first generation
-        // if we conclude that we're the node responsible for this.
-        // In the second case we'll always propose, just as normally bootstrapping nodes do.
+        // In the replacing case we won't propose any CDC generation: we're not introducing any new tokens,
+        // so the current generation used by the cluster is fine.
+        // In the case of an upgrading cluster, one of the nodes is responsible for proposing
+        // the first CDC generation. We'll check if it's us.
+        // Finally, if we're simply a new node joining the ring but skipping bootstrapping,
+        // we'll propose a new generation just as normally bootstrapping nodes do.
 
-        if (!db::system_keyspace::bootstrap_complete() /* second case */
-                || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper)) {
+        if (!db().local().is_replacing()
+                && (!db::system_keyspace::bootstrap_complete()
+                    || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
 
             _cdc_streams_ts = cdc::make_new_cdc_generation(
                     _bootstrap_tokens, _token_metadata, _sys_dist_ks.local(), get_ring_delay(), _for_testing);
@@ -1786,7 +1795,8 @@ void storage_service::remove_endpoint(inet_address endpoint) {
     }).get();
 }
 
-future<std::unordered_set<token>> storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
+future<storage_service::replacement_info>
+storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     if (!db().local().get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
     }
@@ -1816,11 +1826,14 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info(cons
             throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
         }
 
+        auto cdc_streams_ts = cdc::get_streams_timestamp_for(replace_address, _gossiper);
+        replacement_info ret {tokens, cdc_streams_ts};
+
         // use the replacee's host Id as our own so we receive hints, etc
         auto host_id = _gossiper.get_host_id(replace_address);
-        return db::system_keyspace::set_local_host_id(host_id).discard_result().then([this, tokens = std::move(tokens)] () mutable {
-            return _gossiper.reset_endpoint_state_map().then([tokens = std::move(tokens)] () mutable { // clean up since we have what we need
-                return make_ready_future<std::unordered_set<token>>(std::move(tokens));
+        return db::system_keyspace::set_local_host_id(host_id).discard_result().then([this, ret = std::move(ret)] () mutable {
+            return _gossiper.reset_endpoint_state_map().then([ret = std::move(ret)] () mutable { // clean up since we have what we need
+                return make_ready_future<replacement_info>(std::move(ret));
             });
         });
     });
