@@ -809,7 +809,7 @@ public:
 private:
     void update_peer_info(inet_address endpoint);
     void do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
-    sstring get_application_state_value(inet_address endpoint, application_state appstate);
+
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
     future<> replicate_to_all_cores();
     future<> do_replicate_to_all_cores();

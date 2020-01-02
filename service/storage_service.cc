@@ -1416,16 +1416,8 @@ void storage_service::update_peer_info(gms::inet_address endpoint) {
     }
 }
 
-sstring storage_service::get_application_state_value(inet_address endpoint, application_state appstate) {
-    auto v =_gossiper.get_application_state_ptr(endpoint, appstate);
-    if (!v) {
-        return {};
-    }
-    return v->value;
-}
-
 std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
-    auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
+    auto tokens_string = _gossiper.get_application_state_value(endpoint, application_state::TOKENS);
     slogger.trace("endpoint={}, tokens_string={}", endpoint, tokens_string);
     if (tokens_string.size() == 0) {
         return {}; // boost::split produces one element for emty string

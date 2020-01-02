@@ -2056,6 +2056,14 @@ const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint
     return eps->get_application_state_ptr(appstate);
 }
 
+sstring gossiper::get_application_state_value(inet_address endpoint, application_state appstate) const {
+    auto v = get_application_state_ptr(endpoint, appstate);
+    if (!v) {
+        return {};
+    }
+    return v->value;
+}
+
 /**
  * This method is used to mark a node as shutdown; that is it gracefully exited on its own and told us about it
  * @param endpoint endpoint that has shut itself down
