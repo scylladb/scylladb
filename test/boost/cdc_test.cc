@@ -35,8 +35,11 @@
 
 using namespace std::string_literals;
 
+static logging::logger tlog("cdc_test");
+
 namespace cdc {
 api::timestamp_type find_timestamp(const schema&, const mutation&);
+utils::UUID generate_timeuuid(api::timestamp_type);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
@@ -114,6 +117,25 @@ SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
         check_stmt("DELETE vfut FROM t WHERE pk = 0 AND ck = 0");
         check_stmt("DELETE vstatic FROM t WHERE pk = 0");
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_generate_timeuuid) {
+    auto seed = std::random_device{}();
+    tlog.info("test_generate_timeuuid seed: {}", seed);
+
+    std::mt19937 rnd_engine(seed);
+    std::uniform_int_distribution<api::timestamp_type> dist(1505959942168984, 1649959942168984);
+
+    for (int i = 0; i < 1000; ++i) {
+        auto t1 = dist(rnd_engine);
+        auto t2 = dist(rnd_engine);
+        auto tuuid1 = cdc::generate_timeuuid(t1);
+        auto tuuid2 = cdc::generate_timeuuid(t2);
+
+        auto cmp = timeuuid_type->compare(timeuuid_type->decompose(tuuid1), timeuuid_type->decompose(tuuid2));
+        BOOST_REQUIRE((t1 == t2) || (t1 < t2 && cmp < 0) || (t1 > t2 && cmp > 0));
+        BOOST_REQUIRE(utils::UUID_gen::micros_timestamp(tuuid1) == t1 && utils::UUID_gen::micros_timestamp(tuuid2) == t2);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
