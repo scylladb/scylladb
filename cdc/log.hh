@@ -19,6 +19,12 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * This module manages CDC log tables. It contains facilities used to:
+ * - perform schema changes to CDC log tables correspondingly when base tables are changed,
+ * - perform writes to CDC log tables correspondingly when writes to base tables are made.
+ */
+
 #pragma once
 
 #include <functional>

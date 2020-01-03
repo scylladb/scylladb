@@ -26,7 +26,7 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/thread.hh>
 
-#include "cdc/cdc.hh"
+#include "cdc/log.hh"
 #include "cdc/generation.hh"
 #include "bytes.hh"
 #include "database.hh"

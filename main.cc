@@ -74,7 +74,7 @@
 
 #include "alternator/server.hh"
 #include "redis/service.hh"
-#include "cdc/cdc.hh"
+#include "cdc/log.hh"
 #include "alternator/tags_extension.hh"
 
 namespace fs = std::filesystem;

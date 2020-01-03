@@ -60,7 +60,7 @@
 #include "mutation_query.hh"
 #include "system_keyspace.hh"
 #include "cql3/cql3_type.hh"
-#include "cdc/cdc.hh"
+#include "cdc/log.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/util.hh"
 

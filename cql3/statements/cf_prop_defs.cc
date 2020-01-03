@@ -41,7 +41,7 @@
 
 #include "cql3/statements/cf_prop_defs.hh"
 #include "db/extensions.hh"
-#include "cdc/cdc.hh"
+#include "cdc/log.hh"
 #include "service/storage_service.hh"
 
 #include <boost/algorithm/string/predicate.hpp>

@@ -87,7 +87,7 @@
 #include "multishard_mutation_query.hh"
 #include "database.hh"
 #include "db/consistency_level_validations.hh"
-#include "cdc/cdc.hh"
+#include "cdc/log.hh"
 
 namespace bi = boost::intrusive;
 
