@@ -447,10 +447,8 @@ public:
             bm.start(std::ref(qp), bmcfg).get();
             auto stop_bm = defer([&bm] { bm.stop().get(); });
 
-            // FIXME: discarded future.
-            (void)view_update_generator->start(std::ref(*db), std::ref(proxy));
-            // FIXME: discarded future.
-            (void)view_update_generator->invoke_on_all(&db::view::view_update_generator::start);
+            view_update_generator->start(std::ref(*db), std::ref(proxy)).get();
+            view_update_generator->invoke_on_all(&db::view::view_update_generator::start).get();
             auto stop_view_update_generator = defer([view_update_generator] {
                 view_update_generator->stop().get();
             });
