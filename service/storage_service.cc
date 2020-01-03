@@ -587,6 +587,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     // gossip snitch infos (local DC and rack)
     gossip_snitch_info().get();
 
+    // gossip local partitioner information (shard count and ignore_msb_bits)
+    gossip_sharding_info().get();
+
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
 #if 0
     if (!MessagingService.instance().isListening())
@@ -818,7 +821,8 @@ void storage_service::join_token_ring(int delay) {
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
 
             _cdc_streams_ts = cdc::make_new_cdc_generation(
-                    _bootstrap_tokens, _token_metadata, _sys_dist_ks.local(), get_ring_delay(), _for_testing);
+                    _bootstrap_tokens, _token_metadata, _gossiper,
+                    _sys_dist_ks.local(), get_ring_delay(), _for_testing);
         }
     }
 
@@ -1041,7 +1045,8 @@ void storage_service::bootstrap() {
             assert(!_cdc_streams_ts);
 
             _cdc_streams_ts = cdc::make_new_cdc_generation(
-                    _bootstrap_tokens, _token_metadata, _sys_dist_ks.local(), get_ring_delay(), _for_testing);
+                    _bootstrap_tokens, _token_metadata, _gossiper,
+                    _sys_dist_ks.local(), get_ring_delay(), _for_testing);
         } else {
             // We should not be able to join the cluster if other nodes support CDC but we don't.
             // The check should have been made somewhere in prepare_to_join (`check_knows_remote_features`).
@@ -1875,6 +1880,11 @@ future<> storage_service::gossip_snitch_info() {
     return _gossiper.add_local_application_state({
         { gms::application_state::DC, value_factory.datacenter(dc) },
         { gms::application_state::RACK, value_factory.rack(rack) },
+    });
+}
+
+future<> storage_service::gossip_sharding_info() {
+    return _gossiper.add_local_application_state({
         { gms::application_state::SHARD_COUNT, value_factory.shard_count(smp::count) },
         { gms::application_state::IGNORE_MSB_BITS, value_factory.ignore_msb_bits(dht::global_partitioner().sharding_ignore_msb()) },
     });

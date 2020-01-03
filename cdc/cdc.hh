@@ -41,7 +41,6 @@ using schema_ptr = seastar::lw_shared_ptr<const schema>;
 
 namespace locator {
 
-class snitch_ptr;
 class token_metadata;
 
 } // namespace locator
@@ -103,7 +102,6 @@ struct db_context final {
     service::migration_notifier& _migration_notifier;
     locator::token_metadata& _token_metadata;
     cdc::metadata& _cdc_metadata;
-    locator::snitch_ptr& _snitch;
     dht::i_partitioner& _partitioner;
 
     class builder final {
@@ -111,14 +109,12 @@ struct db_context final {
         std::optional<std::reference_wrapper<service::migration_notifier>> _migration_notifier;
         std::optional<std::reference_wrapper<locator::token_metadata>> _token_metadata;
         std::optional<std::reference_wrapper<cdc::metadata>> _cdc_metadata;
-        std::optional<std::reference_wrapper<locator::snitch_ptr>> _snitch;
         std::optional<std::reference_wrapper<dht::i_partitioner>> _partitioner;
     public:
         builder(service::storage_proxy& proxy);
 
         builder& with_migration_notifier(service::migration_notifier& migration_notifier);
         builder& with_token_metadata(locator::token_metadata& token_metadata);
-        builder& with_snitch(locator::snitch_ptr& snitch);
         builder& with_partitioner(dht::i_partitioner& partitioner);
         builder& with_cdc_metadata(cdc::metadata&);
 

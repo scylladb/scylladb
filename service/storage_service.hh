@@ -222,6 +222,7 @@ public:
     }
 
     future<> gossip_snitch_info();
+    future<> gossip_sharding_info();
 
     distributed<database>& db() {
         return _db;

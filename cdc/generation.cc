@@ -30,7 +30,6 @@
 #include "db/system_distributed_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "locator/token_metadata.hh"
-#include "locator/snitch_base.hh"
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
@@ -38,6 +37,16 @@
 #include "cdc/generation.hh"
 
 extern logging::logger cdc_log;
+
+static int get_shard_count(const gms::inet_address& endpoint, const gms::gossiper& g) {
+    auto ep_state = g.get_application_state_ptr(endpoint, gms::application_state::SHARD_COUNT);
+    return ep_state ? std::stoi(ep_state->value) : -1;
+}
+
+static unsigned get_sharding_ignore_msb(const gms::inet_address& endpoint, const gms::gossiper& g) {
+    auto ep_state = g.get_application_state_ptr(endpoint, gms::application_state::IGNORE_MSB_BITS);
+    return ep_state ? std::stoi(ep_state->value) : 0;
+}
 
 namespace cdc {
 
@@ -112,7 +121,7 @@ topology_description generate_topology_description(
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata& token_metadata,
         const dht::i_partitioner& partitioner,
-        locator::snitch_ptr& snitch) {
+        const gms::gossiper& gossiper) {
     if (bootstrap_tokens.empty()) {
         throw std::runtime_error(
                 "cdc: bootstrap tokens is empty in generate_topology_description");
@@ -138,9 +147,9 @@ topology_description generate_topology_description(
             if (!endpoint) {
                 throw std::runtime_error(format("Can't find endpoint for token {}", entry.token_range_end));
             }
-            auto sc = snitch->get_shard_count(*endpoint);
+            auto sc = get_shard_count(*endpoint, gossiper);
             entry.streams.resize(sc > 0 ? sc : 1);
-            entry.sharding_ignore_msb = snitch->get_ignore_msb_bits(*endpoint);
+            entry.sharding_ignore_msb = get_sharding_ignore_msb(*endpoint, gossiper);
         }
 
         spots_to_fill += entry.streams.size();
@@ -285,13 +294,14 @@ future<db_clock::time_point> get_local_streams_timestamp() {
 db_clock::time_point make_new_cdc_generation(
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata& tm,
+        const gms::gossiper& g,
         db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
         bool for_testing) {
     assert(!bootstrap_tokens.empty());
 
     auto gen = generate_topology_description(
-            bootstrap_tokens, tm, dht::global_partitioner(), locator::i_endpoint_snitch::get_local_snitch_ptr());
+            bootstrap_tokens, tm, dht::global_partitioner(), g);
 
     // Begin the race.
     auto ts = db_clock::now() + (

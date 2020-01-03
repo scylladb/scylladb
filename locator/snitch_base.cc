@@ -49,18 +49,6 @@ snitch_base::get_endpoint_info(inet_address endpoint,
     return ep_state ? std::optional(ep_state->value) : std::nullopt;
 }
 
-int snitch_base::get_shard_count(inet_address endpoint) {
-    auto val = get_endpoint_info(endpoint,
-                                 gms::application_state::SHARD_COUNT);
-    return val ? std::stoi(*val) : -1;
-}
-
-unsigned snitch_base::get_ignore_msb_bits(inet_address endpoint) {
-    auto val = get_endpoint_info(endpoint,
-                                 gms::application_state::IGNORE_MSB_BITS);
-    return val ? std::stoi(*val) : 0;
-}
-
 std::vector<inet_address> snitch_base::get_sorted_list_by_proximity(
     inet_address address,
     std::vector<inet_address>& unsorted_address) {

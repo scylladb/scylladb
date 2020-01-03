@@ -265,11 +265,6 @@ db_context::builder& db_context::builder::with_token_metadata(locator::token_met
     return *this;
 }
 
-db_context::builder& db_context::builder::with_snitch(locator::snitch_ptr& snitch) {
-    _snitch = snitch;
-    return *this;
-}
-
 db_context::builder& db_context::builder::with_partitioner(dht::i_partitioner& partitioner) {
     _partitioner = partitioner;
     return *this;
@@ -286,7 +281,6 @@ db_context db_context::builder::build() {
         _migration_notifier ? _migration_notifier->get() : service::get_local_storage_service().get_migration_notifier(),
         _token_metadata ? _token_metadata->get() : service::get_local_storage_service().get_token_metadata(),
         _cdc_metadata ? _cdc_metadata->get() : service::get_local_storage_service().get_cdc_metadata(),
-        _snitch ? _snitch->get() : locator::i_endpoint_snitch::get_local_snitch_ptr(),
         _partitioner ? _partitioner->get() : dht::global_partitioner()
     };
 }
