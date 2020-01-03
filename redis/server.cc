@@ -155,26 +155,25 @@ future<> redis_server::connection::process()
 {
     auto reader = [this] {
         return do_until([this] { return _read_buf.eof(); }, [this] {
-            return with_gate(_pending_requests_gate, [this] {
-                _parser.init();
-                return _read_buf.consume(_parser).then([this] {
-                    if (_parser.eof()) {
-                        return make_ready_future<>();
+            _pending_requests_gate.enter();
+            _parser.init();
+            return _read_buf.consume(_parser).then([this] {
+                if (_parser.eof()) {
+                    return make_ready_future<>();
+                }
+                ++_server._stats._requests_serving;
+                utils::latency_counter lc;
+                lc.start();
+                promise<redis_server::result> pr;
+                auto fut = pr.get_future();
+                (void)process_request_internal(std::move(_parser.get_request())).then_wrapped([this, pr = std::move(pr), lc = std::move(lc)] (auto&& fut) mutable {
+                    _server._stats._requests.mark(lc.stop().latency());
+                    if (lc.is_start()) {
+                        _server._stats._estimated_requests_latency.add(lc.latency(), _server._stats._requests.hist.count);
                     }
-                    ++_server._stats._requests_serving;
-                    utils::latency_counter lc;
-                    lc.start();
-                    promise<redis_server::result> pr;
-                    auto fut = pr.get_future();
-                    (void)process_request_internal(std::move(_parser.get_request())).then_wrapped([this, pr = std::move(pr), lc = std::move(lc)] (auto&& fut) mutable {
-                        _server._stats._requests.mark(lc.stop().latency());
-                        if (lc.is_start()) {
-                            _server._stats._estimated_requests_latency.add(lc.latency(), _server._stats._requests.hist.count);
-                        }
-                        fut.forward_to(std::move(pr)); 
-                    });
-                    return _queue.push_eventually(std::move(fut));
+                    fut.forward_to(std::move(pr)); 
                 });
+                return _queue.push_eventually(std::move(fut));
             });
         });
     };

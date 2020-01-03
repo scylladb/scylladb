@@ -21,6 +21,8 @@
 import pytest
 import redis
 import logging
+import socket
+import time 
 from util import random_string, connect
 
 logger = logging.getLogger('redis-test')
@@ -106,3 +108,33 @@ def test_select():
         raise Exception('Expect that `SELECT 16` does not work')
     except redis.exceptions.ResponseError as ex:
         assert str(ex) == 'invalid DB index'
+
+def test_pipeline():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect(("127.0.0.1", 6379))
+    s.send('*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n'.encode())
+    assert s.recv(1024).decode() == '+PONG\r\n+PONG\r\n+PONG\r\n+PONG\r\n'
+    s.close()
+
+def test_pipeline_vs_normal():
+    r = connect()
+    time_pipeline_start = time.time()
+    with r.pipeline(transaction=False) as p:
+        p.set(random_string(10), random_string(100))
+        p.set(random_string(10), random_string(100))
+        p.set(random_string(10), random_string(100))
+        p.set(random_string(10), random_string(100))
+        p.set(random_string(10), random_string(100))
+        p.set(random_string(10), random_string(100))
+        p.execute()
+    time_pipeline = time.time() - time_pipeline_start 
+    time_normal_start = time.time()
+    r.set(random_string(10), random_string(100))
+    r.set(random_string(10), random_string(100))
+    r.set(random_string(10), random_string(100))
+    r.set(random_string(10), random_string(100))
+    r.set(random_string(10), random_string(100))
+    r.set(random_string(10), random_string(100))
+    time_normal = time.time() - time_normal_start
+
+    assert time_pipeline < time_normal
