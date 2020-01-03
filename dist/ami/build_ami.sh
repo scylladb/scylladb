@@ -87,68 +87,32 @@ if [ $LOCALRPM -eq 1 ]; then
         fi
     done
     if [ -n "$rpm_missing" ]; then
-        reloc/build_reloc.sh
-        reloc/build_rpm.sh --dist --target centos7
+        echo "copy $PRODUCT rpm to following place and run build_ami.sh again:"
         for i in ${rpm_names[@]}; do
-            cp $rpms_path/$i-$version_string.*.x86_64.rpm dist/ami/files/$i.x86_64.rpm
+            echo "  dist/ami/files/$i.x86_64.rpm"
         done
-    fi
-    branch_arg=${BRANCH:-$(git rev-parse --abbrev-ref HEAD || echo -n)}
-    if [ -n "$branch_arg" ]; then
-        if [[ "$b" == '(HEAD detached at'* ]]; then
-            branch_arg=$(echo "$branch_arg" | sed -e 's/^(HEAD detached at.*\///' -e 's/)$//')
-        fi
-        branch_arg="-b $branch_arg"
+        exit 1
     fi
     if [ ! -f dist/ami/files/$PRODUCT-jmx.noarch.rpm ]; then
-        cd build
-        if [ ! -f $PRODUCT-jmx/reloc/build_reloc.sh ]; then
-            # directory exists but file is missing, so need to try clone again
-            rm -rf $PRODUCT-jmx
-            git clone $branch_arg --depth 1 git@github.com:scylladb/$PRODUCT-jmx.git
-        else
-            git pull
-        fi
-        cd $PRODUCT-jmx
-        reloc/build_reloc.sh
-        reloc/build_rpm.sh
-        cd ../..
-        cp build/$PRODUCT-jmx/build/redhat/RPMS/noarch/$PRODUCT-jmx-`cat build/$PRODUCT-jmx/build/SCYLLA-VERSION-FILE`-`cat build/$PRODUCT-jmx/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/$PRODUCT-jmx.noarch.rpm
+        echo "copy $PRODUCT-jmx rpm to following place and run build_ami.sh again:"
+        echo "  dist/ami/files/$PRODUCT-jmx.noarch.rpm"
+        exit 1
     fi
     if [ ! -f dist/ami/files/$PRODUCT-tools.noarch.rpm ] || [ ! -f dist/ami/files/$PRODUCT-tools-core.noarch.rpm ]; then
-        cd build
-        if [ ! -f $PRODUCT-tools-java/reloc/build_reloc.sh ]; then
-            # directory exists but file is missing, so need to try clone again
-            rm -rf $PRODUCT-tools-java
-            git clone $branch_arg --depth 1 git@github.com:scylladb/$PRODUCT-tools-java.git
-        else
-            git pull
-        fi
-        cd $PRODUCT-tools-java
-        reloc/build_reloc.sh
-        reloc/build_rpm.sh
-        cd ../..
-        cp build/$PRODUCT-tools-java/build/redhat/RPMS/noarch/$PRODUCT-tools-`cat build/$PRODUCT-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/$PRODUCT-tools-java/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/$PRODUCT-tools.noarch.rpm
-        cp build/$PRODUCT-tools-java/build/redhat/RPMS/noarch/$PRODUCT-tools-core-`cat build/$PRODUCT-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/$PRODUCT-tools-java/build/SCYLLA-RELEASE-FILE`.noarch.rpm dist/ami/files/$PRODUCT-tools-core.noarch.rpm
+        echo "copy $PRODUCT-tools rpm to following place and run build_ami.sh again:"
+        echo "  dist/ami/files/$PRODUCT-tools.noarch.rpm"
+        echo "  dist/ami/files/$PRODUCT-tools-core.noarch.rpm"
+        exit 1
     fi
     if [ ! -f dist/ami/files/$PRODUCT-ami.noarch.rpm ]; then
-        cd build
-        if [ ! -f $PRODUCT-ami/dist/redhat/build_rpm.sh ]; then
-            # directory exists but file is missing, so need to try clone again
-            rm -rf $PRODUCT-ami
-            git clone $branch_arg --depth 1 git@github.com:scylladb/$PRODUCT-ami.git
-        else
-            git pull
-        fi
-        cd $PRODUCT-ami
-        dist/redhat/build_rpm.sh --target centos7
-        cd ../..
-        cp build/$PRODUCT-ami/build/RPMS/noarch/$PRODUCT-ami-`cat build/$PRODUCT-ami/build/SCYLLA-VERSION-FILE`-`cat build/$PRODUCT-ami/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/$PRODUCT-ami.noarch.rpm
+        echo "copy $PRODUCT-ami rpm to following place and run build_ami.sh again:"
+        echo "  dist/ami/files/$PRODUCT-ami.noarch.rpm"
+        exit 1
     fi
     if [ ! -f dist/ami/files/$PRODUCT-python3.x86_64.rpm ]; then
-        reloc/python3/build_reloc.sh
-        reloc/python3/build_rpm.sh
-        cp build/redhat/RPMS/x86_64/$PRODUCT-python3*.x86_64.rpm dist/ami/files/$PRODUCT-python3.x86_64.rpm
+        echo "copy $PRODUCT-python3 rpm to following place and run build_ami.sh again:"
+        echo "  dist/ami/files/$PRODUCT-python3.x86_64.rpm"
+        exit 1
     fi
 
     SCYLLA_VERSION=$(rpm -q --qf %{VERSION}-%{RELEASE} dist/ami/files/$PRODUCT.x86_64.rpm || true)
