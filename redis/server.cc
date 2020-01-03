@@ -138,6 +138,7 @@ redis_server::connection::connection(redis_server& server, socket_address server
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
     , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)
+    , _queue(max_requests_in_pipeline)
 {
     ++_server._stats._total_connections;
     ++_server._stats._current_connections;
@@ -152,26 +153,57 @@ redis_server::connection::~connection() {
 
 future<> redis_server::connection::process()
 {
-    return do_until([this] {
-        return _read_buf.eof();
-    }, [this] {
-        return with_gate(_pending_requests_gate, [this] {
-            return process_request().then_wrapped([this] (auto f) {
-                try {
-                    f.get();
-                }
-                catch (redis_exception& e) {
-                    write_reply(e);
-                }
-                catch (std::exception& e) {
-                    write_reply(redis_exception { e.what() });
-                }
-                catch (...) {
-                    write_reply(redis_exception { "Unknown exception" });
-                }
+    auto reader = [this] {
+        return do_until([this] { return _read_buf.eof(); }, [this] {
+            return with_gate(_pending_requests_gate, [this] {
+                _parser.init();
+                return _read_buf.consume(_parser).then([this] {
+                    if (_parser.eof()) {
+                        return make_ready_future<>();
+                    }
+                    ++_server._stats._requests_serving;
+                    utils::latency_counter lc;
+                    lc.start();
+                    promise<redis_server::result> pr;
+                    auto fut = pr.get_future();
+                    (void)process_request_internal(std::move(_parser.get_request())).then_wrapped([this, pr = std::move(pr), lc = std::move(lc)] (auto&& fut) mutable {
+                        _server._stats._requests.mark(lc.stop().latency());
+                        if (lc.is_start()) {
+                            _server._stats._estimated_requests_latency.add(lc.latency(), _server._stats._requests.hist.count);
+                        }
+                        fut.forward_to(std::move(pr)); 
+                    });
+                    return _queue.push_eventually(std::move(fut));
+                });
             });
         });
-    }).finally([this] {
+    };
+    auto writer = [this] {
+        return do_until([this] { return _read_buf.eof() && _queue.empty(); }, [this] {
+            return _queue.pop_eventually().then([this] (auto&& w) {
+                return w.then_wrapped([this] (auto&& f) mutable {
+                    try {
+                        auto result = f.get0();
+                        write_reply(std::move(result));
+                    }
+                    catch (redis_exception& e) {
+                        write_reply(e);
+                    }
+                    catch (std::exception& e) {
+                        write_reply(redis_exception { e.what() });
+                    }
+                    catch (...) {
+                        write_reply(redis_exception { "Unknown exception" });
+                    }
+                    --_server._stats._requests_serving;
+                    ++_server._stats._requests_served;
+                    _pending_requests_gate.leave();
+                    return make_ready_future<>();
+                });
+            });
+        });
+    };
+    return when_all(std::move(reader), std::move(writer)).discard_result().finally([this] {
         return _pending_requests_gate.close().then([this] {
             return _ready_to_respond.finally([this] {
                 return _write_buf.close();
@@ -192,8 +224,8 @@ future<> redis_server::connection::shutdown()
 
 thread_local redis_server::connection::execution_stage_type redis_server::connection::_process_request_stage {"redis_transport", &connection::process_request_one};
 
-future<redis_server::result> redis_server::connection::process_request_internal() {
-    return _process_request_stage(this, std::move(_parser.get_request()), seastar::ref(_options), empty_service_permit());
+future<redis_server::result> redis_server::connection::process_request_internal(redis::request&& req) {
+    return _process_request_stage(this, std::move(req), seastar::ref(_options), empty_service_permit());
 }
 
 void redis_server::connection::write_reply(const redis_exception& e)
@@ -214,32 +246,6 @@ void redis_server::connection::write_reply(redis_server::result result)
         auto m = result.make_message();
         return _write_buf.write(std::move(*m)).then([this] {
             return _write_buf.flush();
-        });
-    });
-}
-future<> redis_server::connection::process_request() {
-    _parser.init();
-    return _read_buf.consume(_parser).then([this] {
-        if (_parser.eof()) {
-            return make_ready_future<>();
-        }
-        ++_server._stats._requests_serving;
-        _pending_requests_gate.enter();
-        utils::latency_counter lc;
-        lc.start();
-        auto leave = defer([this] { _pending_requests_gate.leave(); });
-        return process_request_internal().then([this, leave = std::move(leave), lc = std::move(lc)] (auto&& result) mutable {
-            --_server._stats._requests_serving;
-            try {
-                write_reply(std::move(result));
-                ++_server._stats._requests_served;
-                _server._stats._requests.mark(lc.stop().latency());
-                if (lc.is_start()) {
-                    _server._stats._estimated_requests_latency.add(lc.latency(), _server._stats._requests.hist.count);
-                }
-            } catch (...) {
-                logging.error("request processing failed: {}", std::current_exception());
-            }
         });
     });
 }

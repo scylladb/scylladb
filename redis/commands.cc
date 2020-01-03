@@ -98,7 +98,7 @@ future<redis_message> select::execute(service::storage_proxy&, redis::redis_opti
     if (_index < 0 || static_cast<size_t>(_index) >= options.get_total_redis_db_count()) {
         throw invalid_db_index_exception();
     }
-    options.set_keyspace_name(sprint("REDIS_%zu", static_cast<size_t>(_index)));
+    options.set_db_index(static_cast<unsigned>(_index));
     return redis_message::ok();
 }
 

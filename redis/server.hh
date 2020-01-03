@@ -34,13 +34,14 @@
 #include <seastar/core/semaphore.hh>
 #include "seastar/core/distributed.hh"
 #include "seastar/core/reactor.hh"
+#include "seastar/core/queue.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/estimated_histogram.hh"
 #include "redis/protocol_parser.hh"
 #include "redis/request.hh"
 #include "redis/reply.hh"
 #include "redis/options.hh"
-#include  "service/client_state.hh"
+#include "service/client_state.hh"
 #include "redis/stats.hh"
 
 db::consistency_level make_consistency_level(const sstring&);
@@ -90,7 +91,7 @@ private:
     class fmt_visitor;
     friend class connection;
     class connection : public boost::intrusive::list_base_hook<> {
-       // using result = redis_server::result;
+        static constexpr unsigned max_requests_in_pipeline = 256;
         redis_server& _server;
         socket_address _server_addr;
         connected_socket _fd;
@@ -98,16 +99,16 @@ private:
         output_stream<char> _write_buf;
         redis_protocol_parser _parser;
         seastar::gate _pending_requests_gate;
-        //service::client_state _client_state;
         redis::redis_options _options;
         future<> _ready_to_respond = make_ready_future<>();
         unsigned _request_cpu = 0;
+        seastar::queue<future<result>> _queue;
     private:
         enum class tracing_request_type : uint8_t {
             not_requested,
             no_write_on_close,
             write_on_close
-        };  
+        };
 
         using execution_stage_type = inheriting_concrete_execution_stage<
                 future<redis_server::result>,
@@ -129,7 +130,7 @@ private:
         const ::timeout_config& timeout_config() { return _server.timeout_config(); }
         friend class process_request_executor;
         future<result> process_request_one(redis::request&& request, redis::redis_options&, service_permit permit);
-        future<result> process_request_internal();
+        future<result> process_request_internal(redis::request&& request);
     };
 
 private:

@@ -824,6 +824,7 @@ redis = [
         'redis/abstract_command.cc',
         'redis/command_factory.cc',
         'redis/commands.cc',
+        'redis/locks_context.cc',
         ]
 
 idls = ['idl/gossip_digest.idl.hh',

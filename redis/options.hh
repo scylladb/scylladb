@@ -45,6 +45,7 @@ class redis_options {
     const timeout_config& _timeout_config;
     service::client_state _client_state;
     size_t _total_redis_db_count;
+	unsigned _db_index;
 public:
     //redis_options(redis_options&&) = default;
     
@@ -56,27 +57,23 @@ public:
         auth::service& auth,
         const socket_address addr,
         size_t total_redis_db_count)
-        :_ks_name("REDIS_0")
-        ,_read_consistency(rcl)
-        ,_write_consistency(wcl)
-        ,_timeout_config(tc)
-        ,_client_state(service::client_state::external_tag{}, auth, addr)
-        ,_total_redis_db_count(total_redis_db_count)
-    {
-    }
-    explicit redis_options(const sstring& ks_name,
+		: redis_options(0, rcl, wcl, tc, auth, addr, total_redis_db_count)
+	{
+	}
+    explicit redis_options(const unsigned db_index,
         const db::consistency_level rcl,
         const db::consistency_level wcl,
         const timeout_config& tc,
         auth::service& auth,
         const socket_address addr,
         size_t total_redis_db_count)
-        :_ks_name(ks_name)
+        :_ks_name(sprint("REDIS_%d", db_index))
         ,_read_consistency(rcl)
         ,_write_consistency(wcl)
         ,_timeout_config(tc)
         ,_client_state(service::client_state::external_tag{}, auth, addr)
         ,_total_redis_db_count(total_redis_db_count)
+		,_db_index(db_index)
     {
     }
 
@@ -89,8 +86,12 @@ public:
     const sstring& get_keyspace_name() const { return _ks_name; }
     service::client_state& get_client_state() { return _client_state; }
 
-    void set_keyspace_name(const sstring ks_name) { _ks_name = ks_name; }
+	void set_db_index(const unsigned db_index) {
+		_ks_name = sprint("REDIS_%d", db_index);
+		_db_index = db_index;
+	}
     size_t get_total_redis_db_count() const { return _total_redis_db_count; }
+	unsigned db_index() const { return _db_index; }
 };
 
 schema_ptr get_schema(service::storage_proxy& proxy, const sstring& ks_name, const sstring& cf_name);

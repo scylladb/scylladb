@@ -26,6 +26,7 @@
 #include "database.hh"
 #include <seastar/core/print.hh>
 #include "redis/keyspace_utils.hh"
+#include "redis/locks_context.hh"
 #include "redis/options.hh"
 #include "mutation.hh"
 #include "service_permit.hh"
@@ -63,11 +64,13 @@ mutation make_mutation(service::storage_proxy& proxy, const redis_options& optio
 
 future<> write_strings(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, bytes&& data, long ttl, service_permit permit) {
     db::timeout_clock::time_point timeout = db::timeout_clock::now() + options.get_write_timeout();
-    auto m = make_mutation(proxy, options, std::move(key), std::move(data), ttl);
-    auto write_consistency_level = options.get_write_consistency_level();
-    return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit);
+    return redis::with_strings_locked_key(redis::get_locks_context(options.db_index()), key, timeout, 
+        [timeout, &proxy, &options, key = std::move(key), data = std::move(data), ttl, permit] () mutable {
+        auto m = make_mutation(proxy, options, std::move(key), std::move(data), ttl);
+        auto write_consistency_level = options.get_write_consistency_level();
+        return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit);
+    });
 }
-
 
 mutation make_tombstone(service::storage_proxy& proxy, const redis_options& options, const sstring& cf_name, const bytes& key) {
     auto schema = get_schema(proxy, options.get_keyspace_name(), cf_name);
@@ -80,14 +83,30 @@ mutation make_tombstone(service::storage_proxy& proxy, const redis_options& opti
 future<> delete_objects(service::storage_proxy& proxy, redis::redis_options& options, std::vector<bytes>&& keys, service_permit permit) {
     db::timeout_clock::time_point timeout = db::timeout_clock::now() + options.get_write_timeout();
     auto write_consistency_level = options.get_write_consistency_level();
-    std::vector<sstring> tables { redis::STRINGs, redis::LISTs, redis::HASHes, redis::SETs, redis::ZSETs }; 
-    auto remove = [&proxy, timeout, write_consistency_level, permit, &options, keys = std::move(keys)] (const sstring& cf_name) {
-        return parallel_for_each(keys.begin(), keys.end(), [&proxy, timeout, write_consistency_level, &options, permit, cf_name] (const bytes& key) {
-            auto m = make_tombstone(proxy, options, cf_name, key);
-            return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit);
+    struct context {
+        const sstring table;
+        locks_map& locks;
+        context(const sstring table, locks_map& locks_ref) : table(table), locks(locks_ref) {}
+    };
+    auto& locks_context = get_locks_context(options.db_index());
+    std::vector<context> contexts {
+        {redis::STRINGs, locks_context._strings_locks },
+        {redis::LISTs, locks_context._lists_locks },
+        {redis::HASHes, locks_context._hashes_locks },
+        {redis::SETs, locks_context._sets_locks },
+        {redis::ZSETs, locks_context._zsets_locks }
+    }; 
+    auto remove = [&proxy, timeout, write_consistency_level, permit, &options, keys = std::move(keys)] (context& ctx) mutable {
+        return parallel_for_each(keys.begin(), keys.end(), [&proxy, timeout, write_consistency_level, &options, permit, &ctx] (const bytes& key) mutable {
+            return redis::with_locked_key(ctx.locks, key, timeout, [&proxy, timeout, write_consistency_level, &options, key, permit, &ctx] () mutable {
+                auto m = make_tombstone(proxy, options, ctx.table, key);
+                return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit);
+            });
         });
-    };  
-    return parallel_for_each(tables.begin(), tables.end(), remove);
+    };
+    return do_with(std::move(contexts), [remove = std::move(remove)] (auto& contexts) mutable {
+        return parallel_for_each(contexts.begin(), contexts.end(), std::move(remove));
+    });
 }
 
 }
