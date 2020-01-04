@@ -362,11 +362,21 @@ SEASTAR_TEST_CASE(test_user_function_double_return) {
 
 SEASTAR_TEST_CASE(test_user_function_tinyint_return) {
     return with_udf_enabled([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
-        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS tinyint LANGUAGE Lua AS 'return val';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val1 int, val2 int, val3 int, val4 varint);").get();
+        e.execute_cql("INSERT INTO my_table (key, val1, val2, val3, val4) VALUES ('foo', 3, -1, 128, 9223372036854775808);").get();
+        e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS tinyint LANGUAGE Lua AS 'return val';").get();
+
+        auto res = e.execute_cql("SELECT my_func(val1) FROM my_table;").get0();
         assert_that(res).is_rows().with_rows({{serialized(int8_t(3))}});
+
+        res = e.execute_cql("SELECT my_func(val2) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(int8_t(-1))}});
+
+        res = e.execute_cql("SELECT my_func(val3) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(int8_t(-128))}});
+
+        res = e.execute_cql("SELECT my_func(val4) FROM my_table;").get0();
+        assert_that(res).is_rows().with_rows({{serialized(int8_t(0))}});
     });
 }
 

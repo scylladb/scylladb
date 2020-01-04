@@ -827,7 +827,7 @@ struct from_lua_visitor {
     }
 
     int64_t get_integer() {
-        return uint64_t(get_varint(l, -1));
+        return from_varint_to_integer(get_varint(l, -1));
     }
 
     data_value operator()(const timestamp_date_base_class& t) {

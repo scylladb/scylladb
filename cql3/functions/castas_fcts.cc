@@ -100,22 +100,11 @@ static boost::multiprecision::cpp_int from_decimal_to_cppint(const data_value& f
     return val_from.unscaled_value() / boost::multiprecision::pow(ten, val_from.scale());
 }
 
-template <typename ToType>
-static ToType from_varint_to_integer(const boost::multiprecision::cpp_int& varint) {
-    // The behavior CQL expects on overflow is for values to wrap
-    // around. For cpp_int conversion functions, the behavior is to
-    // return the largest or smallest number that the target type can
-    // represent. To implement one with the other, we first mask the
-    // low 64 bits, convert to a uint64_t, and then let c++ convert,
-    // with possible overflow, to ToType.
-    return static_cast<uint64_t>(~static_cast<uint64_t>(0) & varint);
-}
-
 template<typename ToType>
 std::function<data_value(data_value)> make_castas_fctn_from_varint_to_integer() {
     return [](data_value from) -> data_value {
         const auto& varint = value_cast<boost::multiprecision::cpp_int>(from);
-        return from_varint_to_integer<ToType>(varint);
+        return static_cast<ToType>(from_varint_to_integer(varint));
     };
 }
 
@@ -123,7 +112,7 @@ template<typename ToType>
 std::function<data_value(data_value)> make_castas_fctn_from_decimal_to_integer() {
     return [](data_value from) -> data_value {
         auto varint = from_decimal_to_cppint(from);
-        return from_varint_to_integer<ToType>(varint);
+        return static_cast<ToType>(from_varint_to_integer(varint));
     };
 }
 

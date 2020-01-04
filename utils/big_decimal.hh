@@ -26,6 +26,8 @@
 
 #include "bytes.hh"
 
+uint64_t from_varint_to_integer(const boost::multiprecision::cpp_int& varint);
+
 class big_decimal {
 private:
     int32_t _scale;
