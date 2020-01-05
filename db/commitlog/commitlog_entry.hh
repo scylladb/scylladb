@@ -38,17 +38,21 @@ public:
 };
 
 class commitlog_entry_writer {
+public:
+    using force_sync = bool_class<class force_sync_tag>;
+private:
     schema_ptr _schema;
     const frozen_mutation& _mutation;
     bool _with_schema = true;
     size_t _size = std::numeric_limits<size_t>::max();
+    force_sync _sync;
 private:
     template<typename Output>
     void serialize(Output&) const;
     void compute_size();
 public:
-    commitlog_entry_writer(schema_ptr s, const frozen_mutation& fm)
-        : _schema(std::move(s)), _mutation(fm)
+    commitlog_entry_writer(schema_ptr s, const frozen_mutation& fm, force_sync sync)
+        : _schema(std::move(s)), _mutation(fm), _sync(sync)
     {}
 
     void set_with_schema(bool value) {
@@ -70,7 +74,9 @@ public:
     size_t mutation_size() const {
         return _mutation.representation().size();
     }
-
+    force_sync sync() const {
+        return _sync;
+    }
     void write(typename seastar::memory_output_stream<std::vector<temporary_buffer<char>>::iterator>& out) const;
 };
 

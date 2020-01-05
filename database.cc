@@ -1459,7 +1459,7 @@ static future<> maybe_handle_reorder(std::exception_ptr exp) {
 future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout) {
     if (cf.commitlog() != nullptr) {
         return do_with(freeze(m), [this, &m, &cf, timeout] (frozen_mutation& fm) {
-            commitlog_entry_writer cew(m.schema(), fm);
+            commitlog_entry_writer cew(m.schema(), fm, db::commitlog::force_sync::no);
             return cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
         }).then([this, &m, &cf, timeout] (db::rp_handle h) {
             return apply_in_memory(m, cf, std::move(h), timeout).handle_exception(maybe_handle_reorder);
@@ -1471,7 +1471,7 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
 future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
     auto cl = cf.commitlog();
     if (cl != nullptr) {
-        commitlog_entry_writer cew(s, m);
+        commitlog_entry_writer cew(s, m, db::commitlog::force_sync::no);
         return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout, cl](db::rp_handle h) {
             return this->apply_in_memory(m, s, std::move(h), timeout).handle_exception(maybe_handle_reorder);
         });
