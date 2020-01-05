@@ -109,7 +109,10 @@ std::optional<std::map<sstring, sstring>> schema_mutations::cdc_options() const 
     if (_scylla_tables) {
         auto rs = query::result_set(*_scylla_tables);
         if (!rs.empty()) {
-            return db::schema_tables::get_map<sstring, sstring>(rs.row(0), "cdc");
+            auto map = db::schema_tables::get_map<sstring, sstring>(rs.row(0), "cdc");
+            if (map && !map->empty()) {
+                return map;
+            }
         }
     }
     return { };
