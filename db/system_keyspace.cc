@@ -104,10 +104,10 @@ api::timestamp_type schema_creation_timestamp() {
 // FIXME: Make automatic by calculating from schema structure.
 static const uint16_t version_sequence_number = 1;
 
-table_schema_version generate_schema_version(utils::UUID table_id) {
+table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset) {
     md5_hasher h;
     feed_hash(h, table_id);
-    feed_hash(h, version_sequence_number);
+    feed_hash(h, version_sequence_number + offset);
     return utils::UUID_gen::get_name_UUID(h.finalize());
 }
 

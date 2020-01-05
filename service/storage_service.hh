@@ -2341,8 +2341,8 @@ public:
         return bool(_mc_sstable_feature);
     }
 
-    bool cluster_supports_cdc() const {
-        return bool(_cdc_feature);
+    const gms::feature& cluster_supports_cdc() const {
+        return _cdc_feature;
     }
 
     bool cluster_supports_row_level_repair() const {

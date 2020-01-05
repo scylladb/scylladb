@@ -74,7 +74,7 @@ public:
     options() = default;
     options(const std::map<sstring, sstring>& map) {
         if (map.find("enabled") == std::end(map)) {
-            throw exceptions::configuration_exception("Missing enabled CDC option");
+            return;
         }
 
         for (auto& p : map) {
@@ -92,6 +92,9 @@ public:
         }
     }
     std::map<sstring, sstring> to_map() const {
+        if (!_enabled) {
+            return {};
+        }
         return {
             { "enabled", _enabled ? "true" : "false" },
             { "preimage", _preimage ? "true" : "false" },

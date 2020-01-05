@@ -152,7 +152,7 @@ schema_ptr aggregates();
 
 }
 
-table_schema_version generate_schema_version(utils::UUID table_id);
+table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
 // Only for testing.
 void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
