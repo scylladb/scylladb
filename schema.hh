@@ -626,6 +626,9 @@ private:
         std::unordered_map<sstring, dropped_column> _dropped_columns;
         std::map<bytes, data_type> _collections;
         std::unordered_map<sstring, index_metadata> _indices_by_name;
+        // The flag is not stored in the schema mutation and does not affects schema digest.
+        // It is set locally on a system tables that should be extra durable
+        bool _wait_for_sync = false; // true if all writes using this schema have to be synced immediately by commitlog
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -920,6 +923,9 @@ public:
     // recent as this version.
     bool is_synced() const;
     bool equal_columns(const schema&) const;
+    bool wait_for_sync_to_commitlog() const {
+        return _raw._wait_for_sync;
+    }
 public:
     const v3_columns& v3() const {
         return _v3_columns;

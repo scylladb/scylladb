@@ -1491,6 +1491,8 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_
                                  s->ks_name(), s->cf_name(), s->version()));
     }
 
+    sync = sync || db::commitlog::force_sync(s->wait_for_sync_to_commitlog());
+
     // Signal to view building code that a write is in progress,
     // so it knows when new writes start being sent to a new view.
     auto op = cf.write_in_progress();
