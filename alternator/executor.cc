@@ -238,7 +238,21 @@ static std::string get_string_attribute(const rjson::value& value, rjson::string
                 attribute_name, value));
     }
     return attribute_value->GetString();
+}
 
+// Convenience function for getting the value of a boolean attribute, or a
+// default value if it is missing. If the attribute exists, but is not a
+// bool, a descriptive api_error is thrown.
+static bool get_bool_attribute(const rjson::value& value, rjson::string_ref_type attribute_name, bool default_return) {
+    const rjson::value* attribute_value = rjson::find(value, attribute_name);
+    if (!attribute_value) {
+        return default_return;
+    }
+    if (!attribute_value->IsBool()) {
+        throw api_error("ValidationException", format("Expected boolean value for attribute {}, got: {}",
+                attribute_name, value));
+    }
+    return attribute_value->GetBool();
 }
 
 // Convenience function for getting the value of an integer attribute, or
@@ -2087,6 +2101,11 @@ future<json::json_return_type> executor::query(client_state& client_state, std::
     }
     if (rjson::find(request_info, "FilterExpression")) {
         throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
+    }
+    bool forward = get_bool_attribute(request_info, "ScanIndexForward", true);
+    if (!forward) {
+        // FIXME: need to support the !forward (i.e., reverse sort order) case. See issue #5153.
+        throw api_error("ValidationException", "ScanIndexForward=false is not yet implemented in alternator");
     }
 
     //FIXME(sarna): KeyConditions are deprecated in favor of KeyConditionExpression
