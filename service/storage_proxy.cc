@@ -1587,7 +1587,7 @@ storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout)
     auto shard = _db.local().shard_of(m);
     _stats.replica_cross_shard_ops += shard != engine().cpu_id();
     return _db.invoke_on(shard, _write_smp_service_group, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
-        return db.apply(s, m, timeout);
+        return db.apply(s, m, db::commitlog::force_sync::no, timeout);
     });
 }
 
@@ -1596,7 +1596,7 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, clo
     auto shard = _db.local().shard_of(m);
     _stats.replica_cross_shard_ops += shard != engine().cpu_id();
     return _db.invoke_on(shard, _write_smp_service_group, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
-        return db.apply(gs, m, timeout);
+        return db.apply(gs, m, db::commitlog::force_sync::no, timeout);
     });
 }
 
