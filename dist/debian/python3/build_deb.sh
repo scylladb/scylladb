@@ -128,7 +128,7 @@ cp -al dist/debian/python3/debian debian
 if [ "$PRODUCT" != "scylla" ]; then
     # rename all 'scylla-' prefixed artifacts in the debian folder to have the 
     # product name as a prefix
-    find debian -maxdepth 1 -name "scylla-*" -exec bash -c 'mv $1 ${1/scylla-/$PRODUCT-}' _ {} \;
+    find debian -maxdepth 1 -name "scylla-*" -exec bash -c 'mv $1 ${1/scylla-/$2-}' _ {} "$PRODUCT" \;
 fi
 REVISION="1"
 MUSTACHE_DIST="\"debian\": true, \"product\": \"$PRODUCT\", \"$PRODUCT\": true"
