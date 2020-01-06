@@ -54,6 +54,7 @@
 #include <seastar/core/file.hh>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <sys/prctl.h>
 #include "tracing/tracing.hh"
 #include "tracing/tracing_backend_registry.hh"
 #include <seastar/core/prometheus.hh>
@@ -406,6 +407,15 @@ inline auto defer_verbose_shutdown(const char* what, Func&& func) {
 }
 
 int main(int ac, char** av) {
+    // Allow core dumps. The would be disabled by default if
+    // CAP_SYS_NICE was added to the binary, as is suggested by the
+    // epoll backend.
+    int r = prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+    if (r) {
+        std::cerr << "Could not make scylla dumpable\n";
+        exit(1);
+    }
+
   try {
     // early check to avoid triggering
     if (!cpu_sanity()) {
