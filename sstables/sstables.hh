@@ -557,6 +557,8 @@ private:
 
     template <component_type Type, typename T>
     void write_simple(const T& comp, const io_priority_class& pc);
+    void do_write_simple(component_type type, const io_priority_class& pc,
+            noncopyable_function<void (version_types version, file_writer& writer)> write_component);
 
     void write_crc(const checksum& c);
     void write_digest(uint32_t full_checksum);

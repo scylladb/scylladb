@@ -1061,11 +1061,11 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
     });
 }
 
-template <component_type Type, typename T>
-void sstable::write_simple(const T& component, const io_priority_class& pc) {
-    auto file_path = filename(Type);
-    sstlog.debug(("Writing " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
-    file f = new_sstable_component_file(_write_error_handler, Type, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+void sstable::do_write_simple(component_type type, const io_priority_class& pc,
+        noncopyable_function<void (version_types version, file_writer& writer)> write_component) {
+    auto file_path = filename(type);
+    sstlog.debug(("Writing " + sstable_version_constants::get_component_map(_version).at(type) + " file {} ").c_str(), file_path);
+    file f = new_sstable_component_file(_write_error_handler, type, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1073,7 +1073,7 @@ void sstable::write_simple(const T& component, const io_priority_class& pc) {
     auto w = file_writer(std::move(f), std::move(options));
     std::exception_ptr eptr;
     try {
-        write(_version, w, component);
+        write_component(_version, w);
         w.flush();
     } catch (...) {
         eptr = std::current_exception();
@@ -1093,8 +1093,17 @@ void sstable::write_simple(const T& component, const io_priority_class& pc) {
     }
 }
 
+template <component_type Type, typename T>
+void sstable::write_simple(const T& component, const io_priority_class& pc) {
+    do_write_simple(Type, pc, [&component] (version_types v, file_writer& w) {
+        write(v, w, component);
+    });
+}
+
 template future<> sstable::read_simple<component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
 template void sstable::write_simple<component_type::Filter>(const sstables::filter& f, const io_priority_class& pc);
+
+template void sstable::write_simple<component_type::Summary>(const sstables::summary_ka&, const io_priority_class&);
 
 future<> sstable::read_compression(const io_priority_class& pc) {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
