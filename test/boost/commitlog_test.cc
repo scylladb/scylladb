@@ -102,6 +102,37 @@ SEASTAR_TEST_CASE(test_commitlog_written_to_disk_batch){
         });
 }
 
+// check that an entry marked as sync is immediately flushed to a storage
+SEASTAR_TEST_CASE(test_commitlog_written_to_disk_sync){
+    commitlog::config cfg;
+    return cl_test(cfg, [](commitlog& log) {
+            sstring tmp = "hej bubba cow";
+            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), db::commitlog::force_sync::yes, [tmp](db::commitlog::output& dst) {
+                        dst.write(tmp.data(), tmp.size());
+                    }).then([&log](replay_position rp) {
+                        BOOST_CHECK_NE(rp, db::replay_position());
+                        auto n = log.get_flush_count();
+                        BOOST_REQUIRE(n > 0);
+                    });
+        });
+}
+
+// check that an entry marked as sync is immediately flushed to a storage
+SEASTAR_TEST_CASE(test_commitlog_written_to_disk_no_sync){
+    commitlog::config cfg;
+    cfg.commitlog_sync_period_in_ms = 10000000000;
+    return cl_test(cfg, [](commitlog& log) {
+            sstring tmp = "hej bubba cow";
+            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
+                        dst.write(tmp.data(), tmp.size());
+                    }).then([&log](replay_position rp) {
+                        BOOST_CHECK_NE(rp, db::replay_position());
+                        auto n = log.get_flush_count();
+                        BOOST_REQUIRE(n == 0);
+                    });
+        });
+}
+
 SEASTAR_TEST_CASE(test_commitlog_written_to_disk_periodic){
     return cl_test([](commitlog& log) {
             auto state = make_lw_shared(false);
