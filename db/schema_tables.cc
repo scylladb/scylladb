@@ -920,7 +920,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
 
        if (do_flush) {
            proxy.local().get_db().invoke_on_all([s, cfs = std::move(column_families)] (database& db) {
-               return parallel_for_each(cfs.begin(), cfs.end(), [&db] (auto& id) {
+               return parallel_for_each(cfs.begin(), cfs.end(), [&db] (const utils::UUID& id) {
                    auto& cf = db.find_column_family(id);
                    return cf.flush();
                });
@@ -950,7 +950,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
 
        proxy.local().get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
            // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-           return do_for_each(keyspaces_to_drop, [&db] (auto keyspace_to_drop) {
+           return do_for_each(keyspaces_to_drop, [&db] (sstring keyspace_to_drop) {
                db.drop_keyspace(keyspace_to_drop);
                return service::get_local_migration_manager().notify_drop_keyspace(keyspace_to_drop);
             });
