@@ -31,5 +31,5 @@ def test_health_only_works_for_root_path(dynamodb):
     url = dynamodb.meta.client._endpoint.host
     for suffix in ['/abc', '/-', '/index.htm', '/health']:
         print(url + suffix)
-        response = requests.get(url + suffix)
+        response = requests.get(url + suffix, verify=False)
         assert response.status_code in range(400, 405)

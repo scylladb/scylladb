@@ -55,7 +55,7 @@ def test_expired_signature(dynamodb, test_table):
                'X-Amz-Target': 'DynamoDB_20120810.DescribeEndpoints',
                'Authorization': 'AWS4-HMAC-SHA256 Credential=alternator/2/3/4/aws4_request SignedHeaders=x-amz-date;host Signature=123'
     }
-    response = requests.post(url, headers=headers)
+    response = requests.post(url, headers=headers, verify=False)
     assert not response.ok
     assert "InvalidSignatureException" in response.text and "Signature expired" in response.text
 
@@ -69,6 +69,6 @@ def test_signature_too_futuristic(dynamodb, test_table):
                'X-Amz-Target': 'DynamoDB_20120810.DescribeEndpoints',
                'Authorization': 'AWS4-HMAC-SHA256 Credential=alternator/2/3/4/aws4_request SignedHeaders=x-amz-date;host Signature=123'
     }
-    response = requests.post(url, headers=headers)
+    response = requests.post(url, headers=headers, verify=False)
     assert not response.ok
     assert "InvalidSignatureException" in response.text and "Signature not yet current" in response.text
