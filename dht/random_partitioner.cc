@@ -92,18 +92,18 @@ static float ratio_helper(boost::multiprecision::uint128_t a, boost::multiprecis
     return static_cast<float>(val.convert_to<double>() * 0x1p-127);
 }
 
-token random_partitioner::get_token(bytes data) {
+token random_partitioner::get_token(bytes data) const {
     md5_hasher h;
     h.update(reinterpret_cast<const char*>(data.c_str()), data.size());
     return bytes_to_token(h.finalize());
 }
 
-token random_partitioner::get_token(const schema& s, partition_key_view key) {
+token random_partitioner::get_token(const schema& s, partition_key_view key) const {
     auto&& legacy = key.legacy_form(s);
     return get_token(bytes(legacy.begin(), legacy.end()));
 }
 
-token random_partitioner::get_token(const sstables::key_view& key) {
+token random_partitioner::get_token(const sstables::key_view& key) const {
     auto v = bytes_view(key);
     if (v.empty()) {
         return minimum_token();

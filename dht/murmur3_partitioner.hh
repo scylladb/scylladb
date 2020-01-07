@@ -38,8 +38,8 @@ public:
             , _sharding_ignore_msb_bits(shard_count > 1 ? sharding_ignore_msb_bits : 0) {
     }
     virtual const sstring name() const { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
-    virtual token get_token(const schema& s, partition_key_view key) override;
-    virtual token get_token(const sstables::key_view& key) override;
+    virtual token get_token(const schema& s, partition_key_view key) const override;
+    virtual token get_token(const sstables::key_view& key) const override;
     virtual token get_random_token() override;
     virtual bool preserves_order() override { return false; }
     virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens) override;
@@ -56,7 +56,7 @@ public:
 private:
     using uint128_t = unsigned __int128;
     static int64_t normalize(int64_t in);
-    token get_token(bytes_view key);
+    token get_token(bytes_view key) const;
     token get_token(uint64_t value) const;
     token bias(uint64_t value) const;      // translate from a zero-baed range
     uint64_t unbias(const token& t) const; // translate to a zero-baed range

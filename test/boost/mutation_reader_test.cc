@@ -1967,8 +1967,8 @@ public:
     }
 
     virtual dht::token midpoint(const dht::token& left, const dht::token& right) const override { return _partitioner.midpoint(left, right); }
-    virtual dht::token get_token(const schema& s, partition_key_view key) override { return _partitioner.get_token(s, key); }
-    virtual dht::token get_token(const sstables::key_view& key) override { return _partitioner.get_token(key); }
+    virtual dht::token get_token(const schema& s, partition_key_view key) const override { return _partitioner.get_token(s, key); }
+    virtual dht::token get_token(const sstables::key_view& key) const override { return _partitioner.get_token(key); }
     virtual sstring to_sstring(const dht::token& t) const override { return _partitioner.to_sstring(t); }
     virtual dht::token from_sstring(const sstring& t) const override { return _partitioner.from_sstring(t); }
     virtual dht::token from_bytes(bytes_view bytes) const override { return _partitioner.from_bytes(bytes); }

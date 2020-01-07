@@ -67,7 +67,7 @@ murmur3_partitioner::normalize(int64_t in) {
 }
 
 token
-murmur3_partitioner::get_token(bytes_view key) {
+murmur3_partitioner::get_token(bytes_view key) const {
     if (key.empty()) {
         return minimum_token();
     }
@@ -88,12 +88,12 @@ murmur3_partitioner::get_token(uint64_t value) const {
 }
 
 token
-murmur3_partitioner::get_token(const sstables::key_view& key) {
+murmur3_partitioner::get_token(const sstables::key_view& key) const {
     return get_token(bytes_view(key));
 }
 
 token
-murmur3_partitioner::get_token(const schema& s, partition_key_view key) {
+murmur3_partitioner::get_token(const schema& s, partition_key_view key) const {
     std::array<uint64_t, 2> hash;
     auto&& legacy = key.legacy_form(s);
     utils::murmur_hash::hash3_x64_128(legacy.begin(), legacy.size(), 0, hash);

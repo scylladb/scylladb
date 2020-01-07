@@ -278,8 +278,8 @@ public:
      * (This is NOT a method to create a token from its string representation;
      * for that, use tokenFactory.fromString.)
      */
-    virtual token get_token(const schema& s, partition_key_view key) = 0;
-    virtual token get_token(const sstables::key_view& key) = 0;
+    virtual token get_token(const schema& s, partition_key_view key) const = 0;
+    virtual token get_token(const sstables::key_view& key) const = 0;
 
 
     /**

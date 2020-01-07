@@ -32,8 +32,8 @@ class random_partitioner final : public i_partitioner {
 public:
     random_partitioner(unsigned shard_count = smp::count, unsigned ignore_msb = 0) : i_partitioner(shard_count) {}
     virtual const sstring name() const { return "org.apache.cassandra.dht.RandomPartitioner"; }
-    virtual token get_token(const schema& s, partition_key_view key) override;
-    virtual token get_token(const sstables::key_view& key) override;
+    virtual token get_token(const schema& s, partition_key_view key) const override;
+    virtual token get_token(const sstables::key_view& key) const override;
     virtual token get_random_token() override;
     virtual bool preserves_order() override { return false; }
     virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens) override;
@@ -47,7 +47,7 @@ public:
     virtual unsigned shard_of(const token& t) const override;
     virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans) const override;
 private:
-    token get_token(bytes data);
+    token get_token(bytes data) const;
 };
 
 }
