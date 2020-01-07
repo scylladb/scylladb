@@ -41,6 +41,9 @@ if __name__ == "__main__":
         if args.ami:
             idata = aws_instance()
 
+            if not idata.is_supported_instance_class():
+                logging.error('{} is not supported instance type, run "scylla_io_setup" again without --ami option.'.format(idata.instance()))
+                sys.exit(1)
             disk_properties = {}
             disk_properties["mountpoint"] = datadir()
             nr_disks = len(idata.ephemeral_disks())
