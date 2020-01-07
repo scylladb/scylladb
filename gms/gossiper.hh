@@ -413,11 +413,11 @@ public:
     // removes ALL endpoint states; should only be called after shadow gossip
     future<> reset_endpoint_state_map();
 
-    std::unordered_map<inet_address, endpoint_state>& get_endpoint_states();
+    const std::unordered_map<inet_address, endpoint_state>& get_endpoint_states() const;
 
-    bool uses_host_id(inet_address endpoint);
+    bool uses_host_id(inet_address endpoint) const;
 
-    utils::UUID get_host_id(inet_address endpoint);
+    utils::UUID get_host_id(inet_address endpoint) const;
 
     std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, int version);
 

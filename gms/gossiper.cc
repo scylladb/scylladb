@@ -1297,11 +1297,11 @@ future<> gossiper::reset_endpoint_state_map() {
     });
 }
 
-std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() {
+const std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() const {
     return endpoint_state_map;
 }
 
-bool gossiper::uses_host_id(inet_address endpoint) {
+bool gossiper::uses_host_id(inet_address endpoint) const {
     return netw::get_local_messaging_service().knows_version(endpoint) ||
             get_application_state_ptr(endpoint, application_state::NET_VERSION);
 }
@@ -1325,7 +1325,7 @@ bool gossiper::is_cql_ready(const inet_address& endpoint) const {
     return ready;
 }
 
-utils::UUID gossiper::get_host_id(inet_address endpoint) {
+utils::UUID gossiper::get_host_id(inet_address endpoint) const {
     if (!uses_host_id(endpoint)) {
         throw std::runtime_error(format("Host {} does not use new-style tokens!", endpoint));
     }
