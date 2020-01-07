@@ -127,7 +127,6 @@ ar.add('install.sh')
 # not distributed in the .rpm and .deb packages, scylla_post_install is, so we'll add it in the package
 # together with the other scripts that will end up in /usr/lib/scylla
 ar.add('scylla_post_install.sh', arcname="dist/common/scripts/scylla_post_install.sh")
-ar.add('scripts/relocate_python_scripts.py', arcname='relocate_python_scripts.py')
 ar.add('README.md')
 ar.add('NOTICE.txt')
 ar.add('ORIGIN')
