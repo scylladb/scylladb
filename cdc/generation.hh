@@ -34,9 +34,24 @@
 #pragma once
 
 #include <vector>
+#include <unordered_set>
 
 #include "database_fwd.hh"
+#include "db_clock.hh"
 #include "dht/i_partitioner.hh"
+
+namespace db {
+    class system_distributed_keyspace;
+} // namespace db
+
+namespace gms {
+    class inet_address;
+    class gossiper;
+} // namespace gms
+
+namespace locator {
+    class token_metadata;
+} // namespace locator
 
 namespace cdc {
 
@@ -91,5 +106,42 @@ public:
 
     const std::vector<token_range_description>& entries() const;
 };
+
+/* Should be called when we're restarting and we noticed that we didn't save any streams timestamp in our local tables,
+ * which means that we're probably upgrading from a non-CDC/old CDC version (another reason could be
+ * that there's a bug, or the user messed with our local tables).
+ *
+ * It checks whether we should be the node to propose the first generation of CDC streams.
+ * The chosen condition is arbitrary, it only tries to make sure that no two nodes propose a generation of streams
+ * when upgrading, and nothing bad happens if they for some reason do (it's mostly an optimization).
+ */
+bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper&);
+
+/*
+ * Read this node's streams generation timestamp stored in the LOCAL table.
+ * Assumes that the node has successfully bootstrapped, and we're not upgrading from a non-CDC version,
+ * so the timestamp is present.
+ */
+future<db_clock::time_point> get_local_streams_timestamp();
+
+/* Generate a new set of CDC streams and insert it into the distributed cdc_topology_description table.
+ * Returns the timestamp of this new generation.
+ *
+ * Should be called when starting the node for the first time (i.e., joining the ring).
+ *
+ * Assumes that the system_distributed keyspace is initialized.
+ *
+ * The caller of this function is expected to insert this timestamp into the gossiper as fast as possible,
+ * so that other nodes learn about the generation before their clocks cross the timestmap
+ * (not guaranteed in the current implementation, but expected to be the common case;
+ *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
+ */
+db_clock::time_point make_new_cdc_generation(
+        const std::unordered_set<dht::token>& bootstrap_tokens,
+        const locator::token_metadata& tm,
+        const gms::gossiper& g,
+        db::system_distributed_keyspace& sys_dist_ks,
+        std::chrono::milliseconds ring_delay,
+        bool for_testing);
 
 } // namespace cdc

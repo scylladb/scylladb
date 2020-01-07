@@ -25,15 +25,22 @@
 
 #include "keys.hh"
 #include "schema_builder.hh"
+#include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "locator/token_metadata.hh"
 #include "locator/snitch_base.hh"
+#include "gms/inet_address.hh"
+#include "gms/gossiper.hh"
 
 #include "cdc/generation.hh"
 
 extern logging::logger cdc_log;
 
 namespace cdc {
+
+extern const api::timestamp_clock::duration generation_leeway =
+    std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::seconds(5));
 
 stream_id::stream_id()
     : _first(-1), _second(-1) {}
@@ -250,6 +257,47 @@ topology_description generate_topology_description(
     }
 
     return {std::move(entries)};
+}
+
+bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper& g) {
+    auto my_host_id = g.get_host_id(me);
+    auto& eps = g.get_endpoint_states();
+    return std::none_of(eps.begin(), eps.end(),
+            [&] (const std::pair<gms::inet_address, gms::endpoint_state>& ep) {
+        return my_host_id < g.get_host_id(ep.first);
+    });
+}
+
+future<db_clock::time_point> get_local_streams_timestamp() {
+    return db::system_keyspace::get_saved_cdc_streams_timestamp().then([] (std::optional<db_clock::time_point> ts) {
+        if (!ts) {
+            auto err = format("get_local_streams_timestamp: tried to retrieve streams timestamp after bootstrapping, but it's not present");
+            cdc_log.error("{}", err);
+            throw std::runtime_error(err);
+        }
+        return *ts;
+    });
+}
+
+// Run inside seastar::async context.
+db_clock::time_point make_new_cdc_generation(
+        const std::unordered_set<dht::token>& bootstrap_tokens,
+        const locator::token_metadata& tm,
+        db::system_distributed_keyspace& sys_dist_ks,
+        std::chrono::milliseconds ring_delay,
+        bool for_testing) {
+    assert(!bootstrap_tokens.empty());
+
+    auto gen = generate_topology_description(
+            bootstrap_tokens, tm, dht::global_partitioner(), locator::i_endpoint_snitch::get_local_snitch_ptr());
+
+    // Begin the race.
+    auto ts = db_clock::now() + (
+            for_testing ? std::chrono::milliseconds(0) : (
+                2 * ring_delay + std::chrono::duration_cast<std::chrono::milliseconds>(generation_leeway)));
+    sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tm.count_normal_token_owners() }).get();
+
+    return ts;
 }
 
 } // namespace cdc
