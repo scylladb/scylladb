@@ -103,6 +103,39 @@ EOF
     chmod +x "$root/$prefix/bin/$bin"
 }
 
+relocate_python3() {
+    local script="$2"
+    local scriptname="$(basename "$script")"
+    local installdir="$1"
+    local install="$installdir/$scriptname"
+    local relocateddir="$installdir/libexec"
+    local pythoncmd=$(realpath -ms --relative-to "$installdir" "$rpython3")
+    local pythonpath="$(dirname "$pythoncmd")"
+
+    if [ ! -x "$script" ]; then
+        cp "$script" "$install"
+        return
+    fi
+    mkdir -p "$relocateddir"
+    cp "$script" "$relocateddir"
+    cat > "$install"<<EOF
+#!/usr/bin/env bash
+x="\$(readlink -f "\$0")"
+b="\$(basename "\$x")"
+d="\$(dirname "\$x")"
+CENTOS_SSL_CERT_FILE="/etc/pki/tls/cert.pem"
+if [ -f "\${CENTOS_SSL_CERT_FILE}" ]; then
+  c=\${CENTOS_SSL_CERT_FILE}
+fi
+DEBIAN_SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
+if [ -f "\${DEBIAN_SSL_CERT_FILE}" ]; then
+  c=\${DEBIAN_SSL_CERT_FILE}
+fi
+PYTHONPATH="\${d}:\${d}/libexec:\$PYTHONPATH" PATH="\${d}/$pythonpath:\${PATH}" SSL_CERT_FILE="\${c}" exec -a "\$0" "\${d}/libexec/\${b}" "\$@"
+EOF
+    chmod +x "$install"
+}
+
 if [ -z "$prefix" ]; then
     if $nonroot; then
         prefix=~/scylladb
@@ -274,16 +307,12 @@ install -m755 scylla-gdb.py -Dt "$rprefix"/scripts/
 
 PYSCRIPTS=$(find dist/common/scripts/ -maxdepth 1 -type f -exec grep -Pls '\A#!/usr/bin/env python3' {} +)
 for i in $PYSCRIPTS; do
-    ./relocate_python_scripts.py \
-            --installroot $rprefix/scripts/ --with-python3 "$rpython3" $i
+    relocate_python3 "$rprefix"/scripts "$i"
 done
-./relocate_python_scripts.py \
-            --installroot $rprefix/scripts/ --with-python3 "$rpython3" \
-            seastar/scripts/perftune.py seastar/scripts/seastar-addr2line seastar/scripts/perftune.py
-
-./relocate_python_scripts.py \
-            --installroot $rprefix/scyllatop/ --with-python3 "$rpython3" \
-            tools/scyllatop/scyllatop.py
+for i in seastar/scripts/perftune.py seastar/scripts/seastar-addr2line; do
+    relocate_python3 "$rprefix"/scripts "$i"
+done
+relocate_python3 "$rprefix"/scyllatop tools/scyllatop/scyllatop.py
 
 if $nonroot; then
     sed -i -e "s#/var/lib/scylla#$rprefix#g" $rsysconfdir/scylla-server
