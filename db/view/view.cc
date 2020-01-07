@@ -206,7 +206,8 @@ static bool is_partition_key_empty(
     default:
         // No multi-cell columns in the view's partition key
         auto& c = update.cells().cell_at(base_col->id);
-        return c.as_atomic_cell(*base_col).value().empty();
+        atomic_cell_view col_value = c.as_atomic_cell(*base_col);
+        return !col_value.is_live() || col_value.value().empty();
     }
 }
 
