@@ -575,7 +575,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
 
 // We don't want schema digest to change between Scylla versions because that results in a schema disagreement
 // during rolling upgrade.
-future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_dir, std::set<sstring> disabled_features, std::vector<utils::UUID> expected_digests) {
+future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_dir, std::set<sstring> disabled_features, std::vector<utils::UUID> expected_digests, std::function<void(cql_test_env& e)> extra_schema_changes) {
     using namespace db;
     using namespace db::schema_tables;
 
@@ -598,7 +598,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
     cql_test_config cfg_in(db_cfg_ptr);
     cfg_in.disabled_features = std::move(disabled_features);
 
-    return do_with_cql_env_thread([regenerate, expected_digests = std::move(expected_digests)](cql_test_env& e) {
+    return do_with_cql_env_thread([regenerate, expected_digests = std::move(expected_digests), extra_schema_changes = std::move(extra_schema_changes)] (cql_test_env& e) {
         if (regenerate) {
             // Exercise many different kinds of schema changes.
             e.execute_cql(
@@ -614,6 +614,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             e.execute_cql(
                 "create keyspace tests2 with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
             e.execute_cql("drop keyspace tests2;").get();
+            extra_schema_changes(e);
         }
 
         auto expect_digest = [&] (schema_features sf, utils::UUID expected) {
@@ -674,7 +675,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
         utils::UUID("1d91ad22-ea7c-3e7f-9557-87f0f3bb94d7"),
         utils::UUID("2dcd4a37-cbb5-399b-b3c9-8eb1398b096b")
     };
-    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS"}, std::move(expected_digests));
+    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
@@ -689,5 +690,5 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
         utils::UUID("d58e5214-516e-3d0b-95b5-01ab71584a8d"),
         utils::UUID("e1b50bed-2ab8-3759-92c7-1f4288046ae6")
     };
-    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test_computed_columns", std::set<sstring>{}, std::move(expected_digests));
+    return test_schema_digest_does_not_change_with_disabled_features("./tests/sstables/schema_digest_test_computed_columns", std::set<sstring>{}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
