@@ -354,6 +354,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                                 return p->fetch_page(builder, page_size, now, timeout);
                             }
                     ).then([this, &builder, restrictions_need_filtering] {
+                                return builder.with_thread_if_needed([&builder, restrictions_need_filtering, this] {
                                 auto rs = builder.build();
                                 if (restrictions_need_filtering) {
                                     _stats.filtered_rows_matched_total += rs->size();
@@ -361,6 +362,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                                 update_stats_rows_read(rs->size());
                                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
                                 return shared_ptr<cql_transport::messages::result_message>(std::move(msg));
+                                });
                             });
                 });
     }
