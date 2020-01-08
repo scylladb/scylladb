@@ -242,7 +242,7 @@ public:
                  uint32_t partition_limit = max_partitions,
                  utils::UUID query_uuid = utils::UUID(),
                  bool is_first_page = false,
-                 api::timestamp_type rt = api::missing_timestamp)
+                 api::timestamp_type rt = api::new_timestamp())
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
