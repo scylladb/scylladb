@@ -185,7 +185,7 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
         return do_with(std::move(decision), [tr_state = std::move(tr_state), schema = std::move(schema), timeout, t]
                                              (proposal& decision) {
             auto f = make_ready_future();
-            auto truncated_at = std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch()).count();
+            auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
             // When saving a decision, also delete the last accepted proposal. This is just an
             // optimization to save space.
             // Even though there is no guarantee we will see decisions in the right order,
