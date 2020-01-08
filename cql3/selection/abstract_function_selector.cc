@@ -46,6 +46,10 @@ namespace cql3 {
 
 namespace selection {
 
+bool abstract_function_selector::requires_thread() const {
+    return _requires_thread;
+}
+
 shared_ptr<selector::factory>
 abstract_function_selector::new_factory(shared_ptr<functions::function> fun, shared_ptr<selector_factories> factories) {
     if (fun->is_aggregate()) {
