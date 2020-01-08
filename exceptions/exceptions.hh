@@ -62,10 +62,10 @@ enum class exception_code : int32_t {
     IS_BOOTSTRAPPING= 0x1002,
     TRUNCATE_ERROR  = 0x1003,
     WRITE_TIMEOUT   = 0x1100,
-    WRITE_FAILURE   = 0x1500,
     READ_TIMEOUT    = 0x1200,
     READ_FAILURE    = 0x1300,
     FUNCTION_FAILURE= 0x1400,
+    WRITE_FAILURE   = 0x1500,
     CDC_WRITE_FAILURE = 0x1600,
 
     // 2xx: problem validating the request
