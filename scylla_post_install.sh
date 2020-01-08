@@ -58,7 +58,8 @@ EOS
     # For systems with not a lot of memory, override default reservations for the slices
     # seastar has a minimum reservation of 1.5GB that kicks in, and 21GB * 0.07 = 1.5GB.
     # So for anything smaller than that we will not use percentages in the helper slice
-    MEMTOTAL_BYTES=$(cat /proc/meminfo | grep MemTotal | awk '{print $2 * 1024}')
+    MEMTOTAL=$(cat /proc/meminfo |grep -e "^MemTotal:"|sed -s 's/^MemTotal:\s*\([0-9]*\) kB$/\1/')
+    MEMTOTAL_BYTES=$(($MEMTOTAL * 1024))
     if [ $MEMTOTAL_BYTES -lt 23008753371 ]; then
         mkdir -p /etc/systemd/system/scylla-helper.slice.d/
         cat << EOS > /etc/systemd/system/scylla-helper.slice.d/memory.conf
