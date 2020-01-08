@@ -360,7 +360,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                                 }
                                 update_stats_rows_read(rs->size());
                                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
-                                return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
+                                return shared_ptr<cql_transport::messages::result_message>(std::move(msg));
                             });
                 });
     }
