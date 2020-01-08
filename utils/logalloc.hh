@@ -555,6 +555,10 @@ public:
         return _total_space ? float(used_space()) / total_space() : 0;
     }
 
+    explicit operator bool() const {
+        return _total_space > 0;
+    }
+
     friend std::ostream& operator<<(std::ostream&, const occupancy_stats&);
 };
 
@@ -643,6 +647,10 @@ public:
 
     // Will cause subsequent calls to evictable_occupancy() to report empty occupancy.
     void ground_evictable_occupancy();
+
+    // Follows region's occupancy in the parent region group. Less fine-grained than occupancy().
+    // After ground_evictable_occupancy() is called returns 0.
+    occupancy_stats evictable_occupancy();
 
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.

@@ -1378,9 +1378,11 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // release the biggest amount of memory and is less likely to be generating tiny
                 // SSTables.
                 memtable& candidate_memtable = memtable::from_region(*(this->_virtual_region_group.get_largest_region()));
+                memtable_list& mtlist = *(candidate_memtable.get_memtable_list());
 
-                if (candidate_memtable.empty()) {
-                    // Soft pressure, but nothing to flush. It could be due to fsync or memtable_to_cache lagging.
+                if (!candidate_memtable.region().evictable_occupancy()) {
+                    // Soft pressure, but nothing to flush. It could be due to fsync, memtable_to_cache lagging,
+                    // or candidate_memtable failed to flush.
                     // Back off to avoid OOMing with flush continuations.
                     return sleep(1ms);
                 }
@@ -1388,7 +1390,7 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
-                (void)this->flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
+                (void)this->flush_one(mtlist, std::move(permit));
                 return make_ready_future<>();
             });
         });
