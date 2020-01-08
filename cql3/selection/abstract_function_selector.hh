@@ -42,6 +42,7 @@
 #include "selector.hh"
 #include "selector_factories.hh"
 #include "cql3/functions/function.hh"
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace cql3 {
 namespace selection {
@@ -56,13 +57,18 @@ protected:
      */
     std::vector<bytes_opt> _args;
     std::vector<shared_ptr<selector>> _arg_selectors;
+    const bool _requires_thread;
+
 public:
     static shared_ptr<factory> new_factory(shared_ptr<functions::function> fun, shared_ptr<selector_factories> factories);
 
     abstract_function_selector(shared_ptr<functions::function> fun, std::vector<shared_ptr<selector>> arg_selectors)
-            : _fun(std::move(fun)), _arg_selectors(std::move(arg_selectors)) {
+            : _fun(std::move(fun)), _arg_selectors(std::move(arg_selectors)),
+              _requires_thread(boost::algorithm::any_of(_arg_selectors, [] (auto& s) { return s->requires_thread(); })) {
         _args.resize(_arg_selectors.size());
     }
+
+    virtual bool requires_thread() const override;
 
     virtual data_type get_type() const override {
         return _fun->return_type();
