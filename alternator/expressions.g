@@ -145,6 +145,12 @@ REMOVE: R E M O V E;
 ADD: A D D;
 DELETE: D E L E T E;
 
+AND: A N D;
+OR: O R;
+NOT: N O T;
+BETWEEN: B E T W E E N;
+IN: I N;
+
 fragment ALPHA: 'A'..'Z' | 'a'..'z';
 fragment DIGIT: '0'..'9';
 fragment ALNUM: ALPHA | DIGIT | '_';
@@ -165,19 +171,19 @@ path returns [parsed::path p]:
       | '[' INTEGER ']'           { $p.add_index(std::stoi($INTEGER.text)); }
     )*;
 
-update_expression_set_value returns [parsed::value v]:
-      VALREF                             { $v.set_valref($VALREF.text); }
-    | path                               { $v.set_path($path.p); }
-    | NAME                               { $v.set_func_name($NAME.text); }
-     '(' x=update_expression_set_value   { $v.add_func_parameter($x.v); }
-     (',' x=update_expression_set_value  { $v.add_func_parameter($x.v); })*
+value returns [parsed::value v]:
+      VALREF       { $v.set_valref($VALREF.text); }
+    | path         { $v.set_path($path.p); }
+    | NAME         { $v.set_func_name($NAME.text); }
+     '(' x=value   { $v.add_func_parameter($x.v); }
+     (',' x=value  { $v.add_func_parameter($x.v); })*
      ')'
     ;
 
 update_expression_set_rhs returns [parsed::set_rhs rhs]:
-    v=update_expression_set_value  { $rhs.set_value(std::move($v.v)); }
-    (   '+' v=update_expression_set_value  { $rhs.set_plus(std::move($v.v)); }
-      | '-' v=update_expression_set_value  { $rhs.set_minus(std::move($v.v)); }
+    v=value  { $rhs.set_value(std::move($v.v)); }
+    (   '+' v=value  { $rhs.set_plus(std::move($v.v)); }
+      | '-' v=value  { $rhs.set_minus(std::move($v.v)); }
     )?
     ;
 
@@ -212,3 +218,48 @@ update_expression returns [parsed::update_expression e]:
 projection_expression returns [std::vector<parsed::path> v]:
     p=path      { $v.push_back(std::move($p.p)); }
     (',' p=path { $v.push_back(std::move($p.p)); } )* EOF;
+
+
+primitive_condition returns [parsed::primitive_condition c]:
+      v=value         { $c.add_value(std::move($v.v));
+                        $c.set_operator(parsed::primitive_condition::type::VALUE); }
+      (  (  '='       { $c.set_operator(parsed::primitive_condition::type::EQ); }
+          | '<' '>'   { $c.set_operator(parsed::primitive_condition::type::NE); }
+          | '<'       { $c.set_operator(parsed::primitive_condition::type::LT); }
+          | '<' '='   { $c.set_operator(parsed::primitive_condition::type::LE); }
+          | '>'       { $c.set_operator(parsed::primitive_condition::type::GT); }
+          | '>' '='   { $c.set_operator(parsed::primitive_condition::type::GE); }
+         )
+         v=value      { $c.add_value(std::move($v.v)); }
+       | BETWEEN      { $c.set_operator(parsed::primitive_condition::type::BETWEEN); }
+         v=value      { $c.add_value(std::move($v.v)); }
+         AND
+         v=value      { $c.add_value(std::move($v.v)); }
+       | IN '('       { $c.set_operator(parsed::primitive_condition::type::IN); }
+         v=value      { $c.add_value(std::move($v.v)); }
+         (',' v=value { $c.add_value(std::move($v.v)); })*
+         ')'
+      )?
+    ;
+
+// The following rules for parsing boolean expressions are verbose and
+// somewhat strange because of Antlr 3's limitations on recursive rules,
+// common rule prefixes, and (lack of) support for operator precedence.
+// These rules could have been written more clearly using a more powerful
+// parser generator - such as Yacc.
+boolean_expression returns [parsed::condition_expression e]:
+	  b=boolean_expression_1       { $e.append(std::move($b.e), '|'); }
+	  (OR b=boolean_expression_1   { $e.append(std::move($b.e), '|'); } )*
+	;
+boolean_expression_1 returns [parsed::condition_expression e]:
+	  b=boolean_expression_2       { $e.append(std::move($b.e), '&'); }
+	  (AND b=boolean_expression_2  { $e.append(std::move($b.e), '&'); } )*
+	;
+boolean_expression_2 returns [parsed::condition_expression e]:
+	  p=primitive_condition        { $e.set_primitive(std::move($p.c)); }
+	| NOT b=boolean_expression_2   { $e = std::move($b.e); $e.apply_not(); }
+	| '(' b=boolean_expression ')' { $e = std::move($b.e); }
+    ;
+
+condition_expression returns [parsed::condition_expression e]:
+    boolean_expression { e=std::move($boolean_expression.e); } EOF;

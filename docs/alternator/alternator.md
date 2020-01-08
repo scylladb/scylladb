@@ -76,14 +76,15 @@ progresses and compatibility continues to improve.
 ### Item Operations
 * GetItem: Support almost complete except that projection expressions can
   only ask for top-level attributes.
-* PutItem: Conditional updates using the "Expected" option are supported,
-  but the "ConditionExpression" syntax is not supported yet.
-  Return values (optional return of pre-put content) not yet supported..
-* UpdateItem: Like PutItem does not yet support ConditionExpression or
-  return values. Nested documents are supported but updates
-  to nested attributes are not (e.g., `SET a.b[3].c=val`).
-* DeleteItem: Mostly works, but again does not support ConditionExpression
-  or return values.
+* PutItem: Support almost complete except that condition expressions can
+  only refer to to-level attributes, and return values (optional return of
+  pre-put content) not yet supported.
+* UpdateItem: Like PutItem does not yet support return values. Nested
+  documents are supported but updates to nested attributes are not (e.g.,
+  `SET a.b[3].c=val`), and neither are nested attributes in condition
+  expressions.
+* DeleteItem: Mostly works, but again does not support nested attributes
+  in condition expressions, or return values.
 ### Batch Operations
 * BatchGetItem: Almost complete except that projection expressions can only
   ask for top-level attributes.

@@ -22,9 +22,18 @@
 # test_condition_expression.py. Many of the tests there are very similar to
 # the ones included here.
 
+# NOTE: In this file, we use the b'xyz' syntax to represent DynamoDB's binary
+# values. This syntax works as expected only in Python3. In Python2 it
+# appears to work, but the "b" is actually ignored and the result is a normal
+# string 'xyz'. That means that we end up testing the string type instead of
+# the binary type as intended. So this test can run on Python2 but doesn't
+# cover testing binary types. The test should be run in Python3 to ensure full
+# coverage.
+
 import pytest
 from botocore.exceptions import ClientError
 from util import random_string
+from sys import version_info
 
 # Most of the tests in this file check that the ConditionExpression
 # parameter works for the UpdateItem operation. It should also work the
@@ -61,7 +70,6 @@ def test_condition_expression_attribute_updates(test_table_s):
 # attribute from the request, and the case of comparing two different
 # attributes of the same item (the latter case wasn't possible to express
 # with Expected, and becomes possible with ConditionExpression).
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_eq_success(test_table_s):
     p = random_string()
     values = (1, "hello", True, b'xyz', None, ['hello', 42], {'hello': 'world'}, set(['hello', 'world']), set([1, 2, 3]), set([b'xyz', b'hi']))
@@ -85,7 +93,6 @@ def test_update_condition_eq_success(test_table_s):
 
 # Comparing values of *different* types should always fail. Check all the
 # combination of different types.
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_eq_different(test_table_s):
     p = random_string()
     values = (1, "hello", True, b'xyz', None, ['hello', 42], {'hello': 'world'}, set(['hello', 'world']), set([1, 2, 3]), set([b'xyz', b'hi']))
@@ -112,7 +119,6 @@ def test_update_condition_eq_different(test_table_s):
                         ExpressionAttributeValues={':val1': val1, ':val2': val2})
 
 # Also check an actual case of same time, but inequality.
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_eq_unequal(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -126,7 +132,6 @@ def test_update_condition_eq_unequal(test_table_s):
 # Check that set equality is checked correctly. Unlike string equality (for
 # example), it cannot be done with just naive string comparison of the JSON
 # representation, and we need to allow for any order. (see issue #5021)
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_eq_set(test_table_s):
     p = random_string()
     # Because boto3 sorts the set values we give it, in order to generate a
@@ -146,7 +151,6 @@ def test_update_condition_eq_set(test_table_s):
     assert 'b' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
 
 # Test for ConditionExpression with operator "<>" (non-equality),
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_ne(test_table_s):
     p = random_string()
     # We only check here one type of attributes (numbers), assuming that the
@@ -187,7 +191,6 @@ def test_update_condition_ne(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 3
 
 # Test for ConditionExpression with operator "<"
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_lt(test_table_s):
     p = random_string()
     # The < operator should work for string, number and binary types
@@ -260,7 +263,6 @@ def test_update_condition_lt(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
 
 # Test for ConditionExpression with operator "<="
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_le(test_table_s):
     p = random_string()
     # The <= operator should work for string, number and binary types
@@ -324,7 +326,6 @@ def test_update_condition_le(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 7
 
 # Test for ConditionExpression with operator ">"
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_gt(test_table_s):
     p = random_string()
     # The > operator should work for string, number and binary types
@@ -388,7 +389,6 @@ def test_update_condition_gt(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
 
 # Test for ConditionExpression with operator ">="
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_ge(test_table_s):
     p = random_string()
     # The >= operator should work for string, number and binary types
@@ -454,7 +454,6 @@ def test_update_condition_ge(test_table_s):
 # Test for ConditionExpression with ternary operator "BETWEEN" (checking
 # if a value is between two others, equality included). The keywords
 # "BETWEEN" and "AND" are case insensitive.
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_between(test_table_s):
     p = random_string()
     # The BETWEEN operator should work for string, number and binary types
@@ -536,7 +535,6 @@ def test_update_condition_between(test_table_s):
 # Test for ConditionExpression with multi-operand operator "IN", checking
 # whether a value is equal to one of possibly many values (up to 100 should
 # be supported, according to the DynamoDB documentation).
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_in(test_table_s):
     p = random_string()
     
@@ -583,6 +581,12 @@ def test_update_condition_in(test_table_s):
         ConditionExpression='a IN (:x, :y)',
         ExpressionAttributeValues={':val': 1, ':x': 'dog', ':y': 174})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 1
+    # IN with zero arguments results in a syntax error, not a failed condition
+    with pytest.raises(ClientError, match='ValidationException.*yntax error'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = :val37',
+            ConditionExpression='a IN ()',
+            ExpressionAttributeValues=values)
 
 # Beyond the above operators, there are also test functions supported -
 # attribute_exists, attribute_not_exists, attribute_type, begins_with,
@@ -590,7 +594,6 @@ def test_update_condition_in(test_table_s):
 # These functions are listed and described in
 # https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.OperatorsAndFunctions.html
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_attribute_exists(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -605,8 +608,34 @@ def test_update_condition_attribute_exists(test_table_s):
             UpdateExpression='SET c = :val',
                 ConditionExpression='attribute_exists (z)',
                 ExpressionAttributeValues={':val': 3})
+    # Somewhat artificially, attribute_exists() requires that its parameter
+    # be a path - it cannot be a different sort of value.
+    with pytest.raises(ClientError, match='ValidationException.*path'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = :val',
+                ConditionExpression='attribute_exists (:val)',
+                ExpressionAttributeValues={':val': 3})
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
+# Primitive conditions usually look like an operator between two (<, <=,
+# etc.), three (BETWEEN) or more (IN) values. Can just a single value be
+# a condition? The special case of a single function call *can* be - we saw
+# an example attribute_exists(z) in the previous test. However that only
+# function calls are supported in this context - not general values (i.e.,
+# attribute or value references).
+# While DynamoDB does not accept a non-function-call value as a condition
+# (it results with with a syntax error), in Alternator currently, for
+# simplicity of the parser, this case is parsed correctly and only fails
+# later when the calculated value ends up to not be a boolean.
+def test_update_condition_single_value_attribute(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = :val',
+                ConditionExpression='a',
+                ExpressionAttributeValues={':val': 1})
+
 def test_update_condition_attribute_not_exists(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -622,7 +651,6 @@ def test_update_condition_attribute_not_exists(test_table_s):
                 ConditionExpression='attribute_not_exists (a)',
                 ExpressionAttributeValues={':val': 3})
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_attribute_type(test_table_s):
     p = random_string()
     type_values = [
@@ -640,6 +668,10 @@ def test_update_condition_attribute_type(test_table_s):
     test_table_s.update_item(Key={'p': p}, AttributeUpdates=updates)
     for i in range(len(type_values)):
         expected_type = type_values[i][0]
+        # As explained in a comment in the top of the file, the binary types
+        # cannot be tested with Python 2
+        if expected_type in ('B', 'BS') and version_info[0] == 2:
+            continue
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET c = :val',
             ConditionExpression='attribute_type (a{}, :type)'.format(i),
@@ -651,25 +683,32 @@ def test_update_condition_attribute_type(test_table_s):
                 UpdateExpression='SET c = :val',
                 ConditionExpression='attribute_type (a{}, :type)'.format(i),
                 ExpressionAttributeValues={':val': i, ':type': wrong_type})
+    # The DynamoDB documentation suggests that attribute_type()'s first
+    # parameter must be a path (as we saw above, this is indeed the case for
+    # attribute_exists()). But in fact, attribute_type() does work fine also
+    # for an expression attribute.
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET c = :val',
+            ConditionExpression='attribute_type (:val, :type)',
+            ExpressionAttributeValues={':val': 0, ':type': 'N'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 0
 
 # The DynamoDB documentation explicitly states that the second argument
 # of the attribute_type function - the type to compare to - *must* be an
 # expression attribute (:name) - it cannot be an item attribute.
 # I don't know why this was important to forbid, but this test confirms that
 # DynamoDB does forbid it.
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_attribute_type_second_arg(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
                               'b': {'Value': 'N', 'Action': 'PUT'}})
-    with pytest.raises(ClientError, match='ValidationException.*Incorrect'):
+    with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET c = :val',
                 ConditionExpression='attribute_type (a, b)',
                 ExpressionAttributeValues={':val': 1})
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_begins_with(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -712,12 +751,11 @@ def test_update_condition_begins_with(test_table_s):
                 ConditionExpression='begins_with(c, a)',
                 ExpressionAttributeValues={':val': 3})
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_contains(test_table_s):
     p = random_string()
     # contains() can be used for two unrelated things: check substring (in
     # string or binary) and membership (in set or a list). The DynamoDB
-    # documentation only bention string and set (not binary or list) but
+    # documentation only mention string and set (not binary or list) but
     # the fact is that binary and list are also support.
     test_table_s.update_item(Key={'p': p},
         AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'},
@@ -752,11 +790,19 @@ def test_update_condition_contains(test_table_s):
             UpdateExpression='SET z = :val',
                 ConditionExpression='contains(d, :arg)',
                 ExpressionAttributeValues={':val': 4, ':arg': b'dog'})
-    # While both operands of contains may be item attributes, strangely
-    # it is explicitly forbidden to have the same attribute as both and
-    # trying to do so results in a ValidationException.
+
+
+# While both operands of contains() may be item attributes, strangely
+# it is explicitly forbidden to have the same attribute as both and
+# trying to do so results in a ValidationException. I don't know why it's
+# important to make this query fail, when it could have just worked...
+# TODO: Is this limitation only for contains() or other functions as well?
+@pytest.mark.xfail(reason="extra check for same attribute not implemented yet")
+def test_update_condition_contains_same_attribute(test_table_s):
+    p = random_string()
     test_table_s.update_item(Key={'p': p},
-        AttributeUpdates={'a1': {'Value': 'hello', 'Action': 'PUT'}})
+        AttributeUpdates={'a1': {'Value': 'hello', 'Action': 'PUT'},
+                          'a': {'Value': 'hello', 'Action': 'PUT'}})
     test_table_s.update_item(Key={'p': p},
         UpdateExpression='SET z = :val',
             ConditionExpression='contains(a, a1)',
@@ -774,7 +820,6 @@ def test_update_condition_contains(test_table_s):
 # function whose return value needs to be further combined with another
 # operand using a comparison operation - and it isn't specified which is
 # supported.
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_size(test_table_s):
     p = random_string()
     # First verify what size() returns for various types. We use only the
@@ -784,7 +829,7 @@ def test_update_condition_size(test_table_s):
                           'b': {'Value': set([2, 4, 7]), 'Action': 'PUT'},
                           'c': {'Value': [2, 'dog', 7], 'Action': 'PUT'},
                           'd': {'Value': b'hi there', 'Action': 'PUT'},
-                          'e': {'Value': {'x': 2, 'y': 3}, 'Action': 'PUT'},
+                          'e': {'Value': {'x': 2, 'y': {'m': 3, 'n': 4}}, 'Action': 'PUT'},
                           'f': {'Value': 5, 'Action': 'PUT'},
                           'g': {'Value': True, 'Action': 'PUT'},
                           'h': {'Value': None, 'Action': 'PUT'}})
@@ -869,6 +914,70 @@ def test_update_condition_size(test_table_s):
             ConditionExpression='size(a)>=:arg',
             ExpressionAttributeValues={':val': 11, ':arg': 2})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 11
+    # size() is only allowed one operand; More operands are allowed by the
+    # parser, but later result in an error:
+    with pytest.raises(ClientError, match='ValidationException.*2'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+            ConditionExpression='size(a, a)=:arg',
+            ExpressionAttributeValues={':val': 1, ':arg': 5})
+
+# The above test tested conditions involving size() in a comparison.
+# Trying to use just size(a) as a condition (as we use the rest of the
+# functions supported by ConditionExpression) does not work - DynamoDB
+# reports # that "The function is not allowed to be used this way in an
+# expression; function: size".
+def test_update_condition_size_alone(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+            ConditionExpression='size(a)',
+            ExpressionAttributeValues={':val': 1})
+
+# Similarly, while attribute_exists(a) works alone, it cannot be used in
+# a comparison, e.g., attribute_exists(a) < 1 also causes DynamoDB to
+# complain about "The function is not allowed to be used in this way in an
+# expression.".
+def test_update_condition_attribute_exists_in_comparison(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+            ConditionExpression='attribute_exists(a) < :val',
+            ExpressionAttributeValues={':val': 1})
+
+# In essense, the size() function tested in the previous test behaves
+# exactly like the functions of UpdateExpressions, i.e., it transforms a
+# value (attribute from the item or the query) into a new value, which
+# can than be operated (in our case, compared). In this test we check
+# that other functions supported by UpdateExpression - if_not_exists()
+# and list_append() - are not supported.
+def test_update_condition_other_funcs(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'}})
+    # dog() is an unknown function name:
+    with pytest.raises(ClientError, match='ValidationException.*function'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+            ConditionExpression='dog(a)=:arg',
+            ExpressionAttributeValues={':val': 1, ':arg': 5})
+    # The functions if_not_exists() and list_append() are known functions
+    # (they are supported in UpdateExpression) but not allowed in
+    # ConditionExpression. This means we can have a single function for
+    # evaluation a parsed::value, but it needs to know whether it is
+    # called for a UpdateExpression or a ConditionExpression.
+    with pytest.raises(ClientError, match='ValidationException.*not allowed'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+            ConditionExpression='if_not_exists(a, a)=:arg',
+            ExpressionAttributeValues={':val': 1, ':arg': 5})
+    with pytest.raises(ClientError, match='ValidationException.*not allowed'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+            ConditionExpression='list_append(a, a)=:arg',
+            ExpressionAttributeValues={':val': 1, ':arg': 5})
 
 # All the previous tests involved top-level attributes to be tested. But
 # ConditionExpressions also allows reading nested attributes, and we should
@@ -894,7 +1003,6 @@ def test_update_condition_nested_attributes(test_table_s):
 # But the DynamoDB API also allows to refer to attributes using a #reference.
 # Among other things this allows using attribute names which are usually
 # reserved keywords in condition expressions.
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_attribute_reference(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -924,7 +1032,6 @@ def test_update_condition_nested_attribute_reference(test_table_s):
 # precedence involved, and should be tested (see the definitions in
 # https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.OperatorsAndFunctions.html
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_and(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -949,7 +1056,6 @@ def test_update_condition_and(test_table_s):
                 ConditionExpression='a < b AND c < b',
                 ExpressionAttributeValues={':val': 1})
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_or(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -979,7 +1085,6 @@ def test_update_condition_or(test_table_s):
                 ConditionExpression='b < a OR c < b',
                 ExpressionAttributeValues={':val': 1})
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_not(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -1002,8 +1107,13 @@ def test_update_condition_not(test_table_s):
             UpdateExpression='SET z = :val',
                 ConditionExpression='NOT a < b',
                 ExpressionAttributeValues={':val': 1})
+    # NOT NOT NOT NOT also works (and does nothing) :-)
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+            ConditionExpression='NOT NOT NOT NOT a < b',
+            ExpressionAttributeValues={':val': 3})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_parentheses(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -1019,7 +1129,6 @@ def test_update_condition_parentheses(test_table_s):
 # There is operator precedence that allows a user to use less parentheses.
 # We need to implement it correctly:
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_and_before_or(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -1032,7 +1141,6 @@ def test_update_condition_and_before_or(test_table_s):
             ExpressionAttributeValues={':val': 1})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 1
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_not_before_and(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -1045,7 +1153,6 @@ def test_update_condition_not_before_and(test_table_s):
                 ConditionExpression='NOT a < b AND c < b',
                 ExpressionAttributeValues={':val': 1})
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_between_before_and(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -1060,7 +1167,6 @@ def test_update_condition_between_before_and(test_table_s):
 
 # An empty ConditionExpression is not allowed - resulting in a validation
 # error, not a failed condition:
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_update_condition_empty(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*empty'):
@@ -1076,7 +1182,6 @@ def test_update_condition_empty(test_table_s):
 # used to test the condition. So we just need one test for each operation,
 # to verify that this code actually gets called.
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_delete_item_condition(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -1091,7 +1196,6 @@ def test_delete_item_condition(test_table_s):
             ExpressionAttributeValues={':oldval': 1})
     assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
 
-@pytest.mark.xfail(reason="ConditionExpression not yet implemented")
 def test_put_item_condition(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -1104,3 +1208,89 @@ def test_put_item_condition(test_table_s):
         test_table_s.put_item(Item={'p': p, 'a': 3},
             ConditionExpression='a = :oldval',
             ExpressionAttributeValues={':oldval': 1})
+
+# DynamoDB frowns upon unused entries in ExpressionAttributeValues and
+# ExpressionAttributeNames. Check that we do too (in all three operations),
+# although it's not terribly important that we be compatible with DynamoDB
+# here...
+# There's one delicate issue, though. Should we check for unused entries
+# during parsing, or during evaluation? The stage we check this changes
+# our behavior when the condition was supposed to fail. So we have two
+# separate tests here, one for failed condition and one for successful.
+# Because Alternator does this check at a different stage from DynamoDB,
+# this test currently fails.
+@pytest.mark.xfail(reason="unused entries are checked too late")
+def test_update_condition_unused_entries_failed(test_table_s):
+    p = random_string()
+    # unused val3:
+    with pytest.raises(ClientError, match='ValidationException.*val3'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET #name1 = :val1',
+            ConditionExpression='#name2 = :val2',
+            ExpressionAttributeValues={':val1': 1, ':val2': 2, ':val3': 3},
+            ExpressionAttributeNames={'#name1': 'a', '#name2': 'b'})
+    with pytest.raises(ClientError, match='ValidationException.*val3'):
+        test_table_s.delete_item(Key={'p': p},
+            ConditionExpression='#name1 = :val1',
+            ExpressionAttributeValues={':val1': 1, ':val3': 3},
+            ExpressionAttributeNames={'#name1': 'a'})
+    with pytest.raises(ClientError, match='ValidationException.*val3'):
+        test_table_s.put_item(Item={'p': p, 'a': 3},
+            ConditionExpression='#name1 = :val1',
+            ExpressionAttributeValues={':val1': 1, ':val3': 3},
+            ExpressionAttributeNames={'#name1': 'a'})
+    # unused name3:
+    with pytest.raises(ClientError, match='ValidationException.*name3'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET #name1 = :val1',
+            ConditionExpression='#name2 = :val2',
+            ExpressionAttributeValues={':val1': 1, ':val2': 2},
+            ExpressionAttributeNames={'#name1': 'a', '#name2': 'b', '#name3': 'c'})
+    with pytest.raises(ClientError, match='ValidationException.*name3'):
+        test_table_s.delete_item(Key={'p': p},
+            ConditionExpression='#name1 = :val1',
+            ExpressionAttributeValues={':val1': 1},
+            ExpressionAttributeNames={'#name1': 'a', '#name3': 'c'})
+    with pytest.raises(ClientError, match='ValidationException.*name3'):
+        test_table_s.put_item(Item={'p': p, 'a': 3},
+            ConditionExpression='#name1 = :val1',
+            ExpressionAttributeValues={':val1': 1},
+            ExpressionAttributeNames={'#name1': 'a', '#name3': 'c'})
+def test_update_condition_unused_entries_succeeded(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'b': {'Value': 2, 'Action': 'PUT'}})
+    # unused val3:
+    with pytest.raises(ClientError, match='ValidationException.*val3'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET #name1 = :val1',
+            ConditionExpression='#name2 = :val2',
+            ExpressionAttributeValues={':val1': 1, ':val2': 2, ':val3': 3},
+            ExpressionAttributeNames={'#name1': 'a', '#name2': 'b'})
+    with pytest.raises(ClientError, match='ValidationException.*val3'):
+        test_table_s.delete_item(Key={'p': p},
+            ConditionExpression='#name2 = :val2',
+            ExpressionAttributeValues={':val2': 2, ':val3': 3},
+            ExpressionAttributeNames={'#name2': 'b'})
+    with pytest.raises(ClientError, match='ValidationException.*val3'):
+        test_table_s.put_item(Item={'p': p, 'a': 3},
+            ConditionExpression='#name2 = :val2',
+            ExpressionAttributeValues={':val2': 2, ':val3': 3},
+            ExpressionAttributeNames={'#name2': 'b'})
+    # unused name3:
+    with pytest.raises(ClientError, match='ValidationException.*name3'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET #name1 = :val1',
+            ConditionExpression='#name2 = :val2',
+            ExpressionAttributeValues={':val1': 1, ':val2': 2},
+            ExpressionAttributeNames={'#name1': 'a', '#name2': 'b', '#name3': 'c'})
+    with pytest.raises(ClientError, match='ValidationException.*name3'):
+        test_table_s.delete_item(Key={'p': p},
+            ConditionExpression='#name2 = :val2',
+            ExpressionAttributeValues={':val2': 2},
+            ExpressionAttributeNames={'#name2': 'b', '#name3': 'c'})
+    with pytest.raises(ClientError, match='ValidationException.*name3'):
+        test_table_s.put_item(Item={'p': p, 'a': 3},
+            ConditionExpression='#name2 = :val2',
+            ExpressionAttributeValues={':val2': 2},
+            ExpressionAttributeNames={'#name2': 'b', '#name3': 'c'})

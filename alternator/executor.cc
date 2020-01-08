@@ -44,6 +44,7 @@
 #include "error.hh"
 #include "serialization.hh"
 #include "expressions.hh"
+#include "expressions_eval.hh"
 #include "conditions.hh"
 #include "cql3/constants.hh"
 #include <optional>
@@ -946,30 +947,86 @@ future<json::json_return_type> rmw_operation::execute(service::storage_proxy& pr
     });
 }
 
-class put_item_operation  : public rmw_operation {
+static parsed::condition_expression get_parsed_condition_expression(rjson::value& request) {
+    rjson::value* condition_expression = rjson::find(request, "ConditionExpression");
+    if (!condition_expression) {
+        // Returning an empty() condition_expression means no condition.
+        return parsed::condition_expression{};
+    }
+    if (!condition_expression->IsString()) {
+        throw api_error("ValidationException", "ConditionExpression must be a string");
+    }
+    if (condition_expression->GetStringLength() == 0) {
+        throw api_error("ValidationException", "ConditionExpression must not be empty");
+    }
+    try {
+        return parse_condition_expression(condition_expression->GetString());
+    } catch(expressions_syntax_error& e) {
+        throw api_error("ValidationException", e.what());
+    }
+}
+
+static bool check_needs_read_before_write(const parsed::condition_expression& condition_expression) {
+    // Theoretically, a condition expression may exist but not refer to the
+    // item at all. But this is not a useful case and there is no point in
+    // optimizing for it.
+    return !condition_expression.empty();
+}
+
+// Fail the expression if it has unused attribute names or values. This is
+// how DynamoDB behaves, so we do too.
+// FIXME: DynamoDB does the verification that all ExpressionAttributeValues
+// and ExpressionAttributeNames entries are used in the preparation stage
+// of the query (inspecting the parsed expressions) - not as we do after
+// fully performing the request. This causes us to fail the test
+// test_condition_expression.py::test_update_condition_unused_entries_failed.
+static void verify_all_are_used(const rjson::value& req, const char* field,
+        const std::unordered_set<std::string>& used, const char* operation) {
+    const rjson::value* attribute_names = rjson::find(req, rjson::string_ref_type(field));
+    if (!attribute_names) {
+        return;
+    }
+    for (auto it = attribute_names->MemberBegin(); it != attribute_names->MemberEnd(); ++it) {
+        if (!used.count(it->name.GetString())) {
+            throw api_error("ValidationException",
+                format("{} has spurious '{}', not used in {}",
+                       field, it->name.GetString(), operation));
+        }
+    }
+}
+
+class put_item_operation : public rmw_operation {
 private:
     rjson::value& _item;
 public:
+    parsed::condition_expression _condition_expression;
     put_item_operation(service::storage_proxy& proxy, rjson::value&& request)
         : rmw_operation(proxy, std::move(request))
         , _item(rjson::get(_request, "Item")) {
         _pk = pk_from_json(_item, schema());
         _ck = ck_from_json(_item, schema());
-        if (rjson::find(_request, "ConditionExpression")) {
-            throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
-        }
         auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
         if (return_values != "NONE") {
             // FIXME: Need to support also the ALL_OLD option. See issue #5053.
             throw api_error("ValidationException", format("Unsupported ReturnValues={} for PutItem operation", return_values));
         }
+        _condition_expression = get_parsed_condition_expression(_request);
     }
     virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) override {
-        if (!verify_expected(_request, previous_item)) {
+        std::unordered_set<std::string> used_attribute_values;
+        std::unordered_set<std::string> used_attribute_names;
+        if (!verify_expected(_request, previous_item) ||
+            !verify_condition_expression(_condition_expression,
+                    used_attribute_values, used_attribute_names,
+                    _request, _schema, previous_item)) {
             // If the update is to be cancelled because of an unfulfilled Expected
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
             return {};
+        }
+        if (!_condition_expression.empty()) {
+            verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
+            verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
         }
         return make_item_mutation(_item, schema());
     }
@@ -984,7 +1041,8 @@ future<json::json_return_type> executor::put_item(client_state& client_state, st
 
     auto op = make_shared<put_item_operation>(_proxy, std::move(request));
     tracing::add_table_name(client_state.get_trace_state(), op->schema()->ks_name(), op->schema()->cf_name());
-    const bool needs_read_before_write = op->request().HasMember("Expected");
+    const bool needs_read_before_write = op->request().HasMember("Expected") ||
+            check_needs_read_before_write(op->_condition_expression);
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
@@ -1022,31 +1080,39 @@ static mutation make_delete_item_mutation(const rjson::value& key, schema_ptr sc
     return m;
 }
 
-class delete_item_operation  : public rmw_operation {
+class delete_item_operation : public rmw_operation {
 private:
     rjson::value& _key;
 public:
+    parsed::condition_expression _condition_expression;
     delete_item_operation(service::storage_proxy& proxy, rjson::value&& request)
         : rmw_operation(proxy, std::move(request))
         , _key(rjson::get(_request, "Key")) {
         _pk = pk_from_json(_key, schema());
         _ck = ck_from_json(_key, schema());
         check_key(_key, schema());
-        if (rjson::find(_request, "ConditionExpression")) {
-            throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
-        }
         auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
         if (return_values != "NONE") {
             // FIXME: Need to support also the ALL_OLD option. See issue #5053.
             throw api_error("ValidationException", format("Unsupported ReturnValues={} for DeleteItem operation", return_values));
         }
+        _condition_expression = get_parsed_condition_expression(_request);
     }
     virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) override {
-        if (!verify_expected(_request, previous_item)) {
+        std::unordered_set<std::string> used_attribute_values;
+        std::unordered_set<std::string> used_attribute_names;
+        if (!verify_expected(_request, previous_item) ||
+            !verify_condition_expression(_condition_expression,
+                                used_attribute_values, used_attribute_names,
+                                _request, _schema, previous_item)) {
             // If the update is to be cancelled because of an unfulfilled Expected
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
             return {};
+        }
+        if (!_condition_expression.empty()) {
+            verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
+            verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
         }
         return make_delete_item_mutation(_key, schema());
     }
@@ -1061,7 +1127,8 @@ future<json::json_return_type> executor::delete_item(client_state& client_state,
 
     auto op = make_shared<delete_item_operation>(_proxy, std::move(request));
     tracing::add_table_name(client_state.get_trace_state(), op->schema()->ks_name(), op->schema()->cf_name());
-    const bool needs_read_before_write = op->request().HasMember("Expected");
+    const bool needs_read_before_write = op->request().HasMember("Expected") ||
+            check_needs_read_before_write(op->_condition_expression);
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
@@ -1194,23 +1261,6 @@ static std::string resolve_update_path(const parsed::path& p,
     return column_name;
 }
 
-// Fail the expression if it has unused attribute names or values. This is
-// how DynamoDB behaves, so we do too.
-static void verify_all_are_used(const rjson::value& req, const char* field,
-        const std::unordered_set<std::string>& used, const char* operation) {
-    const rjson::value* attribute_names = rjson::find(req, rjson::string_ref_type(field));
-    if (!attribute_names) {
-        return;
-    }
-    for (auto it = attribute_names->MemberBegin(); it != attribute_names->MemberEnd(); ++it) {
-        if (!used.count(it->name.GetString())) {
-            throw api_error("ValidationException",
-                format("{} has spurious '{}', not used in {}",
-                       field, it->name.GetString(), operation));
-        }
-    }
-}
-
 // Check if a given JSON object encodes a list (i.e., it is a {"L": [...]}
 // and returns a pointer to that list.
 static const rjson::value* unwrap_list(const rjson::value& v) {
@@ -1326,11 +1376,67 @@ static rjson::value number_subtract(const rjson::value& v1, const rjson::value& 
 template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
+// calculate_size() is ConditionExpression's size() function, i.e., it takes
+// a JSON-encoded value and returns its "size" as defined differently for the
+// different types - also as a JSON-encoded number.
+// It return a JSON-encoded "null" value if this value's type has no size
+// defined. Comparisons against this non-numeric value will later fail.
+static rjson::value calculate_size(const rjson::value& v) {
+    // NOTE: If v is improperly formatted for our JSON value encoding, it
+    // must come from the request itself, not from the database, so it makes
+    // sense to throw a ValidationException if we see such a problem.
+    if (!v.IsObject() || v.MemberCount() != 1) {
+        throw api_error("ValidationException", format("invalid object: {}", v));
+    }
+    auto it = v.MemberBegin();
+    int ret;
+    if (it->name == "S") {
+        if (!it->value.IsString()) {
+            throw api_error("ValidationException", format("invalid string: {}", v));
+        }
+        ret = it->value.GetStringLength();
+    } else if (it->name == "NS" || it->name == "SS" || it->name == "BS" || it->name == "L") {
+        if (!it->value.IsArray()) {
+            throw api_error("ValidationException", format("invalid set: {}", v));
+        }
+        ret = it->value.Size();
+    } else if (it->name == "M") {
+        if (!it->value.IsObject()) {
+            throw api_error("ValidationException", format("invalid map: {}", v));
+        }
+        ret = it->value.MemberCount();
+    } else if (it->name == "B") {
+        // TODO (optimization): Calculate the length of a base64-encoded
+        // string directly, without decoding it first.
+        if (!it->value.IsString()) {
+            throw api_error("ValidationException", format("invalid byte string: {}", v));
+        }
+        ret = base64_decode(it->value).size();
+    } else {
+        rjson::value json_ret = rjson::empty_object();
+        rjson::set(json_ret, "null", rjson::value(true));
+        return json_ret;
+    }
+    rjson::value json_ret = rjson::empty_object();
+    rjson::set(json_ret, "N", rjson::from_string(std::to_string(ret)));
+    return json_ret;
+}
+
+static rjson::value to_bool_json(bool b) {
+    rjson::value json_ret = rjson::empty_object();
+    rjson::set(json_ret, "BOOL", rjson::value(b));
+    return json_ret;
+}
+
 // Given a parsed::value, which can refer either to a constant value from
 // ExpressionAttributeValues, to the value of some attribute, or to a function
 // of other values, this function calculates the resulting value.
-static rjson::value calculate_value(const parsed::value& v,
-        const rjson::value& expression_attribute_values,
+// "caller" determines which expression - ConditionExpression or
+// UpdateExpression - is asking for this value. We need to know this because
+// DynamoDB allows a different choice of functions for different expressions.
+rjson::value calculate_value(const parsed::value& v,
+        calculate_value_caller caller,
+        const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values,
         const rjson::value& update_info,
@@ -1338,34 +1444,180 @@ static rjson::value calculate_value(const parsed::value& v,
         const std::unique_ptr<rjson::value>& previous_item) {
     return std::visit(overloaded {
         [&] (const std::string& valref) -> rjson::value {
-            const rjson::value& value = rjson::get(expression_attribute_values, rjson::string_ref_type(valref.c_str()));
+            if (!expression_attribute_values) {
+                throw api_error("ValidationException",
+                        format("ExpressionAttributeValues missing, entry '{}' required by {}", valref, caller));
+            }
+            const rjson::value& value = rjson::get(*expression_attribute_values, rjson::string_ref_type(valref.c_str()));
             if (value.IsNull()) {
                 throw api_error("ValidationException",
-                        format("ExpressionAttributeValues missing entry '{}' required by UpdateExpression", valref));
+                        format("ExpressionAttributeValues missing entry '{}' required by {}", valref, caller));
             }
             used_attribute_values.emplace(std::move(valref));
             return rjson::copy(value);
         },
         [&] (const parsed::value::function_call& f) -> rjson::value {
+            // TODO: use a lookup table here - for each function name a
+            // function and allowed caller - instead of all these ifs.
             if (f._function_name == "list_append") {
+                if (caller != calculate_value_caller::UpdateExpression) {
+                    throw api_error("ValidationException",
+                            format("{}: list_append() not allowed here", caller));
+                }
                 if (f._parameters.size() != 2) {
                     throw api_error("ValidationException",
-                            format("UpdateExpression: list_append() accepts 2 parameters, got {}", f._parameters.size()));
+                            format("{}: list_append() accepts 2 parameters, got {}", caller, f._parameters.size()));
                 }
-                rjson::value v1 = calculate_value(f._parameters[0], expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                rjson::value v2 = calculate_value(f._parameters[1], expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                rjson::value v1 = calculate_value(f._parameters[0], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                rjson::value v2 = calculate_value(f._parameters[1], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
                 return list_concatenate(v1, v2);
             } else if (f._function_name == "if_not_exists") {
+                if (caller != calculate_value_caller::UpdateExpression) {
+                    throw api_error("ValidationException",
+                            format("{}: if_not_exists() not allowed here", caller));
+                }
                 if (f._parameters.size() != 2) {
                     throw api_error("ValidationException",
-                            format("UpdateExpression: if_not_exists() accepts 2 parameters, got {}", f._parameters.size()));
+                            format("{}: if_not_exists() accepts 2 parameters, got {}", caller, f._parameters.size()));
                 }
                 if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
-                    throw api_error("ValidationException", "UpdateExpression: if_not_exists() must include path as its first argument");
+                    throw api_error("ValidationException",
+                            format("{}: if_not_exists() must include path as its first argument", caller));
                 }
-                rjson::value v1 = calculate_value(f._parameters[0], expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-                rjson::value v2 = calculate_value(f._parameters[1], expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                rjson::value v1 = calculate_value(f._parameters[0], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                rjson::value v2 = calculate_value(f._parameters[1], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
                 return v1.IsNull() ? std::move(v2) : std::move(v1);
+            } else if (f._function_name == "size") {
+                if (caller != calculate_value_caller::ConditionExpression) {
+                    throw api_error("ValidationException",
+                            format("{}: size() not allowed here", caller));
+                }
+                if (f._parameters.size() != 1) {
+                    throw api_error("ValidationException",
+                            format("{}: size() accepts 1 parameter, got {}", caller, f._parameters.size()));
+                }
+                rjson::value v = calculate_value(f._parameters[0], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                return calculate_size(v);
+            } else if (f._function_name == "attribute_exists") {
+                if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_exists() not allowed here", caller));
+                }
+                if (f._parameters.size() != 1) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_exists() accepts 1 parameter, got {}", caller, f._parameters.size()));
+                }
+                if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_exists()'s parameter must be a path", caller));
+                }
+                rjson::value v = calculate_value(f._parameters[0], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                return to_bool_json(!v.IsNull());
+            } else if (f._function_name == "attribute_not_exists") {
+                if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_not_exists() not allowed here", caller));
+                }
+                if (f._parameters.size() != 1) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_not_exists() accepts 1 parameter, got {}", caller, f._parameters.size()));
+                }
+                if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_not_exists()'s parameter must be a path", caller));
+                }
+                rjson::value v = calculate_value(f._parameters[0], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                return to_bool_json(v.IsNull());
+            } else if (f._function_name == "attribute_type") {
+                if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_type() not allowed here", caller));
+                }
+                if (f._parameters.size() != 2) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_type() accepts 2 parameters, got {}", caller, f._parameters.size()));
+                }
+                // There is no real reason for the following check (not
+                // allowing the type to come from a document attribute), but
+                // DynamoDB does this check, so we do too...
+                if (!std::holds_alternative<std::string>(f._parameters[1]._value)) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_types()'s first parameter must be an expression attribute", caller));
+                }
+                rjson::value v0 = calculate_value(f._parameters[0], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                rjson::value v1 = calculate_value(f._parameters[1], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                if (v1.IsObject() && v1.MemberCount() == 1 && v1.MemberBegin()->name == "S") {
+                    if (v0.IsObject() && v0.MemberCount() == 1) {
+                        return to_bool_json(v1.MemberBegin()->value == v0.MemberBegin()->name);
+                    } else {
+                        return to_bool_json(false);
+                    }
+                } else {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_type() second parameter must refer to a string, got {}", caller, v1));
+                }
+            } else if (f._function_name == "begins_with") {
+                if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                    throw api_error("ValidationException",
+                            format("{}: begins_with() not allowed here", caller));
+                }
+                if (f._parameters.size() != 2) {
+                    throw api_error("ValidationException",
+                            format("{}: begins_with() accepts 2 parameters, got {}", caller, f._parameters.size()));
+                }
+                rjson::value v1 = calculate_value(f._parameters[0], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                rjson::value v2 = calculate_value(f._parameters[1], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                // TODO: There's duplication here with check_BEGINS_WITH().
+                // But unfortunately, the two functions differ a bit.
+                bool ret = false;
+                if (!v1.IsObject() || v1.MemberCount() != 1) {
+                    if (std::holds_alternative<std::string>(f._parameters[0]._value)) {
+                        throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v1));
+                    }
+                } else if (v1.MemberBegin()->name != "S" && v1.MemberBegin()->name != "B") {
+                    if (std::holds_alternative<std::string>(f._parameters[0]._value)) {
+                        throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v1));
+                    }
+                } else {
+                    auto it1 = v1.MemberBegin();
+                    if (!v2.IsObject() || v2.MemberCount() != 1) {
+                        if (std::holds_alternative<std::string>(f._parameters[1]._value)) {
+                            throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v2));
+                        }
+                    } else if (v2.MemberBegin()->name != "S" && v2.MemberBegin()->name != "B") {
+                        if (std::holds_alternative<std::string>(f._parameters[1]._value)) {
+                            throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v2));
+                        }
+                    } else {
+                        auto it2 = v2.MemberBegin();
+                        if (it1->name == it2->name) {
+                            if (it2->name == "S") {
+                                std::string_view val1(it1->value.GetString(), it1->value.GetStringLength());
+                                std::string_view val2(it2->value.GetString(), it2->value.GetStringLength());
+                                ret = val1.substr(0, val2.size()) == val2;
+                            } else /* it2->name == "B" */ {
+                                // TODO (optimization): Check the begins_with condition directly on
+                                // the base64-encoded string, without making a decoded copy.
+                                bytes val1 = base64_decode(it1->value);
+                                bytes val2 = base64_decode(it2->value);
+                                ret = val1.substr(0, val2.size()) == val2;
+                            }
+                        }
+                    }
+                }
+                return to_bool_json(ret);
+            } else if (f._function_name == "contains") {
+                if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                    throw api_error("ValidationException",
+                            format("{}: contains() not allowed here", caller));
+                }
+                if (f._parameters.size() != 2) {
+                    throw api_error("ValidationException",
+                            format("{}: contains() accepts 2 parameters, got {}", caller, f._parameters.size()));
+                }
+                rjson::value v1 = calculate_value(f._parameters[0], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                rjson::value v2 = calculate_value(f._parameters[1], caller, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+                return to_bool_json(check_CONTAINS(v1.IsNull() ? nullptr : &v1,  v2));
             } else {
                 throw api_error("ValidationException",
                         format("UpdateExpression: unknown function '{}' called.", f._function_name));
@@ -1385,7 +1637,7 @@ static rjson::value calculate_value(const parsed::value& v,
 // Same as calculate_value() above, except takes a set_rhs, which may be
 // either a single value, or v1+v2 or v1-v2.
 static rjson::value calculate_value(const parsed::set_rhs& rhs,
-        const rjson::value& expression_attribute_values,
+        const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values,
         const rjson::value& update_info,
@@ -1393,15 +1645,15 @@ static rjson::value calculate_value(const parsed::set_rhs& rhs,
         const std::unique_ptr<rjson::value>& previous_item) {
     switch(rhs._op) {
     case 'v':
-        return calculate_value(rhs._v1, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+        return calculate_value(rhs._v1, calculate_value_caller::UpdateExpression, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
     case '+': {
-        rjson::value v1 = calculate_value(rhs._v1, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-        rjson::value v2 = calculate_value(rhs._v2, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+        rjson::value v1 = calculate_value(rhs._v1, calculate_value_caller::UpdateExpression, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+        rjson::value v2 = calculate_value(rhs._v2, calculate_value_caller::UpdateExpression, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
         return number_add(v1, v2);
     }
     case '-': {
-        rjson::value v1 = calculate_value(rhs._v1, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
-        rjson::value v2 = calculate_value(rhs._v2, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+        rjson::value v1 = calculate_value(rhs._v1, calculate_value_caller::UpdateExpression, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
+        rjson::value v2 = calculate_value(rhs._v2, calculate_value_caller::UpdateExpression, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
         return number_subtract(v1, v2);
     }
     }
@@ -1582,7 +1834,6 @@ static bool check_needs_read_before_write(const parsed::update_expression& updat
     });
 }
 
-
 // FIXME: Getting the previous item does not offer any synchronization guarantees nor linearizability.
 // It should be overridden once we can leverage a consensus protocol.
 static future<std::unique_ptr<rjson::value>> get_previous_item(
@@ -1611,6 +1862,7 @@ public:
     // errors, and cached to be used again during apply().
     rjson::value* _attribute_updates;
     parsed::update_expression _update_expression;
+    parsed::condition_expression _condition_expression;
 
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
     virtual ~update_item_operation() = default;
@@ -1620,9 +1872,6 @@ public:
 update_item_operation::update_item_operation(service::storage_proxy& proxy, rjson::value&& update_info)
     : rmw_operation(proxy, std::move(update_info))
 {
-    if (rjson::find(_request, "ConditionExpression")) {
-        throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
-    }
     auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
     if (return_values != "NONE") {
         // FIXME: Need to support also ALL_OLD, UPDATED_OLD, ALL_NEW and UPDATED_NEW options. See issue #5053.
@@ -1657,8 +1906,10 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
         }
     }
 
+    _condition_expression = get_parsed_condition_expression(_request);
+
     // DynamoDB forbids having both old-style AttributeUpdates or Expected
-    // and new-style UpdateExpression in the same request
+    // and new-style UpdateExpression or ConditionExpression in the same request
     const rjson::value* expected = rjson::find(_request, "Expected");
     if (update_expression && _attribute_updates) {
         throw api_error("ValidationException",
@@ -1668,12 +1919,21 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
         throw api_error("ValidationException",
                 format("UpdateItem does not allow both old-style Expected and new-style UpdateExpression to be given together"));
     }
+    if (_attribute_updates && !_condition_expression.empty()) {
+        throw api_error("ValidationException",
+                format("UpdateItem does not allow both old-style AttributeUpdates and new-style ConditionExpression to be given together"));
+    }
 }
 
 std::optional<mutation>
 update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item) {
-    if (!verify_expected(_request, previous_item)) {
-        // If the update is to be cancelled because of an unfulfilled Expected
+    std::unordered_set<std::string> used_attribute_values;
+    std::unordered_set<std::string> used_attribute_names;
+    if (!verify_expected(_request, previous_item) ||
+        !verify_condition_expression(_condition_expression,
+                used_attribute_values, used_attribute_names,
+                _request, _schema, previous_item)) {
+        // If the update is to be cancelled because of an unfulfilled
         // condition, return an empty optional mutation, which is more
         // efficient than throwing an exception.
         return {};
@@ -1703,11 +1963,7 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item)
 
     if (!_update_expression.empty()) {
         std::unordered_set<std::string> seen_column_names;
-        std::unordered_set<std::string> used_attribute_values;
-        std::unordered_set<std::string> used_attribute_names;
-        rjson::value empty_attribute_values = rjson::empty_object();
-        const rjson::value* attr_values_raw = rjson::find(_request, "ExpressionAttributeValues");
-        const rjson::value& attr_values = attr_values_raw ? *attr_values_raw : empty_attribute_values;
+        const rjson::value* attr_values = rjson::find(_request, "ExpressionAttributeValues");
         for (auto& action : _update_expression.actions()) {
             std::string column_name = resolve_update_path(action._path, _request, _schema, used_attribute_names, allow_key_columns::no);
             // DynamoDB forbids multiple updates in the same expression to
@@ -1733,8 +1989,8 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item)
                     parsed::value addition;
                     base.set_path(action._path);
                     addition.set_valref(a._valref);
-                    rjson::value v1 = calculate_value(base, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
-                    rjson::value v2 = calculate_value(addition, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value v2 = calculate_value(addition, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
                     rjson::value result;
                     std::string v1_type = get_item_type_string(v1);
                     if (v1_type == "N") {
@@ -1757,13 +2013,15 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item)
                     parsed::value subset;
                     base.set_path(action._path);
                     subset.set_valref(a._valref);
-                    rjson::value v1 = calculate_value(base, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
-                    rjson::value v2 = calculate_value(subset, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value v2 = calculate_value(subset, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
                     rjson::value result  = set_diff(v1, v2);
                     do_update(to_bytes(column_name), result);
                 }
             }, action._action);
         }
+    }
+    if (!_update_expression.empty() || !_condition_expression.empty()) {
         verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
         verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
     }
@@ -1821,6 +2079,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
     auto op = make_shared<update_item_operation>(_proxy, std::move(update_info));
     tracing::add_table_name(client_state.get_trace_state(), op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = check_needs_read_before_write(op->_update_expression) ||
+                    check_needs_read_before_write(op->_condition_expression) ||
                     op->request().HasMember("Expected");
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
