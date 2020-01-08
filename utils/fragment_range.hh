@@ -60,6 +60,34 @@ struct is_fragment_range<T, std::void_t<typename T::fragment_type>> : std::true_
 template<typename T>
 static constexpr bool is_fragment_range_v = is_fragment_range<T>::value;
 
+/// A non-mutable view of a FragmentRange
+///
+/// Provide a trivially copyable and movable, non-mutable view on a
+/// fragment range. This allows uniform ownership semantics across
+/// multi-fragment ranges and the single fragment and empty fragment
+/// adaptors below, i.e. it allows treating all fragment ranges
+/// uniformly as views.
+template <typename T>
+GCC6_CONCEPT(
+    requires FragmentRange<T>
+)
+class fragment_range_view {
+    const T* _range;
+public:
+    using fragment_type = typename T::fragment_type;
+    using iterator = typename T::const_iterator;
+    using const_iterator = typename T::const_iterator;
+
+public:
+    explicit fragment_range_view(const T& range) : _range(&range) { }
+
+    const_iterator begin() const { return _range->begin(); }
+    const_iterator end() const { return _range->end(); }
+
+    size_t size_bytes() const { return _range->size_bytes(); }
+    bool empty() const { return _range->empty(); }
+};
+
 /// Single-element fragment range
 ///
 /// This is a helper that allows converting a bytes_view into a FragmentRange.
