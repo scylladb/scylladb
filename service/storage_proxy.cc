@@ -1917,6 +1917,8 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
                 return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
             } catch (timed_out_error&) {
                 return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
+            } catch (rpc::closed_error&) {
+                return make_exception_future<>(mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(ks, cl), db::write_type::COUNTER));
             }
         };
 
