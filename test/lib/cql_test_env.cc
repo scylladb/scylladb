@@ -383,7 +383,6 @@ public:
             cfg->num_tokens.set(256);
             cfg->ring_delay_ms.set(500);
             auto features = cfg->experimental_features();
-            features.emplace_back(db::experimental_features_t::CDC);
             features.emplace_back(db::experimental_features_t::LWT);
             cfg->experimental_features(features);
             cfg->shutdown_announce_in_ms.set(0);

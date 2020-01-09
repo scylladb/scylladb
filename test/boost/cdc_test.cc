@@ -23,6 +23,7 @@
 #include <string>
 
 #include "cdc/log.hh"
+#include "db/config.hh"
 #include "schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
@@ -36,6 +37,14 @@
 using namespace std::string_literals;
 
 static logging::logger tlog("cdc_test");
+
+static cql_test_config mk_cdc_test_config() {
+    shared_ptr<db::config> cfg(make_shared<db::config>());
+    auto features = cfg->experimental_features();
+    features.emplace_back(db::experimental_features_t::CDC);
+    cfg->experimental_features(features);
+    return cql_test_config(std::move(cfg));
+};
 
 namespace cdc {
 api::timestamp_type find_timestamp(const schema&, const mutation&);
@@ -116,7 +125,7 @@ SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
         check_stmt("DELETE vut.b FROM t WHERE pk = 0 AND ck = 0");
         check_stmt("DELETE vfut FROM t WHERE pk = 0 AND ck = 0");
         check_stmt("DELETE vstatic FROM t WHERE pk = 0");
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_generate_timeuuid) {
@@ -184,7 +193,7 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
         test("WITH cdc = {'enabled':'false'}", "{'enabled':'true'}", "{'enabled':'false'}", {false}, {true}, {false});
         test("", "{'enabled':'true','preimage':'true','postimage':'true','ttl':'1'}", "{'enabled':'false'}", {false}, {true, true, true, 1}, {false});
         test("WITH cdc = {'enabled':'true','preimage':'true','postimage':'true','ttl':'1'}", "{'enabled':'false'}", "{'enabled':'true','preimage':'false','postimage':'true','ttl':'2'}", {true, true, true, 1}, {false}, {true, false, true, 2});
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
 
 static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
@@ -301,7 +310,7 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11
         assert_row(1, 11);
         BOOST_REQUIRE(actual_i == actual_end);
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
@@ -352,7 +361,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
         };
         test(true);
         test(false);
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_add_columns) {
@@ -376,7 +385,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
         auto kokos = *updates.back()[kokos_index];
 
         BOOST_REQUIRE_EQUAL(data_value("kaka"), value_cast<tuple_type_impl::native_type>(kokos_type->deserialize(bytes_view(kokos))).at(1));
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
 
 // #5582 - just quickly test that we can create the cdc enabled table on a different shard 
@@ -394,5 +403,5 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_across_shards) {
         auto rows = select_log(e, "tbl");
 
         BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::update).empty());
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
