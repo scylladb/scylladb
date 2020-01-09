@@ -354,7 +354,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                                 return p->fetch_page(builder, page_size, now, timeout);
                             }
                     ).then([this, &builder, restrictions_need_filtering] {
-                                return builder.with_thread_if_needed([&builder, restrictions_need_filtering, this] {
+                                return builder.with_thread_if_needed([this, &builder, restrictions_need_filtering] {
                                     auto rs = builder.build();
                                      if (restrictions_need_filtering) {
                                         _stats.filtered_rows_matched_total += rs->size();
