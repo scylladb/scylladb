@@ -1475,7 +1475,27 @@ static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::na
     }
 }
 
-static size_t concrete_serialized_size(const varint_type_impl::native_type& v);
+static size_t concrete_serialized_size(const boost::multiprecision::cpp_int& num);
+
+static void serialize_varint(bytes::iterator& out, const boost::multiprecision::cpp_int& num) {
+    boost::multiprecision::cpp_int pnum = boost::multiprecision::abs(num);
+
+    std::vector<uint8_t> b;
+    auto size = concrete_serialized_size(num);
+    b.reserve(size);
+    if (num.sign() < 0) {
+        pnum -= 1;
+    }
+    for (unsigned i = 0; i < size; i++) {
+        auto v = boost::multiprecision::integer_modulus(pnum, 256);
+        pnum >>= 8;
+        if (num.sign() < 0) {
+            v = ~v;
+        }
+        b.push_back(v);
+    }
+    out = std::copy(b.crbegin(), b.crend(), out);
+}
 
 static void serialize(const abstract_type& t, const void* value, bytes::iterator& out);
 
@@ -1573,24 +1593,8 @@ struct serialize_visitor {
         if (num1->empty()) {
             return;
         }
-        auto& num = std::move(*num1).get();
-        boost::multiprecision::cpp_int pnum = boost::multiprecision::abs(num);
 
-        std::vector<uint8_t> b;
-        auto size = concrete_serialized_size(*num1);
-        b.reserve(size);
-        if (num.sign() < 0) {
-            pnum -= 1;
-        }
-        for (unsigned i = 0; i < size; i++) {
-            auto v = boost::multiprecision::integer_modulus(pnum, 256);
-            pnum >>= 8;
-            if (num.sign() < 0) {
-                v = ~v;
-            }
-            b.push_back(v);
-        }
-        out = std::copy(b.crbegin(), b.crend(), out);
+        serialize_varint(out, num1->get());
     }
     void operator()(const decimal_type_impl& t, const decimal_type_impl::native_type* bd1) {
         if (bd1->empty()) {
@@ -1599,9 +1603,7 @@ struct serialize_visitor {
         auto&& bd = std::move(*bd1).get();
         auto u = net::hton(bd.scale());
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(int32_t), out);
-        varint_type_impl::native_type unscaled_value = bd.unscaled_value();
-        const auto* real_varint_type = reinterpret_cast<const varint_type_impl*>(varint_type.get());
-        serialize_visitor{out}(*real_varint_type, &unscaled_value);
+        serialize_varint(out, bd.unscaled_value());
     }
     void operator()(const counter_type_impl& t, const void*) { fail(unimplemented::cause::COUNTERS); }
     void operator()(const duration_type_impl& t, const duration_type_impl::native_type* m) {
@@ -2080,13 +2082,16 @@ static size_t concrete_serialized_size(const string_type_impl::native_type& v) {
 static size_t concrete_serialized_size(const bytes_type_impl::native_type& v) { return v.size(); }
 static size_t concrete_serialized_size(const inet_addr_type_impl::native_type& v) { return v.get().size(); }
 
-static size_t concrete_serialized_size(const varint_type_impl::native_type& v) {
-    const auto& num = v.get();
+static size_t concrete_serialized_size(const boost::multiprecision::cpp_int& num) {
     if (!num) {
         return 1;
     }
     auto pnum = abs(num);
     return align_up(boost::multiprecision::msb(pnum) + 2, 8u) / 8;
+}
+
+static size_t concrete_serialized_size(const varint_type_impl::native_type& v) {
+    return concrete_serialized_size(v.get());
 }
 
 static size_t concrete_serialized_size(const decimal_type_impl::native_type& v) {
