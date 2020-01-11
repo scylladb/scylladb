@@ -3215,21 +3215,21 @@ future<sstring> storage_service::get_removal_status() {
 future<> storage_service::force_remove_completion() {
     return run_with_no_api_lock([] (storage_service& ss) {
         return seastar::async([&ss] {
-            if (!ss._operation_in_progress.empty()) {
+            while (!ss._operation_in_progress.empty()) {
                 if (ss._operation_in_progress != sstring("removenode")) {
                     throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
-                } else {
-                    // This flag will make removenode stop waiting for the confirmation
-                    ss._force_remove_completion = true;
-                    while (!ss._operation_in_progress.empty()) {
-                        // Wait removenode operation to complete
-                        slogger.info("Operation {} is in progress, wait for it to complete", ss._operation_in_progress);
-                        sleep_abortable(std::chrono::seconds(1), ss._abort_source).get();
-                    }
-                    ss._force_remove_completion = false;
                 }
+
+                // This flag will make removenode stop waiting for the confirmation,
+                // wait it to complete
+                slogger.info("Operation removenode is in progress, wait for it to complete");
+
+                ss._force_remove_completion = true;
+                sleep_abortable(std::chrono::seconds(1), ss._abort_source).get();
+                ss._force_remove_completion = false;
             }
             ss._operation_in_progress = sstring("removenode_force");
+
             try {
                 if (!ss._replicating_nodes.empty() || !ss._token_metadata.get_leaving_endpoints().empty()) {
                     auto leaving = ss._token_metadata.get_leaving_endpoints();
