@@ -2458,7 +2458,6 @@ future<> storage_service::removenode(sstring host_id_string) {
             }
 
             if (ss._force_remove_completion) {
-                ss._force_remove_completion = false;
                 throw std::runtime_error("nodetool removenode force is called by user");
             }
 
