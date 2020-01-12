@@ -81,44 +81,85 @@ public:
 template <typename T>
 struct accumulator_for;
 
+template <typename NarrowType, typename AccType>
+static NarrowType checking_narrow(AccType acc) {
+    NarrowType ret = static_cast<NarrowType>(acc);
+    if (static_cast<AccType>(ret) != acc) {
+        throw exceptions::overflow_error_exception("Sum overflow. Values should be casted to a wider type.");
+    }
+    return ret;
+}
+
 template <>
 struct accumulator_for<int8_t> {
     using type = __int128;
+
+    static int8_t narrow(type acc) {
+        return checking_narrow<int8_t>(acc);
+    }
 };
 
 template <>
 struct accumulator_for<int16_t> {
     using type = __int128;
+
+    static int16_t narrow(type acc) {
+        return checking_narrow<int16_t>(acc);
+    }
 };
 
 template <>
 struct accumulator_for<int32_t> {
     using type = __int128;
+
+    static int32_t narrow(type acc) {
+        return checking_narrow<int32_t>(acc);
+    }
 };
 
 template <>
 struct accumulator_for<int64_t> {
     using type = __int128;
+
+    static int64_t narrow(type acc) {
+        return checking_narrow<int64_t>(acc);
+    }
 };
 
 template <>
 struct accumulator_for<float> {
     using type = float;
+
+    static auto narrow(type acc) {
+        return acc;
+    }
 };
 
 template <>
 struct accumulator_for<double> {
     using type = double;
+
+    static auto narrow(type acc) {
+        return acc;
+    }
 };
 
 template <>
 struct accumulator_for<boost::multiprecision::cpp_int> {
     using type = boost::multiprecision::cpp_int;
+
+    static auto narrow(type acc) {
+        return acc;
+    }
 };
 
 template <>
 struct accumulator_for<big_decimal> {
     using type = big_decimal;
+
+    static auto narrow(type acc) {
+        return acc;
+    }
 };
 
 template <typename Type>
@@ -130,12 +171,7 @@ public:
         _sum = {};
     }
     virtual opt_bytes compute(cql_serialization_format sf) override {
-        Type ret = static_cast<Type>(_sum);
-        if (static_cast<accumulator_type>(ret) != _sum) {
-            throw exceptions::overflow_error_exception("Sum overflow. Values should be casted to a wider type.");
-        }
-        return data_type_for<Type>()->decompose(ret);
-
+        return data_type_for<Type>()->decompose(accumulator_for<Type>::narrow(_sum));
     }
     virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
