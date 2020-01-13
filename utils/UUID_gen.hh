@@ -322,6 +322,15 @@ public:
         return (uuid.timestamp() / 10000) + START_EPOCH;
     }
 
+    static int64_t make_nanos_since(int64_t millis) {
+        return (millis - START_EPOCH) * 10000;
+    }
+
+    // nanos_since must fit in 60 bits
+    static bool is_valid_nanos_since(uint64_t nanos_since) {
+        return !(0xf000000000000000UL & nanos_since);
+    }
+
 private:
 
     // needs to return two different values for the same when.
@@ -333,7 +342,7 @@ private:
         using namespace std::chrono;
         int64_t millis = duration_cast<milliseconds>(
                 system_clock::now().time_since_epoch()).count();
-        int64_t nanos_since = (millis - START_EPOCH) * 10000;
+        int64_t nanos_since = make_nanos_since(millis);
         if (nanos_since > last_nanos)
             last_nanos = nanos_since;
         else
@@ -351,9 +360,10 @@ private:
     static int64_t create_time(uint64_t nanos_since)
     {
         uint64_t msb = 0L;
+        assert(is_valid_nanos_since(nanos_since));
         msb |= (0x00000000ffffffffL & nanos_since) << 32;
         msb |= (0x0000ffff00000000UL & nanos_since) >> 16;
-        msb |= (0xffff000000000000UL & nanos_since) >> 48;
+        msb |= (0x0fff000000000000UL & nanos_since) >> 48;
         msb |= 0x0000000000001000L; // sets the version to 1.
         return msb;
     }
