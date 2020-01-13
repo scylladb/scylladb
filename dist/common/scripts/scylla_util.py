@@ -64,6 +64,9 @@ def datadir_p():
     else:
         return Path('/var/lib/scylla')
 
+def scyllabindir_p():
+    return scylladir_p() / 'bin'
+
 def scriptsdir():
     return str(scriptsdir_p())
 
@@ -78,6 +81,9 @@ def etcdir():
 
 def datadir():
     return str(datadir_p())
+
+def scyllabindir():
+    return str(scyllabindir_p())
 
 def curl(url, byte=False):
     max_retries = 5
@@ -323,7 +329,7 @@ class scylla_cpuinfo:
 
 # When a CLI tool is not installed, use relocatable CLI tool provided by Scylla
 scylla_env = os.environ.copy()
-scylla_env['PATH'] =  scylla_env['PATH'] + ':/opt/scylladb/bin'
+scylla_env['PATH'] =  '{}:{}'.format(scylla_env['PATH'], scyllabindir())
 
 def run(cmd, shell=False, silent=False, exception=True):
     stdout = subprocess.DEVNULL if silent else None
