@@ -4702,3 +4702,230 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
         }
     });
 }
+
+shared_ptr<cql_transport::messages::result_message> cql_func_require_nofail(
+        cql_test_env& env,
+        const seastar::sstring& fct,
+        const seastar::sstring& inp,
+        std::unique_ptr<cql3::query_options>&& qo = nullptr,
+        const std::experimental::source_location& loc = std::experimental::source_location::current()) {
+    auto res = shared_ptr<cql_transport::messages::result_message>(nullptr);
+    auto query = format("SELECT {}({}) FROM t;", fct, inp);
+    try {
+        if (qo) {
+            res = env.execute_cql(query, std::move(qo)).get0();
+        } else {
+            res = env.execute_cql(query).get0();
+        }
+        BOOST_TEST_MESSAGE(format("Query '{}' succeeded as expected", query));
+    } catch (...) {
+        BOOST_ERROR(format("query '{}' failed unexpectedly with error: {}\n{}:{}: originally from here",
+                query, std::current_exception(),
+                loc.file_name(), loc.line()));
+    }
+    return res;
+}
+
+// FIXME: should be in cql_assertions, but we don't want to call boost from cql_assertions.hh
+template <typename Exception>
+void cql_func_require_throw(
+        cql_test_env& env,
+        const seastar::sstring& fct,
+        const seastar::sstring& inp,
+        std::unique_ptr<cql3::query_options>&& qo = nullptr,
+        const std::experimental::source_location& loc = std::experimental::source_location::current()) {
+    auto query = format("SELECT {}({}) FROM t;", fct, inp);
+    try {
+        if (qo) {
+            env.execute_cql(query, std::move(qo)).get();
+        } else {
+            env.execute_cql(query).get();
+        }
+        BOOST_ERROR(format("query '{}' succeeded unexpectedly\n{}:{}: originally from here", query,
+                loc.file_name(), loc.line()));
+    } catch (Exception& e) {
+        BOOST_TEST_MESSAGE(format("Query '{}' failed as expected with error: {}", query, e));
+    } catch (...) {
+        BOOST_ERROR(format("query '{}' failed with unexpected error: {}\n{}:{}: originally from here",
+                query, std::current_exception(),
+                loc.file_name(), loc.line()));
+    }
+}
+
+static void create_time_uuid_fcts_schema(cql_test_env& e) {
+    cquery_nofail(e, "CREATE TABLE t (id int primary key, t timestamp, l bigint, f float, u timeuuid, d date)");
+    cquery_nofail(e, "INSERT INTO t (id, t, l, f, u, d) VALUES "
+            "(1, 1579072460606, 1579072460606000, 1579072460606, a66525e0-3766-11ea-8080-808080808080, '2020-01-13')");
+    cquery_nofail(e, "SELECT * FROM t;");
+}
+
+SEASTAR_TEST_CASE(test_basic_time_uuid_fcts) {
+    return do_with_cql_env_thread([] (auto& e) {
+        create_time_uuid_fcts_schema(e);
+
+        cql_func_require_nofail(e, "currenttime", "");
+        cql_func_require_nofail(e, "currentdate", "");
+        cql_func_require_nofail(e, "now", "");
+        cql_func_require_nofail(e, "currenttimeuuid", "");
+        cql_func_require_nofail(e, "currenttimestamp", "");
+    });
+}
+
+SEASTAR_TEST_CASE(test_time_uuid_fcts_input_validation) {
+    return do_with_cql_env_thread([] (auto& e) {
+        create_time_uuid_fcts_schema(e);
+
+        // test timestamp arg
+        auto require_timestamp = [&e] (const sstring& fct) {
+            cql_func_require_nofail(e, fct, "t");
+            cql_func_require_throw<exceptions::server_exception>(e, fct, "l");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "f");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "u");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "d");
+
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currenttime()");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currentdate()");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "now()");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currenttimeuuid()");
+            cql_func_require_nofail(e, fct, "currenttimestamp()");
+        };
+
+        require_timestamp("mintimeuuid");
+        require_timestamp("maxtimeuuid");
+
+        // test timeuuid arg
+        auto require_timeuuid = [&e] (const sstring& fct) {
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "t");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "l");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "f");
+            cql_func_require_nofail(e, fct, "u");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "d");
+
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currenttime()");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currentdate()");
+            cql_func_require_nofail(e, fct, "now()");
+            cql_func_require_nofail(e, fct, "currenttimeuuid()");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currenttimestamp()");
+        };
+
+        require_timeuuid("dateof");
+        require_timeuuid("unixtimestampof");
+
+        // test timeuuid or date arg
+        auto require_timeuuid_or_date = [&e] (const sstring& fct) {
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "t");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "l");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "f");
+            cql_func_require_nofail(e, fct, "u");
+            cql_func_require_nofail(e, fct, "d");
+
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currenttime()");
+            cql_func_require_nofail(e, fct, "currentdate()");
+            cql_func_require_nofail(e, fct, "now()");
+            cql_func_require_nofail(e, fct, "currenttimeuuid()");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currenttimestamp()");
+        };
+
+        require_timeuuid_or_date("totimestamp");
+
+        // test timestamp or timeuuid arg
+        auto require_timestamp_or_timeuuid = [&e] (const sstring& fct) {
+            cql_func_require_nofail(e, fct, "t");
+            cql_func_require_throw<std::exception>(e, fct, "l");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "f");
+            cql_func_require_nofail(e, fct, "u");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "d");
+
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currenttime()");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currentdate()");
+            cql_func_require_nofail(e, fct, "now()");
+            cql_func_require_nofail(e, fct, "currenttimeuuid()");
+            cql_func_require_nofail(e, fct, "currenttimestamp()");
+        };
+
+        require_timestamp_or_timeuuid("todate");
+
+        // test timestamp, timeuuid, or date arg
+        auto require_timestamp_timeuuid_or_date = [&e] (const sstring& fct) {
+            cql_func_require_nofail(e, fct, "t");
+            cql_func_require_throw<exceptions::server_exception>(e, fct, "l");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "f");
+            cql_func_require_nofail(e, fct, "u");
+            cql_func_require_nofail(e, fct, "d");
+
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "currenttime()");
+            cql_func_require_nofail(e, fct, "currentdate()");
+            cql_func_require_nofail(e, fct, "now()");
+            cql_func_require_nofail(e, fct, "currenttimeuuid()");
+            cql_func_require_nofail(e, fct, "currenttimestamp()");
+        };
+
+        require_timestamp_timeuuid_or_date("tounixtimestamp");
+    });
+}
+
+SEASTAR_TEST_CASE(test_time_uuid_fcts_result) {
+    return do_with_cql_env_thread([] (auto& e) {
+        create_time_uuid_fcts_schema(e);
+
+        // test timestamp arg
+        auto require_timestamp = [&e] (const sstring& fct) {
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "mintimeuuid(t)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "maxtimeuuid(t)");
+            cql_func_require_nofail(e, fct, "dateof(u)");
+            cql_func_require_nofail(e, fct, "unixtimestampof(u)");
+            cql_func_require_nofail(e, fct, "totimestamp(u)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "todate(u)");
+            cql_func_require_nofail(e, fct, "tounixtimestamp(u)");
+        };
+
+        require_timestamp("mintimeuuid");
+        require_timestamp("maxtimeuuid");
+
+        // test timeuuid arg
+        auto require_timeuuid = [&e] (const sstring& fct) {
+            cql_func_require_nofail(e, fct, "mintimeuuid(t)");
+            cql_func_require_nofail(e, fct, "maxtimeuuid(t)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "dateof(u)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "unixtimestampof(u)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "totimestamp(u)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "todate(u)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "tounixtimestamp(u)");
+        };
+
+        require_timeuuid("dateof");
+        require_timeuuid("unixtimestampof");
+
+        // test timeuuid or date arg
+        auto require_timeuuid_or_date = [&e] (const sstring& fct) {
+            cql_func_require_nofail(e, fct, "mintimeuuid(t)");
+            cql_func_require_nofail(e, fct, "maxtimeuuid(t)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "dateof(u)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "unixtimestampof(u)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "totimestamp(u)");
+            cql_func_require_nofail(e, fct, "todate(u)");
+            cql_func_require_throw<exceptions::invalid_request_exception>(e, fct, "tounixtimestamp(u)");
+        };
+
+        require_timeuuid_or_date("totimestamp");
+
+        // test timestamp or timeuuid arg
+        auto require_timestamp_or_timeuuid = [&e] (const sstring& fct) {
+        };
+
+        require_timestamp_or_timeuuid("todate");
+
+        // test timestamp, timeuuid, or date arg
+        auto require_timestamp_timeuuid_or_date = [&e] (const sstring& fct) {
+            cql_func_require_nofail(e, fct, "mintimeuuid(t)");
+            cql_func_require_nofail(e, fct, "maxtimeuuid(t)");
+            cql_func_require_nofail(e, fct, "dateof(u)");
+            cql_func_require_nofail(e, fct, "unixtimestampof(u)");
+            cql_func_require_nofail(e, fct, "totimestamp(u)");
+            cql_func_require_nofail(e, fct, "todate(u)");
+            cql_func_require_nofail(e, fct, "tounixtimestamp(u)");
+        };
+
+        require_timestamp_timeuuid_or_date("tounixtimestamp");
+    });
+}
