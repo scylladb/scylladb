@@ -464,7 +464,7 @@ public:
     future<> send_replication_finished(msg_addr id, inet_address from);
 
     // Wrappers for PAXOS verbs
-    void register_paxos_prepare(std::function<future<service::paxos::prepare_response>(
+    void register_paxos_prepare(std::function<future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>(
                 const rpc::client_info&, rpc::opt_time_point, query::read_command cmd, partition_key key, utils::UUID ballot,
                 bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info>)>&& func);
 

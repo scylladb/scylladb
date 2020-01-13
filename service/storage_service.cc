@@ -2221,75 +2221,71 @@ future<> storage_service::start_native_transport() {
         if (ss._cql_server || isolated.load()) {
             return make_ready_future<>();
         }
+        return seastar::async([&ss] {
+            ss._cql_server = distributed<cql_transport::cql_server>();
+            auto cserver = &*ss._cql_server;
 
-        ss._cql_server = distributed<cql_transport::cql_server>();
-        auto cserver = &*ss._cql_server;
+            auto& cfg = ss._db.local().get_config();
+            auto addr = cfg.rpc_address();
+            auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
+            auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
+            auto ceo = cfg.client_encryption_options();
+            auto keepalive = cfg.rpc_keepalive();
+            cql_transport::cql_server_config cql_server_config;
+            cql_server_config.timeout_config = make_timeout_config(cfg);
+            cql_server_config.max_request_size = ss._service_memory_total;
+            cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
+            cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
+            smp_service_group_config cql_server_smp_service_group_config;
+            cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
+            cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
+            seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
+            cserver->start(std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), std::ref(ss._cql_config), cql_server_config).get();
+            struct listen_cfg {
+                socket_address addr;
+                std::shared_ptr<seastar::tls::credentials_builder> cred;
+            };
 
-        auto& cfg = ss._db.local().get_config();
-        auto addr = cfg.rpc_address();
-        auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
-        auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-        auto ceo = cfg.client_encryption_options();
-        auto keepalive = cfg.rpc_keepalive();
-        cql_transport::cql_server_config cql_server_config;
-        cql_server_config.timeout_config = make_timeout_config(cfg);
-        cql_server_config.max_request_size = ss._service_memory_total;
-        cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
-        cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
-        return gms::inet_address::lookup(addr, family, preferred).then([&ss, cserver, addr, &cfg, keepalive, ceo = std::move(ceo), cql_server_config] (seastar::net::inet_address ip) {
-                return cserver->start(std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), std::ref(ss._cql_config), cql_server_config).then([cserver, &cfg, addr, ip, ceo, keepalive]() {
+            std::vector<listen_cfg> configs({ { socket_address{ip, cfg.native_transport_port()} }});
 
-                auto f = make_ready_future();
+            // main should have made sure values are clean and neatish
+            if (ceo.at("enabled") == "true") {
+                auto cred = std::make_shared<seastar::tls::credentials_builder>();
 
-                struct listen_cfg {
-                    socket_address addr;
-                    std::shared_ptr<seastar::tls::credentials_builder> cred;
-                };
+                cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
+                cred->set_priority_string(db::config::default_tls_priority);
 
-                std::vector<listen_cfg> configs({ { socket_address{ip, cfg.native_transport_port()} }});
-
-                // main should have made sure values are clean and neatish
-                if (ceo.at("enabled") == "true") {
-                    auto cred = std::make_shared<seastar::tls::credentials_builder>();
-
-                    cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
-                    cred->set_priority_string(db::config::default_tls_priority);
-
-                    if (ceo.count("priority_string")) {
-                        cred->set_priority_string(ceo.at("priority_string"));
-                    }
-                    if (ceo.count("require_client_auth") && ceo.at("require_client_auth") == "true") {
-                        cred->set_client_auth(seastar::tls::client_auth::REQUIRE);
-                    }
-
-                    f = cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM);
-
-                    if (ceo.count("truststore")) {
-                        f = f.then([cred, f = ceo.at("truststore")] { return cred->set_x509_trust_file(f, seastar::tls::x509_crt_format::PEM); });
-                    }
-
-                    slogger.info("Enabling encrypted CQL connections between client and server");
-
-                    if (cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() != cfg.native_transport_port()) {
-                        configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, std::move(cred)});
-                    } else {
-                        configs.back().cred = std::move(cred);
-                    }
+                if (ceo.count("priority_string")) {
+                    cred->set_priority_string(ceo.at("priority_string"));
+                }
+                if (ceo.count("require_client_auth") && ceo.at("require_client_auth") == "true") {
+                    cred->set_client_auth(seastar::tls::client_auth::REQUIRE);
                 }
 
-                return f.then([cserver, configs = std::move(configs), keepalive] {
-                    return parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
-                        return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, keepalive).then([cfg] {
-                            slogger.info("Starting listening for CQL clients on {} ({})"
-                                            , cfg.addr, cfg.cred ? "encrypted" : "unencrypted"
-                                            );
-                        });
-                    });
+                cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM).get();
 
+                if (ceo.count("truststore")) {
+                    cred->set_x509_trust_file(ceo.at("truststore"), seastar::tls::x509_crt_format::PEM).get();
+                }
+
+                slogger.info("Enabling encrypted CQL connections between client and server");
+
+                if (cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() != cfg.native_transport_port()) {
+                    configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, std::move(cred)});
+                } else {
+                    configs.back().cred = std::move(cred);
+                }
+            }
+
+            parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
+                return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, keepalive).then([cfg] {
+                    slogger.info("Starting listening for CQL clients on {} ({})"
+                            , cfg.addr, cfg.cred ? "encrypted" : "unencrypted"
+                    );
                 });
-            });
-        }).then([&ss] {
-            return ss.set_cql_ready(true);
+            }).get();
+
+            ss.set_cql_ready(true).get();
         });
     });
 }

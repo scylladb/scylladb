@@ -137,6 +137,10 @@ sstring get_local_dc() {
     return get_dc(local_addr);
 }
 
+unsigned storage_proxy::cas_shard(dht::token token) {
+    return dht::shard_of(token);
+}
+
 class mutation_holder {
 protected:
     size_t _size = 0;
@@ -897,7 +901,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 bool only_digest = peer != _live_endpoints[0];
                 auto da = digest_algorithm();
                 if (fbu::is_me(peer)) {
-                    return paxos::paxos_state::prepare(tr_state, _schema, _cmd, _key.key(), ballot, only_digest, da, _timeout);
+                    return paxos::paxos_state::prepare(tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     netw::messaging_service& ms = netw::get_local_messaging_service();
                     return ms.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
@@ -1051,7 +1055,7 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
         return parallel_for_each(_live_endpoints, [this, &request_tracker, timeout_if_partially_accepted, &proposal] (gms::inet_address peer) mutable {
             return futurize_apply([&] {
                 if (fbu::is_me(peer)) {
-                    return paxos::paxos_state::accept(tr_state, _schema, proposal, _timeout);
+                    return paxos::paxos_state::accept(tr_state, _schema, proposal.update.decorated_key(*_schema).token(), proposal, _timeout);
                 } else {
                     netw::messaging_service& ms = netw::get_local_messaging_service();
                     return ms.send_paxos_accept(peer, _timeout, proposal, tracing::make_trace_info(tr_state));
@@ -3972,6 +3976,7 @@ storage_proxy::do_query(schema_ptr s,
     }
 }
 
+// WARNING: the function should be called on a shard that owns the key that is been read
 future<storage_proxy::coordinator_query_result>
 storage_proxy::do_query_with_paxos(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
@@ -3986,6 +3991,9 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     auto cl_for_learn = cl == db::consistency_level::LOCAL_SERIAL ? db::consistency_level::LOCAL_QUORUM :
             db::consistency_level::QUORUM;
 
+    if (cas_shard(partition_ranges[0].start()->value().as_decorated_key().token()) != engine().cpu_id()) {
+        throw std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard");
+    }
     // All cas networking operations run with query provided timeout
     db::timeout_clock::time_point timeout = query_options.timeout(*this);
     // When to give up due to contention
@@ -4077,6 +4085,8 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
  * Note that since we are performing a CAS rather than a simple update, we perform a read (of committed
  * values) between the prepare and accept phases. This gives us a slightly longer window for another
  * coordinator to come along and trump our own promise with a newer one but is otherwise safe.
+ *
+ * WARNING: the function should be called on a shard that owns the key cas() operates on
  */
 future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges, storage_proxy::coordinator_query_options query_options,
@@ -4088,6 +4098,10 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
     db::validate_for_cas(cl_for_paxos);
     db::validate_for_cas_commit(cl_for_commit, schema->ks_name());
+
+    if (cas_shard(partition_ranges[0].start()->value().as_decorated_key().token()) != engine().cpu_id()) {
+        throw std::logic_error("storage_proxy::cas called on a wrong shard");
+    }
 
     shared_ptr<paxos_response_handler> handler;
     try {
@@ -4649,9 +4663,19 @@ void storage_proxy::init_messaging_service() {
             tracing::begin(tr_state);
         }
 
-        return get_schema_for_read(cmd.schema_version, src_addr).then([cmd = make_lw_shared<query::read_command>(std::move(cmd)),
-                key = std::move(key), ballot, only_digest, da, timeout, tr_state = std::move(tr_state)] (schema_ptr schema) {
-            return paxos::paxos_state::prepare(tr_state, std::move(schema), cmd, std::move(key), ballot, only_digest, da, *timeout);
+        return get_schema_for_read(cmd.schema_version, src_addr).then([this, cmd = std::move(cmd), key = std::move(key), ballot,
+                         only_digest, da, timeout, tr_state = std::move(tr_state)] (schema_ptr schema) mutable {
+            dht::token token = dht::global_partitioner().get_token(*schema, key);
+            unsigned shard = _db.local().shard_of(token);
+            bool local = shard == engine().cpu_id();
+            _stats.replica_cross_shard_ops += !local;
+            return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                     local, cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
+                                     ballot, only_digest, da, timeout] () {
+                return paxos::paxos_state::prepare(gt, gs, *cmd, key, ballot, only_digest, da, *timeout).then([] (paxos::prepare_response r) {
+                    return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
+                });
+            });
         });
     });
     ms.register_paxos_accept([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
@@ -4663,9 +4687,16 @@ void storage_proxy::init_messaging_service() {
             tracing::begin(tr_state);
         }
 
-        return get_schema_for_read(proposal.update.schema_version(), src_addr).then([tr_state = std::move(tr_state),
-                                                              proposal = std::move(proposal), timeout] (schema_ptr schema) {
-            return paxos::paxos_state::accept(tr_state, std::move(schema), std::move(proposal), *timeout);
+        return get_schema_for_read(proposal.update.schema_version(), src_addr).then([this, tr_state = std::move(tr_state),
+                                                              proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
+            dht::token token = proposal.update.decorated_key(*schema).token();
+            unsigned shard = _db.local().shard_of(token);
+            bool local = shard == engine().cpu_id();
+            _stats.replica_cross_shard_ops += !local;
+            return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                     local, proposal = std::move(proposal), timeout, token] () {
+                return paxos::paxos_state::accept(gt, gs, token, proposal, *timeout);
+            });
         });
     });
 }
