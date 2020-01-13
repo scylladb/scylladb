@@ -377,7 +377,6 @@ def test_gsi_3(test_table_gsi_3):
         KeyConditions={'a': {'AttributeValueList': [items[3]['a']], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [items[3]['b']], 'ComparisonOperator': 'EQ'}})
 
-@pytest.mark.xfail(reason="GSI in alternator currently have a bug on updating the second regular base column")
 def test_gsi_update_second_regular_base_column(test_table_gsi_3):
     items = [{'p': random_string(), 'a': random_string(), 'b': random_string(), 'd': random_string()} for i in range(10)]
     with test_table_gsi_3.batch_writer() as batch:
