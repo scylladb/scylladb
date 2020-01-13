@@ -77,14 +77,10 @@ public:
     impl(db_context ctxt)
         : _ctxt(std::move(ctxt))
     {
-        if (engine().cpu_id() == 0) {
-            _ctxt._migration_manager.register_listener(this);
-        }
+        _ctxt._migration_manager.register_listener(this);
     }
     ~impl() {
-        if (engine().cpu_id() == 0) {
-            _ctxt._migration_manager.unregister_listener(this);
-        }
+        _ctxt._migration_manager.unregister_listener(this);
     }
 
     void on_before_create_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
@@ -165,6 +161,10 @@ public:
     }
 
     void on_create_column_family(const sstring& ks_name, const sstring& cf_name) override {
+        // This callback is done on all shards. Only do the work once. 
+        if (engine().cpu_id() != 0) {
+            return; 
+        }
         auto& db = _ctxt._proxy.get_db().local();
         auto& cf = db.find_column_family(ks_name, cf_name);
         auto schema = cf.schema();

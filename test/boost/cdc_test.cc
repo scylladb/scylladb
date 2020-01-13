@@ -284,3 +284,20 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
     }).get();
 }
 
+// #5582 - just quickly test that we can create the cdc enabled table on a different shard 
+// and still get the logs proper. 
+SEASTAR_THREAD_TEST_CASE(test_cdc_across_shards) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        smp::submit_to(1, [&e] {
+            // this is actually ok. there is no members of cql_test_env actually used in call
+            return seastar::async([&] {
+                cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
+            });
+        }).get();
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)");
+
+        auto rows = select_log(e, "tbl");
+
+        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::update).empty());
+    }).get();
+}
