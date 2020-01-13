@@ -62,6 +62,16 @@ make_now_fct() {
     });
 }
 
+static int64_t get_valid_timestamp(const data_value& ts_obj) {
+    auto ts = value_cast<db_clock::time_point>(ts_obj);
+    int64_t ms = ts.time_since_epoch().count();
+    auto nanos_since = utils::UUID_gen::make_nanos_since(ms);
+    if (!utils::UUID_gen::is_valid_nanos_since(nanos_since)) {
+        throw exceptions::server_exception(format("{}: timestamp is out of range. Must be in milliseconds since epoch", ms));
+    }
+    return ms;
+}
+
 inline
 shared_ptr<function>
 make_min_timeuuid_fct() {
@@ -75,8 +85,7 @@ make_min_timeuuid_fct() {
         if (ts_obj.is_null()) {
             return {};
         }
-        auto ts = value_cast<db_clock::time_point>(ts_obj);
-        auto uuid = utils::UUID_gen::min_time_UUID(ts.time_since_epoch().count());
+        auto uuid = utils::UUID_gen::min_time_UUID(get_valid_timestamp(ts_obj));
         return {timeuuid_type->decompose(uuid)};
     });
 }
@@ -94,8 +103,7 @@ make_max_timeuuid_fct() {
         if (ts_obj.is_null()) {
             return {};
         }
-        auto ts = value_cast<db_clock::time_point>(ts_obj);
-        auto uuid = utils::UUID_gen::max_time_UUID(ts.time_since_epoch().count());
+        auto uuid = utils::UUID_gen::max_time_UUID(get_valid_timestamp(ts_obj));
         return {timeuuid_type->decompose(uuid)};
     });
 }
@@ -261,9 +269,7 @@ make_timeuuidtounixtimestamp_fct() {
 }
 
 inline bytes time_point_to_long(const data_value& v) {
-    auto since_epoch = value_cast<db_clock::time_point>(v).time_since_epoch();
-    int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(since_epoch).count();
-    return serialized(ms);
+    return serialized(get_valid_timestamp(v));
 }
 
 inline
