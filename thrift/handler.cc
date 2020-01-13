@@ -962,6 +962,9 @@ public:
         virtual void visit(const cql_transport::messages::result_message::rows& m) override {
             _result = to_thrift_result(m.rs());
         }
+        virtual void visit(const cql_transport::messages::result_message::bounce_to_shard& m) override {
+            throw TProtocolException(TProtocolException::TProtocolExceptionType::NOT_IMPLEMENTED, "Thrift does not support executing LWT statements");
+        }
     };
 
     void execute_cql3_query(thrift_fn::function<void(CqlResult const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression, const ConsistencyLevel::type consistency) {

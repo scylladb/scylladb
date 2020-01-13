@@ -68,6 +68,29 @@ public:
         UNINITIALIZED, AUTHENTICATION, READY
     };
 
+    // This class is used to move client_state between shards
+    // It is created on a shard that owns client_state than passed
+    // to a target shard where client_state_for_another_shard::get()
+    // can be called to obtain a shard local copy.
+    class client_state_for_another_shard {
+    private:
+        const client_state* _cs;
+        tracing::global_trace_state_ptr _trace_state;
+        seastar::sharded<auth::service>* _auth_service;
+        client_state_for_another_shard(const client_state* cs, tracing::global_trace_state_ptr gt,
+                seastar::sharded<auth::service>* auth_service) : _cs(cs), _trace_state(gt), _auth_service(auth_service) {}
+        friend client_state;
+    public:
+        client_state get() const {
+            return client_state(_cs, _trace_state, _auth_service);
+        }
+    };
+private:
+    client_state(const client_state* cs, tracing::global_trace_state_ptr gt, seastar::sharded<auth::service>* auth_service)
+            : _keyspace(cs->_keyspace),  _trace_state_ptr(gt), _user(cs->_user), _auth_state(cs->_auth_state),
+              _is_internal(cs->_is_internal), _is_thrift(cs->_is_thrift), _remote_address(cs->_remote_address),
+              _auth_service(auth_service ? &auth_service->local() : nullptr) {}
+    friend client_state_for_another_shard;
 private:
     sstring _keyspace;
     tracing::trace_state_ptr _trace_state_ptr;
@@ -155,7 +178,8 @@ public:
             , _is_thrift(false)
     {}
 
-    client_state(client_state&) = delete;
+    client_state(const client_state&) = delete;
+    client_state(client_state&&) = default;
 
     ///
     /// `nullptr` for internal instances.
@@ -313,6 +337,10 @@ public:
 
     const std::optional<auth::authenticated_user>& user() const {
         return _user;
+    }
+
+    client_state_for_another_shard move_to_other_shard() {
+        return client_state_for_another_shard(this, _trace_state_ptr, _auth_service ? &_auth_service->container() : nullptr);
     }
 
 #if 0

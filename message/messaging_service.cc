@@ -1234,7 +1234,7 @@ future<std::vector<row_level_diff_detect_algorithm>> messaging_service::send_rep
 }
 
 void
-messaging_service::register_paxos_prepare(std::function<future<service::paxos::prepare_response>(
+messaging_service::register_paxos_prepare(std::function<future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>(
         const rpc::client_info&, rpc::opt_time_point, query::read_command cmd, partition_key key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info>)>&& func) {
     register_handler(this, messaging_verb::PAXOS_PREPARE, std::move(func));
