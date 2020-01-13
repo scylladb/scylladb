@@ -155,6 +155,11 @@ public:
         return uuid;
     }
 
+    /** validates uuid from raw bytes. */
+    static bool is_valid_UUID(bytes raw) {
+        return raw.size() == 16;
+    }
+
     /** creates uuid from raw bytes. */
     static UUID get_UUID(bytes raw) {
         assert(raw.size() == 16);

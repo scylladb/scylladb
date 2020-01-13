@@ -101,6 +101,17 @@ make_max_timeuuid_fct() {
     });
 }
 
+inline utils::UUID get_valid_timeuuid(bytes raw) {
+    if (!utils::UUID_gen::is_valid_UUID(raw)) {
+        throw exceptions::server_exception(format("invalid timeuuid: size={}", raw.size()));
+    }
+    auto uuid = utils::UUID_gen::get_UUID(raw);
+    if (!uuid.is_timestamp()) {
+        throw exceptions::server_exception(format("{}: Not a timeuuid: version={}", uuid, uuid.version()));
+    }
+    return uuid;
+}
+
 inline
 shared_ptr<function>
 make_date_of_fct() {
@@ -111,7 +122,7 @@ make_date_of_fct() {
         if (!bb) {
             return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb))));
         return {timestamp_type->decompose(ts)};
     });
 }
@@ -126,7 +137,7 @@ make_unix_timestamp_of_fct() {
         if (!bb) {
             return {};
         }
-        return {long_type->decompose(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb)))};
+        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)))};
     });
 }
 
@@ -177,7 +188,7 @@ make_timeuuidtodate_fct() {
         if (!bb) {
             return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb))));
         auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
         return {simple_date_type->decompose(to_simple_date(ts))};
     });
@@ -212,7 +223,7 @@ make_timeuuidtotimestamp_fct() {
         if (!bb) {
             return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb))));
         return {timestamp_type->decompose(ts)};
     });
 }
@@ -246,7 +257,7 @@ make_timeuuidtounixtimestamp_fct() {
         if (!bb) {
             return {};
         }
-        return {long_type->decompose(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb)))};
+        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)))};
     });
 }
 
