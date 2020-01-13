@@ -171,6 +171,10 @@ public:
     gms::inet_address get_client_address() const {
         return gms::inet_address(_remote_address);
     }
+    
+    ::in_port_t get_client_port() const {
+        return _remote_address.port();
+    }
 
     client_state(internal_tag)
             : _keyspace("system")
