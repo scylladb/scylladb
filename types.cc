@@ -1558,6 +1558,13 @@ public:
         }
         out = std::copy(b.crbegin(), b.crend(), out);
     }
+    static size_t serialized_size_aux(const boost::multiprecision::cpp_int& num) {
+        if (num) {
+            return align_up(boost::multiprecision::msb(num) + 2, 8u) / 8;
+        } else {
+            return 1;
+        }
+    }
     virtual size_t serialized_size(const void* value) const override {
         if (!value) {
             return 0;
@@ -1570,8 +1577,10 @@ public:
         if (!num) {
             return 1;
         }
-        auto pnum = abs(num);
-        return align_up(boost::multiprecision::msb(pnum) + 2, 8u) / 8;
+        if (num < 0) {
+            return serialized_size_aux(-num - 1);
+        }
+        return serialized_size_aux(num);
     }
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
         if (v1.empty()) {
