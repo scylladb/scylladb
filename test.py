@@ -42,6 +42,7 @@ import time
 import xml.etree.ElementTree as ET
 import yaml
 
+
 def create_formatter(*decorators):
     """Return a function which decorates its argument with the given
     color/style if stdout is a tty, and leaves intact otherwise."""
@@ -80,8 +81,6 @@ class TestSuite(ABC):
         self.name = os.path.basename(self.path)
         self.cfg = cfg
         self.tests = []
-        # Map of custom test command line arguments, if configured
-        self.custom_args = cfg.get("custom_args", {})
 
     @property
     def next_id(self):
@@ -155,6 +154,14 @@ class TestSuite(ABC):
 class UnitTestSuite(TestSuite):
     """TestSuite instantiation for non-boost unit tests"""
 
+    def __init__(self, path, cfg):
+        super().__init__(path, cfg)
+        # Map of custom test command line arguments, if configured
+        self.custom_args = cfg.get("custom_args", {})
+
+    def create_test(self, *args, **kwargs):
+        return UnitTest(*args, **kwargs)
+
     def add_test(self, shortname, mode, options):
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
@@ -163,7 +170,7 @@ class UnitTestSuite(TestSuite):
         # are two cores and 2G of RAM
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
-            test = UnitTest(self.next_id, shortname, a, self, mode, options)
+            test = self.create_test(self.next_id, shortname, a, self, mode, options)
             self.tests.append(test)
 
     @property
@@ -173,6 +180,9 @@ class UnitTestSuite(TestSuite):
 
 class BoostTestSuite(UnitTestSuite):
     """TestSuite for boost unit tests"""
+
+    def create_test(self, *args, **kwargs):
+        return BoostTest(*args, **kwargs)
 
     def junit_tests(self):
         """Boost tests produce an own XML output, so are not included in a junit report"""
@@ -224,14 +234,6 @@ class UnitTest(Test):
         self.path = os.path.join("build", self.mode, "test", self.name)
         self.args = shlex.split(args) + UnitTest.standard_args
 
-        if isinstance(suite, BoostTestSuite):
-            boost_args = []
-            xmlout = os.path.join(options.tmpdir, self.mode, "xml",
-                                  self.uname + ".xunit.xml")
-            boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
-            boost_args += ['--']
-            self.args = boost_args + self.args
-
     def print_summary(self):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
@@ -240,6 +242,18 @@ class UnitTest(Test):
         self.success = await run_test(self, options)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
+
+
+class BoostTest(UnitTest):
+    """A unit test which can produce its own XML output"""
+
+    def __init__(self, test_no, shortname, args, suite, mode, options):
+        super().__init__(test_no, shortname, args, suite, mode, options)
+        boost_args = []
+        xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
+        boost_args += ['--']
+        self.args = boost_args + self.args
 
 
 class CqlTest(Test):
