@@ -30,6 +30,7 @@
 #include "concrete_types.hh"
 #include <seastar/core/print.hh>
 #include <seastar/net/ip.hh>
+#include "utils/exceptions.hh"
 #include "utils/serialization.hh"
 #include "vint-serialization.hh"
 #include "combine.hh"
@@ -2608,7 +2609,7 @@ bool operator==(const data_value& x, const data_value& y) {
     if (x.is_null() || y.is_null()) {
         return false;
     }
-    return x._type->equal(x.serialize(), y.serialize());
+    return x._type->equal(*x.serialize(), *y.serialize());
 }
 
 size_t data_value::serialized_size() const {
@@ -2624,14 +2625,22 @@ void data_value::serialize(bytes::iterator& out) const {
     }
 }
 
-bytes data_value::serialize() const {
+bytes_opt data_value::serialize() const {
     if (!_value) {
-        return {};
+        return std::nullopt;
     }
     bytes b(bytes::initialized_later(), serialized_size());
     auto i = b.begin();
     serialize(i);
     return b;
+}
+
+bytes data_value::serialize_nonnull() const {
+    static logging::logger logger("types");
+    if (!_value) {
+        on_internal_error(logger, "serialize_nonnull called on null");
+    }
+    return std::move(*serialize());
 }
 
 sstring abstract_type::get_string(const bytes& b) const {

@@ -286,7 +286,7 @@ data_model::mutation_description::collection generate_user_value(std::mt19937& e
     md::collection collection;
     for (auto i: field_idxs) {
         collection.elements.push_back({serialize_field_index(i),
-                val_gen.generate_atomic_value(engine, *type.type(i), value_generator::no_size_in_bytes_limit).serialize()});
+                val_gen.generate_atomic_value(engine, *type.type(i), value_generator::no_size_in_bytes_limit).serialize_nonnull()});
     }
 
     return collection;
@@ -304,8 +304,8 @@ data_model::mutation_description::collection generate_collection(std::mt19937& e
     std::map<bytes, md::atomic_value, serialized_compare> collection{key_type.as_less_comparator()};
 
     for (size_t i = 0; i < size; ++i) {
-        collection.emplace(key_generator(engine, value_generator::no_size_in_bytes_limit).serialize(),
-                value_generator(engine, value_generator::no_size_in_bytes_limit).serialize());
+        collection.emplace(key_generator(engine, value_generator::no_size_in_bytes_limit).serialize_nonnull(),
+                value_generator(engine, value_generator::no_size_in_bytes_limit).serialize().value_or(""));
     }
 
     md::collection flat_collection;
@@ -356,7 +356,7 @@ std::vector<data_value> generate_frozen_set(std::mt19937& engine, const abstract
 
     for (size_t i = 0; i < size; ++i) {
         auto val = key_generator(engine, value_max_size_in_bytes);
-        auto serialized_key = val.serialize();
+        auto serialized_key = val.serialize_nonnull();
         collection.emplace(std::move(serialized_key), std::move(val));
     }
 
@@ -389,7 +389,7 @@ std::vector<std::pair<data_value, data_value>> generate_frozen_map(std::mt19937&
 
     for (size_t i = 0; i < size; ++i) {
         auto key = key_generator(engine, key_max_size_in_bytes);
-        auto serialized_key = key.serialize();
+        auto serialized_key = key.serialize_nonnull();
         auto value = value_generator(engine, value_max_size_in_bytes);
         collection.emplace(std::move(serialized_key), std::pair(std::move(key), std::move(value)));
     }
@@ -672,7 +672,7 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
     auto it = _regular_value_generators.find(&type);
     if (it != _regular_value_generators.end()) {
         return [this, gen = it->second] (std::mt19937& engine) -> data_model::mutation_description::value {
-            return gen(engine, no_size_in_bytes_limit).serialize();
+            return gen(engine, no_size_in_bytes_limit).serialize_nonnull();
         };
     }
 
@@ -683,14 +683,14 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
             };
         } else {
             return [this, maybe_user_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-                return generate_frozen_user_value(engine, *maybe_user_type, *this, no_size_in_bytes_limit).serialize();
+                return generate_frozen_user_value(engine, *maybe_user_type, *this, no_size_in_bytes_limit).serialize_nonnull();
             };
         }
     }
 
     if (auto maybe_tuple_type = dynamic_cast<const tuple_type_impl*>(&type)) {
         return [this, maybe_tuple_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-            return generate_frozen_tuple_value(engine, *maybe_tuple_type, *this, no_size_in_bytes_limit).serialize();
+            return generate_frozen_tuple_value(engine, *maybe_tuple_type, *this, no_size_in_bytes_limit).serialize_nonnull();
         };
     }
 
@@ -701,7 +701,7 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
             };
         } else {
             return [this, maybe_list_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-                return generate_frozen_list_value(engine, *maybe_list_type, *this, no_size_in_bytes_limit).serialize();
+                return generate_frozen_list_value(engine, *maybe_list_type, *this, no_size_in_bytes_limit).serialize_nonnull();
             };
         }
     }
@@ -713,7 +713,7 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
             };
         } else {
             return [this, maybe_set_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-                return generate_frozen_set_value(engine, *maybe_set_type, *this, no_size_in_bytes_limit).serialize();
+                return generate_frozen_set_value(engine, *maybe_set_type, *this, no_size_in_bytes_limit).serialize_nonnull();
             };
         }
     }
@@ -725,7 +725,7 @@ value_generator::generator value_generator::get_generator(const abstract_type& t
             };
         } else {
             return [this, maybe_map_type] (std::mt19937& engine) -> data_model::mutation_description::value {
-                return generate_frozen_map_value(engine, *maybe_map_type, *this, no_size_in_bytes_limit).serialize();
+                return generate_frozen_map_value(engine, *maybe_map_type, *this, no_size_in_bytes_limit).serialize_nonnull();
             };
         }
     }
@@ -918,7 +918,7 @@ data_model::mutation_description::key random_schema::make_key(uint32_t n, value_
 
     std::vector<bytes> key;
     for (const auto& cdef : columns) {
-        key.emplace_back(gen.generate_atomic_value(engine, *cdef.type, max_component_size).serialize());
+        key.emplace_back(gen.generate_atomic_value(engine, *cdef.type, max_component_size).serialize_nonnull());
     }
 
     return key;

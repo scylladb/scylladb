@@ -43,7 +43,7 @@ private:
         if (cell) {
             cell->value().with_linearized([this, &col] (bytes_view cell_view) {
                 auto&& dv = col.type->deserialize_value(cell_view);
-                auto&& d = dv.serialize();
+                auto&& d = dv.serialize_nonnull();
                 _data->_result = std::move(d);
                 _data->_has_result = true;
             });

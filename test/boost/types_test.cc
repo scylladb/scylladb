@@ -831,7 +831,7 @@ BOOST_AUTO_TEST_CASE(test_map_to_string) {
     native_type native{std::pair(n, n), std::pair(n, n)};
     auto ptr = std::make_unique<native_type>(std::move(native));
     auto v = data_value::make(m, std::move(ptr));
-    BOOST_REQUIRE_EQUAL(m->to_string(v.serialize()), "{42 : 42}, {42 : 42}");
+    BOOST_REQUIRE_EQUAL(m->to_string(v.serialize_nonnull()), "{42 : 42}, {42 : 42}");
 }
 
 BOOST_AUTO_TEST_CASE(test_map_to_json) {
@@ -851,7 +851,7 @@ BOOST_AUTO_TEST_CASE(test_set_to_string) {
     native_type native{data_value(int32_t(41)), data_value(int32_t(42))};
     auto ptr = std::make_unique<native_type>(std::move(native));
     auto v = data_value::make(m, std::move(ptr));
-    BOOST_REQUIRE_EQUAL(m->to_string(v.serialize()), "41; 42");
+    BOOST_REQUIRE_EQUAL(m->to_string(v.serialize_nonnull()), "41; 42");
 }
 
 BOOST_AUTO_TEST_CASE(test_list_to_string) {
@@ -860,7 +860,7 @@ BOOST_AUTO_TEST_CASE(test_list_to_string) {
     native_type native{data_value(int32_t(41)), data_value(int32_t(42))};
     auto ptr = std::make_unique<native_type>(std::move(native));
     auto v = data_value::make(m, std::move(ptr));
-    BOOST_REQUIRE_EQUAL(m->to_string(v.serialize()), "41, 42");
+    BOOST_REQUIRE_EQUAL(m->to_string(v.serialize_nonnull()), "41, 42");
 }
 
 BOOST_AUTO_TEST_CASE(test_collection_type_compatibility) {

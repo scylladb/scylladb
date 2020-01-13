@@ -658,7 +658,7 @@ struct from_lua_visitor {
         }
         std::sort(elements.begin(), elements.end(), [&](const data_value& a, const data_value& b) {
             // FIXME: this is madness, we have to be able to compare without serializing!
-            return element_type->less(a.serialize(), b.serialize());
+            return element_type->less(a.serialize_nonnull(), b.serialize_nonnull());
         });
         return make_set_value(t.shared_from_this(), std::move(elements));
     }
@@ -677,7 +677,7 @@ struct from_lua_visitor {
         }
         std::sort(elements.begin(), elements.end(), [&](const map_pair& a, const map_pair& b) {
             // FIXME: this is madness, we have to be able to compare without serializing!
-            return key_type->less(a.first.serialize(), b.first.serialize());
+            return key_type->less(a.first.serialize_nonnull(), b.first.serialize_nonnull());
         });
         return make_map_value(t.shared_from_this(), std::move(elements));
     }
@@ -901,7 +901,7 @@ static bytes convert_return(lua_slice_state &l, const data_type& return_type) {
     // FIXME: It should be possible to avoid creating the data_value,
     // or even better, change the function::execute interface to
     // return a data_value instead of bytes_opt.
-    return convert_from_lua(l, return_type).serialize();
+    return convert_from_lua(l, return_type).serialize_nonnull();
 }
 
 static void push_sstring(lua_slice_state& l, const sstring& v) {

@@ -400,7 +400,8 @@ public:
     }
     size_t serialized_size() const;
     void serialize(bytes::iterator& out) const;
-    bytes serialize() const;
+    bytes_opt serialize() const;
+    bytes serialize_nonnull() const;
     friend bool operator==(const data_value& x, const data_value& y);
     friend inline bool operator!=(const data_value& x, const data_value& y);
     friend class abstract_type;
@@ -426,7 +427,7 @@ public:
 
 template<typename T>
 inline bytes serialized(T v) {
-    return data_value(v).serialize();
+    return data_value(v).serialize_nonnull();
 }
 
 class serialized_compare;

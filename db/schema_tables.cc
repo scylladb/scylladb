@@ -1131,7 +1131,7 @@ static std::map<std::vector<bytes>, const query::result_set_row*> build_row_map(
         std::vector<bytes> key;
         for (const auto& column : primary_key) {
             const data_value *val = row.get_data_value(column.name_as_text());
-            key.push_back(val->serialize());
+            key.push_back(val->serialize_nonnull());
         }
         ret.insert(std::pair(std::move(key), &row));
     }
