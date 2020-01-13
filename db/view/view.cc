@@ -1095,7 +1095,7 @@ future<> mutate_MV(
                 // writes but mutate_locally() doesn't, so we need to do that here.
                 ++stats.writes;
                 auto mut_ptr = std::make_unique<frozen_mutation>(std::move(mut.fm));
-                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut.s, *mut_ptr).then_wrapped(
+                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut.s, *mut_ptr, db::commitlog::force_sync::no).then_wrapped(
                         [&stats,
                          maybe_account_failure = std::move(maybe_account_failure),
                          mut_ptr = std::move(mut_ptr)] (future<>&& f) {
