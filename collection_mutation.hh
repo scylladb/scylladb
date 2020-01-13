@@ -28,6 +28,7 @@
 #include "cql_serialization_format.hh"
 #include "marshal_exception.hh"
 #include "utils/linearizing_input_stream.hh"
+#include <iosfwd>
 
 class abstract_type;
 class bytes_ostream;
@@ -99,6 +100,15 @@ public:
         auto stream = collection_mutation_input_stream(data);
         return f(deserialize_collection_mutation(type, stream));
     }
+
+    class printer {
+        const abstract_type& _type;
+        const collection_mutation_view& _cmv;
+    public:
+        printer(const abstract_type& type, const collection_mutation_view& cmv)
+                : _type(type), _cmv(cmv) {}
+        friend std::ostream& operator<<(std::ostream& os, const printer& cmvp);
+    };
 };
 
 // A serialized mutation of a collection of cells.

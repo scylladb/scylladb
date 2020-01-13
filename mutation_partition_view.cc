@@ -45,6 +45,10 @@
 
 using namespace db;
 
+GCC6_CONCEPT(static_assert(MutationViewVisitor<mutation_partition_view_virtual_visitor>);)
+
+mutation_partition_view_virtual_visitor::~mutation_partition_view_virtual_visitor() = default;
+
 namespace {
 
 using atomic_cell_variant = boost::variant<ser::live_cell_view,
@@ -250,6 +254,10 @@ void mutation_partition_view::accept(const schema& s, partition_builder& visitor
 
 void mutation_partition_view::accept(const column_mapping& cm, converting_mutation_partition_applier& visitor) const
 {
+    do_accept(cm, visitor);
+}
+
+void mutation_partition_view::accept(const column_mapping& cm, mutation_partition_view_virtual_visitor& visitor) const {
     do_accept(cm, visitor);
 }
 

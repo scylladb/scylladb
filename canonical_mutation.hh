@@ -26,6 +26,7 @@
 #include "database_fwd.hh"
 #include "mutation_partition_visitor.hh"
 #include "mutation_partition_serializer.hh"
+#include <iosfwd>
 
 // Immutable mutation form which can be read using any schema version of the same table.
 // Safe to access from other shards via const&.
@@ -52,4 +53,5 @@ public:
 
     const bytes& representation() const { return _data; }
 
+    friend std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm);
 };

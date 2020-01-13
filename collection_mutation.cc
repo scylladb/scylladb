@@ -153,6 +153,44 @@ api::timestamp_type collection_mutation_view::last_update(const abstract_type& t
     ));
 }
 
+std::ostream& operator<<(std::ostream& os, const collection_mutation_view::printer& cmvp) {
+    fmt::print(os, "{{collection_mutation_view ");
+    cmvp._cmv.with_deserialized(cmvp._type, [&os, &type = cmvp._type] (const collection_mutation_view_description& cmvd) {
+        bool first = true;
+        fmt::print(os, "tombstone {}", cmvd.tomb);
+        visit(type, make_visitor(
+        [&] (const collection_type_impl& ctype) {
+            auto&& key_type = ctype.name_comparator();
+            auto&& value_type = ctype.value_comparator();
+            for (auto&& [key, value] : cmvd.cells) {
+                if (!first) {
+                    fmt::print(os, ", ");
+                }
+                fmt::print(os, "{}: {}", key_type->to_string(key), atomic_cell_view::printer(*value_type, value));
+                first = false;
+            }
+        },
+        [&] (const user_type_impl& utype) {
+            for (auto&& [raw_idx, value] : cmvd.cells) {
+                if (!first) {
+                    fmt::print(os, ", ");
+                }
+                auto idx = deserialize_field_index(raw_idx);
+                fmt::print(os, "{}: {}", utype.field_name_as_string(idx), atomic_cell_view::printer(*utype.type(idx), value));
+                first = false;
+            }
+        },
+        [&] (const abstract_type& o) {
+            // Not throwing exception in this likely-to-be debug context
+            fmt::print(os, "attempted to pretty-print collection_mutation_view_description with type {}", o.name());
+        }
+        ));
+    });
+    fmt::print(os, "}}");
+    return os;
+}
+
+
 collection_mutation_description
 collection_mutation_view_description::materialize(const abstract_type& type) const {
     collection_mutation_description m;
