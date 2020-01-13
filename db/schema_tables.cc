@@ -2321,6 +2321,10 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
         builder.set_cdc_options(std::move(cdc_options));
     }
 
+    if (is_system_keyspace(ks_name) && is_extra_durable(cf_name)) {
+        builder.set_wait_for_sync_to_commitlog(true);
+    }
+
     return builder.build();
 }
 

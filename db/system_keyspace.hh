@@ -124,6 +124,10 @@ static constexpr auto FUNCTIONS = "schema_functions";
 static constexpr auto AGGREGATES = "schema_aggregates";
 }
 
+static constexpr const char* extra_durable_tables[] = { PAXOS };
+
+bool is_extra_durable(const sstring& name);
+
 // Partition estimates for a given range of tokens.
 struct range_estimates {
     schema_ptr schema;
