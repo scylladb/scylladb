@@ -450,6 +450,41 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_large_collection_serialization_exception_safety) {
+#ifndef SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION
+    std::cout << "Test case " << get_name() << " will not run because SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION is not defined." << std::endl;
+    return;
+#endif
+    const auto key_type = int32_type;
+    const auto value_type = utf8_type;
+    const auto collection_type = map_type_impl::get_instance(key_type, value_type, true);
+
+    const auto blob_size = 1024;
+    const bytes blob(blob_size, 'a');
+    const api::timestamp_type ts = 1;
+
+    collection_mutation_description cmd;
+
+    for (size_t i = 0; i != 256; ++i) {
+        cmd.cells.emplace_back(int32_type->decompose(int(i)), atomic_cell::make_live(*value_type, ts, blob, atomic_cell::collection_member::yes));
+    }
+
+    // We need an undisturbed run first to create all thread_local variables.
+    cmd.serialize(*collection_type);
+
+    auto& injector = memory::local_failure_injector();
+    uint64_t i = 0;
+    do {
+        try {
+            injector.fail_after(i++);
+            cmd.serialize(*collection_type);
+            injector.cancel();
+        } catch (const std::bad_alloc&) {
+            // expected
+        }
+    } while (injector.failed());
+}
+
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     return seastar::async([] {
     storage_service_for_tests ssft;
