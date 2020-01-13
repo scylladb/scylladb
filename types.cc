@@ -1480,17 +1480,30 @@ static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::na
 static size_t concrete_serialized_size(const boost::multiprecision::cpp_int& num);
 
 static void serialize_varint_aux(bytes::iterator& out, const boost::multiprecision::cpp_int& num, uint8_t mask) {
-    std::vector<uint8_t> b;
-    export_bits(num, std::back_inserter(b), 8);
-    if (b[0] & 0x80) {
-        *out++ = 0 ^ mask;
-    }
+    struct inserter_with_prefix {
+        bytes::iterator& out;
+        uint8_t mask;
+        bool first = true;
+        inserter_with_prefix& operator*() {
+            return *this;
+        }
+        inserter_with_prefix& operator=(uint8_t value) {
+            if (first) {
+                if (value & 0x80) {
+                    *out++ = 0 ^ mask;
+                }
+                first = false;
+            }
+            *out = value ^ mask;
+            return *this;
+        }
+        inserter_with_prefix& operator++() {
+            ++out;
+            return *this;
+        }
+    };
 
-    for (uint8_t &c : b) {
-        c ^= mask;
-    }
-
-    out = std::copy(b.cbegin(), b.cend(), out);
+    export_bits(num, inserter_with_prefix{out, mask}, 8);
 }
 
 static void serialize_varint(bytes::iterator& out, const boost::multiprecision::cpp_int& num) {
