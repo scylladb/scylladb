@@ -93,7 +93,9 @@ public:
      */
     static UUID get_time_UUID()
     {
-        return UUID(instance->create_time_safe(), clock_seq_and_node);
+        auto uuid = UUID(instance->create_time_safe(), clock_seq_and_node);
+        assert(uuid.is_timestamp());
+        return uuid;
     }
 
     /**
@@ -103,7 +105,9 @@ public:
      */
     static UUID get_time_UUID(int64_t when)
     {
-        return UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
+        auto uuid = UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
+        assert(uuid.is_timestamp());
+        return uuid;
     }
 
     /**
@@ -117,12 +121,16 @@ public:
         // "nanos" needs to be in 100ns intervals since the adoption of the Gregorian calendar in the West.
         uint64_t nanos = duration_cast<nanoseconds>(tp.time_since_epoch()).count() / 100;
         nanos -= (10000ULL * START_EPOCH);
-        return UUID(create_time(nanos), clock_seq_and_node);
+        auto uuid = UUID(create_time(nanos), clock_seq_and_node);
+        assert(uuid.is_timestamp());
+        return uuid;
     }
 
     static UUID get_time_UUID(int64_t when, int64_t clock_seq_and_node)
     {
-        return UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
+        auto uuid = UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
+        assert(uuid.is_timestamp());
+        return uuid;
     }
     /**
      * Similar to get_time_UUID, but randomize the clock and sequence.
@@ -142,7 +150,9 @@ public:
         int64_t when_in_millis = when_in_micros / 1000;
         int64_t nanos = (when_in_micros - (when_in_millis * 1000)) * 10;
 
-        return UUID(create_time(from_unix_timestamp(when_in_millis) + nanos), rand_dist(rand_gen));
+        auto uuid = UUID(create_time(from_unix_timestamp(when_in_millis) + nanos), rand_dist(rand_gen));
+        assert(uuid.is_timestamp());
+        return uuid;
     }
 
     /** creates uuid from raw bytes. */
@@ -198,7 +208,9 @@ public:
      */
     static UUID min_time_UUID(int64_t timestamp)
     {
-        return UUID(create_time(from_unix_timestamp(timestamp)), MIN_CLOCK_SEQ_AND_NODE);
+        auto uuid = UUID(create_time(from_unix_timestamp(timestamp)), MIN_CLOCK_SEQ_AND_NODE);
+        assert(uuid.is_timestamp());
+        return uuid;
     }
 
     /**
@@ -214,7 +226,9 @@ public:
         // timestamp 1ms, then we should not extend 100's nanoseconds
         // precision by taking 10000, but rather 19999.
         int64_t uuid_tstamp = from_unix_timestamp(timestamp + 1) - 1;
-        return UUID(create_time(uuid_tstamp), MAX_CLOCK_SEQ_AND_NODE);
+        auto uuid = UUID(create_time(uuid_tstamp), MAX_CLOCK_SEQ_AND_NODE);
+        assert(uuid.is_timestamp());
+        return uuid;
     }
 
     /**
