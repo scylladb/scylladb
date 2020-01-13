@@ -49,6 +49,8 @@
 #include "test/lib/exception_utils.hh"
 #include "json.hh"
 #include <regex>
+#include "schema_builder.hh"
+#include "service/migration_manager.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -4642,5 +4644,61 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
             base_schema->describe(base_ss);
             BOOST_CHECK_EQUAL(normalize_white_space(base_ss.str()), normalize_white_space(base_table));
         }
+    });
+}
+
+SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE t (p int, c int, v1 int, v2 int, primary key(p,c))");
+        auto schema = e.local_db().find_schema("ks", "t");
+
+        // Create a CQL-illegal view with two regular base columns in the view key
+        schema_builder view_builder("ks", "tv");
+        view_builder.with_column(to_bytes("v1"), int32_type, column_kind::partition_key)
+                .with_column(to_bytes("v2"), int32_type, column_kind::clustering_key)
+                .with_column(to_bytes("p"), int32_type, column_kind::clustering_key)
+                .with_column(to_bytes("c"), int32_type, column_kind::clustering_key)
+                .with_view_info(*schema, false, "v1 IS NOT NULL AND v2 IS NOT NULL AND p IS NOT NULL AND c IS NOT NULL");
+
+        schema_ptr view_schema = view_builder.build();
+        service::get_local_migration_manager().announce_new_view(view_ptr(view_schema)).get();
+
+        // Verify that deleting and restoring columns behaves as expected - i.e. the row is deleted and regenerated
+        cquery_nofail(e, "INSERT INTO t (p, c, v1, v2) VALUES (1, 2, 3, 4)");
+        auto msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_rows({
+            {{int32_type->decompose(3), int32_type->decompose(4), int32_type->decompose(1), int32_type->decompose(2)}},
+        });
+
+        cquery_nofail(e, "UPDATE t SET v2 = NULL WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+
+        cquery_nofail(e, "UPDATE t SET v2 = 7 WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_rows({
+            {{int32_type->decompose(3), int32_type->decompose(7), int32_type->decompose(1), int32_type->decompose(2)}},
+        });
+
+        cquery_nofail(e, "UPDATE t SET v1 = NULL WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+
+
+        cquery_nofail(e, "UPDATE t SET v1 = 9 WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_rows({
+            {{int32_type->decompose(9), int32_type->decompose(7), int32_type->decompose(1), int32_type->decompose(2)}},
+        });
+
+        cquery_nofail(e, "UPDATE t SET v1 = NULL, v2 = NULL WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+
+        cquery_nofail(e, "UPDATE t SET v1 = 11, v2 = 13 WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_rows({
+            {{int32_type->decompose(11), int32_type->decompose(13), int32_type->decompose(1), int32_type->decompose(2)}},
+        });
     });
 }
