@@ -1597,12 +1597,14 @@ future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
 
 // Serialized
 future<> storage_service::replicate_tm_only() {
-    _shadow_token_metadata = _token_metadata;
+    auto tm = _token_metadata;
 
-    return get_storage_service().invoke_on_all([this](storage_service& local_ss){
-        if (engine().cpu_id() != 0) {
-            local_ss._token_metadata = _shadow_token_metadata;
-        }
+    return do_with(std::move(tm), [] (token_metadata& tm) {
+        return get_storage_service().invoke_on_all([&tm] (storage_service& local_ss){
+            if (engine().cpu_id() != 0) {
+                local_ss._token_metadata = tm;
+            }
+        });
     });
 }
 
