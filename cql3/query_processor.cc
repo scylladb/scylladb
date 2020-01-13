@@ -402,6 +402,11 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, qu
                             sm::description("Counts the number of rows read during CQL requests that required ALLOW FILTERING and dropped by the filter. Number similar to filtered_rows_read_total indicates that filtering is not accurate and might cause performance degradation.")),
 
                     sm::make_derive(
+                            "select_bypass_caches",
+                            _cql_stats.select_bypass_caches,
+                            sm::description("Counts the number of SELECT statements with BYPASS CACHE option.")),
+
+                    sm::make_derive(
                             "authorized_prepared_statements_cache_evictions",
                             [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_cache_evictions; },
                             sm::description("Counts the number of authenticated prepared statements cache entries evictions.")),

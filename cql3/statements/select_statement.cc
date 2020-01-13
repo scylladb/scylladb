@@ -313,6 +313,8 @@ select_statement::do_execute(service::storage_proxy& proxy,
             ? source_selector::INTERNAL : source_selector::USER;
     ++_stats.query_cnt(src_sel, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
 
+    _stats.select_bypass_caches += _parameters->bypass_cache();
+
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
         make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, utils::UUID(), options.get_timestamp(state));
 
