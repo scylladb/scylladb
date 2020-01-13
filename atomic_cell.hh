@@ -153,6 +153,14 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
+
+    class printer {
+        const abstract_type& _type;
+        const atomic_cell_view& _cell;
+    public:
+        printer(const abstract_type& type, const atomic_cell_view& cell) : _type(type), _cell(cell) {}
+        friend std::ostream& operator<<(std::ostream& os, const printer& acvp);
+    };
 };
 
 class atomic_cell_mutable_view final : public basic_atomic_cell_view<mutable_view::yes> {
@@ -219,6 +227,12 @@ public:
     static atomic_cell make_live_uninitialized(const abstract_type& type, api::timestamp_type timestamp, size_t size);
     friend class atomic_cell_or_collection;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell& ac);
+
+    class printer : atomic_cell_view::printer {
+    public:
+        printer(const abstract_type& type, const atomic_cell_view& cell) : atomic_cell_view::printer(type, cell) {}
+        friend std::ostream& operator<<(std::ostream& os, const printer& acvp);
+    };
 };
 
 class column_definition;

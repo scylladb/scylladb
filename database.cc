@@ -1627,25 +1627,6 @@ operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
     return fmt_print(os, "prefix{{{}}}", ::join(":", ecp._v | boost::adaptors::transformed(enhex)));
 }
 
-std::ostream&
-operator<<(std::ostream& os, const atomic_cell_view& acv) {
-    if (acv.is_live()) {
-        return fmt_print(os, "atomic_cell{{{};ts={:d};expiry={:d},ttl={:d}}}",
-            to_hex(acv.value().linearize()),
-            acv.timestamp(),
-            acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
-            acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);
-    } else {
-        return fmt_print(os, "atomic_cell{{DEAD;ts={:d};deletion_time={:d}}}",
-            acv.timestamp(), acv.deletion_time().time_since_epoch().count());
-    }
-}
-
-std::ostream&
-operator<<(std::ostream& os, const atomic_cell& ac) {
-    return os << atomic_cell_view(ac);
-}
-
 sstring database::get_available_index_name(const sstring &ks_name, const sstring &cf_name,
                                            std::optional<sstring> index_name_root) const
 {

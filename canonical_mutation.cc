@@ -35,6 +35,7 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
+#include <iostream>
 
 canonical_mutation::canonical_mutation(bytes data)
         : _data(std::move(data))
@@ -89,3 +90,81 @@ mutation canonical_mutation::to_mutation(schema_ptr s) const {
     }
     return m;
 }
+
+static sstring bytes_to_text(bytes_view bv) {
+    sstring ret(sstring::initialized_later(), bv.size());
+    std::copy_n(reinterpret_cast<const char*>(bv.data()), bv.size(), ret.data());
+    return ret;
+}
+
+std::ostream& operator<<(std::ostream& os, const canonical_mutation& cm) {
+    auto in = ser::as_input_stream(cm._data);
+    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
+    column_mapping mapping = mv.mapping();
+    auto partition_view = mutation_partition_view::from_view(mv.partition());
+    fmt::print(os, "{{canonical_mutation: ");
+    fmt::print(os, "table_id {} schema_version {} ", mv.table_id(), mv.schema_version());
+    fmt::print(os, "partition_key {} ", mv.key());
+    class printing_visitor : public mutation_partition_view_virtual_visitor {
+        std::ostream& _os;
+        const column_mapping& _cm;
+        bool _first = true;
+        bool _in_row = false;
+    private:
+        void print_separator() {
+            if (!_first) {
+                fmt::print(_os, ", ");
+            }
+            _first = false;
+        }
+    public:
+        printing_visitor(std::ostream& os, const column_mapping& cm) : _os(os), _cm(cm) {}
+        virtual void accept_partition_tombstone(tombstone t) override {
+            print_separator();
+            fmt::print(_os, "partition_tombstone {}", t);
+        }
+        virtual void accept_static_cell(column_id id, atomic_cell ac) override {
+            print_separator();
+            auto&& entry = _cm.static_column_at(id);
+            fmt::print(_os, "static column {} {}", bytes_to_text(entry.name()), atomic_cell::printer(*entry.type(), ac));
+        }
+        virtual void accept_static_cell(column_id id, collection_mutation_view cmv) override {
+            print_separator();
+            auto&& entry = _cm.static_column_at(id);
+            fmt::print(_os, "static column {} {}", bytes_to_text(entry.name()), collection_mutation_view::printer(*entry.type(), cmv));
+        }
+        virtual void accept_row_tombstone(range_tombstone rt) override {
+            print_separator();
+            fmt::print(_os, "row tombstone {}", rt);
+        }
+        virtual void accept_row(position_in_partition_view pipv, row_tombstone rt, row_marker rm, is_dummy, is_continuous) override {
+            if (_in_row) {
+                fmt::print(_os, "}}, ");
+            }
+            fmt::print(_os, "{{row {} tombstone {} marker {}", pipv, rt, rm);
+            _in_row = true;
+            _first = false;
+        }
+        virtual void accept_row_cell(column_id id, atomic_cell ac) override {
+            print_separator();
+            auto&& entry = _cm.regular_column_at(id);
+            fmt::print(_os, "column {} {}", bytes_to_text(entry.name()), atomic_cell::printer(*entry.type(), ac));
+        }
+        virtual void accept_row_cell(column_id id, collection_mutation_view cmv) override {
+            print_separator();
+            auto&& entry = _cm.regular_column_at(id);
+            fmt::print(_os, "column {} {}", bytes_to_text(entry.name()), collection_mutation_view::printer(*entry.type(), cmv));
+        }
+        void finalize() {
+            if (_in_row) {
+                fmt::print(_os, "}}");
+            }
+        }
+    };
+    printing_visitor pv(os, mapping);
+    partition_view.accept(mapping, pv);
+    pv.finalize();
+    fmt::print(os, "}}");
+    return os;
+}
+
