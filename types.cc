@@ -1485,13 +1485,13 @@ static void serialize_varint(bytes::iterator& out, const boost::multiprecision::
     std::vector<uint8_t> b;
     auto size = concrete_serialized_size(num);
     b.reserve(size);
-    if (num.sign() < 0) {
+    if (num < 0) {
         pnum -= 1;
     }
     for (unsigned i = 0; i < size; i++) {
         auto v = boost::multiprecision::integer_modulus(pnum, 256);
         pnum >>= 8;
-        if (num.sign() < 0) {
+        if (num < 0) {
             v = ~v;
         }
         b.push_back(v);
