@@ -111,7 +111,9 @@ lw_shared_ptr<query::read_command> cas_request::read_command() const {
     } else {
         ranges = query::clustering_range::deoverlap(std::move(ranges), clustering_key::tri_compare(*_schema));
     }
-    query::partition_slice ps(std::move(ranges), *_schema, columns_to_read, update_parameters::options);
+    auto options = update_parameters::options;
+    options.set(query::partition_slice::option::always_return_static_content);
+    query::partition_slice ps(std::move(ranges), *_schema, columns_to_read, options);
     ps.set_partition_row_limit(max_rows);
     return make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(ps));
 }
