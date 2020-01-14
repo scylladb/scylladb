@@ -81,7 +81,6 @@ class gossiper;
 
 namespace service {
 
-class load_broadcaster;
 class storage_service;
 
 extern distributed<storage_service> _the_storage_service;
@@ -158,7 +157,6 @@ private:
     // It shouldn't be impossible to actively serialize two callers if the need
     // ever arise.
     bool _loading_new_sstables = false;
-    shared_ptr<load_broadcaster> _lb;
     std::optional<distributed<cql_transport::cql_server>> _cql_server;
     std::optional<distributed<thrift_server>> _thrift_server;
     sstring _operation_in_progress;
@@ -200,9 +198,6 @@ public:
     }
 
     future<> gossip_snitch_info();
-
-    void set_load_broadcaster(shared_ptr<load_broadcaster> lb);
-    shared_ptr<load_broadcaster>& get_load_broadcaster();
 
     distributed<database>& db() {
         return _db;
@@ -891,14 +886,6 @@ private:
 
     // needs to be modified to accept either a keyspace or ARS.
     std::unordered_multimap<dht::token_range, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
-public:
-    /** raw load value */
-    double get_load() const;
-
-    sstring get_load_string() const;
-
-    future<std::map<sstring, double>> get_load_map();
-
 #if 0
     public final void deliverHints(String host) throws UnknownHostException
     {

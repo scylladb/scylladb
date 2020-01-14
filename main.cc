@@ -32,7 +32,7 @@
 #include "db/legacy_schema_migrator.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
-#include "service/load_broadcaster.hh"
+#include "service/load_meter.hh"
 #include "service/view_update_backlog_broker.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
@@ -462,11 +462,12 @@ int main(int ac, char** av) {
 
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
+    service::load_meter load_meter;
     debug::db = &db;
     auto& qp = cql3::get_query_processor();
     auto& proxy = service::get_storage_proxy();
     auto& mm = service::get_migration_manager();
-    api::http_context ctx(db, proxy);
+    api::http_context ctx(db, proxy, load_meter);
     httpd::http_server_control prometheus_server;
     utils::directories dirs;
     sharded<gms::feature_service> feature_service;
@@ -497,7 +498,7 @@ int main(int ac, char** av) {
         tcp_syncookies_sanity();
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs,
-                &prometheus_server, &cf_cache_hitrate_calculator, &feature_service] {
+                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
@@ -944,15 +945,13 @@ int main(int ac, char** av) {
             db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
                 return b.start();
             }).get();
-            supervisor::notify("starting load broadcaster");
-            // should be unique_ptr, but then lambda passed to at_exit will be non copieable and
-            // casting to std::function<> will fail to compile
-            auto lb = make_shared<service::load_broadcaster>(db, gms::get_local_gossiper());
-            lb->start_broadcasting();
-            service::get_local_storage_service().set_load_broadcaster(lb);
-            auto stop_load_broadcater = defer_verbose_shutdown("broadcaster", [lb = std::move(lb)] () {
-                lb->stop_broadcasting().get();
+
+            supervisor::notify("starting load meter");
+            load_meter.init(db, gms::get_local_gossiper()).get();
+            auto stop_load_meter = defer_verbose_shutdown("load meter", [&load_meter] {
+                load_meter.exit().get();
             });
+
             supervisor::notify("starting cf cache hit rate calculator");
             cf_cache_hitrate_calculator.start(std::ref(db)).get();
             auto stop_cache_hitrate_calculator = defer_verbose_shutdown("cf cache hit rate calculator",

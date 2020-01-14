@@ -23,6 +23,8 @@
 #include "service/storage_proxy.hh"
 #include <seastar/http/httpd.hh>
 
+namespace service { class load_meter; }
+
 namespace api {
 
 struct http_context {
@@ -31,9 +33,11 @@ struct http_context {
     httpd::http_server_control http_server;
     distributed<database>& db;
     distributed<service::storage_proxy>& sp;
+    service::load_meter& lmeter;
     http_context(distributed<database>& _db,
-            distributed<service::storage_proxy>& _sp)
-            : db(_db), sp(_sp) {
+            distributed<service::storage_proxy>& _sp,
+            service::load_meter& _lm)
+            : db(_db), sp(_sp), lmeter(_lm) {
     }
 };
 
