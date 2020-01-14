@@ -2515,11 +2515,7 @@ future<> storage_service::drain() {
                 slogger.warn("Cannot drain node (did it already happen?)");
                 return;
             }
-            if (drain_in_progress) {
-                drain_in_progress->get();
-                ss.set_mode(mode::DRAINED, true);
-                return;
-            }
+
             promise<> p;
             drain_in_progress = p.get_future();
 
