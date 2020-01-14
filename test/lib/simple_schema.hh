@@ -82,7 +82,7 @@ public:
     }
 
     clustering_key make_ckey(sstring ck) {
-        return clustering_key::from_single_value(*_s, data_value(ck).serialize());
+        return clustering_key::from_single_value(*_s, serialized(ck));
     }
 
     query::clustering_range make_ckey_range(uint32_t start_inclusive, uint32_t end_inclusive) {
@@ -101,7 +101,7 @@ public:
     }
 
     dht::decorated_key make_pkey(sstring pk) {
-        auto key = partition_key::from_single_value(*_s, data_value(pk).serialize());
+        auto key = partition_key::from_single_value(*_s, serialized(pk));
         return dht::global_partitioner().decorate_key(*_s, key);
     }
 
@@ -110,7 +110,7 @@ public:
             t = new_timestamp();
         }
         const column_definition& v_def = get_v_def(*_s);
-        m.set_clustered_cell(key, v_def, atomic_cell::make_live(*v_def.type, t, data_value(v).serialize()));
+        m.set_clustered_cell(key, v_def, atomic_cell::make_live(*v_def.type, t, serialized(v)));
         return t;
     }
 
@@ -130,7 +130,7 @@ public:
     mutation_fragment make_row(const clustering_key& key, sstring v) {
         auto row = clustering_row(key);
         const column_definition& v_def = get_v_def(*_s);
-        row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, new_timestamp(), data_value(v).serialize()));
+        row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, new_timestamp(), serialized(v)));
         return mutation_fragment(std::move(row));
     }
 

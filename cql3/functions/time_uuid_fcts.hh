@@ -253,7 +253,7 @@ make_timeuuidtounixtimestamp_fct() {
 inline bytes time_point_to_long(const data_value& v) {
     auto since_epoch = value_cast<db_clock::time_point>(v).time_since_epoch();
     int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(since_epoch).count();
-    return data_value(ms).serialize();
+    return serialized(ms);
 }
 
 inline

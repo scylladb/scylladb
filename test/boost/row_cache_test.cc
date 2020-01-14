@@ -2865,7 +2865,7 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
         memtable_snapshot_source underlying(s);
 
         auto pk = dht::global_partitioner().decorate_key(*s,
-            partition_key::from_single_value(*s, data_value(3).serialize()));
+            partition_key::from_single_value(*s, serialized(3)));
         auto pr = dht::partition_range::make_singular(pk);
 
         auto ck1 = clustering_key::from_deeply_exploded(*s, {data_value(1), data_value(1)});

@@ -644,9 +644,9 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         env.require_table_exists("querier_cache", "test").get();
 
         auto insert_id = env.prepare("INSERT INTO querier_cache.test (pk, ck, value) VALUES (?, ?, ?);").get0();
-        auto pk = cql3::raw_value::make_value(data_value(0).serialize());
+        auto pk = cql3::raw_value::make_value(serialized(0));
         for (int i = 0; i < 100; ++i) {
-            auto ck = cql3::raw_value::make_value(data_value(i).serialize());
+            auto ck = cql3::raw_value::make_value(serialized(i));
             env.execute_prepared(insert_id, {{pk, ck, ck}}).get();
         }
 

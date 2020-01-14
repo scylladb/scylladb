@@ -141,7 +141,7 @@ int main(int argc, char** argv) {
             stats_printer.arm_periodic(1s);
 
             auto make_pkey = [s] (sstring pk) {
-                auto key = partition_key::from_single_value(*s, data_value(pk).serialize());
+                auto key = partition_key::from_single_value(*s, serialized(pk));
                 return dht::global_partitioner().decorate_key(*s, key);
             };
 
@@ -168,9 +168,9 @@ int main(int argc, char** argv) {
                 int32_t ckey_seq = 0;
                 while (!cancelled) {
                     mutation m(s, pkey);
-                    auto ck = clustering_key::from_single_value(*s, data_value(ckey_seq++).serialize());
+                    auto ck = clustering_key::from_single_value(*s, serialized(ckey_seq++));
                     auto&& col = *s->get_column_definition(to_bytes("v"));
-                    m.set_clustered_cell(ck, col, atomic_cell::make_live(*col.type, api::new_timestamp(), data_value(value).serialize()));
+                    m.set_clustered_cell(ck, col, atomic_cell::make_live(*col.type, api::new_timestamp(), serialized(value)));
                     auto t0 = clock::now();
                     db.apply(s, freeze(m)).get();
                     writes_hist.add(std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0).count());

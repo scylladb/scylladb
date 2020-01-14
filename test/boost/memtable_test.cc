@@ -297,9 +297,9 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
         auto mt = make_lw_shared<memtable>(s);
 
         auto empty_m = make_unique_mutation(s);
-        auto ck1 = clustering_key::from_single_value(*s, data_value(make_unique_bytes()).serialize());
-        auto ck2 = clustering_key::from_single_value(*s, data_value(make_unique_bytes()).serialize());
-        auto ck3 = clustering_key::from_single_value(*s, data_value(make_unique_bytes()).serialize());
+        auto ck1 = clustering_key::from_single_value(*s, serialized(make_unique_bytes()));
+        auto ck2 = clustering_key::from_single_value(*s, serialized(make_unique_bytes()));
+        auto ck3 = clustering_key::from_single_value(*s, serialized(make_unique_bytes()));
 
         auto m1 = empty_m;
         m1.set_clustered_cell(ck1, to_bytes("col"), data_value(bytes(bytes::initialized_later(), 8)), next_timestamp());
@@ -372,7 +372,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
 
         for (auto& m : ring) {
             for (int i = 0; i < rows_per_partition; ++i) {
-                auto ck = clustering_key::from_single_value(*s, data_value(make_unique_bytes()).serialize());
+                auto ck = clustering_key::from_single_value(*s, serialized(make_unique_bytes()));
                 auto col_value = data_value(bytes(bytes::initialized_later(), 8));
                 m.set_clustered_cell(ck, to_bytes("col"), col_value, next_timestamp());
             }

@@ -124,7 +124,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto mt = make_lw_shared<memtable>(s);
         while (mt->occupancy().total_space() < memtable_size) {
             auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
-                data_value(utils::UUID_gen::get_time_UUID()).serialize()));
+                serialized(utils::UUID_gen::get_time_UUID())));
             mutation m = gen();
             mt->apply(m);
             if (cancelled) {
@@ -205,7 +205,7 @@ void test_small_partitions() {
 
     run_test("Small partitions, no overwrites", s, [&] {
         auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
-            data_value(utils::UUID_gen::get_time_UUID()).serialize()));
+            serialized(utils::UUID_gen::get_time_UUID())));
         mutation m(s, pk);
         auto val = data_value(bytes(bytes::initialized_later(), cell_size));
         m.set_clustered_cell(clustering_key::make_empty(), "v1", val, api::new_timestamp());
@@ -225,13 +225,13 @@ void test_partition_with_lots_of_small_rows() {
         .build();
 
     auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
-        data_value(utils::UUID_gen::get_time_UUID()).serialize()));
+        serialized(utils::UUID_gen::get_time_UUID())));
     int ck_idx = 0;
 
     run_test("Large partition, lots of small rows", s, [&] {
         mutation m(s, pk);
         auto val = data_value(bytes(bytes::initialized_later(), cell_size));
-        auto ck = clustering_key::from_single_value(*s, data_value(ck_idx++).serialize());
+        auto ck = clustering_key::from_single_value(*s, serialized(ck_idx++));
         m.set_clustered_cell(ck, "v1", val, api::new_timestamp());
         m.set_clustered_cell(ck, "v2", val, api::new_timestamp());
         m.set_clustered_cell(ck, "v3", val, api::new_timestamp());
@@ -250,13 +250,13 @@ void test_partition_with_few_small_rows() {
 
     run_test("Small partition with a few rows", s, [&] {
         auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
-            data_value(utils::UUID_gen::get_time_UUID()).serialize()));
+            serialized(utils::UUID_gen::get_time_UUID())));
 
         mutation m(s, pk);
         auto val = data_value(bytes(bytes::initialized_later(), cell_size));
 
         for (int i = 0; i < 3; ++i) {
-            auto ck = clustering_key::from_single_value(*s, data_value(i).serialize());
+            auto ck = clustering_key::from_single_value(*s, serialized(i));
             m.set_clustered_cell(ck, "v1", val, api::new_timestamp());
             m.set_clustered_cell(ck, "v2", val, api::new_timestamp());
             m.set_clustered_cell(ck, "v3", val, api::new_timestamp());
@@ -275,13 +275,13 @@ void test_partition_with_lots_of_range_tombstones() {
         .build();
 
     auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
-        data_value(utils::UUID_gen::get_time_UUID()).serialize()));
+        serialized(utils::UUID_gen::get_time_UUID())));
     int ck_idx = 0;
 
     run_test("Large partition, lots of range tombstones", s, [&] {
         mutation m(s, pk);
         auto val = data_value(bytes(bytes::initialized_later(), cell_size));
-        auto ck = clustering_key::from_single_value(*s, data_value(ck_idx++).serialize());
+        auto ck = clustering_key::from_single_value(*s, serialized(ck_idx++));
         auto r = query::clustering_range::make({ck}, {ck});
         tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_row_tombstone(*s, range_tombstone(bound_view::from_range_start(r), bound_view::from_range_end(r), tomb));

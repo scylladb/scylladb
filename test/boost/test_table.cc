@@ -71,7 +71,7 @@ std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_tes
             explicit simple_partition_content_generator(int pk, int row_count) : _pk(pk), _row_count(row_count) {
             }
             virtual partition_key generate_partition_key(const schema& schema) override {
-                return partition_key::from_single_value(schema, data_value(_pk).serialize());
+                return partition_key::from_single_value(schema, serialized(_pk));
             }
             virtual bool has_static_row() override {
                 return false;
@@ -87,7 +87,7 @@ std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_tes
                 const auto data = _pk ^ ck;
                 auto buf = bytes(bytes::initialized_later{}, sizeof(int));
                 std::copy_n(&data, 1, reinterpret_cast<int*>(buf.data()));
-                return row{clustering_key::from_single_value(schema, data_value(ck).serialize()), std::move(buf)};
+                return row{clustering_key::from_single_value(schema, serialized(ck)), std::move(buf)};
             }
             virtual query::clustering_row_ranges generate_delete_ranges(const schema&, const std::vector<clustering_key>&) override {
                 return {};
@@ -132,7 +132,7 @@ population_description create_test_table(cql_test_env& env, const sstring& ks_na
             , _key_dist(std::numeric_limits<int>::min(), std::numeric_limits<int>::max()) {
         }
         virtual partition_key generate_partition_key(const schema& schema) override {
-            return partition_key::from_single_value(schema, data_value(_key_dist(_engine)).serialize());
+            return partition_key::from_single_value(schema, serialized(_key_dist(_engine)));
         }
         virtual bool has_static_row() override {
             return _config.static_row_size_dist.has_value();
@@ -144,7 +144,7 @@ population_description create_test_table(cql_test_env& env, const sstring& ks_na
             return _config.clustering_row_count_dist(_engine);
         }
         virtual row generate_row(const schema& schema, const partition_key& pk) override {
-            auto ck = clustering_key::from_single_value(schema, data_value(_key_dist(_engine)).serialize());
+            auto ck = clustering_key::from_single_value(schema, serialized(_key_dist(_engine)));
             auto value = _gen_blob(schema, _config.clustering_row_size_dist(_engine), pk, &ck);
             return row{std::move(ck), std::move(value)};
         }
@@ -229,7 +229,7 @@ static size_t maybe_generate_static_row(cql_test_env& env, const schema& schema,
 
     env.execute_prepared(static_insert_id, {{
             cql3::raw_value::make_value(bytes(part_desc.dkey.key().get_component(schema, 0))),
-            cql3::raw_value::make_value(data_value(std::move(value)).serialize())}}).get();
+            cql3::raw_value::make_value(serialized(std::move(value)))}}).get();
     return size;
 }
 
@@ -285,7 +285,7 @@ static clustering_row_generation_result generate_clustering_rows(
         env.execute_prepared(clustering_insert_id, {{
                 cql3::raw_value::make_value(bytes(part_desc.dkey.key().get_component(schema, 0))),
                 cql3::raw_value::make_value(bytes(key.get_component(schema, 0))),
-                cql3::raw_value::make_value(data_value(std::move(value)).serialize())}}).get();
+                cql3::raw_value::make_value(serialized(std::move(value)))}}).get();
         written_rows.insert(std::move(key));
     }
 
@@ -464,7 +464,7 @@ population_description create_test_table(cql_test_env& env, const sstring& ks_na
     // We don't expect this to fail, this is here more to validate our
     // expectation of the population, then the correctness of writes.
     auto msg = env.execute_cql(format("SELECT COUNT(*) FROM {}.{}", ks_name, table_name)).get0();
-    assert_that(msg).is_rows().with_rows({{data_value(int64_t(live_row_count)).serialize()}});
+    assert_that(msg).is_rows().with_rows({{serialized(int64_t(live_row_count))}});
 
     tlog.info("Done. Population summary: written {} partitions, {} rows, {} range tombstones and {} bytes;"
             " have (after de-duplication) {} partitions, {} live rows and {} dead rows.",

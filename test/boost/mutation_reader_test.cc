@@ -2469,8 +2469,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
 
         for (int pk = 0; pk < partition_count; ++pk) {
             env.execute_prepared(insert_id, {{
-                    cql3::raw_value::make_value(data_value(pk).serialize()),
-                    cql3::raw_value::make_value(data_value(0).serialize())}}).get();
+                    cql3::raw_value::make_value(serialized(pk)),
+                    cql3::raw_value::make_value(serialized(0))}}).get();
         }
 
         auto schema = env.local_db().find_column_family("multishard_combining_reader_next_partition_ks", "test").schema();
@@ -2668,8 +2668,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
 
         for (int pk = 0; pk < partition_count; ++pk) {
             env.execute_prepared(insert_id, {{
-                    cql3::raw_value::make_value(data_value(pk).serialize()),
-                    cql3::raw_value::make_value(data_value(0).serialize())}}).get();
+                    cql3::raw_value::make_value(serialized(pk)),
+                    cql3::raw_value::make_value(serialized(0))}}).get();
         }
 
         auto schema = env.local_db().find_column_family("multishard_streaming_reader_ks", "test").schema();

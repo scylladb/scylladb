@@ -919,7 +919,7 @@ public:
     virtual int n_rows(const table_config&) = 0;
 
     clustering_key make_ck(const schema& s, int ck) {
-        return clustering_key::from_single_value(s, data_value(ck).serialize());
+        return clustering_key::from_single_value(s, serialized(ck));
     }
 };
 
@@ -945,9 +945,9 @@ public:
     large_part_ds1() : simple_large_part_ds("large-part-ds1", "One large partition with many small rows") {}
 
     generator_fn make_generator(schema_ptr s, const table_config& cfg) override {
-        auto value = data_value(make_blob(cfg.value_size));
+        auto value = serialized(make_blob(cfg.value_size));
         auto& value_cdef = *s->get_column_definition("value");
-        auto pk = partition_key::from_single_value(*s, data_value(0).serialize());
+        auto pk = partition_key::from_single_value(*s, serialized(0));
         return [this, s, ck = 0, n_ck = n_rows(cfg), &value_cdef, value, pk] () mutable -> std::optional<mutation> {
             if (ck == n_ck) {
                 return std::nullopt;
@@ -955,7 +955,7 @@ public:
             auto ts = api::new_timestamp();
             mutation m(s, pk);
             auto& row = m.partition().clustered_row(*s, make_ck(*s, ck));
-            row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value.serialize()));
+            row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value));
             ++ck;
             return m;
         };
@@ -968,16 +968,16 @@ public:
         "create table {} (pk int, value blob, primary key (pk))") {}
 
     generator_fn make_generator(schema_ptr s, const table_config& cfg) override {
-        auto value = data_value(make_blob(cfg.value_size));
+        auto value = serialized(make_blob(cfg.value_size));
         auto& value_cdef = *s->get_column_definition("value");
         return [s, pk = 0, n_pk = n_partitions(cfg), &value_cdef, value] () mutable -> std::optional<mutation> {
             if (pk == n_pk) {
                 return std::nullopt;
             }
             auto ts = api::new_timestamp();
-            mutation m(s, partition_key::from_single_value(*s, data_value(pk).serialize()));
+            mutation m(s, partition_key::from_single_value(*s, serialized(pk)));
             auto& row = m.partition().clustered_row(*s, clustering_key::make_empty());
-            row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value.serialize()));
+            row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value));
             ++pk;
             return m;
         };
