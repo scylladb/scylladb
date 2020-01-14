@@ -86,7 +86,6 @@ shared_ptr<function>
 make_max_timeuuid_fct() {
     return make_native_scalar_function<true>("maxtimeuuid", timeuuid_type, { timestamp_type },
             [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
-        // FIXME: should values be a vector<optional<bytes>>?
         auto& bb = values[0];
         if (!bb) {
             return {};
