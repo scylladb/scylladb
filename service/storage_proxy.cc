@@ -4048,7 +4048,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
                 return make_ready_future<storage_proxy::coordinator_query_result>(f.get0());
             } catch (request_timeout_exception& ex) {
                 _stats.cas_read_timeouts.mark();
-                return make_exception_future<storage_proxy::coordinator_query_result>(std::move(ex));
+                return make_exception_future<storage_proxy::coordinator_query_result>(std::current_exception());
             } catch (exceptions::unavailable_exception& ex) {
                 _stats.cas_read_unavailables.mark();
                 return make_exception_future<storage_proxy::coordinator_query_result>(std::move(ex));
@@ -4184,7 +4184,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                 return make_ready_future<bool>(f.get0());
             } catch (request_timeout_exception& ex) {
                 _stats.cas_write_timeouts.mark();
-                return make_exception_future<bool>(std::move(ex));
+                return make_exception_future<bool>(std::current_exception());
             } catch (exceptions::unavailable_exception& ex) {
                 _stats.cas_write_unavailables.mark();
                 return make_exception_future<bool>(std::move(ex));
