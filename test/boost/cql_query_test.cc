@@ -49,6 +49,7 @@
 #include "json.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
+#include <regex>
 
 using namespace std::literals::chrono_literals;
 
@@ -4490,5 +4491,214 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
         assert_that(msg).is_rows().with_rows({
             {{int32_type->decompose(11), int32_type->decompose(13), int32_type->decompose(1), int32_type->decompose(2)}},
         });
+    });
+}
+
+/*!
+ * \brief this helper function changes all white space into a single space for
+ * a more robust testing.
+ */
+std::string normalize_white_space(const std::string& str) {
+  return std::regex_replace(std::regex_replace(" " + str + " ", std::regex("\\s+"), " "), std::regex(", "), ",");
+}
+
+SEASTAR_TEST_CASE(test_describe_simple_schema) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        std::unordered_map<std::string, std::string> cql_create_tables {
+            {"cf", "CREATE TABLE ks.cf (\n"
+                "    pk blob,\n"
+                "    \"COL2\" blob,\n"
+                "    col1 blob,\n"
+                "    PRIMARY KEY (pk)\n"
+                ") WITH bloom_filter_fp_chance = 0.01\n"
+                "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
+                "    AND comment = ''\n"
+                "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND crc_check_chance = 1\n"
+                "    AND dclocal_read_repair_chance = 0.1\n"
+                "    AND default_time_to_live = 0\n"
+                "    AND gc_grace_seconds = 864000\n"
+                "    AND max_index_interval = 2048\n"
+                "    AND memtable_flush_period_in_ms = 0\n"
+                "    AND min_index_interval = 128\n"
+                "    AND read_repair_chance = 0\n"
+                "    AND speculative_retry = '99.0PERCENTILE';\n"},
+            {"cf1", "CREATE TABLE ks.cf1 (\n"
+                "    pk blob,\n"
+                "    ck blob,\n"
+                "    col1 blob,\n"
+                "    col2 blob,\n"
+                "    PRIMARY KEY (pk, ck)\n"
+                ") WITH CLUSTERING ORDER BY (ck ASC)\n"
+                "    AND bloom_filter_fp_chance = 0.01\n"
+                "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
+                "    AND comment = ''\n"
+                "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND crc_check_chance = 1\n"
+                "    AND dclocal_read_repair_chance = 0.1\n"
+                "    AND default_time_to_live = 0\n"
+                "    AND gc_grace_seconds = 864000\n"
+                "    AND max_index_interval = 2048\n"
+                "    AND memtable_flush_period_in_ms = 0\n"
+                "    AND min_index_interval = 128\n"
+                "    AND read_repair_chance = 0\n"
+                "    AND speculative_retry = '99.0PERCENTILE';\n"
+            },
+            {"CF2", "CREATE TABLE ks.\"CF2\" (\n"
+                "    pk blob,\n"
+                "    \"CK\" blob,\n"
+                "    col1 blob,\n"
+                "    col2 blob,\n"
+                "    PRIMARY KEY (pk, \"CK\")\n"
+                ") WITH CLUSTERING ORDER BY (\"CK\" DESC)\n"
+                "    AND bloom_filter_fp_chance = 0.02\n"
+                "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
+                "    AND comment = ''\n"
+                "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND crc_check_chance = 1\n"
+                "    AND dclocal_read_repair_chance = 0.2\n"
+                "    AND default_time_to_live = 0\n"
+                "    AND gc_grace_seconds = 954000\n"
+                "    AND max_index_interval = 3048\n"
+                "    AND memtable_flush_period_in_ms = 10\n"
+                "    AND min_index_interval = 128\n"
+                "    AND read_repair_chance = 0\n"
+                "    AND speculative_retry = '99.0PERCENTILE';\n"
+            },
+            {"Cf3", "CREATE TABLE ks.\"Cf3\" (\n"
+                "    pk blob,\n"
+                "    pk2 blob,\n"
+                "    \"CK\" blob,\n"
+                "    col1 blob,\n"
+                "    col2 blob,\n"
+                "    PRIMARY KEY ((pk, pk2), \"CK\")\n"
+                ") WITH CLUSTERING ORDER BY (\"CK\" DESC)\n"
+                "    AND bloom_filter_fp_chance = 0.02\n"
+                "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
+                "    AND comment = ''\n"
+                "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND crc_check_chance = 1\n"
+                "    AND dclocal_read_repair_chance = 0.2\n"
+                "    AND default_time_to_live = 0\n"
+                "    AND gc_grace_seconds = 954000\n"
+                "    AND max_index_interval = 3048\n"
+                "    AND memtable_flush_period_in_ms = 10\n"
+                "    AND min_index_interval = 128\n"
+                "    AND read_repair_chance = 0\n"
+                "    AND speculative_retry = '99.0PERCENTILE';\n"
+            },
+            {"cf4", "CREATE TABLE ks.cf4 (\n"
+                "    pk blob,\n"
+                "    col1 blob,\n"
+                "    col2 blob,\n"
+                "    pn phone,\n"
+                "    PRIMARY KEY (pk)\n"
+                ") WITH "
+                "     bloom_filter_fp_chance = 0.02\n"
+                "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
+                "    AND comment = ''\n"
+                "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND crc_check_chance = 1\n"
+                "    AND dclocal_read_repair_chance = 0.2\n"
+                "    AND default_time_to_live = 0\n"
+                "    AND gc_grace_seconds = 954000\n"
+                "    AND max_index_interval = 3048\n"
+                "    AND memtable_flush_period_in_ms = 10\n"
+                "    AND min_index_interval = 128\n"
+                "    AND read_repair_chance = 0\n"
+                "    AND speculative_retry = '99.0PERCENTILE';\n"
+            }
+
+        };
+        e.execute_cql("CREATE TYPE phone ("
+            "country_code int,"
+            "number text)"
+        ).get();
+        for (auto &&ct : cql_create_tables) {
+            e.execute_cql(ct.second).get();
+            auto schema = e.local_db().find_schema("ks", ct.first);
+            std::ostringstream ss;
+
+            schema->describe(ss);
+            BOOST_CHECK_EQUAL(normalize_white_space(ss.str()), normalize_white_space(ct.second));
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_describe_view_schema) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        std::string base_table = "CREATE TABLE \"KS\".\"cF\" (\n"
+                "    pk blob,\n"
+                "    pk1 blob,\n"
+                "    ck blob,\n"
+                "    ck1 blob,\n"
+                "    \"COL1\" blob,\n"
+                "    col2 blob,\n"
+                "    PRIMARY KEY ((pk, pk1), ck, ck1)\n"
+                ") WITH CLUSTERING ORDER BY (ck ASC, ck1 ASC)\n"
+                "    AND bloom_filter_fp_chance = 0.01\n"
+                "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
+                "    AND comment = ''\n"
+                "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND crc_check_chance = 1\n"
+                "    AND dclocal_read_repair_chance = 0.1\n"
+                "    AND default_time_to_live = 0\n"
+                "    AND gc_grace_seconds = 864000\n"
+                "    AND max_index_interval = 2048\n"
+                "    AND memtable_flush_period_in_ms = 0\n"
+                "    AND min_index_interval = 128\n"
+                "    AND read_repair_chance = 0\n"
+                "    AND speculative_retry = '99.0PERCENTILE';\n";
+
+        std::unordered_map<std::string, std::string> cql_create_tables {
+          {"cf_view", "CREATE MATERIALIZED VIEW \"KS\".cf_view AS\n"
+              "    SELECT \"COL1\", pk, pk1, ck1, ck\n"
+              "    FROM \"KS\".\"cF\"\n"
+              "    WHERE pk IS NOT null AND \"COL1\" IS NOT null AND pk1 IS NOT null AND ck1 IS NOT null AND ck IS NOT null\n"
+              "    PRIMARY KEY (\"COL1\", pk, pk1, ck1, ck)\n"
+              "    WITH CLUSTERING ORDER BY (pk ASC, pk1 ASC, ck1 ASC, ck ASC)\n"
+              "    AND bloom_filter_fp_chance = 0.01\n"
+              "    AND caching = {'keys': 'ALL','rows_per_partition': 'ALL'}\n"
+              "    AND comment = ''\n"
+              "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
+              "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+              "    AND crc_check_chance = 1\n"
+              "    AND dclocal_read_repair_chance = 0.1\n"
+              "    AND default_time_to_live = 0\n"
+              "    AND gc_grace_seconds = 864000\n"
+              "    AND max_index_interval = 2048\n"
+              "    AND memtable_flush_period_in_ms = 0\n"
+              "    AND min_index_interval = 128\n"
+              "    AND read_repair_chance = 0\n"
+              "    AND speculative_retry = '99.0PERCENTILE';\n"},
+          {"cf_index_index", "CREATE INDEX cf_index ON \"KS\".\"cF\"(col2);"},
+          {"cf_index1_index", "CREATE INDEX cf_index1 ON \"KS\".\"cF\"(pk);"},
+          {"cf_index2_index", "CREATE INDEX cf_index2 ON \"KS\".\"cF\"(pk1);"},
+          {"cf_index3_index", "CREATE INDEX cf_index3 ON \"KS\".\"cF\"(ck1);"},
+          {"cf_index4_index", "CREATE INDEX cf_index4 ON \"KS\".\"cF\"((pk, pk1),col2);"}
+        };
+
+        e.execute_cql("CREATE KEYSPACE \"KS\" WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}").get();
+        e.execute_cql(base_table).get();
+
+        for (auto &&ct : cql_create_tables) {
+            e.execute_cql(ct.second).get();
+            auto schema = e.local_db().find_schema("KS", ct.first);
+            std::ostringstream ss;
+
+            schema->describe(ss);
+            BOOST_CHECK_EQUAL(normalize_white_space(ss.str()), normalize_white_space(ct.second));
+
+            auto base_schema = e.local_db().find_schema("KS", "cF");
+            std::ostringstream base_ss;
+            base_schema->describe(base_ss);
+            BOOST_CHECK_EQUAL(normalize_white_space(base_ss.str()), normalize_white_space(base_table));
+        }
     });
 }

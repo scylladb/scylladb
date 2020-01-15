@@ -1526,7 +1526,7 @@ const std::vector<sstables::shared_sstable>& table::compacted_undeleted_sstables
 
 inline bool table::manifest_json_filter(const fs::path&, const directory_entry& entry) {
     // Filter out directories. If type of the entry is unknown - check its name.
-    if (entry.type.value_or(directory_entry_type::regular) != directory_entry_type::directory && entry.name == "manifest.json") {
+    if (entry.type.value_or(directory_entry_type::regular) != directory_entry_type::directory && (entry.name == "manifest.json" || entry.name == "schema.cql")) {
         return false;
     }
 
@@ -1713,6 +1713,27 @@ seal_snapshot(sstring jsondir) {
     });
 }
 
+future<> table::write_schema_as_cql(sstring dir) const {
+    std::ostringstream ss;
+    try {
+        this->schema()->describe(ss);
+    } catch (...) {
+        return make_exception_future<>(std::current_exception());
+    }
+    auto schema_description = ss.str();
+    auto schema_file_name = dir + "/schema.cql";
+    return open_checked_file_dma(general_disk_error_handler, schema_file_name, open_flags::wo | open_flags::create | open_flags::truncate).then([schema_description = std::move(schema_description)](file f) {
+        return do_with(make_file_output_stream(std::move(f)), [schema_description  = std::move(schema_description)] (output_stream<char>& out) {
+            return out.write(schema_description.c_str(), schema_description.size()).then([&out] {
+               return out.flush();
+            }).then([&out] {
+               return out.close();
+            });
+        });
+    });
+
+}
+
 future<> table::snapshot(sstring name) {
     return flush().then([this, name = std::move(name)]() {
        return with_semaphore(_sstable_deletion_sem, 1, [this, name = std::move(name)]() {
@@ -1747,7 +1768,7 @@ future<> table::snapshot(sstring name) {
                     auto rf = f.substr(sst->get_dir().size() + 1);
                     table_names.insert(std::move(rf));
                 }
-                return smp::submit_to(shard, [requester = engine().cpu_id(), jsondir = std::move(jsondir),
+                return smp::submit_to(shard, [requester = engine().cpu_id(), jsondir = std::move(jsondir), this,
                                               tables = std::move(table_names), datadir = _config.datadir] {
 
                     if (pending_snapshots.count(jsondir) == 0) {
@@ -1762,10 +1783,15 @@ future<> table::snapshot(sstring name) {
                     auto my_work = make_ready_future<>();
                     if (requester == engine().cpu_id()) {
                         my_work = snapshot->requests.wait(smp::count).then([jsondir = std::move(jsondir),
-                                                                            snapshot] () mutable {
-                            return seal_snapshot(jsondir).then([snapshot] {
-                                snapshot->manifest_write.signal(smp::count);
+                                                                            snapshot, this] {
+                            return write_schema_as_cql(jsondir).handle_exception([jsondir](std::exception_ptr ptr) {
+                                tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
                                 return make_ready_future<>();
+                            }).finally([jsondir = std::move(jsondir), snapshot] () mutable {
+                                return seal_snapshot(jsondir).then([snapshot] {
+                                    snapshot->manifest_write.signal(smp::count);
+                                    return make_ready_future<>();
+                                });
                             });
                         });
                     }
@@ -1814,7 +1840,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                         //
                         // All the others should just generate an exception: there is something wrong, so don't blindly
                         // add it to the size.
-                        if (name != "manifest.json") {
+                        if (name != "manifest.json" && name != "schema.cql") {
                             sstables::entry_descriptor::make_descriptor(snapshot_dir.native(), name);
                             all_snapshots.at(snapshot_name).total += size;
                         } else {

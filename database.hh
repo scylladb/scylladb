@@ -827,6 +827,24 @@ public:
     future<> snapshot(sstring name);
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
+    /*!
+     * \brief write the schema to a 'schema.cql' file at the given directory.
+     *
+     * When doing a snapshot, the snapshot directory contains a 'schema.cql' file
+     * with a CQL command that can be used to generate the schema.
+     * The content is is similar to the result of the CQL DESCRIBE command of the table.
+     *
+     * When a schema has indexes, local indexes or views, those indexes and views
+     * are represented by their own schemas.
+     * In those cases, the method would write the relevant information for each of the schemas:
+     *
+     * The schema of the base table would output a file with the CREATE TABLE command
+     * and the schema of the view that is used for the index would output a file with the
+     * CREATE INDEX command.
+     * The same is true for local index and MATERIALIZED VIEW.
+     */
+    future<> write_schema_as_cql(sstring dir) const;
+
     const bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
     }

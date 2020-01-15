@@ -912,6 +912,24 @@ public:
     // Search for an existing index with same kind and options.
     std::optional<index_metadata> find_index_noname(const index_metadata& target) const;
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
+    /*!
+     * \brief stream the CQL DESCRIBE output.
+     *
+     * CQL DESCRIBE is implemented at the driver level. This method mimic that functionality
+     * inside Scylla.
+     *
+     * The output of DESCRIBE is the CQL command to create the described table with its indexes and views.
+     *
+     * For tables with Indexes or Materialized Views, the CQL DESCRIBE is split between the base and view tables.
+     * Calling the describe method on the base table schema would result with the CQL "CREATE TABLE"
+     * command for creating that table only.
+     *
+     * Calling the describe method on a view schema would result with the appropriate "CREATE MATERIALIZED VIEW"
+     * or "CREATE INDEX" depends on the type of index that schema describes (ie. Materialized View, Global
+     * Index or Local Index).
+     *
+     */
+    std::ostream& describe(std::ostream& os) const;
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
     friend class schema_registry_entry;
