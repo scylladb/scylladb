@@ -232,6 +232,10 @@ public:
         return *this;
     }
 
+    schema_builder& set_wait_for_sync_to_commitlog(bool sync) {
+        _raw._wait_for_sync = sync;
+        return *this;
+    }
     class default_names {
     public:
         default_names(const schema_builder&);

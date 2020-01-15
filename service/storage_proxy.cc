@@ -193,7 +193,7 @@ public:
         auto m = _mutations[utils::fb_utilities::get_broadcast_address()];
         if (m) {
             tracing::trace(tr_state, "Executing a mutation locally");
-            return sp.mutate_locally(_schema, *m, timeout);
+            return sp.mutate_locally(_schema, *m, db::commitlog::force_sync::no, timeout);
         }
         return make_ready_future<>();
     }
@@ -244,7 +244,7 @@ public:
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
         tracing::trace(tr_state, "Executing a mutation locally");
-        return sp.mutate_locally(_schema, *_mutation, timeout);
+        return sp.mutate_locally(_schema, *_mutation, db::commitlog::force_sync::no, timeout);
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, std::vector<gms::inet_address>&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1587,16 +1587,16 @@ storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout)
     auto shard = _db.local().shard_of(m);
     _stats.replica_cross_shard_ops += shard != engine().cpu_id();
     return _db.invoke_on(shard, _write_smp_service_group, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
-        return db.apply(s, m, timeout);
+        return db.apply(s, m, db::commitlog::force_sync::no, timeout);
     });
 }
 
 future<>
-storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, clock_type::time_point timeout) {
+storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-    return _db.invoke_on(shard, _write_smp_service_group, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
-        return db.apply(gs, m, timeout);
+    return _db.invoke_on(shard, _write_smp_service_group, [&m, gs = global_schema_ptr(s), timeout, sync] (database& db) -> future<> {
+        return db.apply(gs, m, sync, timeout);
     });
 }
 
@@ -4504,7 +4504,7 @@ void storage_proxy::init_messaging_service() {
                 trace_info ? *trace_info : std::nullopt,
                 /* apply_fn */ [] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr, schema_ptr s, const frozen_mutation& m,
                         clock_type::time_point timeout) {
-                    return p->mutate_locally(std::move(s), m, timeout);
+                    return p->mutate_locally(std::move(s), m, db::commitlog::force_sync::no, timeout);
                 },
                 /* forward_fn */ [] (netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address reply_to, unsigned shard, response_id_type response_id,

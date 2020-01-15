@@ -71,7 +71,7 @@ SEASTAR_TEST_CASE(test_commitlog_new_segment_custom_prefix){
             auto uuid = utils::UUID_gen::get_time_UUID();
             return do_until([&set]() { return set.size() > 1; }, [&log, &set, uuid]() {
                 sstring tmp = "hej bubba cow";
-                return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                     dst.write(tmp.data(), tmp.size());
                 }).then([&set](rp_handle h) {
                     BOOST_CHECK_NE(h.rp(), db::replay_position());

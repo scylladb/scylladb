@@ -84,6 +84,7 @@
 #include "idl/frozen_mutation.dist.hh"
 #include "serializer_impl.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -95,6 +96,10 @@ namespace system_keyspace {
 
 static logging::logger slogger("system_keyspace");
 static const api::timestamp_type creation_timestamp = api::new_timestamp();
+
+bool is_extra_durable(const sstring& name) {
+    return boost::algorithm::any_of(extra_durable_tables, [name] (const char* table) { return name == table; });
+}
 
 api::timestamp_type schema_creation_timestamp() {
     return creation_timestamp;
@@ -199,6 +204,7 @@ schema_ptr batchlog() {
         //    .compactionStrategyClass(LeveledCompactionStrategy.class);
        )));
        builder.with_version(generate_schema_version(builder.uuid()));
+       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return paxos;

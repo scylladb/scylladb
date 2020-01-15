@@ -847,7 +847,7 @@ public:
                 return new_seg->allocate(id, std::move(writer), std::move(permit), timeout);
             });
         } else if (!_buffer.empty() && (s > _buffer_ostream.size())) {  // enough data?
-            if (_segment_manager->cfg.mode == sync_mode::BATCH) {
+            if (_segment_manager->cfg.mode == sync_mode::BATCH || writer->sync) {
                 // TODO: this could cause starvation if we're really unlucky.
                 // If we run batch mode and find ourselves not fit in a non-empty
                 // buffer, we must force a cycle and wait for it (to keep flush order)
@@ -901,7 +901,7 @@ public:
         ++_segment_manager->totals.allocation_count;
         ++_num_allocs;
 
-        if (_segment_manager->cfg.mode == sync_mode::BATCH) {
+        if (_segment_manager->cfg.mode == sync_mode::BATCH || writer->sync) {
             return batch_cycle(timeout).then([h = std::move(h)](auto s) mutable {
                 return make_ready_future<rp_handle>(std::move(h));
             });
@@ -1720,13 +1720,13 @@ db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acqu
  * Add mutation.
  */
 future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
-        size_t size, db::timeout_clock::time_point timeout, serializer_func func) {
+        size_t size, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync, serializer_func func) {
     class serializer_func_entry_writer final : public entry_writer {
         serializer_func _func;
         size_t _size;
     public:
-        serializer_func_entry_writer(size_t sz, serializer_func func)
-            : _func(std::move(func)), _size(sz)
+        serializer_func_entry_writer(size_t sz, serializer_func func, db::commitlog::force_sync sync)
+            : entry_writer(sync), _func(std::move(func)), _size(sz)
         { }
         virtual size_t size(segment&) override { return _size; }
         virtual size_t size() override { return _size; }
@@ -1734,7 +1734,7 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
             _func(out);
         }
     };
-    auto writer = ::make_shared<serializer_func_entry_writer>(size, std::move(func));
+    auto writer = ::make_shared<serializer_func_entry_writer>(size, std::move(func), sync);
     return _segment_manager->allocate_when_possible(id, writer, timeout);
 }
 
@@ -1743,7 +1743,7 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
     class cl_entry_writer final : public entry_writer {
         commitlog_entry_writer _writer;
     public:
-        cl_entry_writer(const commitlog_entry_writer& wr) : _writer(wr) { }
+        cl_entry_writer(const commitlog_entry_writer& wr) : entry_writer(wr.sync()), _writer(wr) { }
         virtual size_t size(segment& seg) override {
             _writer.set_with_schema(!seg.is_schema_version_known(_writer.schema()));
             return _writer.size();

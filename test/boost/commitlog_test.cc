@@ -78,7 +78,7 @@ static int loggo = [] {
 SEASTAR_TEST_CASE(test_create_commitlog){
     return cl_test([](commitlog& log) {
             sstring tmp = "hej bubba cow";
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](db::commitlog::output& dst) {
+            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                         dst.write(tmp.data(), tmp.size());
                     }).then([](db::replay_position rp) {
                         BOOST_CHECK_NE(rp, db::replay_position());
@@ -92,12 +92,43 @@ SEASTAR_TEST_CASE(test_commitlog_written_to_disk_batch){
     cfg.mode = commitlog::sync_mode::BATCH;
     return cl_test(cfg, [](commitlog& log) {
             sstring tmp = "hej bubba cow";
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](db::commitlog::output& dst) {
+            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                         dst.write(tmp.data(), tmp.size());
                     }).then([&log](replay_position rp) {
                         BOOST_CHECK_NE(rp, db::replay_position());
                         auto n = log.get_flush_count();
                         BOOST_REQUIRE(n > 0);
+                    });
+        });
+}
+
+// check that an entry marked as sync is immediately flushed to a storage
+SEASTAR_TEST_CASE(test_commitlog_written_to_disk_sync){
+    commitlog::config cfg;
+    return cl_test(cfg, [](commitlog& log) {
+            sstring tmp = "hej bubba cow";
+            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), db::commitlog::force_sync::yes, [tmp](db::commitlog::output& dst) {
+                        dst.write(tmp.data(), tmp.size());
+                    }).then([&log](replay_position rp) {
+                        BOOST_CHECK_NE(rp, db::replay_position());
+                        auto n = log.get_flush_count();
+                        BOOST_REQUIRE(n > 0);
+                    });
+        });
+}
+
+// check that an entry marked as sync is immediately flushed to a storage
+SEASTAR_TEST_CASE(test_commitlog_written_to_disk_no_sync){
+    commitlog::config cfg;
+    cfg.commitlog_sync_period_in_ms = 10000000000;
+    return cl_test(cfg, [](commitlog& log) {
+            sstring tmp = "hej bubba cow";
+            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
+                        dst.write(tmp.data(), tmp.size());
+                    }).then([&log](replay_position rp) {
+                        BOOST_CHECK_NE(rp, db::replay_position());
+                        auto n = log.get_flush_count();
+                        BOOST_REQUIRE(n == 0);
                     });
         });
 }
@@ -109,7 +140,7 @@ SEASTAR_TEST_CASE(test_commitlog_written_to_disk_periodic){
             return do_until([state]() {return *state;},
                     [&log, state, uuid]() {
                         sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
                                 }).then([&log, state](replay_position rp) {
                                     BOOST_CHECK_NE(rp, db::replay_position());
@@ -129,7 +160,7 @@ SEASTAR_TEST_CASE(test_commitlog_new_segment){
             auto uuid = utils::UUID_gen::get_time_UUID();
             return do_until([&set]() { return set.size() > 1; }, [&log, &set, uuid]() {
                 sstring tmp = "hej bubba cow";
-                return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                     dst.write(tmp.data(), tmp.size());
                 }).then([&set](rp_handle h) {
                     BOOST_CHECK_NE(h.rp(), db::replay_position());
@@ -187,7 +218,7 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
                     [&log, state]() {
                         sstring tmp = "hej bubba cow";
                         auto uuid = state->next_uuid();
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
                                 }).then([state, uuid](db::rp_handle h) {
                                     state->rps[uuid].put(std::move(h));
@@ -223,7 +254,7 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
 SEASTAR_TEST_CASE(test_equal_record_limit){
     return cl_test([](commitlog& log) {
             auto size = log.max_record_size();
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
+            return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
                         dst.fill(char(1), size);
                     }).then([](db::replay_position rp) {
                         BOOST_CHECK_NE(rp, db::replay_position());
@@ -234,7 +265,7 @@ SEASTAR_TEST_CASE(test_equal_record_limit){
 SEASTAR_TEST_CASE(test_exceed_record_limit){
     return cl_test([](commitlog& log) {
             auto size = log.max_record_size() + 1;
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
+            return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
                         dst.fill(char(1), size);
                     }).then_wrapped([](future<db::rp_handle> f) {
                         try {
@@ -254,7 +285,7 @@ SEASTAR_TEST_CASE(test_commitlog_closed) {
         return log.shutdown().then([&log] {
             sstring tmp = "test321";
             auto uuid = utils::UUID_gen::get_time_UUID();
-            return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+            return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                 dst.write(tmp.data(), tmp.size());
             }).then_wrapped([] (future<db::rp_handle> f) {
                 BOOST_REQUIRE_EXCEPTION(f.get(), gate_closed_exception, exception_predicate::message_equals("gate closed"));
@@ -284,7 +315,7 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
             return do_until([set, sem]() {return set->size() > 2 && sem->try_wait();},
                     [&log, set, uuid]() {
                         sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
                                 }).then([set](rp_handle h) {
                                     BOOST_CHECK_NE(h.rp(), db::replay_position());
@@ -332,7 +363,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
             return do_until([count, set]() {return set->size() > 1;},
                     [&log, uuid, count, set]() {
                         sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
                                 }).then([&log, set, count](auto h) {
                                     BOOST_CHECK_NE(db::replay_position(), h.rp());
@@ -398,7 +429,7 @@ SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
                     [&log, rps]() {
                         auto uuid = utils::UUID_gen::get_time_UUID();
                         sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
                                 }).then([&log, rps](rp_handle h) {
                                     BOOST_CHECK_NE(h.rp(), db::replay_position());
@@ -442,7 +473,7 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                     [&log, rps]() {
                         auto uuid = utils::UUID_gen::get_time_UUID();
                         sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
                                 }).then([&log, rps](rp_handle h) {
                                     BOOST_CHECK_NE(h.rp(), db::replay_position());
@@ -485,7 +516,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
                     [&log, rps]() {
                         auto uuid = utils::UUID_gen::get_time_UUID();
                         sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                        return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
                                 }).then([&log, rps](rp_handle h) {
                                     BOOST_CHECK_NE(h.rp(), db::replay_position());
@@ -549,7 +580,7 @@ SEASTAR_TEST_CASE(test_allocation_failure){
                 }
             } catch (std::bad_alloc&) {
             }
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
+            return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
                         dst.fill(char(1), size);
                     }).then_wrapped([junk, size](future<db::rp_handle> f) {
                         std::exception_ptr ep;

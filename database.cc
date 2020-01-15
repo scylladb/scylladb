@@ -1459,7 +1459,7 @@ static future<> maybe_handle_reorder(std::exception_ptr exp) {
 future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout) {
     if (cf.commitlog() != nullptr) {
         return do_with(freeze(m), [this, &m, &cf, timeout] (frozen_mutation& fm) {
-            commitlog_entry_writer cew(m.schema(), fm);
+            commitlog_entry_writer cew(m.schema(), fm, db::commitlog::force_sync::no);
             return cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
         }).then([this, &m, &cf, timeout] (db::rp_handle h) {
             return apply_in_memory(m, cf, std::move(h), timeout).handle_exception(maybe_handle_reorder);
@@ -1468,10 +1468,11 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
     return apply_in_memory(m, cf, {}, timeout);
 }
 
-future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
+future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, db::timeout_clock::time_point timeout,
+        db::commitlog::force_sync sync) {
     auto cl = cf.commitlog();
     if (cl != nullptr) {
-        commitlog_entry_writer cew(s, m);
+        commitlog_entry_writer cew(s, m, sync);
         return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout, cl](db::rp_handle h) {
             return this->apply_in_memory(m, s, std::move(h), timeout).handle_exception(maybe_handle_reorder);
         });
@@ -1479,7 +1480,7 @@ future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::
     return apply_in_memory(m, std::move(s), {}, timeout);
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
@@ -1490,15 +1491,17 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_
                                  s->ks_name(), s->cf_name(), s->version()));
     }
 
+    sync = sync || db::commitlog::force_sync(s->wait_for_sync_to_commitlog());
+
     // Signal to view building code that a write is in progress,
     // so it knows when new writes start being sent to a new view.
     auto op = cf.write_in_progress();
     if (cf.views().empty()) {
-        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout).finally([op = std::move(op)] { });
+        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout, sync).finally([op = std::move(op)] { });
     }
     future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m, timeout);
-    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout, &cf, op = std::move(op)] (row_locker::lock_holder lock) mutable {
-        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout).finally(
+    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout, &cf, op = std::move(op), sync] (row_locker::lock_holder lock) mutable {
+        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout, sync).finally(
                 // Hold the local lock on the base-table partition or row
                 // taken before the read, until the update is done.
                 [lock = std::move(lock), op = std::move(op)] { });
@@ -1523,11 +1526,11 @@ Future database::update_write_metrics(Future&& f) {
     });
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
+future<> database::apply(schema_ptr s, const frozen_mutation& m, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), timeout));
+    return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), timeout, sync));
 }
 
 future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {

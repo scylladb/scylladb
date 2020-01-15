@@ -171,7 +171,7 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
             if (utils::UUID_gen::unix_timestamp(decision.ballot) >= truncated_at) {
                 logger.debug("Committing decision {}", decision);
                 tracing::trace(tr_state, "Committing decision {}", decision);
-                f = get_local_storage_proxy().mutate_locally(schema, decision.update, timeout);
+                f = get_local_storage_proxy().mutate_locally(schema, decision.update, db::commitlog::force_sync::yes, timeout);
             } else {
                 logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
                 tracing::trace(tr_state, "Not committing decision {} as ballot timestamp predates last truncation time", decision);
