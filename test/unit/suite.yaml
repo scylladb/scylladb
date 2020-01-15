@@ -1,0 +1,20 @@
+# Suite test type. Supported types: unit, boost, cql
+type: unit
+# A list of long tests, these are only run in dev and release modes
+long:
+    - lsa_async_eviction_test
+    - lsa_sync_eviction_test
+    - row_cache_alloc_stress_test
+    - row_cache_stress_test
+# Custom command line arguments for some of the tests
+custom_args:
+    lsa_async_eviction_test:
+        - '-c1 -m200M --size 1024 --batch 3000 --count 2000000'
+    lsa_sync_eviction_test:
+        - '-c1 -m100M --count 10 --standard-object-size 3000000'
+        - '-c1 -m100M --count 24000 --standard-object-size 2048'
+        - '-c1 -m1G --count 4000000 --standard-object-size 128'
+    row_cache_alloc_stress_test:
+        - '-c1 -m2G'
+    row_cache_stress_test:
+        - '-c1 -m1G --seconds 10'

@@ -1,0 +1,11 @@
+type: boost
+# Custom command line arguments for some of the tests
+custom_args:
+    mutation_reader_test:
+        - '-c3 -m2G'
+    sstable_test:
+        - '-c1 -m2G'
+    sstable_datafile_test:
+        - '-c1 -m2G'
+    sstable_3_x_test:
+        - '-c1 -m2G'

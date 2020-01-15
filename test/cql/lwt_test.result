@@ -1,0 +1,28 @@
+create table t1 (a int primary key);
+{
+	"status" : "ok"
+}
+insert into t1 (a) values (1);
+{
+	"status" : "ok"
+}
+insert into t1 (a) values (2);
+{
+	"status" : "ok"
+}
+select * from t1 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"a" : "1"
+		},
+		{
+			"a" : "2"
+		}
+	]
+}
+drop table t1;
+{
+	"status" : "ok"
+}
