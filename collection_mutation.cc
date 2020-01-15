@@ -33,7 +33,7 @@ collection_mutation::collection_mutation(const abstract_type& type, collection_m
     : _data(imr_object_type::make(data::cell::make_collection(v.data), &type.imr_state().lsa_migrator())) {}
 
 collection_mutation::collection_mutation(const abstract_type& type, const bytes_ostream& data)
-	: _data(imr_object_type::make(data::cell::make_collection(data), &type.imr_state().lsa_migrator())) {}
+	: _data(imr_object_type::make(data::cell::make_collection(fragment_range_view(data)), &type.imr_state().lsa_migrator())) {}
 
 static collection_mutation_view get_collection_mutation_view(const uint8_t* ptr)
 {

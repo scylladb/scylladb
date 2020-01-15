@@ -277,23 +277,6 @@ private:
     static thread_local imr::alloc::lsa_migrate_fn<external_chunk,
         imr::alloc::context_factory<chunk_context>> lsa_chunk_migrate_fn;
 
-    template<typename FragmentRangeView>
-    GCC6_CONCEPT(
-        requires std::is_nothrow_move_constructible_v<std::decay_t<FragmentRangeView>> &&
-                std::is_nothrow_copy_constructible_v<std::decay_t<FragmentRangeView>> &&
-                std::is_nothrow_copy_assignable_v<std::decay_t<FragmentRangeView>> &&
-                std::is_nothrow_move_assignable_v<std::decay_t<FragmentRangeView>>
-    )
-    static auto do_make_collection(FragmentRangeView&& data) noexcept {
-        return [data] (auto&& serializer, auto&& allocations) noexcept {
-            return serializer
-                .serialize(imr::set_flag<tags::collection>(),
-                           imr::set_flag<tags::external_data>(data.size_bytes() > maximum_internal_storage_length))
-                .template serialize_as<tags::collection>(variable_value::write(data), allocations)
-                .done();
-        };
-    }
-
 public:
     /// Make a writer that copies a cell
     ///
@@ -309,25 +292,24 @@ public:
     /// \arg data needs to remain valid as long as the writer is in use.
     /// \returns imr::WriterAllocator for cell::structure.
     template<typename FragmentRange, typename = std::enable_if_t<is_fragment_range_v<std::decay_t<FragmentRange>>>>
-    static auto make_collection(const FragmentRange& data) noexcept {
-        // The writer (`do_make_collection()`) is noexcept so we have to make
-        // sure the data can be copied/moved without the risk of throwing
-        // exceptions. If `data` is nothrow copyable already, which is the
-        // case when `data` is a view, we forward it as-is. Otherwise we
-        // wrap `data` in a view and forward the view. We require the caller
-        // to keep `data` alive anyway.
-        if constexpr (std::is_nothrow_move_constructible_v<std::decay_t<FragmentRange>> &&
+    GCC6_CONCEPT(
+        requires std::is_nothrow_move_constructible_v<std::decay_t<FragmentRange>> &&
                 std::is_nothrow_copy_constructible_v<std::decay_t<FragmentRange>> &&
                 std::is_nothrow_copy_assignable_v<std::decay_t<FragmentRange>> &&
-                std::is_nothrow_move_assignable_v<std::decay_t<FragmentRange>>) {
-            return do_make_collection(data);
-        } else {
-            return do_make_collection(fragment_range_view(data));
-        }
+                std::is_nothrow_move_assignable_v<std::decay_t<FragmentRange>>
+    )
+    static auto make_collection(FragmentRange data) noexcept {
+        return [data = std::move(data)] (auto&& serializer, auto&& allocations) noexcept {
+            return serializer
+                .serialize(imr::set_flag<tags::collection>(),
+                           imr::set_flag<tags::external_data>(data.size_bytes() > maximum_internal_storage_length))
+                .template serialize_as<tags::collection>(variable_value::write(data), allocations)
+                .done();
+        };
     }
 
     static auto make_collection(bytes_view data) noexcept {
-        return do_make_collection(single_fragment_range(data));
+        return make_collection(single_fragment_range(data));
     }
 
     /// Make a writer for a dead cell
