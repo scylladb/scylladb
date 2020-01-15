@@ -260,7 +260,7 @@ modes = {
     }
 }
 
-scylla_tests = [
+scylla_tests = set([
     'test/boost/UUID_test',
     'test/boost/aggregate_fcts_test',
     'test/boost/allocation_strategy_test',
@@ -383,33 +383,33 @@ scylla_tests = [
     'test/perf/perf_row_cache_update',
     'test/perf/perf_simple_query',
     'test/perf/perf_sstable',
-    'test/tools/cql_repl',
     'test/unit/lsa_async_eviction_test',
     'test/unit/lsa_sync_eviction_test',
     'test/unit/memory_footprint_test',
     'test/unit/row_cache_alloc_stress_test',
     'test/unit/row_cache_stress_test',
-]
+])
 
-perf_tests = [
+perf_tests = set([
     'test/perf/perf_mutation_readers',
     'test/perf/perf_checksum',
     'test/perf/perf_mutation_fragment',
     'test/perf/perf_idl',
     'test/perf/perf_vint',
-]
+])
 
-apps = [
+apps = set([
     'scylla',
-]
+    'test/tools/cql_repl',
+])
 
-tests = scylla_tests + perf_tests
+tests = scylla_tests | perf_tests
 
-other = [
+other = set([
     'iotune',
-]
+])
 
-all_artifacts = apps + tests + other
+all_artifacts = apps | tests | other
 
 arg_parser = argparse.ArgumentParser('Configure scylla')
 arg_parser.add_argument('--static', dest='static', action='store_const', default='',
@@ -875,6 +875,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
 
 deps = {
     'scylla': idls + ['main.cc', 'release.cc', 'build_id.cc'] + scylla_core + api + alternator + redis,
+    'test/tools/cql_repl': idls + ['test/tools/cql_repl.cc'] + scylla_core + scylla_tests_generic_dependencies,
 }
 
 pure_boost_tests = set([
@@ -1409,7 +1410,7 @@ with open(buildfile_tmp, 'w') as f:
                     'zstd/lib/libzstd.a',
                 ]])
                 objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
-                if binary.startswith('test/'):
+                if binary in tests:
                     local_libs = '$seastar_libs_{} $libs'.format(mode)
                     if binary in pure_boost_tests:
                         local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
