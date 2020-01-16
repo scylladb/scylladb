@@ -1502,9 +1502,12 @@ with open(buildfile_tmp, 'w') as f:
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, ' '.join(serializers)))
-                if cc.endswith('Parser.cpp') and has_sanitize_address_use_after_scope:
-                    # Parsers end up using huge amounts of stack space and overflowing their stack
-                    f.write('  obj_cxxflags = -fno-sanitize-address-use-after-scope\n')
+                if cc.endswith('Parser.cpp'):
+                    # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
+                    flags = '-O1'
+                    if has_sanitize_address_use_after_scope:
+                        flags += ' -fno-sanitize-address-use-after-scope'
+                    f.write('  obj_cxxflags = %s\n' % flags)
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep))
