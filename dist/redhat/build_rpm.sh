@@ -93,5 +93,6 @@ fi
 rpm_payload_opts=(--define "_binary_payload w2${xz_thread_param}.xzdio")
 
 ln -fv $RELOC_PKG $RPMBUILD/SOURCES/
+ln -fv dist/redhat/systemd.inc $RPMBUILD/SOURCES/
 pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST, \"product\": \"$PRODUCT\", \"$PRODUCT\": true, \"reloc_pkg\": \"$RELOC_PKG_BASENAME\" }" > $RPMBUILD/SPECS/scylla.spec
 rpmbuild -ba "${rpm_payload_opts[@]}" --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla.spec

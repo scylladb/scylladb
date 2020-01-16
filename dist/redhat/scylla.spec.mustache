@@ -7,8 +7,11 @@ Group:          Applications/Databases
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        {{reloc_pkg}}
+Source1:        systemd.inc
 Requires:       {{product}}-server = {{version}} {{product}}-jmx = {{version}} {{product}}-tools = {{version}} {{product}}-tools-core = {{version}} {{product}}-kernel-conf = {{version}}
 Obsoletes:	scylla-server < 1.1
+
+%include %{SOURCE1}
 
 %global _debugsource_template %{nil}
 %global _debuginfo_subpackages %{nil}
