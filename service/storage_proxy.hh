@@ -86,6 +86,10 @@ class one_or_two_partition_ranges;
 
 }
 
+namespace cdc {
+    class cdc_service;    
+}
+
 namespace service {
 
 class abstract_write_response_handler;
@@ -268,6 +272,7 @@ private:
     class view_update_handlers_list;
     std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
 
+    cdc::cdc_service* _cdc = nullptr;
 private:
     future<> uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
@@ -388,6 +393,9 @@ private:
     void maybe_update_view_backlog_of(gms::inet_address, std::optional<db::view::update_backlog>);
 
     db::view::update_backlog get_backlog_of(gms::inet_address) const;
+
+    template<typename Range>
+    future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog);
     ~storage_proxy();
@@ -396,6 +404,13 @@ public:
     }
     distributed<database>& get_db() {
         return _db;
+    }
+
+    void set_cdc_service(cdc::cdc_service* cdc) {
+        _cdc = cdc;
+    }
+    cdc::cdc_service* get_cdc_service() const {
+        return _cdc;
     }
 
     view_update_handlers_list& get_view_update_handlers_list() {
@@ -440,9 +455,6 @@ public:
 
     future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                            clock_type::time_point timeout, service_permit permit);
-
-    template<typename Range>
-    future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
     future<> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                   bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters = false);

@@ -71,6 +71,7 @@ static future<> populate_desc(db_context ctx, const schema& s);
 }
 
 class cdc::cdc_service::impl : service::migration_listener::empty_listener {
+    friend cdc_service;
     db_context _ctxt;
 public:
     impl(db_context ctxt)
@@ -177,6 +178,14 @@ public:
     }
 
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {}
+
+    future<std::tuple<std::vector<mutation>, result_callback>> augment_mutation_call(
+        lowres_clock::time_point timeout,
+        std::vector<mutation>&& mutations
+    );
+
+    template<typename Iter>
+    future<> append_mutations(Iter i, Iter e, schema_ptr s, lowres_clock::time_point, std::vector<mutation>&);
 };
 
 cdc::cdc_service::cdc_service(service::storage_proxy& proxy)
@@ -185,7 +194,9 @@ cdc::cdc_service::cdc_service(service::storage_proxy& proxy)
 
 cdc::cdc_service::cdc_service(db_context ctxt)
     : _impl(std::make_unique<impl>(std::move(ctxt)))
-{}
+{
+    _impl->_ctxt._proxy.set_cdc_service(this);
+}
 
 cdc::cdc_service::~cdc_service() = default;
 
@@ -634,9 +645,9 @@ public:
         auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, query::max_partitions);
 
         return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
-                [this, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
+                [s = _schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
                     cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
-                    query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *selection));
+                    query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *s, *selection));
                     auto result_set = builder.build();
                     if (!result_set || result_set->empty()) {
                         return {};
@@ -746,33 +757,62 @@ transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_siz
         .then([&muts] () mutable { return std::move(muts); });
 }
 
-future<std::vector<mutation>> append_log_mutations(
-        db_context ctx,
-        schema_ptr s,
-        service::storage_proxy::clock_type::time_point timeout,
-        service::query_state& qs,
-        std::vector<mutation> muts) {
-    return get_streams(ctx, s->ks_name(), s->cf_name(), timeout, qs).then([ctx, s = std::move(s), muts = std::move(muts), &qs](::shared_ptr<transformer::streams_type> streams) mutable {
-        return do_with(std::move(muts), transformer(ctx, s, std::move(streams)), [&qs, s] (std::vector<mutation>& muts, transformer& trans) {
-            muts.reserve(2 * muts.size());
-            if (!s->cdc_options().preimage()) {
-                constexpr int batch_size = 100;
-                int muts_len = muts.size();
-                return transform_mutations(muts, batch_size, [&muts, &trans, batch_size, muts_len] (int idx) {
-                    for (int len = std::min(idx + batch_size, muts_len); idx < len; ++idx) {
-                        muts.push_back(trans.transform(muts[idx]));
-                    }
+} // namespace cdc
+
+future<std::tuple<std::vector<mutation>, cdc::result_callback>>
+cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations) {
+    // we do all this because in the case of batches, we can have mixed schemas.
+    auto e = mutations.end();
+    auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
+        return m.schema()->cdc_options().enabled();
+    });
+
+    if (i == e) {
+        return make_ready_future<std::tuple<std::vector<mutation>, cdc::result_callback>>(std::make_tuple(std::move(mutations), result_callback{}));
+    }
+
+    mutations.reserve(2 * mutations.size());
+
+    return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), [this, timeout, i](std::vector<mutation>& mutations, service::query_state& qs) {
+        return transform_mutations(mutations, 1, [this, &mutations, timeout, &qs] (int idx) {
+            auto& m = mutations[idx];
+            auto s = m.schema();
+
+            if (!s->cdc_options().enabled()) {
+                return make_ready_future<>();
+            }
+            // for batches/multiple mutations this is super inefficient. either partition the mutation set by schema
+            // and re-use streams, or probably better: add a cache so this lookup is a noop on second mutation
+            return get_streams(_ctxt, s->ks_name(), s->cf_name(), timeout, qs).then([this, s = std::move(s), &qs, &mutations, idx](::shared_ptr<transformer::streams_type> streams) mutable {
+                auto& m = mutations[idx]; // should not really need because of reserve, but lets be conservative
+                transformer trans(_ctxt, s, streams);
+
+                if (!s->cdc_options().preimage()) {
+                    mutations.emplace_back(trans.transform(m));
                     return make_ready_future<>();
+                }
+
+                // Note: further improvement here would be to coalesce the pre-image selects into one
+                // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
+                // so this is premature.
+                auto f = trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m);
+                return f.then([trans = std::move(trans), &mutations, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+                    mutations.push_back(trans.transform(mutations[idx], rs.get()));
                 });
-            } else {
-                return transform_mutations(muts, 1, [&qs, &trans, &muts] (int idx) mutable {
-                    return trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, muts[idx]).then([&trans, &muts, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
-                        muts.push_back(trans.transform(muts[idx], rs.get()));
-                    });
-                });
-           }
+            });
+        }).then([](std::vector<mutation> mutations) {
+            return make_ready_future<std::tuple<std::vector<mutation>, cdc::result_callback>>(std::make_tuple(std::move(mutations), result_callback{}));
         });
     });
 }
 
-} // namespace cdc
+bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutations) const {
+    return std::any_of(mutations.begin(), mutations.end(), [](const mutation& m) {
+        return m.schema()->cdc_options().enabled();
+    });
+}
+
+future<std::tuple<std::vector<mutation>, cdc::result_callback>>
+cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations) {
+    return _impl->augment_mutation_call(timeout, std::move(mutations));
+}

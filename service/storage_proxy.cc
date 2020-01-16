@@ -87,6 +87,7 @@
 #include "multishard_mutation_query.hh"
 #include "database.hh"
 #include "db/consistency_level_validations.hh"
+#include "cdc/cdc.hh"
 
 namespace bi = boost::intrusive;
 
@@ -2011,6 +2012,17 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
  * @param tr_state trace state handle
  */
 future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
+    if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations)).then([this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), raw_counters](std::tuple<std::vector<mutation>, cdc::result_callback>&& t) mutable {
+            auto mutations = std::move(std::get<0>(t));
+            auto end_func = std::move(std::get<1>(t));
+            auto f = _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
+            if (end_func) {
+                f = f.then(std::move(end_func));
+            }
+            return f;
+        });
+    }
     return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
 }
 
@@ -2168,19 +2180,35 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         }
     };
 
-    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit)] (std::vector<mutation> mutations, db::consistency_level cl) mutable {
+    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit), cl] (std::vector<mutation> mutations) mutable {
       try {
           return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit)));
       } catch(...) {
           return make_exception_future<lw_shared_ptr<context>>(std::current_exception());
       }
     };
-
-    return mk_ctxt(std::move(mutations), cl).then([this] (lw_shared_ptr<context> ctxt) {
-        return ctxt->run().finally([ctxt]{});
-    }).then_wrapped([p = shared_from_this(), lc, tr_state = std::move(tr_state)] (future<> f) mutable {
+    auto cleanup = [p = shared_from_this(), lc, tr_state = std::move(tr_state)] (future<> f) mutable {
         return p->mutate_end(std::move(f), lc, p->_stats, std::move(tr_state));
-    });
+    };
+
+    if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations)).then([this, mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup)](std::tuple<std::vector<mutation>, cdc::result_callback>&& t) mutable {
+            auto mutations = std::move(std::get<0>(t));
+            auto end_func = std::get<1>(t);
+            auto f = std::move(mk_ctxt)(std::move(mutations)).then([this] (lw_shared_ptr<context> ctxt) {
+                return ctxt->run().finally([ctxt]{});
+            }).then_wrapped(std::move(cleanup));
+
+            if (end_func) {
+                f = f.then(std::move(end_func));                
+            }
+            return f;
+        });
+    }
+
+    return mk_ctxt(std::move(mutations)).then([this] (lw_shared_ptr<context> ctxt) {
+        return ctxt->run().finally([ctxt]{});
+    }).then_wrapped(std::move(cleanup));
 }
 
 template<typename Range>
