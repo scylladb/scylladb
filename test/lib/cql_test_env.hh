@@ -123,6 +123,8 @@ public:
     virtual db::view::view_builder& local_view_builder() = 0;
 
     virtual db::view::view_update_generator& local_view_update_generator() = 0;
+
+    virtual service::migration_notifier& local_mnotifier() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {});

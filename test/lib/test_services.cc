@@ -41,6 +41,7 @@ class storage_service_for_tests::impl {
     db::config _cfg;
     sharded<auth::service> _auth_service;
     sharded<cql3::cql_config> _cql_config;
+    sharded<service::migration_notifier> _mnotif;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
     sharded<db::view::view_update_generator> _view_update_generator;
 public:
@@ -51,13 +52,14 @@ public:
         utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
         utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
         _abort_source.start().get();
+        _mnotif.start().get();
         _feature_service.start().get();
         _gossiper.start(std::ref(_abort_source), std::ref(_feature_service), std::ref(_cfg)).get();
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false).get();
         service::storage_service_config sscfg;
         sscfg.available_memory = memory::stats().total_memory();
         _cql_config.start().get();
-        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_auth_service), std::ref(_cql_config), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, true).get();
+        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_auth_service), std::ref(_cql_config), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, std::ref(_mnotif), true).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();
@@ -68,6 +70,7 @@ public:
         netw::get_messaging_service().stop().get();
         _db.stop().get();
         _gossiper.stop().get();
+        _mnotif.stop().get();
         _feature_service.stop().get();
         _abort_source.stop().get();
     }

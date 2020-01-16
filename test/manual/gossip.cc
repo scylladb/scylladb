@@ -81,12 +81,16 @@ int main(int ac, char ** av) {
             sharded<db::system_distributed_keyspace> sys_dist_ks;
             sharded<db::view::view_update_generator> view_update_generator;
             sharded<abort_source> abort_sources;
+            sharded<service::migration_notifier> mnotif;
+
             abort_sources.start().get();
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
+            mnotif.start().get();
+            auto stop_mnotifier = defer([&] { mnotif.stop().get(); });
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
             cql_config.start().get();
-            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg).get();
+            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg, mnotif).get();
             netw::get_messaging_service().start(listen).get();
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();

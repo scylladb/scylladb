@@ -141,12 +141,12 @@ event::event_type parse_event_type(const sstring& value)
 }
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
-        const cql3::cql_config& cql_config, cql_server_config config)
+        const cql3::cql_config& cql_config, service::migration_notifier& mn, cql_server_config config)
     : _query_processor(qp)
     , _config(config)
     , _max_request_size(config.max_request_size)
     , _memory_available(config.get_service_memory_limiter_semaphore())
-    , _notifier(std::make_unique<event_notifier>())
+    , _notifier(std::make_unique<event_notifier>(mn))
     , _auth_service(auth_service)
     , _cql_config(cql_config)
 {

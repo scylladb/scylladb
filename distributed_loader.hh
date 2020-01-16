@@ -50,6 +50,7 @@ class foreign_sstable_open_info;
 namespace service {
 
 class storage_proxy;
+class migration_manager;
 
 }
 
@@ -68,7 +69,7 @@ public:
     static future<> populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name);
     static future<> init_system_keyspace(distributed<database>& db);
     static future<> ensure_system_table_directories(distributed<database>& db);
-    static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy);
+    static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm);
 private:
     static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
     static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);

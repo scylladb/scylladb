@@ -39,7 +39,7 @@
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
-#include "service/migration_listener.hh"
+#include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 #include "database.hh"
 
@@ -114,14 +114,14 @@ static future<> validate_role_exists(const service& ser, std::string_view role_n
 service::service(
         permissions_cache_config c,
         cql3::query_processor& qp,
-        ::service::migration_manager& mm,
+        ::service::migration_notifier& mn,
         std::unique_ptr<authorizer> z,
         std::unique_ptr<authenticator> a,
         std::unique_ptr<role_manager> r)
             : _permissions_cache_config(std::move(c))
             , _permissions_cache(nullptr)
             , _qp(qp)
-            , _migration_manager(mm)
+            , _mnotifier(mn)
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
@@ -141,18 +141,19 @@ service::service(
 service::service(
         permissions_cache_config c,
         cql3::query_processor& qp,
+        ::service::migration_notifier& mn,
         ::service::migration_manager& mm,
         const service_config& sc)
             : service(
                       std::move(c),
                       qp,
-                      mm,
+                      mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, mm),
                       create_object<authenticator>(sc.authenticator_java_name, qp, mm),
                       create_object<role_manager>(sc.role_manager_java_name, qp, mm)) {
 }
 
-future<> service::create_keyspace_if_missing() const {
+future<> service::create_keyspace_if_missing(::service::migration_manager& mm) const {
     auto& db = _qp.db();
 
     if (!db.has_keyspace(meta::AUTH_KS)) {
@@ -166,15 +167,15 @@ future<> service::create_keyspace_if_missing() const {
 
         // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments.
         // See issue #2129.
-        return _migration_manager.announce_new_keyspace(ksm, api::min_timestamp, false);
+        return mm.announce_new_keyspace(ksm, api::min_timestamp, false);
     }
 
     return make_ready_future<>();
 }
 
-future<> service::start() {
-    return once_among_shards([this] {
-        return create_keyspace_if_missing();
+future<> service::start(::service::migration_manager& mm) {
+    return once_among_shards([this, &mm] {
+        return create_keyspace_if_missing(mm);
     }).then([this] {
         return _role_manager->start().then([this] {
             return when_all_succeed(_authorizer->start(), _authenticator->start());
@@ -183,7 +184,7 @@ future<> service::start() {
         _permissions_cache = std::make_unique<permissions_cache>(_permissions_cache_config, *this, log);
     }).then([this] {
         return once_among_shards([this] {
-            _migration_manager.register_listener(_migration_listener.get());
+            _mnotifier.register_listener(_migration_listener.get());
             return make_ready_future<>();
         });
     });
@@ -192,7 +193,7 @@ future<> service::start() {
 future<> service::stop() {
     // Only one of the shards has the listener registered, but let's try to
     // unregister on each one just to make sure.
-    _migration_manager.unregister_listener(_migration_listener.get());
+    _mnotifier.unregister_listener(_migration_listener.get());
 
     return _permissions_cache->stop().then([this] {
         return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop());

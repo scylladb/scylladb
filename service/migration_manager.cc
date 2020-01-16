@@ -63,8 +63,7 @@ using namespace std::chrono_literals;
 
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 
-migration_manager::migration_manager()
-    : _listeners{}
+migration_manager::migration_manager(migration_notifier& notifier) : _notifier(notifier)
 {
 }
 
@@ -148,7 +147,7 @@ void migration_manager::init_messaging_service()
         });
     });
     ms.register_schema_check([] {
-        return make_ready_future<utils::UUID>(service::get_local_storage_service().db().local().get_version());
+        return make_ready_future<utils::UUID>(service::get_local_storage_proxy().get_db().local().get_version());
     });
 }
 
@@ -162,12 +161,12 @@ future<> migration_manager::uninit_messaging_service()
     );
 }
 
-void migration_manager::register_listener(migration_listener* listener)
+void migration_notifier::register_listener(migration_listener* listener)
 {
     _listeners.emplace_back(listener);
 }
 
-void migration_manager::unregister_listener(migration_listener* listener)
+void migration_notifier::unregister_listener(migration_listener* listener)
 {
     _listeners.erase(std::remove(_listeners.begin(), _listeners.end(), listener), _listeners.end());
 }
@@ -356,7 +355,7 @@ bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoin
             && !gms::get_local_gossiper().is_gossip_only_member(endpoint);
 }
 
-future<> migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
+future<> migration_notifier::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     return seastar::async([this, ksm] {
         auto&& name = ksm->name();
         for (auto&& listener : _listeners) {
@@ -369,7 +368,7 @@ future<> migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_
     });
 }
 
-future<> migration_manager::notify_create_column_family(const schema_ptr& cfm) {
+future<> migration_notifier::create_column_family(const schema_ptr& cfm) {
     return seastar::async([this, cfm] {
         auto&& ks_name = cfm->ks_name();
         auto&& cf_name = cfm->cf_name();
@@ -383,7 +382,7 @@ future<> migration_manager::notify_create_column_family(const schema_ptr& cfm) {
     });
 }
 
-future<> migration_manager::notify_create_user_type(const user_type& type) {
+future<> migration_notifier::create_user_type(const user_type& type) {
     return seastar::async([this, type] {
         auto&& ks_name = type->_keyspace;
         auto&& type_name = type->get_name_as_string();
@@ -397,7 +396,7 @@ future<> migration_manager::notify_create_user_type(const user_type& type) {
     });
 }
 
-future<> migration_manager::notify_create_view(const view_ptr& view) {
+future<> migration_notifier::create_view(const view_ptr& view) {
     return seastar::async([this, view] {
         auto&& ks_name = view->ks_name();
         auto&& view_name = view->cf_name();
@@ -425,7 +424,7 @@ public void notifyCreateAggregate(UDAggregate udf)
 }
 #endif
 
-future<> migration_manager::notify_update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
+future<> migration_notifier::update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     return seastar::async([this, ksm] {
         auto&& name = ksm->name();
         for (auto&& listener : _listeners) {
@@ -438,7 +437,7 @@ future<> migration_manager::notify_update_keyspace(const lw_shared_ptr<keyspace_
     });
 }
 
-future<> migration_manager::notify_update_column_family(const schema_ptr& cfm, bool columns_changed) {
+future<> migration_notifier::update_column_family(const schema_ptr& cfm, bool columns_changed) {
     return seastar::async([this, cfm, columns_changed] {
         auto&& ks_name = cfm->ks_name();
         auto&& cf_name = cfm->cf_name();
@@ -452,7 +451,7 @@ future<> migration_manager::notify_update_column_family(const schema_ptr& cfm, b
     });
 }
 
-future<> migration_manager::notify_update_user_type(const user_type& type) {
+future<> migration_notifier::update_user_type(const user_type& type) {
     return seastar::async([this, type] {
         auto&& ks_name = type->_keyspace;
         auto&& type_name = type->get_name_as_string();
@@ -466,7 +465,7 @@ future<> migration_manager::notify_update_user_type(const user_type& type) {
     });
 }
 
-future<> migration_manager::notify_update_view(const view_ptr& view, bool columns_changed) {
+future<> migration_notifier::update_view(const view_ptr& view, bool columns_changed) {
     return seastar::async([this, view, columns_changed] {
         auto&& ks_name = view->ks_name();
         auto&& view_name = view->cf_name();
@@ -494,7 +493,7 @@ public void notifyUpdateAggregate(UDAggregate udf)
 }
 #endif
 
-future<> migration_manager::notify_drop_keyspace(const sstring& ks_name) {
+future<> migration_notifier::drop_keyspace(const sstring& ks_name) {
     return seastar::async([this, ks_name] {
         for (auto&& listener : _listeners) {
             try {
@@ -506,7 +505,7 @@ future<> migration_manager::notify_drop_keyspace(const sstring& ks_name) {
     });
 }
 
-future<> migration_manager::notify_drop_column_family(const schema_ptr& cfm) {
+future<> migration_notifier::drop_column_family(const schema_ptr& cfm) {
     return seastar::async([this, cfm] {
         auto&& cf_name = cfm->cf_name();
         auto&& ks_name = cfm->ks_name();
@@ -520,7 +519,7 @@ future<> migration_manager::notify_drop_column_family(const schema_ptr& cfm) {
     });
 }
 
-future<> migration_manager::notify_drop_user_type(const user_type& type) {
+future<> migration_notifier::drop_user_type(const user_type& type) {
     return seastar::async([this, type] {
         auto&& ks_name = type->_keyspace;
         auto&& type_name = type->get_name_as_string();
@@ -534,7 +533,7 @@ future<> migration_manager::notify_drop_user_type(const user_type& type) {
     });
 }
 
-future<> migration_manager::notify_drop_view(const view_ptr& view) {
+future<> migration_notifier::drop_view(const view_ptr& view) {
     return seastar::async([this, view] {
         auto&& ks_name = view->ks_name();
         auto&& view_name = view->cf_name();
@@ -547,6 +546,31 @@ future<> migration_manager::notify_drop_view(const view_ptr& view) {
         }
     });
 }
+
+void migration_notifier::before_create_column_family(const schema& schema,
+        std::vector<mutation>& mutations, api::timestamp_type timestamp) {
+    for (auto&& listener : _listeners) {
+        // allow exceptions. so a listener can effectively kill a create-table
+        listener->on_before_create_column_family(schema, mutations, timestamp);
+    }
+}
+
+void migration_notifier::before_update_column_family(const schema& new_schema,
+        const schema& old_schema, std::vector<mutation>& mutations, api::timestamp_type ts) {
+    for (auto&& listener : _listeners) {
+        // allow exceptions. so a listener can effectively kill an update-column
+        listener->on_before_update_column_family(new_schema, old_schema, mutations, ts);
+    }
+}
+
+void migration_notifier::before_drop_column_family(const schema& schema,
+        std::vector<mutation>& mutations, api::timestamp_type ts) {
+    for (auto&& listener : _listeners) {
+        // allow exceptions. so a listener can effectively kill a drop-column
+        listener->on_before_drop_column_family(schema, mutations, ts);
+    }
+}
+
 
 #if 0
 public void notifyDropFunction(UDFunction udf)
@@ -628,10 +652,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::time
         auto ksm = keyspace.metadata();
         return seastar::async([this, cfm, timestamp, ksm] {
             auto mutations = db::schema_tables::make_create_table_mutations(ksm, cfm, timestamp);
-            for (auto&& listener : _listeners) {
-                // allow exceptions. so a listener can effectively kill a create table etc. 
-                listener->on_before_create_column_family(*cfm, mutations, timestamp);
-            }
+            get_notifier().before_create_column_family(*cfm, mutations, timestamp);
             return mutations;
         }).then([announce_locally, ksm](std::vector<mutation> mutations) {
             return include_keyspace_and_announce(*ksm, std::move(mutations), announce_locally);
@@ -669,10 +690,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
                     return std::move(result);
                 }).get0();
 
-            for (auto&& listener : _listeners) {
-                // allow exceptions. so a listener can effectively kill a create table etc. 
-                listener->on_before_update_column_family(*cfm, *old_schema, mutations, ts);
-            }
+            get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
             return mutations;
         }).then([keyspace, announce_locally] (auto&& mutations) {
             return include_keyspace_and_announce(*keyspace, std::move(mutations), announce_locally);
@@ -816,11 +834,8 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
                     mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
                 }
             }
-            for (auto&& listener : _listeners) {
-                // allow exceptions. so a listener can effectively kill a create table etc. 
-                listener->on_before_drop_column_family(*schema, mutations, ts);
-            }
 
+            get_notifier().before_drop_column_family(*schema, mutations, ts);
             return mutations;
         }).then([this, keyspace, announce_locally](std::vector<mutation> mutations) {
             return include_keyspace_and_announce(*keyspace, std::move(mutations), announce_locally);
@@ -972,9 +987,9 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
  */
 future<> migration_manager::passive_announce(utils::UUID version) {
     return gms::get_gossiper().invoke_on(0, [version] (auto&& gossiper) {
-        auto& ss = service::get_local_storage_service();
+        gms::versioned_value::factory value_factory;
         mlogger.debug("Gossiping my schema version {}", version);
-        return gossiper.add_local_application_state(gms::application_state::SCHEMA, ss.value_factory.schema(version));
+        return gossiper.add_local_application_state(gms::application_state::SCHEMA, value_factory.schema(version));
     });
 }
 

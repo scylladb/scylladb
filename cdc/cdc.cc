@@ -34,7 +34,6 @@
 #include "partition_slice_builder.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
-#include "service/migration_manager.hh"
 #include "service/migration_listener.hh"
 #include "service/storage_service.hh"
 #include "types/tuple.hh"
@@ -48,7 +47,7 @@ using locator::snitch_ptr;
 using locator::token_metadata;
 using locator::topology;
 using seastar::sstring;
-using service::migration_manager;
+using service::migration_notifier;
 using service::storage_proxy;
 
 namespace std {
@@ -77,10 +76,10 @@ public:
     impl(db_context ctxt)
         : _ctxt(std::move(ctxt))
     {
-        _ctxt._migration_manager.register_listener(this);
+        _ctxt._migration_notifier.register_listener(this);
     }
     ~impl() {
-        _ctxt._migration_manager.unregister_listener(this);
+        _ctxt._migration_notifier.unregister_listener(this);
     }
 
     void on_before_create_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
@@ -354,8 +353,8 @@ db_context::builder::builder(service::storage_proxy& proxy)
     : _proxy(proxy) 
 {}
 
-db_context::builder& db_context::builder::with_migration_manager(service::migration_manager& migration_manager) {
-    _migration_manager = migration_manager;
+db_context::builder& db_context::builder::with_migration_notifier(service::migration_notifier& migration_notifier) {
+    _migration_notifier = migration_notifier;
     return *this;
 }
 
@@ -377,7 +376,7 @@ db_context::builder& db_context::builder::with_partitioner(dht::i_partitioner& p
 db_context db_context::builder::build() {
     return db_context{
         _proxy,
-        _migration_manager ? _migration_manager->get() : service::get_local_migration_manager(),
+        _migration_notifier ? _migration_notifier->get() : service::get_local_storage_service().get_migration_notifier(),
         _token_metadata ? _token_metadata->get() : service::get_local_storage_service().get_token_metadata(),
         _snitch ? _snitch->get() : locator::i_endpoint_snitch::get_local_snitch_ptr(),
         _partitioner ? _partitioner->get() : dht::global_partitioner()

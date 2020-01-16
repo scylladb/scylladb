@@ -164,7 +164,7 @@ void keyspace::remove_user_type(const user_type ut) {
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 
-database::database(const db::config& cfg, database_config dbcfg)
+database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
@@ -213,6 +213,7 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>(*this))
+    , _mnotifier(mn)
 {
     local_schema_registry().init(*this); // TODO: we're never unbound.
     setup_metrics();
@@ -578,7 +579,7 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
     });
 }
 
-future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy) {
+future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm) {
     using namespace db::schema_tables;
     return do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
@@ -608,12 +609,12 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
                 });
             });
             });
-    }).then([&proxy, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
-            return create_views_from_schema_partition(proxy, v.second).then([this] (std::vector<view_ptr> views) {
-                return parallel_for_each(views.begin(), views.end(), [this] (auto&& v) {
-                    return this->add_column_family_and_make_directory(v).then([this, v] {
-                        return maybe_update_legacy_secondary_index_mv_schema(*this, v);
+    }).then([&proxy, &mm, this] {
+        return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy, &mm] (schema_result_value_type &v) {
+            return create_views_from_schema_partition(proxy, v.second).then([this, &mm] (std::vector<view_ptr> views) {
+                return parallel_for_each(views.begin(), views.end(), [this, &mm] (auto&& v) {
+                    return this->add_column_family_and_make_directory(v).then([this, &mm, v] {
+                        return maybe_update_legacy_secondary_index_mv_schema(mm.local(), *this, v);
                     });
                 });
             });
@@ -672,7 +673,7 @@ future<> database::update_keyspace(const sstring& name) {
         auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm->name(), tmp_ksm->strategy_name(), tmp_ksm->strategy_options(), tmp_ksm->durable_writes(),
                         boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
         ks.update_from(std::move(new_ksm));
-        return service::get_local_migration_manager().notify_update_keyspace(ks.metadata());
+        return get_notifier().update_keyspace(ks.metadata());
     });
 }
 
@@ -1867,7 +1868,7 @@ future<utils::UUID> update_schema_version(distributed<service::storage_proxy>& p
 }
 
 future<> announce_schema_version(utils::UUID schema_version) {
-    return service::get_local_migration_manager().passive_announce(schema_version);
+    return service::migration_manager::passive_announce(schema_version);
 }
 
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features)
@@ -1984,3 +1985,4 @@ const timeout_config infinite_timeout_config = {
         // not really infinite, but long enough
         1h, 1h, 1h, 1h, 1h, 1h, 1h,
 };
+

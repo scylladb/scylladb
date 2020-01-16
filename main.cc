@@ -460,6 +460,7 @@ int main(int ac, char** av) {
 
     print_starting_message(ac, av, parsed_opts);
 
+    sharded<service::migration_notifier> mm_notifier;
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
@@ -497,7 +498,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs,
+        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
@@ -647,6 +648,12 @@ int main(int ac, char** av) {
             });
             set_abort_on_internal_error(cfg->abort_on_internal_error());
 
+            supervisor::notify("starting migration manager notifier");
+            mm_notifier.start().get();
+            auto stop_mm_notifier = defer_verbose_shutdown("migration manager notifier", [ &mm_notifier ] {
+                mm_notifier.stop().get();
+            });
+
             supervisor::notify("creating tracing");
             tracing::backend_registry tracing_backend_registry;
             tracing::register_tracing_keyspace_backend(tracing_backend_registry);
@@ -686,8 +693,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            //FIXME: discarded future
-            (void)init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg);
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier).get();
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
@@ -699,7 +705,7 @@ int main(int ac, char** av) {
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
             dbcfg.available_memory = memory::stats().total_memory();
-            db.start(std::ref(*cfg), dbcfg).get();
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier)).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
@@ -787,13 +793,13 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
-            mm.start().get();
+            mm.start(std::ref(mm_notifier)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            qp.start(std::ref(proxy), std::ref(db), qp_mcfg).get();
+            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), qp_mcfg).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             supervisor::notify("initializing batchlog manager");
@@ -826,7 +832,7 @@ int main(int ac, char** av) {
             });
 
             supervisor::notify("loading non-system sstables");
-            distributed_loader::init_non_system_keyspaces(db, proxy).get();
+            distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
             supervisor::notify("starting view update generator");
             view_update_generator.start(std::ref(db), std::ref(proxy)).get();
@@ -988,8 +994,10 @@ int main(int ac, char** av) {
             static sharded<db::view::view_builder> view_builder;
             if (cfg->view_building()) {
                 supervisor::notify("starting the view builder");
-                view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm)).get();
-                view_builder.invoke_on_all(&db::view::view_builder::start).get();
+                view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm_notifier)).get();
+                view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) { 
+                    return vb.start(mm.local());
+                }).get();
             }
 
             // Truncate `clients' CF - this table should not persist between server restarts.

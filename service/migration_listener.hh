@@ -43,6 +43,14 @@
 
 #include <vector>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/shared_ptr.hh>
+
+class keyspace_metadata;
+class view_ptr;
+class user_type_impl;
+using user_type = seastar::shared_ptr<const user_type_impl>;
+class schema;
+using schema_ptr = seastar::lw_shared_ptr<const schema>;
 
 #include "timestamp.hh"
 
@@ -117,6 +125,35 @@ public:
     void on_create_view(const sstring& ks_name, const sstring& view_name) override {};
     void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {};
     void on_drop_view(const sstring& ks_name, const sstring& view_name) override {};
+};
+
+class migration_notifier {
+private:
+    std::vector<migration_listener*> _listeners;
+
+public:
+    /// Register a migration listener on current shard.
+    void register_listener(migration_listener* listener);
+
+    /// Unregister a migration listener on current shard.
+    void unregister_listener(migration_listener* listener);
+
+    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
+    future<> create_column_family(const schema_ptr& cfm);
+    future<> create_user_type(const user_type& type);
+    future<> create_view(const view_ptr& view);
+    future<> update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
+    future<> update_column_family(const schema_ptr& cfm, bool columns_changed);
+    future<> update_user_type(const user_type& type);
+    future<> update_view(const view_ptr& view, bool columns_changed);
+    future<> drop_keyspace(const sstring& ks_name);
+    future<> drop_column_family(const schema_ptr& cfm);
+    future<> drop_user_type(const user_type& type);
+    future<> drop_view(const view_ptr& view);
+
+    void before_create_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
+    void before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);
+    void before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
 };
 
 }
