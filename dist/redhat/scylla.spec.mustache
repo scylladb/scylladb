@@ -1,6 +1,6 @@
 Name:           {{product}}
 Version:        {{version}}
-Release:        {{release}}%{?dist}
+Release:        {{release}}
 Summary:        Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
 Group:          Applications/Databases
 
@@ -48,9 +48,7 @@ Summary:        The Scylla database server
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 BuildRequires: pystache
-{{#centos7}}
 Requires: kernel >= 3.10.0-514
-{{/centos7}}
 Requires:       {{product}}-conf mdadm xfsprogs {{product}}-python3
 Conflicts:      abrt
 AutoReqProv:    no
