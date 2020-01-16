@@ -210,6 +210,9 @@ public:
         return _db;
     }
 
+    gms::feature_service& features() { return _feature_service; }
+    const gms::feature_service& features() const { return _feature_service; }
+
 private:
     bool is_auto_bootstrap() const;
     inet_address get_broadcast_address() const {
