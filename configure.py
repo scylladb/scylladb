@@ -1333,7 +1333,7 @@ with open(buildfile_tmp, 'w') as f:
             libs_{mode} = -l{fmt_lib}
             seastar_libs_{mode} = {seastar_libs}
             rule cxx.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
