@@ -46,6 +46,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/defer.hh>
+#include "utils/atomic_vector.hh"
 
 class keyspace_metadata;
 class view_ptr;
@@ -131,17 +132,7 @@ public:
 
 class migration_notifier {
 private:
-    class listener_vector {
-        std::vector<migration_listener*> _vec;
-        rwlock _vec_lock;
-
-    public:
-        void add(migration_listener* listener);
-        future<> remove(migration_listener* listener);
-        // This must be called on a thread.
-        void for_each(noncopyable_function<void(migration_listener*)> func);
-    };
-    listener_vector _listeners;
+    atomic_vector<migration_listener*> _listeners;
 
 public:
     /// Register a migration listener on current shard.
