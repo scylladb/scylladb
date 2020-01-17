@@ -644,6 +644,9 @@ public:
     uint64_t id() const {
         return _id;
     }
+    size_t block_for() const {
+        return _required_participants;
+    }
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;
