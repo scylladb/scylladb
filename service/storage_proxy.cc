@@ -282,7 +282,9 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
-        return make_exception_future<>(std::runtime_error("Executing hint locally doesn't make sense"));
+        // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
+        // becomes unavailable - this might include the current node
+        return sp.mutate_hint(_schema, *_mutation, timeout);
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, std::vector<gms::inet_address>&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1711,6 +1713,15 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations, clock_type::time_
 }
 
 future<>
+storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, clock_type::time_point timeout) {
+    auto shard = _db.local().shard_of(m);
+    get_stats().replica_cross_shard_ops += shard != engine().cpu_id();
+    return _db.invoke_on(shard, _write_smp_service_group, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
+        return db.apply_hint(gs, m, timeout);
+    });
+}
+
+future<>
 storage_proxy::mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                          tracing::trace_state_ptr trace_state, service_permit permit) {
     get_stats().received_counter_updates += mutations.size();
@@ -1815,6 +1826,12 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
 storage_proxy::response_id_type
 storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
     return create_write_response_handler_helper(m.schema(), m.token(), std::make_unique<shared_mutation>(m), cl, type, tr_state,
+            std::move(permit));
+}
+
+storage_proxy::response_id_type
+storage_proxy::create_write_response_handler(const hint_wrapper& h, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
+    return create_write_response_handler_helper(h.mut.schema(), h.mut.token(), std::make_unique<hint_mutation>(h.mut), cl, type, tr_state,
             std::move(permit));
 }
 
@@ -2415,6 +2432,16 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
             db::write_type::SIMPLE,
             get_stats(),
             allow_hints::no);
+}
+
+future<> storage_proxy::mutate_hint_from_scratch(frozen_mutation_and_schema fm_a_s) {
+    const auto timeout = db::timeout_clock::now() + 1h;
+    if (!_features.cluster_supports_hinted_handoff_separate_connection()) {
+        return mutate({fm_a_s.fm.unfreeze(fm_a_s.s)}, db::consistency_level::ALL, timeout, nullptr, empty_service_permit());
+    }
+
+    std::array<hint_wrapper, 1> ms{hint_wrapper { std::move(fm_a_s.fm.unfreeze(fm_a_s.s)) }};
+    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit(), timeout);
 }
 
 /**
