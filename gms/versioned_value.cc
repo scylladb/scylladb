@@ -42,6 +42,7 @@ namespace gms {
 
 constexpr char versioned_value::DELIMITER;
 constexpr const char versioned_value::DELIMITER_STR[];
+constexpr const char* versioned_value::STATUS_UNKNOWN;
 constexpr const char* versioned_value::STATUS_BOOTSTRAPPING;
 constexpr const char* versioned_value::STATUS_NORMAL;
 constexpr const char* versioned_value::STATUS_LEAVING;

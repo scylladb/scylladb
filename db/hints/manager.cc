@@ -437,7 +437,7 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
                     !ep_state_ptr ||
                     (ep_gossip_state_val != gms::versioned_value::STATUS_NORMAL &&
                     ep_gossip_state_val != gms::versioned_value::SHUTDOWN &&
-                    ep_gossip_state_val != "")
+                    ep_gossip_state_val != gms::versioned_value::STATUS_UNKNOWN)
                 );
             }
             // send the hints out if the destination Node is part of the ring - we will send to all new replicas in this case
