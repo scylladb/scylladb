@@ -941,21 +941,24 @@ bool mutation_fragment_stream_validator::operator()(const dht::decorated_key& dk
         if (_prev_partition_key.less_compare(_schema, dk)) {
             _prev_partition_key = dk;
         } else {
-            on_validation_error(fmr_logger, format("[validator {}] Unexpected partition key: previous {}, current {}", _prev_partition_key, dk));
+            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected partition key: previous {}, current {}",
+                    static_cast<void*>(this), _name, _prev_partition_key, dk));
         }
     }
     return true;
 }
 
-mutation_fragment_stream_validator::mutation_fragment_stream_validator(const schema& s, bool compare_keys)
-    : _schema(s)
+mutation_fragment_stream_validator::mutation_fragment_stream_validator(sstring_view name, const schema& s, bool compare_keys)
+    : _name(format("{} ({}.{} {})", name, s.ks_name(), s.cf_name(), s.id()))
+    , _schema(s)
     , _prev_kind(mutation_fragment::kind::partition_end)
     , _prev_pos(position_in_partition::end_of_partition_tag_t{})
     , _prev_region(partition_region::partition_end)
     , _compare_keys(compare_keys)
     , _prev_partition_key(dht::minimum_token(), partition_key::make_empty())
 {
-    fmr_logger.debug("[validator {}] Will validate {} monotonicity.", static_cast<void*>(this), compare_keys ? "keys" : "only partition regions");
+    fmr_logger.debug("[validator {} for {}] Will validate {} monotonicity.", static_cast<void*>(this), _name,
+            compare_keys ? "keys" : "only partition regions");
 }
 
 bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mv) {
@@ -982,10 +985,10 @@ bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mv)
     }
 
     if (__builtin_expect(!valid, false)) {
-        auto fmt = "[validator {}] Unexpected mutation fragment: previous {}:{}, current {}:{}";
+        auto fmt = "[validator {} for {}] Unexpected mutation fragment: previous {}:{}, current {}:{}";
         sstring msg = _compare_keys ?
-                format(fmt, static_cast<void*>(this), _prev_kind, _prev_pos, kind, pos) :
-                format(fmt, static_cast<void*>(this), _prev_kind, _prev_region, kind, pos);
+                format(fmt, static_cast<void*>(this), _name, _prev_kind, _prev_pos, kind, pos) :
+                format(fmt, static_cast<void*>(this), _name, _prev_kind, _prev_region, kind, pos);
         on_validation_error(fmr_logger, msg);
     }
 
@@ -999,7 +1002,9 @@ bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mv)
 }
 
 void mutation_fragment_stream_validator::on_end_of_stream() const {
+    fmr_logger.debug("[validator {}] EOS", static_cast<const void*>(this));
     if (_prev_kind != mutation_fragment::kind::partition_end) {
-        on_validation_error(fmr_logger, format("[validator {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _prev_kind));
+        on_validation_error(fmr_logger, format("[validator {} for {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _name,
+                _prev_kind));
     }
 }

@@ -756,6 +756,7 @@ struct invalid_mutation_fragment_stream : public std::runtime_error {
 // If the `abort_on_internal_error` configuration option is set, it will
 // abort instead.
 class mutation_fragment_stream_validator {
+    sstring _name;
     const schema& _schema;
     mutation_fragment::kind _prev_kind;
     position_in_partition _prev_pos;
@@ -763,7 +764,10 @@ class mutation_fragment_stream_validator {
     bool _compare_keys;
     dht::decorated_key _prev_partition_key;
 public:
-    mutation_fragment_stream_validator(const schema& s, bool compare_keys = false);
+    /// \arg name is used in log messages to identify the validator, the
+    ///     schema identity is added automatically
+    /// \arg compare_keys enable validating clustering key monotonicity
+    mutation_fragment_stream_validator(sstring_view name, const schema& s, bool compare_keys = false);
 
     bool operator()(const dht::decorated_key& dk);
     bool operator()(const mutation_fragment& mv);
