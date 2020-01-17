@@ -1669,7 +1669,7 @@ future<> storage_service::check_for_endpoint_collision(const std::unordered_map<
                 found_bootstrapping_node = false;
                 for (auto& x : _gossiper.get_endpoint_states()) {
                     auto state = _gossiper.get_gossip_status(x.second);
-                    if (state.empty()) {
+                    if (state == sstring(versioned_value::STATUS_UNKNOWN)) {
                         continue;
                     }
                     auto addr = x.first;

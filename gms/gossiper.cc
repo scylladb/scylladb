@@ -2082,13 +2082,13 @@ void gossiper::force_newer_generation() {
 
 static sstring do_get_gossip_status(const gms::versioned_value* app_state) {
     if (!app_state) {
-        return "";
+        return gms::versioned_value::STATUS_UNKNOWN;
     }
     auto value = app_state->value;
     std::vector<sstring> pieces;
     boost::split(pieces, value, boost::is_any_of(","));
     if (pieces.empty()) {
-        return "";
+        return gms::versioned_value::STATUS_UNKNOWN;
     }
     return pieces[0];
 }
@@ -2179,7 +2179,7 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
 
     // these states are not allowed to join the cluster as it would not be safe
     std::unordered_set<sstring> unsafe_statuses{
-        sstring(""), // failed bootstrap but we did start gossiping
+        sstring(versioned_value::STATUS_UNKNOWN), // failed bootstrap but we did start gossiping
         sstring(versioned_value::STATUS_NORMAL), // node is legit in the cluster or it was stopped with kill -9
         sstring(versioned_value::SHUTDOWN) // node was shutdown
     };

@@ -71,6 +71,7 @@ public:
     static constexpr const char DELIMITER_STR[] = { DELIMITER, 0 };
 
     // values for ApplicationState.STATUS
+    static constexpr const char* STATUS_UNKNOWN = "UNKNOWN";
     static constexpr const char* STATUS_BOOTSTRAPPING = "BOOT";
     static constexpr const char* STATUS_NORMAL = "NORMAL";
     static constexpr const char* STATUS_LEAVING = "LEAVING";
