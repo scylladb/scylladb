@@ -1584,6 +1584,15 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, db::commitlog::
     return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), timeout, sync));
 }
 
+future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
+    if (dblog.is_enabled(logging::log_level::trace)) {
+        dblog.trace("apply hint {}", m.pretty_printer(s));
+    }
+    return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(s), &m, timeout] () mutable {
+        return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), timeout, db::commitlog::force_sync::no));
+    });
+}
+
 future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {
     if (!s->is_synced()) {
         throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
