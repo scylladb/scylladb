@@ -130,8 +130,9 @@ void load_broadcaster::start_broadcasting() {
 
 future<> load_broadcaster::stop_broadcasting() {
     _timer.cancel();
-    _gossiper.unregister_(shared_from_this());
-    return std::move(_done).then([this] {
+    return _gossiper.unregister_(shared_from_this()).then([this] {
+        return std::move(_done);
+    }).then([this] {
         _stopped = true;
     });
 }
@@ -263,9 +264,10 @@ future<> view_update_backlog_broker::start() {
 }
 
 future<> view_update_backlog_broker::stop() {
-    _gossiper.unregister_(shared_from_this());
-    _as.request_abort();
-    return std::move(_started);
+    return _gossiper.unregister_(shared_from_this()).then([this] {
+        _as.request_abort();
+        return std::move(_started);
+    });
 }
 
 void view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {

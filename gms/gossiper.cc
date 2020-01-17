@@ -882,11 +882,11 @@ bool gossiper::is_seed(const gms::inet_address& endpoint) const {
 }
 
 void gossiper::register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-    _subscribers.push_back(subscriber);
+    _subscribers.add(subscriber);
 }
 
-void gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-    _subscribers.remove(subscriber);
+future<> gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+    return _subscribers.remove(subscriber);
 }
 
 std::set<inet_address> gossiper::get_live_members() {

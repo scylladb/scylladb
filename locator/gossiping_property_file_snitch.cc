@@ -323,17 +323,19 @@ future<> gossiping_property_file_snitch::reload_gossiper_state() {
         return make_ready_future<>();
     }
 
+    future<> ret = make_ready_future<>();
     if (_reconnectable_helper) {
-        gms::get_local_gossiper().unregister_(_reconnectable_helper);
+        ret = gms::get_local_gossiper().unregister_(_reconnectable_helper);
     }
 
     if (!_prefer_local) {
-        return make_ready_future<>();
+        return ret;
     }
 
-    _reconnectable_helper = make_shared<reconnectable_snitch_helper>(_my_dc);
-    gms::get_local_gossiper().register_(_reconnectable_helper);
-    return make_ready_future<>();
+    return ret.then([this] {
+        _reconnectable_helper = make_shared<reconnectable_snitch_helper>(_my_dc);
+        gms::get_local_gossiper().register_(_reconnectable_helper);
+    });
 }
 
 using registry_2_params = class_registrator<i_endpoint_snitch,
