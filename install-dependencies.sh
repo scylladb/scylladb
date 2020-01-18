@@ -17,7 +17,15 @@
 # under the License.
 #
 
-. /etc/os-release
+# os-release may be missing in container environment by default.
+if [ -f "/etc/os-release" ]; then
+    . /etc/os-release
+elif [ -f "/etc/arch-release" ]; then
+    export ID=arch
+else
+    echo "/etc/os-release missing."
+    exit 1
+fi
 
 bash seastar/install-dependencies.sh
 
@@ -93,6 +101,28 @@ centos_packages=(
     pigz
 )
 
+# 1) glibc 2.30-3 has sys/sdt.h (systemtap include)
+#    some old containers may contain glibc older,
+#    so enforce update on that one.
+# 2) if problems with signatures, ensure having fresh
+#    archlinux-keyring: pacman -Sy archlinux-keyring && pacman -Syyu
+# 3) aur installations require having sudo and being
+#    a sudoer. makepkg does not work otherwise.
+#
+# aur: antlr3, antlr3-cpp-headers-git
+arch_packages=(
+    base-devel
+    filesystem
+    git
+    jsoncpp
+    lua
+    python-pyparsing
+    python3
+    rapidjson
+    snappy
+    thrift
+)
+
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     apt-get -y install "${debian_base_packages[@]}"
     if [ "$VERSION_ID" = "8" ]; then
@@ -116,4 +146,40 @@ elif [ "$ID" = "fedora" ]; then
 elif [ "$ID" = "centos" ]; then
     yum install -y "${centos_packages[@]}"
     echo -e "Configure example:\n\tpython3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64 --cflags=-I/opt/scylladb/include --with-antlr3=/opt/scylladb/bin/antlr3"
+elif [ "$ID" == "arch" ]; then
+    # main
+    if [ "$EUID" -eq "0" ]; then
+        pacman -Sy --needed --noconfirm "${arch_packages[@]}"
+    else
+        echo "scylla: running without root. Skipping main dependencies (pacman)." 1>&2
+    fi
+
+    # aur
+    if [ ! -x /usr/bin/antlr3 ]; then
+        echo "Installing aur/antlr3..."
+        if (( EUID == 0 )); then
+            echo "Running makepkg as root is not allowed as it can cause permanent, catastrophic damage to your system." 1>&2
+            exit 1
+        fi
+        TEMP=$(mktemp -d)
+        pushd "$TEMP" > /dev/null || exit 1
+        git clone https://aur.archlinux.org/antlr3.git
+        cd antlr3 || exit 1
+        makepkg -si
+        popd > /dev/null || exit 1
+    fi
+    if [ ! -f /usr/include/antlr3.hpp ]; then
+        echo "Installing aur/antlr3-cpp-headers-git..."
+        if (( EUID == 0 )); then
+            echo "Running makepkg as root is not allowed as it can cause permanent, catastrophic damage to your system." 1>&2
+            exit 1
+        fi
+        TEMP=$(mktemp -d)
+        pushd "$TEMP" > /dev/null || exit 1
+        git clone https://aur.archlinux.org/antlr3-cpp-headers-git.git
+        cd antlr3-cpp-headers-git || exit 1
+        makepkg -si
+        popd > /dev/null || exit 1
+    fi
+    echo -e "Configure example:\n\t./configure.py\n\tninja release"
 fi
