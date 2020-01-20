@@ -299,6 +299,10 @@ static void describe_key_schema(rjson::value& parent, const schema& schema, std:
 
 }
 
+static rjson::value generate_arn_for_table(const schema& schema) {
+    return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", schema.ks_name(), schema.cf_name()));
+}
+
 future<json::json_return_type> executor::describe_table(client_state& client_state, std::string content) {
     _stats.api_operations.describe_table++;
     rjson::value request = rjson::parse(content);
@@ -321,6 +325,7 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
     // The other states (CREATING, UPDATING, DELETING) are not currently
     // returned.
     rjson::set(table_description, "TableStatus", "ACTIVE");
+    rjson::set(table_description, "TableArn", generate_arn_for_table(*schema));
     // FIXME: Instead of hardcoding, we should take into account which mode was chosen
     // when the table was created. But, Spark jobs expect something to be returned
     // and PAY_PER_REQUEST seems closer to reality than PROVISIONED.

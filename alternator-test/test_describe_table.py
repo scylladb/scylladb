@@ -141,7 +141,6 @@ def test_describe_table_stream_specification(test_table):
 # includes which zone it is on, which account, and of course the table's
 # name. The ARN format is described in
 # https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html#genref-arns
-@pytest.mark.xfail(reason="DescribeTable does not return ARN")
 def test_describe_table_arn(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     assert 'TableArn' in got and got['TableArn'].startswith('arn:')
