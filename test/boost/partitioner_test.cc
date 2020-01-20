@@ -24,7 +24,6 @@
 
 #include "dht/i_partitioner.hh"
 #include "dht/murmur3_partitioner.hh"
-#include "dht/byte_ordered_partitioner.hh"
 #include "dht/random_partitioner.hh"
 #include "schema.hh"
 #include "types.hh"
@@ -231,200 +230,6 @@ SEASTAR_THREAD_TEST_CASE(test_token_no_wraparound_1) {
     auto midpoint = partitioner.midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x6000'0000'0000'0000));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_1) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("03");
-    auto t2 = partitioner.from_sstring("09");
-    BOOST_REQUIRE(t1 < t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
-    BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, partitioner.from_sstring("06"));
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_2) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("20000000000000000000000000000003");
-    auto t2 = partitioner.from_sstring("A0000000000000000000000000000009");
-    BOOST_REQUIRE(t1 < t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
-    BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, partitioner.from_sstring("60000000000000000000000000000006"));
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_3) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("2000000000000000000000000000000320000000000000000000000000000003");
-    auto t2 = partitioner.from_sstring("A0000000000000000000000000000009A0000000000000000000000000000009");
-    BOOST_REQUIRE(t1 < t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
-    BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, partitioner.from_sstring("6000000000000000000000000000000660000000000000000000000000000006"));
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_4) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("");
-    auto t2 = partitioner.from_sstring("2000");
-    BOOST_REQUIRE(t1 < t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
-    BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, partitioner.from_sstring("1000"));
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_5) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("00");
-    auto t2 = partitioner.from_sstring("2000");
-    BOOST_REQUIRE(t1 < t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
-    BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, partitioner.from_sstring("1000"));
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_nowraparound_6) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring(sstring());
-    auto t2 = partitioner.from_sstring(sstring());
-    BOOST_REQUIRE(t1 <= t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
-    BOOST_REQUIRE(midpoint >= t1 && midpoint <= t2);
-    BOOST_REQUIRE_EQUAL(midpoint, partitioner.from_sstring(""));
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_wraparound_1) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("00000000000000000000000000000009");
-    auto t2 = partitioner.from_sstring("00000000000000000000000000000003");
-    BOOST_REQUIRE(t1 > t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
-    BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, partitioner.from_sstring("80000000000000000000000000000006"));
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_wraparound_2) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("A0000000000000000000000000000009");
-    auto t2 = partitioner.from_sstring("20000000000000000000000000000003");
-    BOOST_REQUIRE(t1 > t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
-    BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, partitioner.from_sstring("E0000000000000000000000000000006"));
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_wraparound_3) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("A000000000000000000000000000000900000000000000000000000000000009");
-    auto t2 = partitioner.from_sstring("2000000000000000000000000000000300000000000000000000000000000003");
-    BOOST_REQUIRE(t1 > t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
-    BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
-    BOOST_REQUIRE_EQUAL(midpoint, partitioner.from_sstring("E000000000000000000000000000000600000000000000000000000000000006"));
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_describe_ownership) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("10000000000000000000000000000000");
-    auto t2 = partitioner.from_sstring("30000000000000000000000000000000");
-    auto t3 = partitioner.from_sstring("A0000000000000000000000000000000");
-    auto t4 = partitioner.from_sstring("F0000000000000000000000000000000");
-    auto sorted_tokens = std::vector<dht::token>{t1, t2, t3, t4};
-    auto own_map = partitioner.describe_ownership(sorted_tokens);
-    BOOST_REQUIRE_EQUAL(own_map[t1], 0.1250);
-    BOOST_REQUIRE_EQUAL(own_map[t2], 0.1250);
-    BOOST_REQUIRE_EQUAL(own_map[t3], 0.4375);
-    BOOST_REQUIRE_EQUAL(own_map[t4], 0.3125);
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_order) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("123456");
-    auto t2 = partitioner.from_sstring("12345678");
-    BOOST_REQUIRE(t1 < t2);
-
-    t1 = partitioner.from_sstring("22");
-    t2 = partitioner.from_sstring("12345678");
-    BOOST_REQUIRE(t1 > t2);
-
-    t1 = partitioner.from_sstring("123456");
-    t2 = partitioner.from_sstring("123457");
-    BOOST_REQUIRE(t1 < t2);
-
-    t1 = partitioner.from_sstring("123456");
-    t2 = partitioner.from_sstring("A23456");
-    BOOST_REQUIRE(t1 < t2);
-
-
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_midpoint1) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("010000");
-    auto t2 = partitioner.from_sstring("20");
-    auto mid = partitioner.midpoint(t1, t2);
-    // The length of the midpoint token is supposed to be 3 bytes, filled with one zero byte
-    auto mid_expected = partitioner.from_sstring("008010");
-
-    BOOST_REQUIRE(t1 < t2);
-    BOOST_REQUIRE(mid_expected._data.size() == 3);
-    BOOST_REQUIRE(mid._data.size() == 3);
-    BOOST_REQUIRE(mid == mid_expected);
-
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_midpoint2) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("020001");
-    auto t2 = partitioner.from_sstring("60");
-    auto mid = partitioner.midpoint(t1, t2);
-    // The length of the midpoint token is supposed to be 3 bytes, filled with one zero byte
-    auto mid_expected = partitioner.from_sstring("01003080");
-
-    BOOST_REQUIRE(t1 < t2);
-    BOOST_REQUIRE(mid == mid_expected);
-
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
-}
-
-SEASTAR_THREAD_TEST_CASE(test_bop_token_midpoint3) {
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.ByteOrderedPartitioner"));
-    dht::byte_ordered_partitioner partitioner;
-    auto t1 = partitioner.from_sstring("20");
-    auto t2 = partitioner.from_sstring("81");
-    auto mid = partitioner.midpoint(t1, t2);
-    auto mid_expected = partitioner.from_sstring("5080");
-
-    BOOST_REQUIRE(t1 < t2);
-    BOOST_REQUIRE(mid == mid_expected);
-
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_rp_token1) {
@@ -688,42 +493,6 @@ SEASTAR_THREAD_TEST_CASE(test_random_partitioner) {
     test_partitioner_sharding(rp1s, 1, rp1s_shard_limits, prev_token);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_byte_ordered_partitioner) {
-    auto prev_token = [] (const dht::i_partitioner& part, dht::token token) {
-        auto& bytes = token._data;
-        for (auto i = 0u; i < bytes.size(); ++i) {
-            auto& b = bytes[bytes.size() - 1 - i];
-            auto bfore = b;
-            --b;
-            if (bfore != 0) {
-                break;
-            }
-        }
-        return token;
-    };
-    auto make_token_vector = [] (dht::i_partitioner& part, std::vector<int> v) {
-        auto from_byte = [&] (bytes::value_type b) { return dht::token(dht::token::kind::key, managed_bytes({b})); };
-        return boost::copy_range<std::vector<dht::token>>(
-                v | boost::adaptors::transformed(from_byte));
-    };
-    dht::byte_ordered_partitioner bop7s(7);
-    auto bop7s_shard_limits = make_token_vector(bop7s, {
-        0, 37, 74, 110, 147, 183, 220,
-    });
-    test_partitioner_sharding(bop7s, 7, bop7s_shard_limits, prev_token);
-    dht::byte_ordered_partitioner bop2s(2);
-    auto bop2s_shard_limits = make_token_vector(bop2s, {
-        0, 128,
-    });
-    test_partitioner_sharding(bop2s, 2, bop2s_shard_limits, prev_token);
-    dht::byte_ordered_partitioner bop1s(1);
-    auto bop1s_shard_limits = make_token_vector(bop1s, {
-        0,
-    });
-    test_partitioner_sharding(bop1s, 1, bop1s_shard_limits, prev_token);
-}
-
-
 static
 dht::partition_range
 normalize(dht::partition_range pr) {
@@ -868,10 +637,6 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
             dht::random_partitioner(1),
             dht::random_partitioner(3),
     };
-    auto some_byte_ordered_partitioners = {
-            dht::byte_ordered_partitioner(1),
-            dht::byte_ordered_partitioner(7),
-    };
     auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
     auto t2 = token_from_long(int64_t(-1));
     auto t3 = token_from_long(int64_t(1));
@@ -898,9 +663,6 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
         }
     }
     for (auto&& part : some_random_partitioners) {
-        func_to_test(part, *s, dht::partition_range::make_open_ended_both_sides());
-    }
-    for (auto&& part : some_byte_ordered_partitioners) {
         func_to_test(part, *s, dht::partition_range::make_open_ended_both_sides());
     }
 }
