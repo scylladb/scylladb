@@ -73,6 +73,7 @@ static future<> populate_desc(db_context ctx, const schema& s);
 class cdc::cdc_service::impl : service::migration_listener::empty_listener {
     friend cdc_service;
     db_context _ctxt;
+    bool _stopped = false;
 public:
     impl(db_context ctxt)
         : _ctxt(std::move(ctxt))
@@ -80,7 +81,13 @@ public:
         _ctxt._migration_notifier.register_listener(this);
     }
     ~impl() {
-        _ctxt._migration_notifier.unregister_listener(this);
+        assert(_stopped);
+    }
+
+    future<> stop() {
+        return _ctxt._migration_notifier.unregister_listener(this).then([this] {
+            _stopped = true;
+        });
     }
 
     void on_before_create_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
@@ -196,6 +203,10 @@ cdc::cdc_service::cdc_service(db_context ctxt)
     : _impl(std::make_unique<impl>(std::move(ctxt)))
 {
     _impl->_ctxt._proxy.set_cdc_service(this);
+}
+
+future<> cdc::cdc_service::stop() {
+    return _impl->stop();
 }
 
 cdc::cdc_service::~cdc_service() = default;

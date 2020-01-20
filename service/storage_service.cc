@@ -1445,7 +1445,7 @@ future<> storage_service::drain_on_shutdown() {
             }).get();
             slogger.info("Drain on shutdown: shutdown commitlog done");
 
-            ss._mnotifier.local().unregister_listener(&ss);
+            ss._mnotifier.local().unregister_listener(&ss).get();
 
             slogger.info("Drain on shutdown: done");
         });

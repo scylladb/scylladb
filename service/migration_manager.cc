@@ -161,14 +161,37 @@ future<> migration_manager::uninit_messaging_service()
     );
 }
 
-void migration_notifier::register_listener(migration_listener* listener)
-{
-    _listeners.emplace_back(listener);
+void migration_notifier::listener_vector::add(migration_listener* listener) {
+    _vec.push_back(listener);
 }
 
-void migration_notifier::unregister_listener(migration_listener* listener)
+future<> migration_notifier::listener_vector::remove(migration_listener* listener) {
+    return with_lock(_vec_lock.for_write(), [this, listener] {
+        _vec.erase(std::remove(_vec.begin(), _vec.end(), listener), _vec.end());
+    });
+}
+
+void migration_notifier::listener_vector::for_each(noncopyable_function<void(migration_listener*)> func) {
+    _vec_lock.for_read().lock().get();
+    auto unlock = defer([this] {
+        _vec_lock.for_read().unlock();
+    });
+    // We grab a lock in remove(), but not in add(), so we
+    // iterate using indexes to guard agaist the vector being
+    // reallocated.
+    for (size_t i = 0, n = _vec.size(); i < n; ++i) {
+        func(_vec[i]);
+    }
+}
+
+void migration_notifier::register_listener(migration_listener* listener)
 {
-    _listeners.erase(std::remove(_listeners.begin(), _listeners.end(), listener), _listeners.end());
+    _listeners.add(listener);
+}
+
+future<> migration_notifier::unregister_listener(migration_listener* listener)
+{
+    return _listeners.remove(listener);
 }
 
 future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
@@ -357,56 +380,56 @@ bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoin
 
 future<> migration_notifier::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     return seastar::async([this, ksm] {
-        auto&& name = ksm->name();
-        for (auto&& listener : _listeners) {
+        const auto& name = ksm->name();
+        _listeners.for_each([&name] (migration_listener* listener) {
             try {
                 listener->on_create_keyspace(name);
             } catch (...) {
                 mlogger.warn("Create keyspace notification failed {}: {}", name, std::current_exception());
             }
-        }
+        });
     });
 }
 
 future<> migration_notifier::create_column_family(const schema_ptr& cfm) {
     return seastar::async([this, cfm] {
-        auto&& ks_name = cfm->ks_name();
-        auto&& cf_name = cfm->cf_name();
-        for (auto&& listener : _listeners) {
+        const auto& ks_name = cfm->ks_name();
+        const auto& cf_name = cfm->cf_name();
+        _listeners.for_each([&ks_name, &cf_name] (migration_listener* listener) {
             try {
                 listener->on_create_column_family(ks_name, cf_name);
             } catch (...) {
                 mlogger.warn("Create column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
 future<> migration_notifier::create_user_type(const user_type& type) {
     return seastar::async([this, type] {
-        auto&& ks_name = type->_keyspace;
-        auto&& type_name = type->get_name_as_string();
-        for (auto&& listener : _listeners) {
+        const auto& ks_name = type->_keyspace;
+        const auto& type_name = type->get_name_as_string();
+        _listeners.for_each([&ks_name, &type_name] (migration_listener* listener) {
             try {
                 listener->on_create_user_type(ks_name, type_name);
             } catch (...) {
                 mlogger.warn("Create user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
 future<> migration_notifier::create_view(const view_ptr& view) {
     return seastar::async([this, view] {
-        auto&& ks_name = view->ks_name();
-        auto&& view_name = view->cf_name();
-        for (auto&& listener : _listeners) {
+        const auto& ks_name = view->ks_name();
+        const auto& view_name = view->cf_name();
+        _listeners.for_each([&ks_name, &view_name] (migration_listener* listener) {
             try {
                 listener->on_create_view(ks_name, view_name);
             } catch (...) {
                 mlogger.warn("Create view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
@@ -426,56 +449,56 @@ public void notifyCreateAggregate(UDAggregate udf)
 
 future<> migration_notifier::update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     return seastar::async([this, ksm] {
-        auto&& name = ksm->name();
-        for (auto&& listener : _listeners) {
+        const auto& name = ksm->name();
+        _listeners.for_each([&name] (migration_listener* listener) {
             try {
                 listener->on_update_keyspace(name);
             } catch (...) {
                 mlogger.warn("Update keyspace notification failed {}: {}", name, std::current_exception());
             }
-        }
+        });
     });
 }
 
 future<> migration_notifier::update_column_family(const schema_ptr& cfm, bool columns_changed) {
     return seastar::async([this, cfm, columns_changed] {
-        auto&& ks_name = cfm->ks_name();
-        auto&& cf_name = cfm->cf_name();
-        for (auto&& listener : _listeners) {
+        const auto& ks_name = cfm->ks_name();
+        const auto& cf_name = cfm->cf_name();
+        _listeners.for_each([&ks_name, &cf_name, columns_changed] (migration_listener* listener) {
             try {
                 listener->on_update_column_family(ks_name, cf_name, columns_changed);
             } catch (...) {
                 mlogger.warn("Update column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
 future<> migration_notifier::update_user_type(const user_type& type) {
     return seastar::async([this, type] {
-        auto&& ks_name = type->_keyspace;
-        auto&& type_name = type->get_name_as_string();
-        for (auto&& listener : _listeners) {
+        const auto& ks_name = type->_keyspace;
+        const auto& type_name = type->get_name_as_string();
+        _listeners.for_each([&ks_name, &type_name] (migration_listener* listener) {
             try {
                 listener->on_update_user_type(ks_name, type_name);
             } catch (...) {
                 mlogger.warn("Update user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
 future<> migration_notifier::update_view(const view_ptr& view, bool columns_changed) {
     return seastar::async([this, view, columns_changed] {
-        auto&& ks_name = view->ks_name();
-        auto&& view_name = view->cf_name();
-        for (auto&& listener : _listeners) {
+        const auto& ks_name = view->ks_name();
+        const auto& view_name = view->cf_name();
+        _listeners.for_each([&ks_name, &view_name, columns_changed] (migration_listener* listener) {
             try {
                 listener->on_update_view(ks_name, view_name, columns_changed);
             } catch (...) {
                 mlogger.warn("Update view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
@@ -495,27 +518,27 @@ public void notifyUpdateAggregate(UDAggregate udf)
 
 future<> migration_notifier::drop_keyspace(const sstring& ks_name) {
     return seastar::async([this, ks_name] {
-        for (auto&& listener : _listeners) {
+        _listeners.for_each([&ks_name] (migration_listener* listener) {
             try {
                 listener->on_drop_keyspace(ks_name);
             } catch (...) {
                 mlogger.warn("Drop keyspace notification failed {}: {}", ks_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
 future<> migration_notifier::drop_column_family(const schema_ptr& cfm) {
     return seastar::async([this, cfm] {
-        auto&& cf_name = cfm->cf_name();
-        auto&& ks_name = cfm->ks_name();
-        for (auto&& listener : _listeners) {
+        const auto& cf_name = cfm->cf_name();
+        const auto& ks_name = cfm->ks_name();
+        _listeners.for_each([&ks_name, &cf_name] (migration_listener* listener) {
             try {
                 listener->on_drop_column_family(ks_name, cf_name);
             } catch (...) {
                 mlogger.warn("Drop column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
@@ -523,13 +546,13 @@ future<> migration_notifier::drop_user_type(const user_type& type) {
     return seastar::async([this, type] {
         auto&& ks_name = type->_keyspace;
         auto&& type_name = type->get_name_as_string();
-        for (auto&& listener : _listeners) {
+        _listeners.for_each([&ks_name, &type_name] (migration_listener* listener) {
             try {
                 listener->on_drop_user_type(ks_name, type_name);
             } catch (...) {
                 mlogger.warn("Drop user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
@@ -537,38 +560,38 @@ future<> migration_notifier::drop_view(const view_ptr& view) {
     return seastar::async([this, view] {
         auto&& ks_name = view->ks_name();
         auto&& view_name = view->cf_name();
-        for (auto&& listener : _listeners) {
+        _listeners.for_each([&ks_name, &view_name] (migration_listener* listener) {
             try {
                 listener->on_drop_view(ks_name, view_name);
             } catch (...) {
                 mlogger.warn("Drop view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
             }
-        }
+        });
     });
 }
 
 void migration_notifier::before_create_column_family(const schema& schema,
         std::vector<mutation>& mutations, api::timestamp_type timestamp) {
-    for (auto&& listener : _listeners) {
+    _listeners.for_each([&mutations, &schema, timestamp] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a create-table
         listener->on_before_create_column_family(schema, mutations, timestamp);
-    }
+    });
 }
 
 void migration_notifier::before_update_column_family(const schema& new_schema,
         const schema& old_schema, std::vector<mutation>& mutations, api::timestamp_type ts) {
-    for (auto&& listener : _listeners) {
+    _listeners.for_each([&mutations, &new_schema, &old_schema, ts] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill an update-column
         listener->on_before_update_column_family(new_schema, old_schema, mutations, ts);
-    }
+    });
 }
 
 void migration_notifier::before_drop_column_family(const schema& schema,
         std::vector<mutation>& mutations, api::timestamp_type ts) {
-    for (auto&& listener : _listeners) {
+    _listeners.for_each([&mutations, &schema, ts] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a drop-column
         listener->on_before_drop_column_family(schema, mutations, ts);
-    }
+    });
 }
 
 

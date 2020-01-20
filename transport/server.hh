@@ -264,7 +264,9 @@ class cql_server::event_notifier : public service::migration_listener,
     std::set<cql_server::connection*> _schema_change_listeners;
     std::unordered_map<gms::inet_address, event::status_change::status_type> _last_status_change;
     service::migration_notifier& _mnotifier;
+    bool _stopped = false;
 public:
+    future<> stop();
     event_notifier(service::migration_notifier& mn);
     ~event_notifier();
     void register_event(cql_transport::event::event_type et, cql_server::connection* conn);

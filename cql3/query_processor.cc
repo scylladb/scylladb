@@ -450,8 +450,9 @@ query_processor::~query_processor() {
 }
 
 future<> query_processor::stop() {
-    _mnotifier.unregister_listener(_migration_subscriber.get());
-    return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
+    return _mnotifier.unregister_listener(_migration_subscriber.get()).then([this] {
+        return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
+    });
 }
 
 future<::shared_ptr<result_message>>
