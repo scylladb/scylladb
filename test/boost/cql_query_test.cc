@@ -4397,7 +4397,7 @@ SEASTAR_TEST_CASE(test_int_sum_with_cast) {
             cquery_nofail(e, "create table cf (pk text, val int, primary key(pk));");
             cquery_nofail(e, "insert into cf (pk, val) values ('a', 2147483647);");
             cquery_nofail(e, "insert into cf (pk, val) values ('b', 2147483647);");
-            auto sum_as_bigint_query = "select sum(val as bigint) from cf;";
+            auto sum_as_bigint_query = "select sum(cast(val as bigint)) from cf;";
             assert_that(e.execute_cql(sum_as_bigint_query).get0())
                 .is_rows()
                 .with_size(1)
@@ -4408,7 +4408,7 @@ SEASTAR_TEST_CASE(test_int_sum_with_cast) {
             assert_that(e.execute_cql(sum_as_bigint_query).get0())
                 .is_rows()
                 .with_size(1)
-                .with_row({long_type->decompose(int64_t(-4294967296))});
+                .with_row({long_type->decompose(int64_t(-4294967295))});
         });
     });
 }
