@@ -218,7 +218,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         return def;
     }));
 
-    if (!_variables->empty()) {
+    if (!_variables.empty()) {
         throw exceptions::invalid_request_exception(format("Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
     }
 

@@ -138,7 +138,7 @@ public:
 
 protected:
     virtual shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
-                                                                     lw_shared_ptr<variable_specifications> bound_names) override {
+                                                                     variable_specifications& bound_names) override {
         auto rs = receivers(db, schema);
         std::vector<::shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
@@ -149,7 +149,7 @@ protected:
     }
 
     virtual shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
-                                                                     lw_shared_ptr<variable_specifications> bound_names) override {
+                                                                     variable_specifications& bound_names) override {
         auto rs = receivers(db, schema);
         std::vector<::shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
@@ -172,7 +172,7 @@ protected:
     }
 
     virtual shared_ptr<restrictions::restriction> new_slice_restriction(database& db, schema_ptr schema,
-                                                                        lw_shared_ptr<variable_specifications> bound_names,
+                                                                        variable_specifications& bound_names,
                                                                         statements::bound bound, bool inclusive) override {
         auto rs = receivers(db, schema);
         std::vector<::shared_ptr<column_specification>> col_specs(rs.size());
@@ -184,12 +184,12 @@ protected:
     }
 
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
-                                                                           lw_shared_ptr<variable_specifications> bound_names, bool is_key) override {
+                                                                           variable_specifications& bound_names, bool is_key) override {
         throw exceptions::invalid_request_exception(format("{} cannot be used for Multi-column relations", get_operator()));
     }
 
     virtual ::shared_ptr<restrictions::restriction> new_LIKE_restriction(
-            database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names) override {
+            database& db, schema_ptr schema, variable_specifications& bound_names) override {
         throw exceptions::invalid_request_exception("LIKE cannot be used for Multi-column relations");
     }
 
@@ -202,7 +202,7 @@ protected:
 
     virtual shared_ptr<term> to_term(const std::vector<shared_ptr<column_specification>>& receivers,
                                      ::shared_ptr<term::raw> raw, database& db, const sstring& keyspace,
-                                     lw_shared_ptr<variable_specifications> bound_names) override {
+                                     variable_specifications& bound_names) override {
         auto as_multi_column_raw = dynamic_pointer_cast<term::multi_column_raw>(raw);
         auto t = as_multi_column_raw->prepare(db, keyspace, receivers);
         t->collect_marker_specification(bound_names);

@@ -119,7 +119,7 @@ public:
 protected:
     virtual ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
                           ::shared_ptr<term::raw> raw, database& db, const sstring& keyspace,
-                          lw_shared_ptr<variable_specifications> bound_names) override;
+                          variable_specifications& bound_names) override;
 
 #if 0
     public SingleColumnRelation withNonStrictOperator()
@@ -148,13 +148,13 @@ protected:
 
 protected:
     virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
-                                           lw_shared_ptr<variable_specifications> bound_names);
+                                           variable_specifications& bound_names);
 
     virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
-                                           lw_shared_ptr<variable_specifications> bound_names) override;
+                                           variable_specifications& bound_names) override;
 
     virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(database& db, schema_ptr schema,
-            lw_shared_ptr<variable_specifications> bound_names,
+            variable_specifications& bound_names,
             statements::bound bound,
             bool inclusive) override {
         auto&& column_def = to_column_definition(schema, _entity);
@@ -171,20 +171,20 @@ protected:
             throw exceptions::invalid_request_exception("Slice restrictions are not supported on duration columns");
         }
 
-        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), std::move(bound_names));
+        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), bound_names);
         return ::make_shared<restrictions::single_column_restriction::slice>(column_def, bound, inclusive, std::move(term));
     }
 
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
-                                                 lw_shared_ptr<variable_specifications> bound_names,
+                                                 variable_specifications& bound_names,
                                                  bool is_key) override {
         auto&& column_def = to_column_definition(schema, _entity);
-        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), std::move(bound_names));
+        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), bound_names);
         return ::make_shared<restrictions::single_column_restriction::contains>(column_def, std::move(term), is_key);
     }
 
     virtual ::shared_ptr<restrictions::restriction> new_LIKE_restriction(
-            database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names) override;
+            database& db, schema_ptr schema, variable_specifications& bound_names) override;
 
     virtual ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) override {
         return *_entity == from

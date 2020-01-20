@@ -80,9 +80,9 @@ void delete_statement::add_update_for_key(mutation& m, const query::clustering_r
 namespace raw {
 
 ::shared_ptr<cql3::statements::modification_statement>
-delete_statement::prepare_internal(database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names,
+delete_statement::prepare_internal(database& db, schema_ptr schema, variable_specifications& bound_names,
         std::unique_ptr<attributes> attrs, cql_stats& stats) {
-    auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, bound_names->size(), schema, std::move(attrs), stats);
+    auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, bound_names.size(), schema, std::move(attrs), stats);
 
     for (auto&& deletion : _deletions) {
         auto&& id = deletion->affected_column()->prepare_column_identifier(schema);
@@ -102,7 +102,7 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, lw_shared_pt
         stmt->add_operation(op);
     }
     prepare_conditions(db, schema, bound_names, *stmt);
-    stmt->process_where_clause(db, _where_clause, std::move(bound_names));
+    stmt->process_where_clause(db, _where_clause, bound_names);
     if (!db.supports_infinite_bound_range_deletions()) {
         if (!stmt->restrictions().get_clustering_columns_restrictions()->has_bound(bound::START)
                 || !stmt->restrictions().get_clustering_columns_restrictions()->has_bound(bound::END)) {

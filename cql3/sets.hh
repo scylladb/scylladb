@@ -94,7 +94,7 @@ public:
             : _comparator(std::move(comparator)), _elements(std::move(elements)) {
         }
         virtual bool contains_bind_marker() const override;
-        virtual void collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names) override;
+        virtual void collect_marker_specification(variable_specifications& bound_names) override;
         virtual shared_ptr<terminal> bind(const query_options& options);
     };
 

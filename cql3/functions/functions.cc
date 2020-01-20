@@ -419,7 +419,7 @@ function_call::uses_function(const sstring& ks_name, const sstring& function_nam
 }
 
 void
-function_call::collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names) {
+function_call::collect_marker_specification(variable_specifications& bound_names) {
     for (auto&& t : _terms) {
         t->collect_marker_specification(bound_names);
     }

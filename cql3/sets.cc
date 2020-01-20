@@ -196,7 +196,7 @@ sets::delayed_value::contains_bind_marker() const {
 }
 
 void
-sets::delayed_value::collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names) {
+sets::delayed_value::collect_marker_specification(variable_specifications& bound_names) {
 }
 
 shared_ptr<terminal>

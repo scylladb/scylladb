@@ -139,7 +139,7 @@ public:
      * @return the <code>Restriction</code> corresponding to this <code>Relation</code>
      * @throws InvalidRequestException if this <code>Relation</code> is not valid
      */
-    virtual ::shared_ptr<restrictions::restriction> to_restriction(database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names) final {
+    virtual ::shared_ptr<restrictions::restriction> to_restriction(database& db, schema_ptr schema, variable_specifications& bound_names) final {
         if (_relation_type == operator_type::EQ) {
             return new_EQ_restriction(db, schema, bound_names);
         } else if (_relation_type == operator_type::LT) {
@@ -182,7 +182,7 @@ public:
      * @throws InvalidRequestException if the relation cannot be converted into an EQ restriction.
      */
     virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
-        lw_shared_ptr<variable_specifications> bound_names) = 0;
+        variable_specifications& bound_names) = 0;
 
     /**
      * Creates a new IN restriction instance.
@@ -193,7 +193,7 @@ public:
      * @throws InvalidRequestException if the relation cannot be converted into an IN restriction.
      */
     virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
-        lw_shared_ptr<variable_specifications> bound_names) = 0;
+        variable_specifications& bound_names) = 0;
 
     /**
      * Creates a new Slice restriction instance.
@@ -206,7 +206,7 @@ public:
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
     virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(database& db, schema_ptr schema,
-        lw_shared_ptr<variable_specifications> bound_names,
+        variable_specifications& bound_names,
         statements::bound bound,
         bool inclusive) = 0;
 
@@ -220,13 +220,13 @@ public:
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
     virtual ::shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
-        lw_shared_ptr<variable_specifications> bound_names, bool isKey) = 0;
+        variable_specifications& bound_names, bool isKey) = 0;
 
     /**
      * Creates a new LIKE restriction instance.
      */
     virtual ::shared_ptr<restrictions::restriction> new_LIKE_restriction(database& db, schema_ptr schema,
-        lw_shared_ptr<variable_specifications> bound_names) = 0;
+        variable_specifications& bound_names) = 0;
 
     /**
      * Renames an identifier in this Relation, if applicable.
@@ -253,7 +253,7 @@ protected:
                                        ::shared_ptr<term::raw> raw,
                                        database& db,
                                        const sstring& keyspace,
-                                       lw_shared_ptr<variable_specifications> boundNames) = 0;
+                                       variable_specifications& boundNames) = 0;
 
     /**
      * Converts the specified <code>Raw</code> terms into a <code>Term</code>s.
@@ -269,7 +269,7 @@ protected:
                                              const std::vector<::shared_ptr<term::raw>>& raws,
                                              database& db,
                                              const sstring& keyspace,
-                                             lw_shared_ptr<variable_specifications> boundNames) {
+                                             variable_specifications& boundNames) {
         std::vector<::shared_ptr<term>> terms;
         for (auto&& r : raws) {
             terms.emplace_back(to_term(receivers, r, db, keyspace, boundNames));

@@ -125,7 +125,7 @@ public:
      * @param bound_names the list of column specification where to collect the
      * bind variables of this term in.
      */
-    virtual void collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names) {
+    virtual void collect_marker_specification(variable_specifications& bound_names) {
         if (_t) {
             _t->collect_marker_specification(bound_names);
         }

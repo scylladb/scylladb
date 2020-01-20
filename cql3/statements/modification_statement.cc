@@ -462,8 +462,8 @@ void modification_statement::build_cas_result_set_metadata() {
 }
 
 void
-modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, lw_shared_ptr<variable_specifications> names) {
-    _restrictions = restrictions::statement_restrictions(db, s, type, where_clause, std::move(names),
+modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, variable_specifications& names) {
+    _restrictions = restrictions::statement_restrictions(db, s, type, where_clause, names,
             applies_only_to_static_columns(), _selects_a_collection, false);
     /*
      * If there's no clustering columns restriction, we may assume that EXISTS
@@ -535,12 +535,12 @@ modification_statement::prepare(database& db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
     auto statement = prepare(db, bound_names, stats);
-    auto partition_key_bind_indices = bound_names->get_partition_key_bind_indexes(schema);
-    return std::make_unique<prepared>(std::move(statement), *bound_names, std::move(partition_key_bind_indices));
+    auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(schema);
+    return std::make_unique<prepared>(std::move(statement), bound_names, std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
-modification_statement::prepare(database& db, lw_shared_ptr<variable_specifications> bound_names, cql_stats& stats) {
+modification_statement::prepare(database& db, variable_specifications& bound_names, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
@@ -550,7 +550,7 @@ modification_statement::prepare(database& db, lw_shared_ptr<variable_specificati
 }
 
 void
-modification_statement::prepare_conditions(database& db, schema_ptr schema, lw_shared_ptr<variable_specifications> bound_names,
+modification_statement::prepare_conditions(database& db, schema_ptr schema, variable_specifications& bound_names,
         cql3::statements::modification_statement& stmt)
 {
     if (_if_not_exists || _if_exists || !_conditions.empty()) {

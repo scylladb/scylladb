@@ -1263,7 +1263,7 @@ void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr sche
 
 std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats, bool for_view) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
-    auto bound_names = get_bound_variables();
+    variable_specifications& bound_names = get_bound_variables();
 
     maybe_jsonize_select_clause(db, schema);
 
@@ -1296,7 +1296,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
         stmt = indexed_table_select_statement::prepare(
                 db,
                 schema,
-                bound_names->size(),
+                bound_names.size(),
                 _parameters,
                 std::move(selection),
                 std::move(restrictions),
@@ -1309,7 +1309,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
     } else {
         stmt = ::make_shared<cql3::statements::primary_key_select_statement>(
                 schema,
-                bound_names->size(),
+                bound_names.size(),
                 _parameters,
                 std::move(selection),
                 std::move(restrictions),
@@ -1321,15 +1321,15 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                 stats);
     }
 
-    auto partition_key_bind_indices = bound_names->get_partition_key_bind_indexes(schema);
+    auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(schema);
 
-    return std::make_unique<prepared>(std::move(stmt), std::move(*bound_names), std::move(partition_key_bind_indices));
+    return std::make_unique<prepared>(std::move(stmt), bound_names, std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>
 select_statement::prepare_restrictions(database& db,
                                        schema_ptr schema,
-                                       lw_shared_ptr<variable_specifications> bound_names,
+                                       variable_specifications& bound_names,
                                        ::shared_ptr<selection::selection> selection,
                                        bool for_view,
                                        bool allow_filtering)
@@ -1347,7 +1347,7 @@ select_statement::prepare_restrictions(database& db,
 
 /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
 ::shared_ptr<term>
-select_statement::prepare_limit(database& db, lw_shared_ptr<variable_specifications> bound_names, ::shared_ptr<term::raw> limit)
+select_statement::prepare_limit(database& db, variable_specifications& bound_names, ::shared_ptr<term::raw> limit)
 {
     if (!limit) {
         return {};

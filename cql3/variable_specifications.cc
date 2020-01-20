@@ -48,11 +48,9 @@ variable_specifications::variable_specifications(const std::vector<::shared_ptr<
     , _specs{variable_names.size()}
     , _target_columns{variable_names.size()}
 { }
-
 lw_shared_ptr<variable_specifications> variable_specifications::empty() {
     return make_lw_shared<variable_specifications>(std::vector<::shared_ptr<column_identifier>>{});
 }
-
 size_t variable_specifications::size() const {
     return _variable_names.size();
 }
@@ -93,6 +91,16 @@ void variable_specifications::add(int32_t bind_index, ::shared_ptr<column_specif
         spec = ::make_shared<column_specification>(spec->ks_name, spec->cf_name, name, spec->type);
     }
     _specs[bind_index] = spec;
+}
+
+void variable_specifications::set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bound_names) {
+    _variable_names = bound_names;
+    _specs.clear();
+    _target_columns.clear();
+
+    const size_t bn_size = bound_names.size();
+    _specs.resize(bn_size);
+    _target_columns.resize(bn_size);
 }
 
 }

@@ -56,6 +56,8 @@ private:
     std::vector<::shared_ptr<column_specification>> _target_columns;
 
 public:
+
+    variable_specifications() = default;
     variable_specifications(const std::vector<::shared_ptr<column_identifier>>& variable_names);
 
     /**
@@ -73,6 +75,8 @@ public:
     std::vector<uint16_t> get_partition_key_bind_indexes(schema_ptr schema) const;
 
     void add(int32_t bind_index, ::shared_ptr<column_specification> spec);
+
+    void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bound_names);
 };
 
 }

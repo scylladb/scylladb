@@ -147,7 +147,7 @@ public:
             return std::all_of(_elements.begin(), _elements.end(), std::mem_fn(&term::contains_bind_marker));
         }
 
-        virtual void collect_marker_specification(lw_shared_ptr<variable_specifications> bound_names) override {
+        virtual void collect_marker_specification(variable_specifications& bound_names) override {
             for (auto&& term : _elements) {
                 term->collect_marker_specification(bound_names);
             }

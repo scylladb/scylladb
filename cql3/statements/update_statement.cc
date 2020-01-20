@@ -307,9 +307,9 @@ insert_statement::insert_statement(            ::shared_ptr<cf_name> name,
 
 ::shared_ptr<cql3::statements::modification_statement>
 insert_statement::prepare_internal(database& db, schema_ptr schema,
-    lw_shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
+    variable_specifications& bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
 {
-    auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::INSERT, bound_names->size(), schema, std::move(attrs), stats);
+    auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::INSERT, bound_names.size(), schema, std::move(attrs), stats);
 
     // Created from an INSERT
     if (stmt->is_counter()) {
@@ -349,7 +349,7 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
         };
     }
     prepare_conditions(db, schema, bound_names, *stmt);
-    stmt->process_where_clause(db, relations, std::move(bound_names));
+    stmt->process_where_clause(db, relations, bound_names);
     return stmt;
 }
 
@@ -367,13 +367,13 @@ insert_json_statement::insert_json_statement(  ::shared_ptr<cf_name> name,
 
 ::shared_ptr<cql3::statements::modification_statement>
 insert_json_statement::prepare_internal(database& db, schema_ptr schema,
-    lw_shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
+    variable_specifications& bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
 {
     assert(dynamic_pointer_cast<constants::literal>(_json_value) || dynamic_pointer_cast<abstract_marker::raw>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
     auto prepared_json_value = _json_value->prepare(db, "", ::make_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     prepared_json_value->collect_marker_specification(bound_names);
-    auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(bound_names->size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
+    auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(bound_names.size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
     prepare_conditions(db, schema, bound_names, *stmt);
     return stmt;
 }
@@ -390,9 +390,9 @@ update_statement::update_statement(            ::shared_ptr<cf_name> name,
 
 ::shared_ptr<cql3::statements::modification_statement>
 update_statement::prepare_internal(database& db, schema_ptr schema,
-    lw_shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
+    variable_specifications& bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
 {
-    auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, bound_names->size(), schema, std::move(attrs), stats);
+    auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, bound_names.size(), schema, std::move(attrs), stats);
 
     for (auto&& entry : _updates) {
         auto id = entry.first->prepare_column_identifier(schema);
@@ -410,7 +410,7 @@ update_statement::prepare_internal(database& db, schema_ptr schema,
         stmt->add_operation(std::move(operation));
     }
     prepare_conditions(db, schema, bound_names, *stmt);
-    stmt->process_where_clause(db, _where_clause, std::move(bound_names));
+    stmt->process_where_clause(db, _where_clause, bound_names);
     return stmt;
 }
 

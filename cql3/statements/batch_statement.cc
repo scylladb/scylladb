@@ -446,15 +446,15 @@ batch_statement::prepare(database& db, cql_stats& stats) {
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
     prep_attrs->collect_marker_specification(bound_names);
 
-    cql3::statements::batch_statement batch_statement_(bound_names->size(), _type, std::move(statements), std::move(prep_attrs), stats);
+    cql3::statements::batch_statement batch_statement_(bound_names.size(), _type, std::move(statements), std::move(prep_attrs), stats);
     batch_statement_.validate();
 
     std::vector<uint16_t> partition_key_bind_indices;
     if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
-        partition_key_bind_indices = bound_names->get_partition_key_bind_indexes(batch_statement_.get_statements()[0].statement->s);
+        partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(batch_statement_.get_statements()[0].statement->s);
     }
     return std::make_unique<prepared>(make_shared(std::move(batch_statement_)),
-                                                     bound_names->get_specifications(),
+                                                     bound_names.get_specifications(),
                                                      std::move(partition_key_bind_indices));
 }
 
