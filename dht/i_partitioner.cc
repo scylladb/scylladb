@@ -22,7 +22,6 @@
 #include "i_partitioner.hh"
 #include <seastar/core/reactor.hh>
 #include "dht/murmur3_partitioner.hh"
-#include "dht/random_partitioner.hh"
 #include "dht/byte_ordered_partitioner.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"
