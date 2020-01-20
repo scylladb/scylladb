@@ -393,8 +393,8 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     tracing::add_table_name(client_state.get_trace_state(), KEYSPACE_NAME, table_name);
 
     if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
-        throw api_error("ResourceNotFoundException",
-                format("Requested resource not found: Table: {} not found", table_name));
+        return make_ready_future<request_return_type>(api_error("ResourceNotFoundException",
+                format("Requested resource not found: Table: {} not found", table_name)));
     }
     return _mm.announce_column_family_drop(KEYSPACE_NAME, table_name, false, service::migration_manager::drop_views::yes).then([table_name = std::move(table_name)] {
         // FIXME: need more attributes?
@@ -509,14 +509,17 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     std::string billing_mode = get_string_attribute(table_info, "BillingMode", "PROVISIONED");
     if (billing_mode == "PAY_PER_REQUEST") {
         if (rjson::find(table_info, "ProvisionedThroughput")) {
-            throw api_error("ValidationException", "When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified.");
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    "When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified."));
         }
     } else if (billing_mode == "PROVISIONED") {
         if (!rjson::find(table_info, "ProvisionedThroughput")) {
-            throw api_error("ValidationException", "When BillingMode=PROVISIONED, ProvisionedThroughput must be specified.");
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    "When BillingMode=PROVISIONED, ProvisionedThroughput must be specified."));
         }
     } else {
-        throw api_error("ValidationException", "Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED.");
+        return make_ready_future<request_return_type>(api_error("ValidationException",
+                "Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED."));
     }
 
     schema_ptr partial_schema = builder.build();
@@ -529,12 +532,12 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     std::vector<sstring> where_clauses;
     if (gsi) {
         if (!gsi->IsArray()) {
-            throw api_error("ValidationException", "GlobalSecondaryIndexes must be an array.");
+            return make_ready_future<request_return_type>(api_error("ValidationException", "GlobalSecondaryIndexes must be an array."));
         }
         for (const rjson::value& g : gsi->GetArray()) {
             const rjson::value* index_name = rjson::find(g, "IndexName");
             if (!index_name || !index_name->IsString()) {
-                throw api_error("ValidationException", "GlobalSecondaryIndexes IndexName must be a string.");
+                return make_ready_future<request_return_type>(api_error("ValidationException", "GlobalSecondaryIndexes IndexName must be a string."));
             }
             std::string vname(view_name(table_name, index_name->GetString()));
             elogger.trace("Adding GSI {}", index_name->GetString());
@@ -596,14 +599,15 @@ future<executor::request_return_type> executor::create_table(client_state& clien
             schema_builder view_builder(KEYSPACE_NAME, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(l);
             if (view_hash_key != hash_key) {
-                throw api_error("ValidationException", "LocalSecondaryIndex hash key must match the base table hash key");
+                return make_ready_future<request_return_type>(api_error("ValidationException",
+                        "LocalSecondaryIndex hash key must match the base table hash key"));
             }
             add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
             if (view_range_key.empty()) {
-                throw api_error("ValidationException", "LocalSecondaryIndex must specify a sort key");
+                return make_ready_future<request_return_type>(api_error("ValidationException", "LocalSecondaryIndex must specify a sort key"));
             }
             if (view_range_key == hash_key) {
-                throw api_error("ValidationException", "LocalSecondaryIndex sort key cannot be the same as hash key");
+                return make_ready_future<request_return_type>(api_error("ValidationException", "LocalSecondaryIndex sort key cannot be the same as hash key"));
               }
             if (view_range_key != range_key) {
                 add_column(builder, view_range_key, attribute_definitions, column_kind::regular_column);
@@ -628,10 +632,10 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         }
     }
     if (rjson::find(table_info, "SSESpecification")) {
-        throw api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported.");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported."));
     }
     if (rjson::find(table_info, "StreamSpecification")) {
-        throw api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported.");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported."));
     }
     // FIXME: we should read the Tags property, and save them somewhere.
 
@@ -1181,7 +1185,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
             if (!request.IsObject() || request.MemberCount() != 1) {
-                throw api_error("ValidationException", format("Invalid BatchWriteItem request: {}", request));
+                return make_ready_future<request_return_type>(api_error("ValidationException", format("Invalid BatchWriteItem request: {}", request)));
             }
             auto r = request.MemberBegin();
             const std::string r_name = r->name.GetString();
@@ -1192,7 +1196,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 // make_item_mutation returns a mutation with a single clustering row
                 auto mut_key = std::make_pair(mutations.back().key(), mutations.back().partition().clustered_rows().begin()->key());
                 if (used_keys.count(mut_key) > 0) {
-                    throw api_error("ValidationException", "Provided list of item keys contains duplicates");
+                    return make_ready_future<request_return_type>(api_error("ValidationException", "Provided list of item keys contains duplicates"));
                 }
                 used_keys.insert(std::move(mut_key));
             } else if (r_name == "DeleteRequest") {
@@ -1201,11 +1205,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 // make_delete_item_mutation returns a mutation with a single clustering row
                 auto mut_key = std::make_pair(mutations.back().key(), mutations.back().partition().clustered_rows().begin()->key());
                 if (used_keys.count(mut_key) > 0) {
-                    throw api_error("ValidationException", "Provided list of item keys contains duplicates");
+                    return make_ready_future<request_return_type>(api_error("ValidationException", "Provided list of item keys contains duplicates"));
                 }
                 used_keys.insert(std::move(mut_key));
             } else {
-                throw api_error("ValidationException", format("Unknown BatchWriteItem request type: {}", r_name));
+                return make_ready_future<request_return_type>(api_error("ValidationException", format("Unknown BatchWriteItem request type: {}", r_name)));
             }
         }
     }
@@ -1871,7 +1875,8 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
     auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
     if (return_values != "NONE") {
         // FIXME: Need to support also ALL_OLD, UPDATED_OLD, ALL_NEW and UPDATED_NEW options. See issue #5053.
-        throw api_error("ValidationException", format("Unsupported ReturnValues={} for UpdateItem operation", return_values));
+        throw api_error("ValidationException",
+                format("Unsupported ReturnValues={} for UpdateItem operation", return_values));
     }
     const rjson::value* key = rjson::find(_request, "Key");
     if (!key) {
@@ -2037,7 +2042,7 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item)
                 // we need to verify the old type and/or value is same as
                 // specified before deleting... We don't do this yet.
                 if (it->value.HasMember("Value")) {
-                    throw api_error("ValidationException",
+                     throw api_error("ValidationException",
                             format("UpdateItem DELETE with checking old value not yet supported"));
                 }
                 do_delete(std::move(column_name));
@@ -2411,11 +2416,13 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     schema_ptr schema = get_table_or_view(_proxy, request_info);
 
     if (rjson::find(request_info, "FilterExpression")) {
-        throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException",
+                "FilterExpression is not yet implemented in alternator"));
     }
     if (get_int_attribute(request_info, "Segment") || get_int_attribute(request_info, "TotalSegments")) {
         // FIXME: need to support parallel scan. See issue #5059.
-        throw api_error("ValidationException", "Scan Segment/TotalSegments is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException",
+                "Scan Segment/TotalSegments is not yet implemented in alternator"));
     }
 
     rjson::value* exclusive_start_key = rjson::find(request_info, "ExclusiveStartKey");
@@ -2425,7 +2432,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     rjson::value* limit_json = rjson::find(request_info, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : query::max_partitions;
     if (limit <= 0) {
-        throw api_error("ValidationException", "Limit must be greater than 0");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "Limit must be greater than 0"));
     }
 
     auto attrs_to_get = calculate_attrs_to_get(request_info);
@@ -2577,19 +2584,19 @@ future<executor::request_return_type> executor::query(client_state& client_state
     rjson::value* limit_json = rjson::find(request_info, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : query::max_partitions;
     if (limit <= 0) {
-        throw api_error("ValidationException", "Limit must be greater than 0");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "Limit must be greater than 0"));
     }
 
     if (rjson::find(request_info, "KeyConditionExpression")) {
-        throw api_error("ValidationException", "KeyConditionExpression is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "KeyConditionExpression is not yet implemented in alternator"));
     }
     if (rjson::find(request_info, "FilterExpression")) {
-        throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "FilterExpression is not yet implemented in alternator"));
     }
     bool forward = get_bool_attribute(request_info, "ScanIndexForward", true);
     if (!forward) {
         // FIXME: need to support the !forward (i.e., reverse sort order) case. See issue #5153.
-        throw api_error("ValidationException", "ScanIndexForward=false is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "ScanIndexForward=false is not yet implemented in alternator"));
     }
 
     //FIXME(sarna): KeyConditions are deprecated in favor of KeyConditionExpression
@@ -2607,19 +2614,15 @@ future<executor::request_return_type> executor::query(client_state& client_state
         auto pk_defs = filtering_restrictions->get_partition_key_restrictions()->get_column_defs();
         auto ck_defs = filtering_restrictions->get_clustering_columns_restrictions()->get_column_defs();
         if (!pk_defs.empty()) {
-            throw api_error("ValidationException", format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", pk_defs.front()->name_as_text()));
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", pk_defs.front()->name_as_text())));
         }
         if (!ck_defs.empty()) {
-            throw api_error("ValidationException", format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", ck_defs.front()->name_as_text()));
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", ck_defs.front()->name_as_text())));
         }
     }
     return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats);
-}
-
-static void validate_limit(int limit) {
-    if (limit < 1 || limit > 100) {
-        throw api_error("ValidationException", "Limit must be greater than 0 and no greater than 100");
-    }
 }
 
 future<executor::request_return_type> executor::list_tables(client_state& client_state, std::string content) {
@@ -2631,7 +2634,9 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     rjson::value* limit_json = rjson::find(table_info, "Limit");
     std::string exclusive_start = exclusive_start_json ? exclusive_start_json->GetString() : "";
     int limit = limit_json ? limit_json->GetInt() : 100;
-    validate_limit(limit);
+    if (limit < 1 || limit > 100) {
+        return make_ready_future<request_return_type>(api_error("ValidationException", "Limit must be greater than 0 and no greater than 100"));
+    }
 
     auto table_names = _proxy.get_db().local().get_column_families()
             | boost::adaptors::map_values
@@ -2683,7 +2688,7 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     // A "Host:" header includes both host name and port, exactly what we need
     // to return.
     if (host_header.empty()) {
-        throw api_error("ValidationException", "DescribeEndpoints needs a 'Host:' header in request");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "DescribeEndpoints needs a 'Host:' header in request"));
     }
     rjson::set(response, "Endpoints", rjson::empty_array());
     rjson::push_back(response["Endpoints"], rjson::empty_object());
