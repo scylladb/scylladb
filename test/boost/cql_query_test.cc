@@ -1214,6 +1214,7 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
             return e.execute_cql("update cf set map1 = {1003, 4003} where p1 = 'key1';");
         }).then_wrapped([&e](future<shared_ptr<cql_transport::messages::result_message>> f) {
             BOOST_REQUIRE(f.failed());
+            f.ignore_ready_future();
             // overwrite whole map
             return e.execute_cql(
                 "update cf set map1 = {1001: 5001, 1002: 5002, 1003: 5003} where p1 = 'key1';").discard_result();
