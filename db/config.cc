@@ -425,13 +425,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If not using vnodes, comment #num_tokens : 256 or set num_tokens : 1 and use initial_token. If you already have an existing cluster with one token per node and wish to migrate to vnodes, see Enabling virtual nodes on an existing production cluster.\n"
         "Note: If using DataStax Enterprise, the default setting of this property depends on the type of node and type of install.")
     , partitioner(this, "partitioner", value_status::Used, "org.apache.cassandra.dht.Murmur3Partitioner",
-        "Distributes rows (by partition key) across all nodes in the cluster. Any IPartitioner may be used, including your own as long as it is in the class path. For new clusters use the default partitioner.\n"
-        "Scylla provides the following partitioners for backwards compatibility:\n"
-        "\n"
-        "\tRandomPartitioner\n"
+        "Distributes rows (by partition key) across all nodes in the cluster. At the moment, only Murmur3Partitioner is supported. For new clusters use the default partitioner.\n"
         "\n"
         "Related information: Partitioners"
-        , {"org.apache.cassandra.dht.Murmur3Partitioner", "org.apache.cassandra.dht.RandomPartitioner"})
+        , {"org.apache.cassandra.dht.Murmur3Partitioner"})
     , storage_port(this, "storage_port", value_status::Used, 7000,
         "The port for inter-node communication.")
     /* Advanced automatic backup setting */
