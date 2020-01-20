@@ -24,7 +24,6 @@
 
 #include "dht/i_partitioner.hh"
 #include "dht/murmur3_partitioner.hh"
-#include "dht/random_partitioner.hh"
 #include "schema.hh"
 #include "types.hh"
 #include "schema_builder.hh"
@@ -315,39 +314,6 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
     test_partitioner_sharding(mm3p2s4i, 2, mm3p2s_shard_limits, prev_token, 4);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_random_partitioner) {
-    using int128 = boost::multiprecision::int128_t;
-    auto prev_token = [] (const dht::i_partitioner& part, dht::token token) {
-        return part.from_sstring(std::string((int128(std::string(part.to_sstring(token))) - 1).str()));
-    };
-    auto make_token_vector = [] (dht::i_partitioner& part, std::vector<const char*> v) {
-        auto from_string = [&] (const char* s) { return part.from_sstring(s); };
-        return boost::copy_range<std::vector<dht::token>>(
-                v | boost::adaptors::transformed(from_string));
-    };
-    dht::random_partitioner rp7s(7);
-    auto rp7s_shard_limits = make_token_vector(rp7s, {
-        "0",
-        "24305883351495604533098186245126300819",
-        "48611766702991209066196372490252601637",
-        "72917650054486813599294558735378902455",
-        "97223533405982418132392744980505203274",
-        "121529416757478022665490931225631504092",
-        "145835300108973627198589117470757804910",
-    });
-    test_partitioner_sharding(rp7s, 7, rp7s_shard_limits, prev_token);
-    dht::random_partitioner rp2s(2);
-    auto rp2s_shard_limits = make_token_vector(rp2s, {
-        "0", "85070591730234615865843651857942052864",
-    });
-    test_partitioner_sharding(rp2s, 2, rp2s_shard_limits, prev_token);
-    dht::random_partitioner rp1s(1);
-    auto rp1s_shard_limits = make_token_vector(rp1s, {
-        "0",
-    });
-    test_partitioner_sharding(rp1s, 1, rp1s_shard_limits, prev_token);
-}
-
 static
 dht::partition_range
 normalize(dht::partition_range pr) {
@@ -488,10 +454,6 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
             dht::murmur3_partitioner(4, 0),
             dht::murmur3_partitioner(32, 8),  // More, and we OOM since memory isn't configured
     };
-    auto some_random_partitioners = {
-            dht::random_partitioner(1),
-            dht::random_partitioner(3),
-    };
     auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
     auto t2 = token_from_long(int64_t(-1));
     auto t3 = token_from_long(int64_t(1));
@@ -516,9 +478,6 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
         for (auto&& range : some_murmur3_ranges) {
             func_to_test(part, *s, range);
         }
-    }
-    for (auto&& part : some_random_partitioners) {
-        func_to_test(part, *s, dht::partition_range::make_open_ended_both_sides());
     }
 }
 
@@ -604,10 +563,6 @@ test_something_with_some_interesting_ranges_and_partitioners_with_token_range(st
             dht::murmur3_partitioner(4, 0),
             dht::murmur3_partitioner(32, 8),  // More, and we OOM since memory isn't configured
     };
-    auto some_random_partitioners = {
-            dht::random_partitioner(1),
-            dht::random_partitioner(3),
-    };
     auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
     auto t2 = token_from_long(int64_t(-1));
     auto t3 = token_from_long(int64_t(1));
@@ -632,9 +587,6 @@ test_something_with_some_interesting_ranges_and_partitioners_with_token_range(st
         for (auto&& range : some_murmur3_ranges) {
             func_to_test(part, *s, range);
         }
-    }
-    for (auto&& part : some_random_partitioners) {
-        func_to_test(part, *s, dht::token_range::make_open_ended_both_sides());
     }
 }
 
