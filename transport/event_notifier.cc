@@ -38,7 +38,13 @@ cql_server::event_notifier::event_notifier(service::migration_notifier& mn) : _m
 cql_server::event_notifier::~event_notifier()
 {
     service::get_local_storage_service().unregister_subscriber(this);
-    _mnotifier.unregister_listener(this);
+    assert(_stopped);
+}
+
+future<> cql_server::event_notifier::stop() {
+    return _mnotifier.unregister_listener(this).then([this]{
+        _stopped = true;
+    });
 }
 
 void cql_server::event_notifier::register_event(event::event_type et, cql_server::connection* conn)

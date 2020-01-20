@@ -42,8 +42,10 @@
 #pragma once
 
 #include <vector>
+#include <seastar/core/rwlock.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/util/defer.hh>
 
 class keyspace_metadata;
 class view_ptr;
@@ -129,14 +131,24 @@ public:
 
 class migration_notifier {
 private:
-    std::vector<migration_listener*> _listeners;
+    class listener_vector {
+        std::vector<migration_listener*> _vec;
+        rwlock _vec_lock;
+
+    public:
+        void add(migration_listener* listener);
+        future<> remove(migration_listener* listener);
+        // This must be called on a thread.
+        void for_each(noncopyable_function<void(migration_listener*)> func);
+    };
+    listener_vector _listeners;
 
 public:
     /// Register a migration listener on current shard.
     void register_listener(migration_listener* listener);
 
     /// Unregister a migration listener on current shard.
-    void unregister_listener(migration_listener* listener);
+    future<> unregister_listener(migration_listener* listener);
 
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     future<> create_column_family(const schema_ptr& cfm);

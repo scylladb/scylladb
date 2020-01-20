@@ -1187,8 +1187,9 @@ future<> view_builder::stop() {
     vlogger.info("Stopping view builder");
     _as.request_abort();
     return _started.finally([this] {
-        _mnotifier.unregister_listener(this);
-        return _sem.wait().then([this] {
+        return _mnotifier.unregister_listener(this).then([this] {
+            return _sem.wait();
+        }).then([this] {
             _sem.broken();
             return _build_step.join();
         }).handle_exception_type([] (const broken_semaphore&) {

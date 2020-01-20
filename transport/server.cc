@@ -198,6 +198,8 @@ future<> cql_server::stop() {
             clogger.debug("cql_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
         });
     }).then([this] {
+        return _notifier->stop();
+    }).then([this] {
         return std::move(_stopped);
     });
 }

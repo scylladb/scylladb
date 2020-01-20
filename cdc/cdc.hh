@@ -81,6 +81,7 @@ class cdc_service {
     class impl;
     std::unique_ptr<impl> _impl;
 public:
+    future<> stop();
     cdc_service(service::storage_proxy&);
     cdc_service(db_context);
     ~cdc_service();
