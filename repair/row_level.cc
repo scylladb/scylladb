@@ -2578,6 +2578,12 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper, size_t max_
     _gossiper.local().register_(_gossip_helper);
 }
 
-repair_service::~repair_service() {
+future<> repair_service::stop() {
     _gossiper.local().unregister_(_gossip_helper);
+    _stopped = true;
+    return make_ready_future<>();
+}
+
+repair_service::~repair_service() {
+    assert(_stopped);
 }
