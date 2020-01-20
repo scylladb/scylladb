@@ -4393,23 +4393,21 @@ SEASTAR_TEST_CASE(test_bigint_sum) {
 
 SEASTAR_TEST_CASE(test_int_sum_with_cast) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        return do_with_cql_env_thread([] (cql_test_env& e) {
-            cquery_nofail(e, "create table cf (pk text, val int, primary key(pk));");
-            cquery_nofail(e, "insert into cf (pk, val) values ('a', 2147483647);");
-            cquery_nofail(e, "insert into cf (pk, val) values ('b', 2147483647);");
-            auto sum_as_bigint_query = "select sum(cast(val as bigint)) from cf;";
-            assert_that(e.execute_cql(sum_as_bigint_query).get0())
-                .is_rows()
-                .with_size(1)
-                .with_row({long_type->decompose(int64_t(4294967294))});
+        cquery_nofail(e, "create table cf (pk text, val int, primary key(pk));");
+        cquery_nofail(e, "insert into cf (pk, val) values ('a', 2147483647);");
+        cquery_nofail(e, "insert into cf (pk, val) values ('b', 2147483647);");
+        auto sum_as_bigint_query = "select sum(cast(val as bigint)) from cf;";
+        assert_that(e.execute_cql(sum_as_bigint_query).get0())
+            .is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(4294967294))});
 
-            cquery_nofail(e, "insert into cf (pk, val) values ('a', -2147483648);");
-            cquery_nofail(e, "insert into cf (pk, val) values ('b', -2147483647);");
-            assert_that(e.execute_cql(sum_as_bigint_query).get0())
-                .is_rows()
-                .with_size(1)
-                .with_row({long_type->decompose(int64_t(-4294967295))});
-        });
+        cquery_nofail(e, "insert into cf (pk, val) values ('a', -2147483648);");
+        cquery_nofail(e, "insert into cf (pk, val) values ('b', -2147483647);");
+        assert_that(e.execute_cql(sum_as_bigint_query).get0())
+            .is_rows()
+            .with_size(1)
+            .with_row({long_type->decompose(int64_t(-4294967295))});
     });
 }
 
