@@ -154,7 +154,7 @@ permissions_validity_in_ms: 2000
 # same partitioner you were already using.
 #
 # Besides Murmur3Partitioner, partitioners included for backwards
-# compatibility include RandomPartitioner and ByteOrderedPartitioner.
+# compatibility include RandomPartitioner.
 #
 partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 

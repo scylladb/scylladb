@@ -429,10 +429,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Scylla provides the following partitioners for backwards compatibility:\n"
         "\n"
         "\tRandomPartitioner\n"
-        "\tByteOrderedPartitioner\n"
         "\n"
         "Related information: Partitioners"
-        , {"org.apache.cassandra.dht.Murmur3Partitioner", "org.apache.cassandra.dht.RandomPartitioner", "org.apache.cassandra.dht.ByteOrderedPartitioner"})
+        , {"org.apache.cassandra.dht.Murmur3Partitioner", "org.apache.cassandra.dht.RandomPartitioner"})
     , storage_port(this, "storage_port", value_status::Used, 7000,
         "The port for inter-node communication.")
     /* Advanced automatic backup setting */
