@@ -130,7 +130,10 @@ void load_broadcaster::start_broadcasting() {
 
 future<> load_broadcaster::stop_broadcasting() {
     _timer.cancel();
-    return std::move(_done);
+    _gossiper.unregister_(shared_from_this());
+    return std::move(_done).then([this] {
+        _stopped = true;
+    });
 }
 
 
