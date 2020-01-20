@@ -177,7 +177,7 @@ void migration_notifier::listener_vector::for_each(noncopyable_function<void(mig
         _vec_lock.for_read().unlock();
     });
     // We grab a lock in remove(), but not in add(), so we
-    // iterate using indexes to guard agaist the vector being
+    // iterate using indexes to guard against the vector being
     // reallocated.
     for (size_t i = 0, n = _vec.size(); i < n; ++i) {
         func(_vec[i]);
