@@ -153,8 +153,7 @@ permissions_validity_in_ms: 2000
 # reloading all data, so when upgrading you should set this to the
 # same partitioner you were already using.
 #
-# Besides Murmur3Partitioner, partitioners included for backwards
-# compatibility include RandomPartitioner.
+# Murmur3Partitioner is currently the only supported partitioner,
 #
 partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 
