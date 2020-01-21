@@ -119,6 +119,7 @@ rjson::value parse_raw(const char* c_str, size_t size);
 rjson::value from_string(const std::string& str);
 rjson::value from_string(const sstring& str);
 rjson::value from_string(const char* str, size_t size);
+rjson::value from_string(std::string_view view);
 
 // Returns a pointer to JSON member if it exists, nullptr otherwise
 rjson::value* find(rjson::value& value, rjson::string_ref_type name);
