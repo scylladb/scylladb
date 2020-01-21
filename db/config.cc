@@ -791,6 +791,16 @@ void db::config::maybe_in_workdir(named_value<string_list>& tos, const char* sub
 
 const sstring db::config::default_tls_priority("SECURE128:-VERS-TLS1.0");
 
+
+namespace db {
+
+std::ostream& operator<<(std::ostream& os, const db::seed_provider_type& s) {
+    os << "seed_provider_type{class=" << s.class_name << ", params=" << s.parameters << "}";
+    return os;
+}
+
+}
+
 namespace utils {
 
 template<>
