@@ -24,7 +24,7 @@ import pytest
 from botocore.exceptions import ClientError
 import re
 import time
-from util import multiset
+from util import multiset, create_test_table
 
 def delete_tags(table, arn):
     got = table.meta.client.list_tags_of_resource(ResourceArn=arn)
@@ -73,6 +73,23 @@ def test_tag_resource_basic(test_table):
     delete_tags(test_table, arn)
     got = test_table.meta.client.list_tags_of_resource(ResourceArn=arn)
     assert len(got['Tags']) == 0
+
+PREDEFINED_TAGS = [{'Key': 'str1', 'Value': 'str2'}, {'Key': 'kkk', 'Value': 'vv'}, {'Key': 'keykey', 'Value': 'valvalvalval'}]
+@pytest.fixture(scope="session")
+def test_table_tags(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'N' } ],
+        Tags=PREDEFINED_TAGS)
+    yield table
+    table.delete()
+
+# Test checking that tagging works during table creation
+def test_list_tags_from_creation(test_table_tags):
+    got = test_table_tags.meta.client.describe_table(TableName=test_table_tags.name)['Table']
+    arn =  got['TableArn']
+    got = test_table_tags.meta.client.list_tags_of_resource(ResourceArn=arn)
+    assert multiset(got['Tags']) == multiset(PREDEFINED_TAGS)
 
 # Test checking that incorrect parameters return proper error codes
 def test_tag_resource_incorrect(test_table):

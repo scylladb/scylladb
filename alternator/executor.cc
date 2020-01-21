@@ -807,7 +807,6 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     if (rjson::find(table_info, "StreamSpecification")) {
         return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported."));
     }
-    // FIXME: we should read the Tags property, and save them somewhere.
 
     builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
     schema_ptr schema = builder.build();
@@ -830,14 +829,20 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         ++where_clause_it;
     }
 
-    return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([table_info = std::move(table_info), schema, view_builders = std::move(view_builders)] () mutable {
+    return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([this, table_info = std::move(table_info), schema, view_builders = std::move(view_builders)] () mutable {
         return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
             return service::get_local_migration_manager().announce_new_view(view_ptr(builder.build()));
-        }).then([table_info = std::move(table_info), schema] () mutable {
-            rjson::value status = rjson::empty_object();
-            supplement_table_info(table_info, *schema);
-            rjson::set(status, "TableDescription", std::move(table_info));
-            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
+        }).then([this, table_info = std::move(table_info), schema] () mutable {
+            future<> f = make_ready_future<>();
+            if (rjson::find(table_info, "Tags")) {
+                f = add_tags(_proxy, schema, table_info);
+            }
+            return f.then([table_info = std::move(table_info), schema] () mutable {
+                rjson::value status = rjson::empty_object();
+                supplement_table_info(table_info, *schema);
+                rjson::set(status, "TableDescription", std::move(table_info));
+                return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
+            });
         });
     }).handle_exception_type([table_name = std::move(table_name)] (exceptions::already_exists_exception&) {
         return make_exception_future<executor::request_return_type>(
