@@ -34,7 +34,7 @@ namespace service {
 
 class load_meter {
 private:
-    std::unique_ptr<load_broadcaster> _lb;
+    shared_ptr<load_broadcaster> _lb;
 
     /** raw load value */
     double get_load() const;
