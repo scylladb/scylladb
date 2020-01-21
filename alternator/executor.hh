@@ -25,6 +25,7 @@
 #include <seastar/http/httpd.hh>
 #include "seastarx.hh"
 #include <seastar/json/json_elements.hh>
+#include <seastar/core/sharded.hh>
 
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
@@ -34,7 +35,7 @@
 
 namespace alternator {
 
-class executor {
+class executor : public peering_sharded_service<executor> {
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
 
