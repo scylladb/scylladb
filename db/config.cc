@@ -612,10 +612,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , authenticator(this, "authenticator", value_status::Used, "org.apache.cassandra.auth.AllowAllAuthenticator",
         "The authentication backend, used to identify users. The available authenticators are:\n"
         "\n"
-        "\torg.apache.cassandra.auth.AllowAllAuthenticator : Disables authentication; no checks are performed.\n"
+        "\tAllowAllAuthenticator : Disables authentication; no checks are performed.\n"
         "\torg.apache.cassandra.auth.PasswordAuthenticator : Authenticates users with user names and hashed passwords stored in the system_auth.credentials table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
         "Related information: Internal authentication"
-        , {"org.apache.cassandra.auth.AllowAllAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator"})
+        , {"AllowAllAuthenticator", "PasswordAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator"})
     , internode_authenticator(this, "internode_authenticator", value_status::Unused, "enabled",
         "Internode authentication backend. It implements org.apache.cassandra.auth.AllowAllInternodeAuthenticator to allows or disallow connections from peer nodes.")
     , authorizer(this, "authorizer", value_status::Used, "org.apache.cassandra.auth.AllowAllAuthorizer",
@@ -624,7 +624,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tAllowAllAuthorizer : Disables authorization; allows any action to any user.\n"
         "\tCassandraAuthorizer : Stores permissions in system_auth.permissions table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
         "Related information: Object permissions"
-        , {"org.apache.cassandra.auth.AllowAllAuthorizer", "org.apache.cassandra.auth.CassandraAuthorizer"})
+        , {"AllowAllAuthorizer", "CassandraAuthorizer"})
     , role_manager(this, "role_manager", value_status::Used, "org.apache.cassandra.auth.CassandraRoleManager",
         "The role-management backend, used to maintain grantts and memberships between roles.\n"
         "The available role-managers are:\n"
