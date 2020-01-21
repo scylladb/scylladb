@@ -62,6 +62,9 @@ public:
     future<request_return_type> batch_write_item(client_state& client_state, std::string content);
     future<request_return_type> batch_get_item(client_state& client_state, std::string content);
     future<request_return_type> query(client_state& client_state, std::string content);
+    future<request_return_type> tag_resource(client_state& client_state, std::string content);
+    future<request_return_type> untag_resource(client_state& client_state, std::string content);
+    future<request_return_type> list_tags_of_resource(client_state& client_state, std::string content);
 
     future<> start();
     future<> stop() { return make_ready_future<>(); }

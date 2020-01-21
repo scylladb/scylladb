@@ -52,6 +52,9 @@
 #include "seastar/json/json_elements.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "collection_mutation.hh"
+#include "db/query_context.hh"
+#include "schema.hh"
+#include "alternator/tags_extension.hh"
 
 #include <boost/range/adaptors.hpp>
 
@@ -486,6 +489,173 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
     return {hash_key, range_key};
 }
 
+static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_view arn) {
+    // Expected format: arn:scylla:alternator:${KEYSPACE_NAME}:scylla:table/${TABLE_NAME};
+    constexpr size_t prefix_size = sizeof("arn:scylla:alternator:") - 1;
+    // NOTE: This code returns AccessDeniedException if it's problematic to parse or recognize an arn.
+    // Technically, a properly formatted, but nonexistent arn *should* return AccessDeniedException,
+    // while an incorrectly formatted one should return ValidationException.
+    // Unfortunately, the rules are really uncertain, since DynamoDB
+    // states that arns are of the form arn:partition:service:region:account-id:resource-type/resource-id
+    // or similar - yet, for some arns that do not fit that pattern (e.g. "john"),
+    // it still returns AccessDeniedException rather than ValidationException.
+    // Consequently, this code simply falls back to AccessDeniedException,
+    // concluding that an error is an error and code which uses tagging
+    // must be ready for handling AccessDeniedException instances anyway.
+    try {
+        size_t keyspace_end = arn.find_first_of(':', prefix_size);
+        std::string_view keyspace_name = arn.substr(prefix_size, keyspace_end - prefix_size);
+        size_t table_start = arn.find_last_of('/');
+        std::string_view table_name = arn.substr(table_start + 1);
+        // FIXME: remove sstring creation once find_schema gains a view-based interface
+        return proxy.get_db().local().find_schema(sstring(keyspace_name), sstring(table_name));
+    } catch (const no_such_column_family& e) {
+        throw api_error("AccessDeniedException", "Incorrect resource identifier");
+    } catch (const std::out_of_range& e) {
+        throw api_error("AccessDeniedException", "Incorrect resource identifier");
+    }
+}
+
+std::map<sstring, sstring> get_tags_of_table(schema_ptr schema) {
+    auto it = schema->extensions().find(tags_extension::NAME);
+    if (it == schema->extensions().end()) {
+        throw api_error("ValidationException", format("Table {} does not have valid tagging information", schema->ks_name()));
+    }
+    auto tags_extension = static_pointer_cast<alternator::tags_extension>(it->second);
+    return tags_extension->tags();
+}
+
+static bool is_legal_tag_char(char c) {
+    // FIXME: According to docs, unicode strings should also be accepted.
+    // Alternator currently uses a simplified ASCII approach
+    return std::isalnum(c) || std::isspace(c)
+            || c == '+' || c == '-' || c == '=' || c == '.' || c == '_' || c == ':' || c == '/' ;
+}
+
+static bool validate_legal_tag_chars(std::string_view tag) {
+    return std::all_of(tag.begin(), tag.end(), &is_legal_tag_char);
+}
+
+// FIXME: Updating tags currently relies on updating schema, which may be subject
+// to races during concurrent updates of the same table. Once Scylla schema updates
+// are fixed, this issue will automatically get fixed as well.
+enum class update_tags_action { add_tags, delete_tags };
+static future<> update_tags(const rjson::value& tags, schema_ptr schema, std::map<sstring, sstring>&& tags_map, update_tags_action action) {
+    if (action == update_tags_action::add_tags) {
+        for (auto it = tags.Begin(); it != tags.End(); ++it) {
+            const rjson::value& key = (*it)["Key"];
+            const rjson::value& value = (*it)["Value"];
+            std::string_view tag_key(key.GetString(), key.GetStringLength());
+            if (tag_key.empty() || tag_key.size() > 128 || !validate_legal_tag_chars(tag_key)) {
+                throw api_error("ValidationException", "The Tag Key provided is invalid string");
+            }
+            std::string_view tag_value(value.GetString(), value.GetStringLength());
+            if (tag_value.empty() || tag_value.size() > 256 || !validate_legal_tag_chars(tag_value)) {
+                throw api_error("ValidationException", "The Tag Value provided is invalid string");
+            }
+            tags_map.emplace(tag_key, tag_value);
+        }
+    } else if (action == update_tags_action::delete_tags) {
+        for (auto it = tags.Begin(); it != tags.End(); ++it) {
+            std::string_view tag_key(it->GetString(), it->GetStringLength());
+            tags_map.erase(sstring(tag_key));
+        }
+    }
+
+    if (tags_map.size() > 50) {
+        return make_exception_future<>(api_error("ValidationException", "Number of Tags exceed the current limit for the provided ResourceArn"));
+    }
+
+    std::stringstream serialized_tags;
+    serialized_tags << '{';
+    for (auto& tag_entry : tags_map) {
+        serialized_tags << format("'{}':'{}',", tag_entry.first, tag_entry.second);
+    }
+    std::string serialized_tags_str = serialized_tags.str();
+    if (!tags_map.empty()) {
+        serialized_tags_str[serialized_tags_str.size() - 1] = '}'; // trims the last ',' delimiter
+    } else {
+        serialized_tags_str.push_back('}');
+    }
+
+    sstring req = format("ALTER TABLE \"{}\".\"{}\" WITH {} = {}",
+            schema->ks_name(), schema->cf_name(), tags_extension::NAME, serialized_tags_str);
+    return db::execute_cql(std::move(req)).discard_result();
+}
+
+static future<> add_tags(service::storage_proxy& proxy, schema_ptr schema, rjson::value& request_info) {
+    const rjson::value* tags = rjson::find(request_info, "Tags");
+    if (!tags || !tags->IsArray()) {
+        return make_exception_future<>(api_error("ValidationException", format("Cannot parse tags")));
+    }
+    if (tags->Size() < 1) {
+        return make_exception_future<>(api_error("ValidationException", "The number of tags must be at least 1"));
+    }
+
+    auto tags_map = get_tags_of_table(schema);
+    return update_tags(rjson::copy(*tags), schema, std::move(tags_map), update_tags_action::add_tags);
+}
+
+future<executor::request_return_type> executor::tag_resource(client_state& client_state, std::string content) {
+    _stats.api_operations.tag_resource++;
+
+    return seastar::async([this, &client_state, content = std::move(content)] () -> request_return_type {
+        rjson::value request_info = rjson::parse(content);
+        const rjson::value* arn = rjson::find(request_info, "ResourceArn");
+        if (!arn || !arn->IsString()) {
+            return api_error("AccessDeniedException", "Incorrect resource identifier");
+        }
+        schema_ptr schema = get_table_from_arn(_proxy, std::string_view(arn->GetString(), arn->GetStringLength()));
+        add_tags(_proxy, schema, request_info).get();
+        return json_string("");
+    });
+}
+
+future<executor::request_return_type> executor::untag_resource(client_state& client_state, std::string content) {
+    _stats.api_operations.untag_resource++;
+
+    return seastar::async([this, &client_state, content = std::move(content)] () -> request_return_type {
+        rjson::value request_info = rjson::parse(content);
+        const rjson::value* arn = rjson::find(request_info, "ResourceArn");
+        if (!arn || !arn->IsString()) {
+            return api_error("AccessDeniedException", "Incorrect resource identifier");
+        }
+        const rjson::value* tags = rjson::find(request_info, "TagKeys");
+        if (!tags || !tags->IsArray()) {
+            return api_error("ValidationException", format("Cannot parse tag keys"));
+        }
+
+        schema_ptr schema = get_table_from_arn(_proxy, std::string_view(arn->GetString(), arn->GetStringLength()));
+
+        auto tags_map = get_tags_of_table(schema);
+        update_tags(*tags, schema, std::move(tags_map), update_tags_action::delete_tags).get();
+        return json_string("");
+    });
+}
+
+future<executor::request_return_type> executor::list_tags_of_resource(client_state& client_state, std::string content) {
+    _stats.api_operations.list_tags_of_resource++;
+    rjson::value request_info = rjson::parse(content);
+    const rjson::value* arn = rjson::find(request_info, "ResourceArn");
+    if (!arn || !arn->IsString()) {
+        return make_ready_future<request_return_type>(api_error("AccessDeniedException", "Incorrect resource identifier"));
+    }
+    schema_ptr schema = get_table_from_arn(_proxy, std::string_view(arn->GetString(), arn->GetStringLength()));
+
+    auto tags_map = get_tags_of_table(schema);
+    rjson::value ret = rjson::empty_object();
+    rjson::set(ret, "Tags", rjson::empty_array());
+
+    rjson::value& tags = ret["Tags"];
+    for (auto& tag_entry : tags_map) {
+        rjson::value new_entry = rjson::empty_object();
+        rjson::set(new_entry, "Key", rjson::from_string(tag_entry.first));
+        rjson::set(new_entry, "Value", rjson::from_string(tag_entry.second));
+        rjson::push_back(tags, std::move(new_entry));
+    }
+
+    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+}
 
 future<executor::request_return_type> executor::create_table(client_state& client_state, std::string content) {
     _stats.api_operations.create_table++;
@@ -639,6 +809,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     }
     // FIXME: we should read the Tags property, and save them somewhere.
 
+    builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
     schema_ptr schema = builder.build();
     auto where_clause_it = where_clauses.begin();
     for (auto& view_builder : view_builders) {
@@ -655,6 +826,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         }
         const bool include_all_columns = true;
         view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
+        view_builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
         ++where_clause_it;
     }
 
