@@ -2704,6 +2704,7 @@ void storage_service::unbootstrap() {
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
+  return seastar::async([this, endpoint, notify_endpoint] {
     auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     auto my_address = get_broadcast_address();
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
@@ -2722,7 +2723,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
         streamer->add_rx_ranges(keyspace_name, std::move(ranges_per_endpoint));
     }
-    return streamer->stream_async().then_wrapped([this, streamer, notify_endpoint] (auto&& f) {
+    streamer->stream_async().then_wrapped([this, streamer, notify_endpoint] (auto&& f) {
         try {
             f.get();
             return this->send_replication_notification(notify_endpoint);
@@ -2732,7 +2733,8 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             return this->send_replication_notification(notify_endpoint);
         }
         return make_ready_future<>();
-    });
+    }).get();
+  });
 }
 
 // Runs inside seastar::async context
