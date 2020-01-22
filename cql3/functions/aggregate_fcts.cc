@@ -81,86 +81,33 @@ public:
 template <typename T>
 struct accumulator_for;
 
-template <typename NarrowType, typename AccType>
-static NarrowType checking_narrow(AccType acc) {
-    NarrowType ret = static_cast<NarrowType>(acc);
-    if (static_cast<AccType>(ret) != acc) {
-        throw exceptions::overflow_error_exception("Sum overflow. Values should be casted to a wider type.");
-    }
-    return ret;
-}
-
-template <>
-struct accumulator_for<int8_t> {
+template <typename T>
+struct int128_accumulator_for {
     using type = __int128;
 
-    static int8_t narrow(type acc) {
-        return checking_narrow<int8_t>(acc);
+    static T narrow(type acc) {
+        T ret = static_cast<T>(acc);
+        if (static_cast<type>(ret) != acc) {
+            throw exceptions::overflow_error_exception("Sum overflow. Values should be casted to a wider type.");
+        }
+        return ret;
     }
 };
 
-template <>
-struct accumulator_for<int16_t> {
-    using type = __int128;
+template <typename T>
+struct same_type_accumulator_for {
+    using type = T;
 
-    static int16_t narrow(type acc) {
-        return checking_narrow<int16_t>(acc);
-    }
-};
-
-template <>
-struct accumulator_for<int32_t> {
-    using type = __int128;
-
-    static int32_t narrow(type acc) {
-        return checking_narrow<int32_t>(acc);
-    }
-};
-
-template <>
-struct accumulator_for<int64_t> {
-    using type = __int128;
-
-    static int64_t narrow(type acc) {
-        return checking_narrow<int64_t>(acc);
-    }
-};
-
-template <>
-struct accumulator_for<float> {
-    using type = float;
-
-    static auto narrow(type acc) {
+    static T narrow(type acc) {
         return acc;
     }
 };
 
-template <>
-struct accumulator_for<double> {
-    using type = double;
-
-    static auto narrow(type acc) {
-        return acc;
-    }
-};
-
-template <>
-struct accumulator_for<boost::multiprecision::cpp_int> {
-    using type = boost::multiprecision::cpp_int;
-
-    static auto narrow(type acc) {
-        return acc;
-    }
-};
-
-template <>
-struct accumulator_for<big_decimal> {
-    using type = big_decimal;
-
-    static auto narrow(type acc) {
-        return acc;
-    }
-};
+template <typename T>
+struct accumulator_for : public std::conditional_t<std::is_integral_v<T>,
+                                                   int128_accumulator_for<T>,
+                                                   same_type_accumulator_for<T>>
+{ };
 
 template <typename Type>
 class impl_sum_function_for final : public aggregate_function::aggregate {
