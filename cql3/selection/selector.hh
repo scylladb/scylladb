@@ -45,6 +45,7 @@
 #include "cql3/assignment_testable.hh"
 #include "types.hh"
 #include "schema.hh"
+#include "counters.hh"
 
 namespace cql3 {
 
@@ -109,7 +110,11 @@ public:
     virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override {
         auto t1 = receiver->type->underlying_type();
         auto t2 = get_type()->underlying_type();
-        if (t1 == t2) {
+        // We want columns of `counter_type' to be served by underlying type's overloads
+        // (here: `counter_cell_view::total_value_type()') with an `EXACT_MATCH'.
+        // Weak assignability between the two would lead to ambiguity because
+        // `WEAKLY_ASSIGNABLE' counter->blob conversion exists and would compete.
+        if (t1 == t2 || (t1 == counter_cell_view::total_value_type() && t2->is_counter())) {
             return assignment_testable::test_result::EXACT_MATCH;
         } else if (t1->is_value_compatible_with(*t2)) {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
