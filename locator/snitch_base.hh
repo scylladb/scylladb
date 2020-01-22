@@ -191,8 +191,9 @@ public:
         return _gossip_started;
     }
 
-    virtual void reload_gossiper_state() {
+    virtual future<> reload_gossiper_state() {
         // noop by default
+        return make_ready_future<>();
     }
 
 protected:

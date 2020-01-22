@@ -147,7 +147,7 @@ future<> gossiping_property_file_snitch::gossiper_starting() {
     return g.add_local_application_state(application_state::INTERNAL_IP,
         ss.value_factory.internal_ip(ostrm.str())).then([this] {
         _gossip_started = true;
-        reload_gossiper_state();
+        return reload_gossiper_state();
     });
 }
 
@@ -224,7 +224,7 @@ future<> gossiping_property_file_snitch::reload_configuration() {
                 // reload Gossiper state (executed on CPU0 only)
                 smp::submit_to(0, [] {
                     auto& local_snitch_ptr = get_local_snitch_ptr();
-                    local_snitch_ptr->reload_gossiper_state();
+                    return local_snitch_ptr->reload_gossiper_state();
                 }).get();
 
                 // update Storage Service on each shard
@@ -318,21 +318,24 @@ future<> gossiping_property_file_snitch::pause_io() {
 }
 
 // should be invoked of CPU0 only
-void gossiping_property_file_snitch::reload_gossiper_state() {
+future<> gossiping_property_file_snitch::reload_gossiper_state() {
     if (!_gossip_started) {
-        return;
+        return make_ready_future<>();
     }
 
+    future<> ret = make_ready_future<>();
     if (_reconnectable_helper) {
-        gms::get_local_gossiper().unregister_(_reconnectable_helper);
+        ret = gms::get_local_gossiper().unregister_(_reconnectable_helper);
     }
 
     if (!_prefer_local) {
-        return;
+        return ret;
     }
 
-    _reconnectable_helper = make_shared<reconnectable_snitch_helper>(_my_dc);
-    gms::get_local_gossiper().register_(_reconnectable_helper);
+    return ret.then([this] {
+        _reconnectable_helper = make_shared<reconnectable_snitch_helper>(_my_dc);
+        gms::get_local_gossiper().register_(_reconnectable_helper);
+    });
 }
 
 using registry_2_params = class_registrator<i_endpoint_snitch,

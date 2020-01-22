@@ -161,29 +161,6 @@ future<> migration_manager::uninit_messaging_service()
     );
 }
 
-void migration_notifier::listener_vector::add(migration_listener* listener) {
-    _vec.push_back(listener);
-}
-
-future<> migration_notifier::listener_vector::remove(migration_listener* listener) {
-    return with_lock(_vec_lock.for_write(), [this, listener] {
-        _vec.erase(std::remove(_vec.begin(), _vec.end(), listener), _vec.end());
-    });
-}
-
-void migration_notifier::listener_vector::for_each(noncopyable_function<void(migration_listener*)> func) {
-    _vec_lock.for_read().lock().get();
-    auto unlock = defer([this] {
-        _vec_lock.for_read().unlock();
-    });
-    // We grab a lock in remove(), but not in add(), so we
-    // iterate using indexes to guard agaist the vector being
-    // reallocated.
-    for (size_t i = 0, n = _vec.size(); i < n; ++i) {
-        func(_vec[i]);
-    }
-}
-
 void migration_notifier::register_listener(migration_listener* listener)
 {
     _listeners.add(listener);

@@ -56,7 +56,7 @@ constexpr std::chrono::milliseconds load_broadcaster::BROADCAST_INTERVAL;
 logging::logger llogger("load_broadcaster");
 
 future<> load_meter::init(distributed<database>& db, gms::gossiper& gms) {
-    _lb = std::make_unique<load_broadcaster>(db, gms);
+    _lb = make_shared<load_broadcaster>(db, gms);
     _lb->start_broadcasting();
     return make_ready_future<>();
 }
@@ -130,7 +130,11 @@ void load_broadcaster::start_broadcasting() {
 
 future<> load_broadcaster::stop_broadcasting() {
     _timer.cancel();
-    return std::move(_done);
+    return _gossiper.unregister_(shared_from_this()).then([this] {
+        return std::move(_done);
+    }).then([this] {
+        _stopped = true;
+    });
 }
 
 
@@ -260,9 +264,10 @@ future<> view_update_backlog_broker::start() {
 }
 
 future<> view_update_backlog_broker::stop() {
-    _gossiper.unregister_(shared_from_this());
-    _as.request_abort();
-    return std::move(_started);
+    return _gossiper.unregister_(shared_from_this()).then([this] {
+        _as.request_abort();
+        return std::move(_started);
+    });
 }
 
 void view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {

@@ -42,6 +42,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/print.hh>
+#include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
 #include "gms/i_failure_detection_event_listener.hh"
@@ -187,38 +188,8 @@ private:
 
     /**
      * subscribers for interest in EndpointState change
-     *
-     * @class subscribers_list - allows modifications of the list at the same
-     *        time as it's being iterated using for_each() method.
      */
-    class subscribers_list {
-        std::list<shared_ptr<i_endpoint_state_change_subscriber>> _l;
-    public:
-        auto push_back(shared_ptr<i_endpoint_state_change_subscriber> s) {
-            return _l.push_back(s);
-        }
-
-       /**
-        * Remove the element pointing to the same object as the given one.
-        * @param s shared_ptr pointing to the same object as one of the elements
-        *          in the list.
-        */
-        void remove(shared_ptr<i_endpoint_state_change_subscriber> s) {
-            _l.remove(s);
-        }
-
-        /**
-         * Make a copy of the current list and iterate over a copy.
-         *
-         * @param Func - function to apply on each list element
-         */
-        template <typename Func>
-        void for_each(Func&& f) {
-            auto list_copy(_l);
-
-            std::for_each(list_copy.begin(), list_copy.end(), std::forward<Func>(f));
-        }
-    } _subscribers;
+    atomic_vector<shared_ptr<i_endpoint_state_change_subscriber>> _subscribers;
 
     /* live member set */
     utils::chunked_vector<inet_address> _live_endpoints;
@@ -278,7 +249,7 @@ public:
      *
      * @param subscriber module which implements the IEndpointStateChangeSubscriber
      */
-    void unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
+    future<> unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
     std::set<inet_address> get_live_members();
 

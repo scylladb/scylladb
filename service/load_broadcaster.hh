@@ -56,13 +56,14 @@ private:
     std::unordered_map<gms::inet_address, double> _load_info;
     timer<> _timer;
     future<> _done = make_ready_future<>();
+    bool _stopped = false;
 
 public:
     load_broadcaster(distributed<database>& db, gms::gossiper& g) : _db(db), _gossiper(g) {
         _gossiper.register_(shared_from_this());
     }
     ~load_broadcaster() {
-        _gossiper.unregister_(shared_from_this());
+        assert(_stopped);
     }
 
     void on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {

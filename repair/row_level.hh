@@ -38,6 +38,9 @@ struct repair_service {
     tracker _tracker;
     repair_service(distributed<gms::gossiper>& gossiper, size_t max_repair_memory);
     ~repair_service();
+    future<> stop();
+private:
+    bool _stopped = false;
 };
 
 future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator);
