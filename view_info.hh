@@ -32,7 +32,6 @@ class view_info final {
     // The following fields are used to select base table rows.
     mutable shared_ptr<cql3::statements::select_statement> _select_statement;
     mutable std::optional<query::partition_slice> _partition_slice;
-    mutable std::optional<dht::partition_range_vector> _partition_ranges;
     // Id of a regular base table column included in the view's PK, if any.
     // Scylla views only allow one such column, alternator can have up to two.
     mutable std::vector<column_id> _base_non_pk_columns_in_view_pk;
@@ -61,7 +60,6 @@ public:
 
     cql3::statements::select_statement& select_statement() const;
     const query::partition_slice& partition_slice() const;
-    const dht::partition_range_vector& partition_ranges() const;
     const column_definition* view_column(const schema& base, column_id base_id) const;
     const column_definition* view_column(const column_definition& base_def) const;
     const std::vector<column_id>& base_non_pk_columns_in_view_pk() const;
