@@ -43,10 +43,10 @@
 
 namespace db {
 
-future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
-    auto& ks = db.find_keyspace(ks_name);
-    return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, ks_name = std::move(ks_name), name = std::move(name)] (auto& pair) {
-        auto& cf = db.find_column_family(pair.second);
+future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name) {
+    auto& ks = _db.local().find_keyspace(ks_name);
+    return parallel_for_each(ks.metadata()->cf_meta_data(), [this, ks_name = std::move(ks_name), name = std::move(name)] (auto& pair) {
+        auto& cf = _db.local().find_column_family(pair.second);
         return cf.snapshot_exists(name).then([ks_name = std::move(ks_name), name] (bool exists) {
             if (exists) {
                 throw std::runtime_error(format("Keyspace {}: snapshot {} already exists.", ks_name, name));
@@ -84,7 +84,7 @@ future<> snapshot_ctl::take_snapshot(sstring tag, std::vector<sstring> keyspace_
 
     return run_snapshot_modify_operation([tag = std::move(tag), keyspace_names = std::move(keyspace_names), this] {
         return parallel_for_each(keyspace_names, [tag, this] (auto& ks_name) {
-            return check_snapshot_not_exist(_db.local(), ks_name, tag);
+            return check_snapshot_not_exist(ks_name, tag);
         }).then([this, tag, keyspace_names] {
             return _db.invoke_on_all([tag = std::move(tag), keyspace_names] (database& db) {
                 return parallel_for_each(keyspace_names, [&db, tag = std::move(tag)] (auto& ks_name) {
@@ -111,7 +111,7 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
     }
 
     return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), tables = std::move(tables), tag = std::move(tag)] {
-        return check_snapshot_not_exist(_db.local(), ks_name, tag).then([this, ks_name, tables = std::move(tables), tag] {
+        return check_snapshot_not_exist(ks_name, tag).then([this, ks_name, tables = std::move(tables), tag] {
             return do_with(std::vector<sstring>(std::move(tables)),[this, ks_name, tag](const std::vector<sstring>& tables) {
                 return do_for_each(tables, [ks_name, tag, this] (const sstring& table_name) {
                     if (table_name.find(".") != sstring::npos) {
