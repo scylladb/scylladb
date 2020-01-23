@@ -910,9 +910,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, stats).then([this, &client_state, &proxy] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(previous_item);
                 if (!m) {
-                    // FIXME: for better performance, return api_error instead of
-                    // an exception future containing it. see issue #5472.
-                    return make_exception_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
+                    return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
                 }
                 return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
                     // Without special options on what to return, all these
@@ -939,9 +937,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             {timeout, empty_service_permit(), client_state, client_state.get_trace_state()},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([read_command] (bool is_applied) {
         if (!is_applied) {
-            // FIXME: for better performance, return api_error instead of
-            // an exception future containing it. see issue #5472.
-            return make_exception_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
+            return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
         }
         return make_ready_future<executor::request_return_type>(json_string(""));
     });
