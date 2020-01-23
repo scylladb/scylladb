@@ -84,6 +84,8 @@ public:
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;
     uint64_t reads_before_write = 0;
+    uint64_t write_using_lwt = 0;
+    uint64_t shard_bounce_for_lwt = 0;
     // CQL-derived stats
     cql3::cql_stats cql_stats;
 private:

@@ -30,6 +30,10 @@
 #include "serialization.hh"
 #include "base64.hh"
 #include <stdexcept>
+#include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
+
+#include "expressions_eval.hh"
 
 namespace alternator {
 
@@ -234,7 +238,7 @@ static bool is_set_of(const rjson::value& type1, const rjson::value& type2) {
 }
 
 // Check if two JSON-encoded values match with the CONTAINS relation
-static bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
+bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
     if (!v1) {
         return false;
     }
@@ -304,6 +308,19 @@ static bool check_IN(const rjson::value* val, const rjson::value& array) {
         }
     }
     return have_match;
+}
+
+// Another variant of check_IN, this one for ConditionExpression. It needs to
+// check whether the first element in the given vector is equal to any of the
+// others.
+static bool check_IN(const std::vector<rjson::value>& array) {
+    const rjson::value* first = &array[0];
+    for (unsigned i = 1; i < array.size(); i++) {
+        if (check_EQ(first, array[i])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool check_NULL(const rjson::value* val) {
@@ -505,16 +522,15 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
     }
 }
 
-// Verify that the existing values of the item (previous_item) match the
+// Check if the existing values of the item (previous_item) match the
 // conditions given by the Expected and ConditionalOperator parameters
 // (if they exist) in the request (an UpdateItem, PutItem or DeleteItem).
-// This function will throw a ConditionalCheckFailedException API error
-// if the values do not match the condition, or ValidationException if there
+// This function can throw an ValidationException API error if there
 // are errors in the format of the condition itself.
-void verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value>& previous_item) {
+bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value>& previous_item) {
     const rjson::value* expected = rjson::find(req, "Expected");
     if (!expected) {
-        return;
+        return true;
     }
     if (!expected->IsObject()) {
         throw api_error("ValidationException", "'Expected' parameter, if given, must be an object");
@@ -548,17 +564,121 @@ void verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value
         bool success = verify_expected_one(it->value, got);
         if (success && !require_all) {
             // When !require_all, one success is enough!
-            return;
+            return true;
         } else if (!success && require_all) {
             // When require_all, one failure is enough!
-            throw api_error("ConditionalCheckFailedException", "Failed condition.");
+            return false;
         }
     }
     // If we got here and require_all, none of the checks failed, so succeed.
     // If we got here and !require_all, all of the checks failed, so fail.
-    if (!require_all) {
-        throw api_error("ConditionalCheckFailedException", "None of ORed Expect conditions were successful.");
+    return require_all;
+}
+
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+bool calculate_primitive_condition(const parsed::primitive_condition& cond,
+        std::unordered_set<std::string>& used_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        const rjson::value& req,
+        schema_ptr schema,
+        const std::unique_ptr<rjson::value>& previous_item) {
+    std::vector<rjson::value> calculated_values;
+    calculated_values.reserve(cond._values.size());
+    for (const parsed::value& v : cond._values) {
+        calculated_values.push_back(calculate_value(v,
+                cond._op == parsed::primitive_condition::type::VALUE ?
+                        calculate_value_caller::ConditionExpressionAlone :
+                        calculate_value_caller::ConditionExpression,
+                rjson::find(req, "ExpressionAttributeValues"),
+                used_attribute_names, used_attribute_values,
+                req, schema, previous_item));
     }
+    switch (cond._op) {
+    case parsed::primitive_condition::type::BETWEEN:
+        if (calculated_values.size() != 3) {
+            // Shouldn't happen unless we have a bug in the parser
+            throw std::logic_error(format("Wrong number of values {} in BETWEEN primitive_condition", cond._values.size()));
+        }
+        return check_BETWEEN(&calculated_values[0], calculated_values[1], calculated_values[2]);
+    case parsed::primitive_condition::type::IN:
+        return check_IN(calculated_values);
+    case parsed::primitive_condition::type::VALUE:
+        if (calculated_values.size() != 1) {
+            // Shouldn't happen unless we have a bug in the parser
+            throw std::logic_error(format("Unexpected values in primitive_condition", cond._values.size()));
+        }
+        // Unwrap the boolean wrapped as the value (if it is a boolean)
+        if (calculated_values[0].IsObject() && calculated_values[0].MemberCount() == 1) {
+            auto it = calculated_values[0].MemberBegin();
+            if (it->name == "BOOL" && it->value.IsBool()) {
+                return it->value.GetBool();
+            }
+        }
+        throw api_error("ValidationException",
+                format("ConditionExpression: condition results in a non-boolean value: {}",
+                        calculated_values[0]));
+    default:
+        // All the rest of the operators have exactly two parameters (and unless
+        // we have a bug in the parser, that's what we have in the parsed object:
+        if (calculated_values.size() != 2) {
+            throw std::logic_error(format("Wrong number of values {} in primitive_condition object", cond._values.size()));
+        }
+    }
+    switch (cond._op) {
+    case parsed::primitive_condition::type::EQ:
+        return check_EQ(&calculated_values[0], calculated_values[1]);
+    case parsed::primitive_condition::type::NE:
+        return check_NE(&calculated_values[0], calculated_values[1]);
+    case parsed::primitive_condition::type::GT:
+        return check_compare(&calculated_values[0], calculated_values[1], cmp_gt{});
+    case parsed::primitive_condition::type::GE:
+        return check_compare(&calculated_values[0], calculated_values[1], cmp_ge{});
+    case parsed::primitive_condition::type::LT:
+        return check_compare(&calculated_values[0], calculated_values[1], cmp_lt{});
+    case parsed::primitive_condition::type::LE:
+        return check_compare(&calculated_values[0], calculated_values[1], cmp_le{});
+    default:
+        // Shouldn't happen unless we have a bug in the parser
+        throw std::logic_error(format("Unknown type {} in primitive_condition object", (int)(cond._op)));
+    }
+}
+
+// Check if the existing values of the item (previous_item) match the
+// conditions given by the given parsed ConditionExpression.
+bool verify_condition_expression(
+        const parsed::condition_expression& condition_expression,
+        std::unordered_set<std::string>& used_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        const rjson::value& req,
+        schema_ptr schema,
+        const std::unique_ptr<rjson::value>& previous_item) {
+    if (condition_expression.empty()) {
+        return true;
+    }
+    bool ret = std::visit(overloaded {
+        [&] (const parsed::primitive_condition& cond) -> bool {
+            return calculate_primitive_condition(cond, used_attribute_values,
+                    used_attribute_names, req, schema, previous_item);
+        },
+        [&] (const parsed::condition_expression::condition_list& list) -> bool {
+            auto verify_condition = [&] (const parsed::condition_expression& e) {
+                return verify_condition_expression(e, used_attribute_values,
+                        used_attribute_names, req, schema, previous_item);
+            };
+            switch (list.op) {
+            case '&':
+                return boost::algorithm::all_of(list.conditions, verify_condition);
+            case '|':
+                return boost::algorithm::any_of(list.conditions, verify_condition);
+            default:
+                // Shouldn't happen unless we have a bug in the parser
+                throw std::logic_error("bad operator in condition_list");
+            }
+        }
+    }, condition_expression._expression);
+    return condition_expression._negated ? !ret : ret;
 }
 
 }

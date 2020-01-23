@@ -36,6 +36,6 @@ public:
 
 parsed::update_expression parse_update_expression(std::string query);
 std::vector<parsed::path> parse_projection_expression(std::string query);
-
+parsed::condition_expression parse_condition_expression(std::string query);
 
 } /* namespace alternator */

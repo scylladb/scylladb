@@ -65,6 +65,15 @@ parse_projection_expression(std::string query) {
     }
 }
 
+parsed::condition_expression
+parse_condition_expression(std::string query) {
+    try {
+        return do_with_parser(query,  std::mem_fn(&expressionsParser::condition_expression));
+    } catch (...) {
+        throw expressions_syntax_error(format("Failed parsing ConditionExpression '{}': {}", query, std::current_exception()));
+    }
+}
+
 template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
@@ -93,6 +102,28 @@ void update_expression::append(update_expression other) {
     seen_add |= other.seen_add;
     seen_del |= other.seen_del;
 }
+
+void condition_expression::append(condition_expression&& a, char op) {
+    std::visit(overloaded {
+        [&] (condition_list& x) {
+            // If 'a' has a single condition, we could, instead of inserting
+            // it insert its single condition (possibly negated if a._negated)
+            // But considering it we don't evaluate these expressions many
+            // times, this optimization is not worth extra code complexity.
+            if (!x.conditions.empty() && x.op != op) {
+                // Shouldn't happen unless we have a bug in the parser
+                throw std::logic_error("condition_expression::append called with mixed operators");
+            }
+            x.conditions.push_back(std::move(a));
+            x.op = op;
+        },
+        [&] (primitive_condition& x) {
+            // Shouldn't happen unless we have a bug in the parser
+            throw std::logic_error("condition_expression::append called on primitive_condition");
+        }
+    }, _expression);
+}
+
 
 } // namespace parsed
 } // namespace alternator

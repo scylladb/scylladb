@@ -21,6 +21,10 @@ DynamoDB API requests.
 For example., "`--alternator-port=8000`" on the command line will run
 Alternator on port 8000 - the traditional port used by DynamoDB.
 
+Alternator uses Scylla's LWT feature, which is currently considered
+experimental and needs to be seperately enabled as well, e.g. with the
+"`--experimental=on`" option.
+
 By default, Scylla listens on this port on all network interfaces.
 To listen only on a specific interface, pass also an "`alternator-address`"
 option.
@@ -72,16 +76,15 @@ progresses and compatibility continues to improve.
 ### Item Operations
 * GetItem: Support almost complete except that projection expressions can
   only ask for top-level attributes.
-* PutItem: Does not yet support conditional expressions (to only add an item
-  if some condition is true), nor return values (optional return of pre-put
-  content).
-* UpdateItem: Like PutItem does not yet support conditional expression nor
-  return values. Read-modify-write operations such as `SET a=b`,
-  `SET a=if_not_exist(a,bal)`, or `SET a=a+1, are supported but not protected
-  against concurrent operations. Nested documents are supported but updates
-  to nested attributes are not (e.g., `SET a.b[3].c=val`).
-* DeleteItem: Mostly works, but again does not support conditional expression
-  or return values.
+* PutItem: Support almost complete except that condition expressions can
+  only refer to to-level attributes, and return values (optional return of
+  pre-put content) not yet supported.
+* UpdateItem: Like PutItem does not yet support return values. Nested
+  documents are supported but updates to nested attributes are not (e.g.,
+  `SET a.b[3].c=val`), and neither are nested attributes in condition
+  expressions.
+* DeleteItem: Mostly works, but again does not support nested attributes
+  in condition expressions, or return values.
 ### Batch Operations
 * BatchGetItem: Almost complete except that projection expressions can only
   ask for top-level attributes.
