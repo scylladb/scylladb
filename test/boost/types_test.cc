@@ -61,6 +61,12 @@ BOOST_AUTO_TEST_CASE(test_value_cast) {
     BOOST_REQUIRE_EQUAL(v1, "");
 }
 
+BOOST_AUTO_TEST_CASE(test_null_is_not_empty) {
+    data_value empty(sstring(""));
+    data_value null = data_value::make_null(utf8_type);
+    BOOST_REQUIRE(empty != null);
+}
+
 BOOST_AUTO_TEST_CASE(test_bytes_type_string_conversions) {
     BOOST_REQUIRE(bytes_type->equal(bytes_type->from_string("616263646566"), bytes_type->decompose(data_value(bytes{"abcdef"}))));
 }

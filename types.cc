@@ -2599,7 +2599,16 @@ bytes abstract_type::decompose(const data_value& value) const {
 }
 
 bool operator==(const data_value& x, const data_value& y) {
-    return x._type == y._type && x._type->equal(x._type->decompose(x), y._type->decompose(y));
+    if (x._type != y._type) {
+        return false;
+    }
+    if (x.is_null() && y.is_null()) {
+        return true;
+    }
+    if (x.is_null() || y.is_null()) {
+        return false;
+    }
+    return x._type->equal(x.serialize(), y.serialize());
 }
 
 size_t data_value::serialized_size() const {
