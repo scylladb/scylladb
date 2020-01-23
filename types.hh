@@ -401,7 +401,7 @@ public:
     size_t serialized_size() const;
     void serialize(bytes::iterator& out) const;
     bytes serialize() const;
-    friend inline bool operator==(const data_value& x, const data_value& y);
+    friend bool operator==(const data_value& x, const data_value& y);
     friend inline bool operator!=(const data_value& x, const data_value& y);
     friend class abstract_type;
     static data_value make_null(data_type type) {
@@ -648,10 +648,7 @@ public:
     friend class abstract_type;
 };
 
-inline bool operator==(const data_value& x, const data_value& y)
-{
-     return x._type == y._type && x._type->equal(x._type->decompose(x), y._type->decompose(y));
-}
+bool operator==(const data_value& x, const data_value& y);
 
 inline bool operator!=(const data_value& x, const data_value& y)
 {

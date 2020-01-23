@@ -2598,6 +2598,10 @@ bytes abstract_type::decompose(const data_value& value) const {
     return b;
 }
 
+bool operator==(const data_value& x, const data_value& y) {
+    return x._type == y._type && x._type->equal(x._type->decompose(x), y._type->decompose(y));
+}
+
 size_t data_value::serialized_size() const {
     if (!_value) {
         return 0;
