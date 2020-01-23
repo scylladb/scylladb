@@ -40,8 +40,9 @@ row_assertion::matches(const query::result_set_row& row) const {
 
         const data_value* val = row.get_data_value(ss_name);
         if (val == nullptr) {
-            // The value is not present. A null value that is present is returned as a null data_value.
-            return false;
+            if (!value.is_null()) {
+                return false;
+            }
         } else {
             if (*val != value) {
                 return false;
