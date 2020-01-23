@@ -118,13 +118,6 @@ const query::partition_slice& view_info::partition_slice() const {
     return *_partition_slice;
 }
 
-const dht::partition_range_vector& view_info::partition_ranges() const {
-    if (!_partition_ranges) {
-        _partition_ranges = select_statement().get_restrictions()->get_partition_key_ranges(cql3::query_options({ }));
-    }
-    return *_partition_ranges;
-}
-
 const column_definition* view_info::view_column(const schema& base, column_id base_id) const {
     // FIXME: Map base column_ids to view_column_ids, which can be something like
     // a boost::small_vector where the position is the base column_id, and the
