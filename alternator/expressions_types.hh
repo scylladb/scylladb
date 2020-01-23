@@ -162,5 +162,58 @@ public:
     }
 };
 
+// A primitive_condition is a condition expression involving one condition,
+// while the full condition_expression below adds boolean logic over these
+// primitive conditions.
+// The supported primitive conditions are:
+// 1. Binary operators - v1 OP v2, where OP is =, <>, <, <=, >, or >= and
+//    v1 and v2 are values - from the item (an attribute path), the query
+//    (a ":val" reference), or a function of the the above (only the size()
+//    function is supported).
+// 2. Ternary operator - v1 BETWEEN v2 and v3 (means v1 >= v2 AND v1 <= v3).
+// 3. N-ary operator - v1 IN ( v2, v3, ... )
+// 4. A single function call (attribute_exists etc.). The parser actually
+//    accepts a more general "value" here but later stages reject a value
+//    which is not a function call (because DynamoDB does it too).
+class primitive_condition {
+public:
+    enum class type {
+        UNDEFINED, VALUE, EQ, NE, LT, LE, GT, GE, BETWEEN, IN
+    };
+    type _op = type::UNDEFINED;
+    std::vector<value> _values;
+    void set_operator(type op) {
+        _op = op;
+    }
+    void add_value(value&& v) {
+        _values.push_back(std::move(v));
+    }
+    bool empty() const {
+        return _op == type::UNDEFINED;
+    }
+};
+
+class condition_expression {
+public:
+    bool _negated = false; // If true, the entire condition is negated
+    struct condition_list {
+        char op = '|'; // '&' or '|'
+        std::vector<condition_expression> conditions;
+    };
+    std::variant<primitive_condition, condition_list> _expression = condition_list();
+
+    void set_primitive(primitive_condition&& p) {
+        _expression = std::move(p);
+    }
+    void append(condition_expression&& c, char op);
+    void apply_not() {
+        _negated = !_negated;
+    }
+    bool empty() const {
+        return std::holds_alternative<condition_list>(_expression) &&
+               std::get<condition_list>(_expression).conditions.empty();
+    }
+};
+
 } // namespace parsed
 } // namespace alternator
