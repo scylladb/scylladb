@@ -77,3 +77,45 @@ BOOST_AUTO_TEST_CASE(test_make_random_uuid) {
     std::sort(uuids.begin(), uuids.end());
     BOOST_CHECK(std::unique(uuids.begin(), uuids.end()) == uuids.end());
 }
+
+BOOST_AUTO_TEST_CASE(test_get_time_uuid) {
+    using namespace std::chrono;
+
+    auto uuid = utils::UUID_gen::get_time_UUID();
+    BOOST_CHECK(uuid.is_timestamp());
+
+    auto tp = system_clock::now();
+    uuid = utils::UUID_gen::get_time_UUID(tp);
+    BOOST_CHECK(uuid.is_timestamp());
+
+    auto millis = duration_cast<milliseconds>(tp.time_since_epoch()).count();
+    uuid = utils::UUID_gen::get_time_UUID(millis);
+    BOOST_CHECK(uuid.is_timestamp());
+
+    auto unix_timestamp = utils::UUID_gen::unix_timestamp(uuid);
+    BOOST_CHECK(unix_timestamp == millis);
+}
+
+BOOST_AUTO_TEST_CASE(test_min_time_uuid) {
+    using namespace std::chrono;
+
+    auto tp = system_clock::now();
+    auto millis = duration_cast<milliseconds>(tp.time_since_epoch()).count();
+    auto uuid = utils::UUID_gen::min_time_UUID(millis);
+    BOOST_CHECK(uuid.is_timestamp());
+
+    auto unix_timestamp = utils::UUID_gen::unix_timestamp(uuid);
+    BOOST_CHECK(unix_timestamp == millis);
+}
+
+BOOST_AUTO_TEST_CASE(test_max_time_uuid) {
+    using namespace std::chrono;
+
+    auto tp = system_clock::now();
+    auto millis = duration_cast<milliseconds>(tp.time_since_epoch()).count();
+    auto uuid = utils::UUID_gen::max_time_UUID(millis);
+    BOOST_CHECK(uuid.is_timestamp());
+
+    auto unix_timestamp = utils::UUID_gen::unix_timestamp(uuid);
+    BOOST_CHECK(unix_timestamp == millis);
+}
