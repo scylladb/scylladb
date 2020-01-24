@@ -94,6 +94,8 @@ protected:
     query::partition_slice::option_set _opts;
     cql_stats& _stats;
     const ks_selector _ks_sel;
+    bool _full_scan = false;
+    bool _full_scan_no_bypass_cache = false;
 protected :
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options) const;
@@ -299,7 +301,6 @@ private:
 
     query::partition_slice get_partition_slice_for_local_index_posting_list(const query_options& options) const;
     query::partition_slice get_partition_slice_for_global_index_posting_list(const query_options& options) const;
-
 };
 
 }

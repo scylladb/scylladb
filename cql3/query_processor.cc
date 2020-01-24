@@ -413,6 +413,16 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                             sm::description("Counts the number of SELECT query executions with ALLOW FILTERING option.")),
 
                     sm::make_derive(
+                            "select_full_scan",
+                            _cql_stats.select_full_scan,
+                            sm::description("Counts the number of SELECT query executions requiring full scan.")),
+
+                    sm::make_derive(
+                            "select_full_scan_no_bypass_cache",
+                            _cql_stats.select_full_scan_no_bypass_cache,
+                            sm::description("Counts the number of SELECT query executions requiring full scan without BYPASS CACHE option.")),
+
+                    sm::make_derive(
                             "authorized_prepared_statements_cache_evictions",
                             [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_cache_evictions; },
                             sm::description("Counts the number of authenticated prepared statements cache entries evictions.")),
