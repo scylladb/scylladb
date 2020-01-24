@@ -405,7 +405,12 @@ query_processor::query_processor(service::storage_proxy& proxy, database& db, se
                     sm::make_derive(
                             "select_bypass_caches",
                             _cql_stats.select_bypass_caches,
-                            sm::description("Counts the number of SELECT statements with BYPASS CACHE option.")),
+                            sm::description("Counts the number of SELECT query executions with BYPASS CACHE option.")),
+
+                    sm::make_derive(
+                            "select_allow_filtering",
+                            _cql_stats.select_allow_filtering,
+                            sm::description("Counts the number of SELECT query executions with ALLOW FILTERING option.")),
 
                     sm::make_derive(
                             "authorized_prepared_statements_cache_evictions",

@@ -314,6 +314,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     ++_stats.query_cnt(src_sel, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
 
     _stats.select_bypass_caches += _parameters->bypass_cache();
+    _stats.select_allow_filtering += _parameters->allow_filtering();
 
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
         make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, utils::UUID(), options.get_timestamp(state));
@@ -725,7 +726,7 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
                                                            ::shared_ptr<term> per_partition_limit,
                                                            cql_stats &stats)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
-{}
+{ }
 
 ::shared_ptr<cql3::statements::select_statement>
 indexed_table_select_statement::prepare(database& db,

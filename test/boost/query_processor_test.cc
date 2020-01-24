@@ -294,3 +294,28 @@ SEASTAR_TEST_CASE(test_query_counters) {
         BOOST_CHECK_EQUAL(expected, get_query_metrics());
     });
 }
+
+SEASTAR_TEST_CASE(test_select_full_scan_metrics) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        qp.execute_internal("create table ks.fsm (pk int, ck int, c1 int, c2 int, PRIMARY KEY(pk, ck));").get();
+        qp.execute_internal("create index on ks.fsm (c1);").get();
+        qp.execute_internal("insert into ks.fsm (pk, ck, c1, c2) values (?,?,?,?);", { 1, 1, 1, 1 }).get();
+        auto stat_bc1 = qp.get_cql_stats().select_bypass_caches;
+        qp.execute_internal("select * from ks.fsm bypass cache;").get();
+        BOOST_CHECK_EQUAL(stat_bc1 + 1, qp.get_cql_stats().select_bypass_caches);
+
+        auto process_prepared = [&e](const sstring& query, clevel cl) mutable {
+            e.prepare(query).then([&e, cl](const auto& id) {
+                return e.execute_prepared(id, {}, cl);})
+            .get();
+        };
+        auto stat_bc2 = qp.get_cql_stats().select_bypass_caches;
+        process_prepared("select * from ks.fsm bypass cache", clevel::ALL);
+        BOOST_CHECK_EQUAL(stat_bc2 + 1, qp.get_cql_stats().select_bypass_caches);
+
+        auto stat_ac1 = qp.get_cql_stats().select_allow_filtering;
+        qp.execute_internal("select * from ks.fsm where c2 = 1 allow filtering;").get();
+        BOOST_CHECK_EQUAL(stat_ac1 + 1, qp.get_cql_stats().select_allow_filtering);
+    });
+}
