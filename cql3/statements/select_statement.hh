@@ -96,6 +96,7 @@ protected:
     const ks_selector _ks_sel;
     bool _full_scan = false;
     bool _full_scan_no_bypass_cache = false;
+    bool _range_scan = false;
 protected :
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options) const;

@@ -354,5 +354,15 @@ SEASTAR_TEST_CASE(test_select_full_scan_metrics) {
         auto stat_fs6 = qp.get_cql_stats().select_full_scan;
         qp.execute_internal("select * from system.views_builds_in_progress;").get();
         BOOST_CHECK_EQUAL(stat_fs6, qp.get_cql_stats().select_full_scan);
+
+        // Range token on PK, full scan
+        auto stat_rs1 = qp.get_cql_stats().select_partition_range_scan;
+        qp.execute_internal("select * from ks.fsm where token(pk) > 100;").get();
+        BOOST_CHECK_EQUAL(stat_rs1 + 1, qp.get_cql_stats().select_partition_range_scan);
+
+        // Token on PK equals, no full scan
+        auto stat_rs2 = qp.get_cql_stats().select_partition_range_scan;
+        qp.execute_internal("select * from ks.fsm where token(pk) = 1;").get();
+        BOOST_CHECK_EQUAL(stat_rs2, qp.get_cql_stats().select_partition_range_scan);
     });
 }
