@@ -46,7 +46,7 @@ class result_set_builder {
 public:
     // Keep slice live as long as the builder is used.
     result_set_builder(schema_ptr schema, const partition_slice& slice);
-    result_set build() const;
+    result_set build();
     void accept_new_partition(const partition_key& key, uint32_t row_count);
     void accept_new_partition(uint32_t row_count);
     void accept_new_row(const clustering_key& key, const result_row_view& static_row, const result_row_view& row);
@@ -78,8 +78,8 @@ result_set_builder::result_set_builder(schema_ptr schema, const partition_slice&
     : _schema{schema}, _slice(slice)
 { }
 
-result_set result_set_builder::build() const {
-    return { _schema, _rows };
+result_set result_set_builder::build() {
+    return { _schema, std::move(_rows) };
 }
 
 void result_set_builder::accept_new_partition(const partition_key& key, uint32_t row_count)
