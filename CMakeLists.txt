@@ -5,12 +5,24 @@
 cmake_minimum_required(VERSION 3.7)
 project(scylla)
 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  message(STATUS "Setting build type to 'Release' as none was specified.")
+  set(CMAKE_BUILD_TYPE "Release" CACHE
+      STRING "Choose the type of build." FORCE)
+  # Set the possible values of build type for cmake-gui
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+    "Debug" "Release" "Dev" "Sanitize")
+endif()
+
+if(CMAKE_BUILD_TYPE)
+    string(TOLOWER "${CMAKE_BUILD_TYPE}" BUILD_TYPE)
+else()
+    set(BUILD_TYPE "release")
+endif()
+
 if (NOT DEFINED FOR_IDE AND NOT DEFINED ENV{FOR_IDE} AND NOT DEFINED ENV{CLION_IDE})
     message(FATAL_ERROR "This CMakeLists.txt file is only valid for use in IDEs, please define FOR_IDE to acknowledge this.")
 endif()
-
-# Default value. A more accurate list is populated through `pkg-config` below if `seastar.pc` is available.
-set(SEASTAR_INCLUDE_DIRS "seastar")
 
 # These paths are always available, since they're included in the repository. Additional DPDK headers are placed while
 # Seastar is built, and are captured in `SEASTAR_INCLUDE_DIRS` through parsing the Seastar pkg-config file (below).
@@ -22,8 +34,13 @@ set(SEASTAR_DPDK_INCLUDE_DIRS
 
 find_package(PkgConfig REQUIRED)
 
-set(ENV{PKG_CONFIG_PATH} "${CMAKE_SOURCE_DIR}/seastar/build/release:$ENV{PKG_CONFIG_PATH}")
+set(ENV{PKG_CONFIG_PATH} "${CMAKE_SOURCE_DIR}/build/${BUILD_TYPE}/seastar:$ENV{PKG_CONFIG_PATH}")
 pkg_check_modules(SEASTAR seastar)
+
+if(NOT SEASTAR_INCLUDE_DIRS)
+    # Default value. A more accurate list is populated through `pkg-config` below if `seastar.pc` is available.
+    set(SEASTAR_INCLUDE_DIRS "seastar/include")
+endif()
 
 find_package(Boost COMPONENTS filesystem program_options system thread)
 
@@ -70,7 +87,7 @@ scan_scylla_source_directories(
           seastar/json
           seastar/net
           seastar/rpc
-          seastar/tests
+          seastar/testing
           seastar/util)
 
 scan_scylla_source_directories(
@@ -106,7 +123,7 @@ scan_scylla_source_directories(
 scan_scylla_source_directories(
         VAR SCYLLA_GEN_SOURCE_FILES
         RECURSIVE
-        PATHS build/release/gen)
+        PATHS build/${BUILD_TYPE}/gen)
 
 set(SCYLLA_SOURCE_FILES
         ${SCYLLA_ROOT_SOURCE_FILES}
@@ -139,4 +156,4 @@ target_include_directories(scylla PUBLIC
         ${Boost_INCLUDE_DIRS}
         xxhash
         libdeflate
-        build/release/gen)
+        build/${BUILD_TYPE}/gen)
