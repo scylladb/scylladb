@@ -236,11 +236,11 @@ static int64_t long_token(dht::token_view t) {
         return std::numeric_limits<long>::min();
     }
 
-    if (t._data.size() != sizeof(int64_t)) {
-        throw runtime_exception(format("Invalid token. Should have size {:d}, has size {:d}\n", sizeof(int64_t), t._data.size()));
+    if (t._data.get().size() != sizeof(int64_t)) {
+        throw runtime_exception(format("Invalid token. Should have size {:d}, has size {:d}\n", sizeof(int64_t), t._data.get().size()));
     }
 
-    auto ptr = t._data.begin();
+    auto ptr = t._data.get().begin();
     auto lp = unaligned_cast<const int64_t *>(ptr);
     return net::ntoh(*lp);
 }

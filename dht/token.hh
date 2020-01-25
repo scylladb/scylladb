@@ -24,6 +24,9 @@
 #include "bytes.hh"
 #include "utils/managed_bytes.hh"
 
+#include <fmt/format.h>
+#include <array>
+#include <functional>
 #include <utility>
 
 namespace dht {
@@ -39,9 +42,9 @@ enum class token_kind {
 class token_view {
 public:
     token_kind _kind;
-    bytes_view _data;
+    std::reference_wrapper<const std::array<uint8_t, 8>> _data;
 
-    token_view(token_kind kind, bytes_view data) : _kind(kind), _data(data) {}
+    token_view(token_kind kind, const std::array<uint8_t, 8>& data) : _kind(kind), _data(data) {}
     explicit token_view(const token& token);
 
     bool is_minimum() const {
@@ -65,12 +68,26 @@ public:
     //     [0x80] == 0.5
     //     [0x00, 0x80] == 1/512
     //     [0xff, 0x80] == 1 - 1/512
-    managed_bytes _data;
+    std::array<uint8_t, 8> _data;
 
     token() : _kind(kind::before_all_keys) {
     }
 
-    token(kind k, managed_bytes d) : _kind(std::move(k)), _data(std::move(d)) {
+    token(kind k, const std::array<uint8_t, 8>& d) : _kind(std::move(k)), _data(d) {
+    }
+
+    token(kind k, const bytes& b) : _kind(std::move(k)) {
+        if (b.size() != 8) {
+            throw std::runtime_error(fmt::format("Wrong token bytes size: expected 8 but got {}", b.size()));
+        }
+        std::copy_n(b.begin(), 8, _data.begin());
+    }
+
+    token(kind k, bytes_view b) : _kind(std::move(k)) {
+        if (b.size() != 8) {
+            throw std::runtime_error(fmt::format("Wrong token bytes size: expected 8 but got {}", b.size()));
+        }
+        std::copy_n(b.begin(), 8, _data.begin());
     }
 
     bool is_minimum() const {
@@ -82,11 +99,11 @@ public:
     }
 
     size_t external_memory_usage() const {
-        return _data.external_memory_usage();
+        return 0;
     }
 
     size_t memory_usage() const {
-        return sizeof(token) + external_memory_usage();
+        return sizeof(token);
     }
 
     explicit token(token_view v) : _kind(v._kind), _data(v._data) {}
@@ -94,9 +111,13 @@ public:
     operator token_view() const {
         return token_view(*this);
     }
+
+    bytes_view data() const {
+        return bytes_view(reinterpret_cast<const int8_t*>(_data.data()), _data.size());
+    }
 };
 
-inline token_view::token_view(const token& token) : _kind(token._kind), _data(bytes_view(token._data)) {}
+inline token_view::token_view(const token& token) : _kind(token._kind), _data(token._data) {}
 
 const token& minimum_token();
 const token& maximum_token();

@@ -44,7 +44,7 @@ debug(Args&&... args) {
 
 static dht::token token_from_long(uint64_t value) {
     auto t = net::hton(value);
-    bytes b(bytes::initialized_later(), 8);
+    std::array<uint8_t, 8> b;
     std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
     return { dht::token::kind::key, std::move(b) };
 }

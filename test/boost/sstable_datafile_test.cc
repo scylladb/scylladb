@@ -5020,7 +5020,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_stop_tracking_compaction) {
 
 static dht::token token_from_long(int64_t value) {
     auto t = net::hton(value);
-    bytes b(bytes::initialized_later(), 8);
+    std::array<uint8_t, 8> b;
     std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
     return { dht::token::kind::key, std::move(b) };
 }

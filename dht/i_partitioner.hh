@@ -859,7 +859,7 @@ struct hash<dht::token> {
         return hash_large_token(b);
     }
 private:
-    size_t hash_large_token(const managed_bytes& b) const;
+    size_t hash_large_token(const std::array<uint8_t, 8>& b) const;
 };
 
 template <>

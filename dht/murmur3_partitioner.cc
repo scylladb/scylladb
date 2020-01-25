@@ -82,7 +82,7 @@ murmur3_partitioner::get_token(uint64_t value) const {
     // indicator.
     // FIXME: will this require a repair when importing a database?
     auto t = net::hton(normalize(value));
-    bytes b(bytes::initialized_later(), 8);
+    std::array<uint8_t, 8> b;
     std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
     return token{token::kind::key, std::move(b)};
 }
@@ -110,11 +110,7 @@ inline int64_t long_token(token_view t) {
         return std::numeric_limits<long>::min();
     }
 
-    if (t._data.size() != sizeof(int64_t)) {
-        throw runtime_exception(format("Invalid token. Should have size {:d}, has size {:d}\n", sizeof(int64_t), t._data.size()));
-    }
-
-    auto ptr = t._data.begin();
+    auto ptr = t._data.get().begin();
     auto lp = unaligned_cast<const int64_t *>(ptr);
     return net::ntoh(*lp);
 }

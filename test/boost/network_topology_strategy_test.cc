@@ -135,7 +135,7 @@ void endpoints_check(
 
 auto d2t = [](double d) {
     unsigned long l = net::hton(static_cast<unsigned long>(d*(std::numeric_limits<unsigned long>::max())));
-    std::array<char, 8> a;
+    std::array<uint8_t, 8> a;
     memcpy(a.data(), &l, 8);
     return a;
 };
@@ -154,8 +154,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
 
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;
-        token t1{dht::token::kind::key,
-             {(int8_t*)d2t(cur_point1 / ring_points.size()).data(), 8}};
+        token t1(dht::token::kind::key, d2t(cur_point1 / ring_points.size()));
         uint64_t cache_hit_count = ars_ptr->get_cache_hits_count();
         auto endpoints1 = ars_ptr->get_natural_endpoints(t1);
 
@@ -172,8 +171,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         //
         cache_hit_count = ars_ptr->get_cache_hits_count();
         double cur_point2 = rp.point - 0.2;
-        token t2{dht::token::kind::key,
-             {(int8_t*)d2t(cur_point2 / ring_points.size()).data(), 8}};
+        token t2(dht::token::kind::key, d2t(cur_point2 / ring_points.size()));
         auto endpoints2 = ars_ptr->get_natural_endpoints(t2);
 
         endpoints_check(ars_ptr, endpoints2);
@@ -208,9 +206,7 @@ future<> simple_test() {
         // Initialize the token_metadata
         for (unsigned i = 0; i < ring_points.size(); i++) {
             tm->update_normal_token(
-                {dht::token::kind::key,
-                 {(int8_t*)d2t(ring_points[i].point / ring_points.size()).data(), 8}
-                },
+                {dht::token::kind::key, d2t(ring_points[i].point / ring_points.size())},
                 ring_points[i].host);
         }
 
@@ -300,8 +296,7 @@ future<> heavy_origin_test() {
                     ring_point rp = {token_point, address};
 
                     ring_points.emplace_back(rp);
-                    tokens[address].emplace(token{dht::token::kind::key,
-                            {(int8_t*)d2t(token_point / total_eps).data(), 8}});
+                    tokens[address].emplace(token{dht::token::kind::key, d2t(token_point / total_eps)});
 
                     nlogger.debug("adding node {} at {}", address, token_point);
 
