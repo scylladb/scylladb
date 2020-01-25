@@ -114,6 +114,7 @@ arch_packages=(
     base-devel
     filesystem
     git
+    glibc
     jsoncpp
     lua
     python-pyparsing
@@ -151,19 +152,19 @@ elif [ "$ID" == "arch" ]; then
     if [ "$EUID" -eq "0" ]; then
         pacman -Sy --needed --noconfirm "${arch_packages[@]}"
     else
-        echo "scylla: running without root. Skipping main dependencies (pacman)." 1>&2
+        echo "scylla: You now ran $0 as non-root. Run it again as root to execute the pacman part of the installation." 1>&2
     fi
 
     # aur
     if [ ! -x /usr/bin/antlr3 ]; then
         echo "Installing aur/antlr3..."
         if (( EUID == 0 )); then
-            echo "Running makepkg as root is not allowed as it can cause permanent, catastrophic damage to your system." 1>&2
+            echo "You now ran $0 as root. This can only update dependencies with pacman. Please run again it as non-root to complete the AUR part of the installation." 1>&2
             exit 1
         fi
         TEMP=$(mktemp -d)
         pushd "$TEMP" > /dev/null || exit 1
-        git clone https://aur.archlinux.org/antlr3.git
+        git clone --depth 1 https://aur.archlinux.org/antlr3.git
         cd antlr3 || exit 1
         makepkg -si
         popd > /dev/null || exit 1
@@ -171,12 +172,12 @@ elif [ "$ID" == "arch" ]; then
     if [ ! -f /usr/include/antlr3.hpp ]; then
         echo "Installing aur/antlr3-cpp-headers-git..."
         if (( EUID == 0 )); then
-            echo "Running makepkg as root is not allowed as it can cause permanent, catastrophic damage to your system." 1>&2
+            echo "You now ran $0 as root. This can only update dependencies with pacman. Please run again it as non-root to complete the AUR part of the installation." 1>&2
             exit 1
         fi
         TEMP=$(mktemp -d)
         pushd "$TEMP" > /dev/null || exit 1
-        git clone https://aur.archlinux.org/antlr3-cpp-headers-git.git
+        git clone --depth 1 https://aur.archlinux.org/antlr3-cpp-headers-git.git
         cd antlr3-cpp-headers-git || exit 1
         makepkg -si
         popd > /dev/null || exit 1
