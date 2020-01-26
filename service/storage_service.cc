@@ -2601,6 +2601,7 @@ future<bool> storage_service::is_initialized() {
     });
 }
 
+// Runs inside seastar::async context
 std::unordered_multimap<dht::token_range, inet_address> storage_service::get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint) {
     // First get all ranges the leaving endpoint is responsible for
     auto ranges = get_ranges_for_endpoint(keyspace_name, endpoint);
@@ -2612,6 +2613,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     // Find (for each range) all nodes that store replicas for these ranges as well
     auto metadata = _token_metadata.clone_only_token_map(); // don't do this in the loop! #7758
     for (auto& r : ranges) {
+        seastar::thread::maybe_yield();
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, metadata);
@@ -2634,6 +2636,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     // not in the currentReplicaEndpoints list, will be needing the
     // range.
     for (auto& r : ranges) {
+        seastar::thread::maybe_yield();
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp);
@@ -2705,6 +2708,7 @@ void storage_service::unbootstrap() {
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
+  return seastar::async([this, endpoint, notify_endpoint] {
     auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     auto my_address = get_broadcast_address();
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
@@ -2723,7 +2727,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
         streamer->add_rx_ranges(keyspace_name, std::move(ranges_per_endpoint));
     }
-    return streamer->stream_async().then_wrapped([this, streamer, notify_endpoint] (auto&& f) {
+    streamer->stream_async().then_wrapped([this, streamer, notify_endpoint] (auto&& f) {
         try {
             f.get();
             return this->send_replication_notification(notify_endpoint);
@@ -2733,7 +2737,8 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             return this->send_replication_notification(notify_endpoint);
         }
         return make_ready_future<>();
-    });
+    }).get();
+  });
 }
 
 // Runs inside seastar::async context
