@@ -294,3 +294,75 @@ SEASTAR_TEST_CASE(test_query_counters) {
         BOOST_CHECK_EQUAL(expected, get_query_metrics());
     });
 }
+
+SEASTAR_TEST_CASE(test_select_full_scan_metrics) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        qp.execute_internal("create table ks.fsm (pk int, ck int, c1 int, c2 int, PRIMARY KEY(pk, ck));").get();
+        qp.execute_internal("create index on ks.fsm (c1);").get();
+        qp.execute_internal("insert into ks.fsm (pk, ck, c1, c2) values (?,?,?,?);", { 1, 1, 1, 1 }).get();
+        auto stat_bc1 = qp.get_cql_stats().select_bypass_caches;
+        qp.execute_internal("select * from ks.fsm bypass cache;").get();
+        BOOST_CHECK_EQUAL(stat_bc1 + 1, qp.get_cql_stats().select_bypass_caches);
+
+        auto process_prepared = [&e](const sstring& query, clevel cl) mutable {
+            e.prepare(query).then([&e, cl](const auto& id) {
+                return e.execute_prepared(id, {}, cl);})
+            .get();
+        };
+        auto stat_bc2 = qp.get_cql_stats().select_bypass_caches;
+        process_prepared("select * from ks.fsm bypass cache", clevel::ALL);
+        BOOST_CHECK_EQUAL(stat_bc2 + 1, qp.get_cql_stats().select_bypass_caches);
+
+        auto stat_ac1 = qp.get_cql_stats().select_allow_filtering;
+        qp.execute_internal("select * from ks.fsm where c2 = 1 allow filtering;").get();
+        BOOST_CHECK_EQUAL(stat_ac1 + 1, qp.get_cql_stats().select_allow_filtering);
+
+        // Unrestricted PK, full scan without BYPASS CACHE
+        auto stat_fs1 = qp.get_cql_stats().select_full_scan;
+        auto stat_fsnb1 = qp.get_cql_stats().select_full_scan_no_bypass_cache;
+        qp.execute_internal("select * from ks.fsm;").get();
+        BOOST_CHECK_EQUAL(stat_fs1 + 1, qp.get_cql_stats().select_full_scan);
+        BOOST_CHECK_EQUAL(stat_fsnb1 + 1, qp.get_cql_stats().select_full_scan_no_bypass_cache);
+
+        // Unrestricted PK, full scan with   BYPASS CACHE
+        auto stat_fsnb2 = qp.get_cql_stats().select_full_scan_no_bypass_cache;
+        qp.execute_internal("select * from ks.fsm BYPASS CACHE;").get();
+        BOOST_CHECK_EQUAL(stat_fsnb2, qp.get_cql_stats().select_full_scan_no_bypass_cache);
+
+        // Restricted PK, no full scan
+        auto stat_fs2 = qp.get_cql_stats().select_full_scan;
+        qp.execute_internal("select * from ks.fsm where pk = 1;").get();
+        BOOST_CHECK_EQUAL(stat_fs2, qp.get_cql_stats().select_full_scan);
+
+        // Indexed on c1, no full scan
+        auto stat_fs3 = qp.get_cql_stats().select_full_scan;
+        qp.execute_internal("select * from ks.fsm where c1 = 1;").get();
+        BOOST_CHECK_EQUAL(stat_fs3, qp.get_cql_stats().select_full_scan);
+
+        // Filtered by ck but not filtered by pk
+        auto stat_fs4 = qp.get_cql_stats().select_full_scan;
+        qp.execute_internal("select * from ks.fsm where ck = 1 allow filtering;").get();
+        BOOST_CHECK_EQUAL(stat_fs4 + 1, qp.get_cql_stats().select_full_scan);
+
+        // Filtered by unindexed non-cluster column
+        auto stat_fs5 = qp.get_cql_stats().select_full_scan;
+        qp.execute_internal("select * from ks.fsm where c2 = 1 allow filtering;").get();
+        BOOST_CHECK_EQUAL(stat_fs5 + 1, qp.get_cql_stats().select_full_scan);
+
+        // System table full scan, not measured
+        auto stat_fs6 = qp.get_cql_stats().select_full_scan;
+        qp.execute_internal("select * from system.views_builds_in_progress;").get();
+        BOOST_CHECK_EQUAL(stat_fs6, qp.get_cql_stats().select_full_scan);
+
+        // Range token on PK, full scan
+        auto stat_rs1 = qp.get_cql_stats().select_partition_range_scan;
+        qp.execute_internal("select * from ks.fsm where token(pk) > 100;").get();
+        BOOST_CHECK_EQUAL(stat_rs1 + 1, qp.get_cql_stats().select_partition_range_scan);
+
+        // Token on PK equals, no full scan
+        auto stat_rs2 = qp.get_cql_stats().select_partition_range_scan;
+        qp.execute_internal("select * from ks.fsm where token(pk) = 1;").get();
+        BOOST_CHECK_EQUAL(stat_rs2, qp.get_cql_stats().select_partition_range_scan);
+    });
+}
