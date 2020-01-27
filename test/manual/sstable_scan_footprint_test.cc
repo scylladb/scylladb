@@ -49,13 +49,61 @@ thread_local std::default_random_engine local_random_engine;
 
 }
 
+namespace {
+
+void execute_reads(reader_concurrency_semaphore& sem, unsigned reads, unsigned concurrency, std::function<future<>(unsigned)> read) {
+    const reader_resources initial_res = sem.available_resources();
+    unsigned n = 0;
+    gate g;
+    std::exception_ptr e;
+
+    while (n < reads && !e) {
+        try {
+            // we wait indirectly via the gate
+            (void)with_gate(g, [reads, read, &n, concurrency] {
+                const auto start = n;
+                n = std::min(reads, n + concurrency);
+                return parallel_for_each(boost::irange(start, n), read);
+            }).handle_exception([&e, &sem, initial_res] (std::exception_ptr eptr) {
+                const auto res = sem.available_resources();
+                testlog.error("Read failed: {}", eptr);
+                testlog.trace("Reads remaining: count: {}/{}, memory: {}/{}, waiters: {}", (initial_res.count - res.count), initial_res.count,
+                        (initial_res.memory - res.memory), initial_res.memory, sem.waiters());
+                e = std::move(eptr);
+            });
+            thread::yield();
+        } catch (...) {
+            e = std::current_exception();
+        }
+
+        const auto res = sem.available_resources();
+        testlog.trace("Initiated reads: {}/{}, count: {}/{}, memory: {}/{}, waiters: {}", n, reads, (initial_res.count - res.count), initial_res.count,
+                (initial_res.memory - res.memory), initial_res.memory, sem.waiters());
+
+        if (sem.waiters()) {
+            testlog.trace("Waiting for queue to drain");
+            sem.wait_admission(1).get();
+        }
+    }
+
+    testlog.debug("Closing gate");
+    g.close().get();
+
+    if (e) {
+        std::rethrow_exception(e);
+    }
+}
+
+} // anonymous namespace
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
 
     app.add_options()
         ("enable-cache", "Enables cache")
         ("with-compression", "Generates compressed sstables")
-        ("reads", bpo::value<unsigned>()->default_value(100), "Concurrent reads")
+        ("reads", bpo::value<unsigned>()->default_value(100), "Total reads")
+        ("read-concurrency", bpo::value<unsigned>()->default_value(1), "Concurrency of reads, the amount of reads to fire at once")
         ("sstables", bpo::value<uint64_t>()->default_value(100), "")
         ("sstable-size", bpo::value<uint64_t>()->default_value(10000000), "")
         ("sstable-format", bpo::value<std::string>()->default_value("mc"), "Sstable format version to use during population")
@@ -87,6 +135,7 @@ int main(int argc, char** argv) {
             uint64_t sstable_size = app.configuration()["sstable-size"].as<uint64_t>();
             uint64_t sstables = app.configuration()["sstables"].as<uint64_t>();
             auto reads = app.configuration()["reads"].as<unsigned>();
+            auto read_concurrency = app.configuration()["read-concurrency"].as<unsigned>();
 
             env.execute_cql(format("{} WITH compression = {{ 'sstable_compression': '{}' }} "
                                    "AND compaction = {{'class' : 'NullCompactionStrategy'}};",
@@ -144,10 +193,14 @@ int main(int argc, char** argv) {
             testlog.info("Occupancy before: {}", prev_occupancy);
 
             testlog.info("Reading");
-            parallel_for_each(boost::irange(0u, reads), [&] (unsigned i) {
-                return env.execute_cql(format("select * from ks.test where pk = 0 and ck > {} limit 100;",
-                    tests::random::get_int(rows / 2))).discard_result();
-            }).get();
+            try {
+                execute_reads(tab.read_concurrency_semaphore(), reads, read_concurrency, [&] (unsigned i) {
+                    return env.execute_cql(format("select * from ks.test where pk = 0 and ck > {} limit 100;",
+                            tests::random::get_int(rows / 2))).discard_result();
+                });
+            } catch (...) {
+                testlog.error("Reads aborted due to exception: {}", std::current_exception());
+            }
 
             auto occupancy = logalloc::shard_tracker().occupancy();
             testlog.info("Occupancy after: {}", occupancy);
