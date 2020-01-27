@@ -64,12 +64,12 @@ public:
         literal(std::vector<shared_ptr<raw>> elements)
                 : _elements(std::move(elements)) {
         }
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override;
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override;
 
         virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override;
 
     private:
-        void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+        void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
             auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver->type->underlying_type());
             if (!tt) {
                 throw exceptions::invalid_request_exception(format("Invalid tuple type literal for {} of type {}", receiver->name, receiver->type->as_cql3_type()));
@@ -88,7 +88,7 @@ public:
             }
         }
     public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override {
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override {
             try {
                 validate_assignable_to(db, keyspace, receiver);
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
@@ -238,7 +238,7 @@ public:
             return make_shared<tuples::marker>(_bind_index, make_receiver(receivers));
         }
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override {
             throw std::runtime_error("Tuples.Raw.prepare() requires a list of receivers");
         }
 
@@ -280,7 +280,7 @@ public:
             return make_shared<tuples::in_marker>(_bind_index, make_in_receiver(receivers));
         }
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override {
             throw std::runtime_error("Tuples.INRaw.prepare() requires a list of receivers");
         }
 

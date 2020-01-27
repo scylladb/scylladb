@@ -106,7 +106,7 @@ public:
      */
     virtual void reset() = 0;
 
-    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override {
         auto t1 = receiver->type->underlying_type();
         auto t2 = get_type()->underlying_type();
         if (t1 == t2) {

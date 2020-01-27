@@ -507,7 +507,7 @@ function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, c
 }
 
 ::shared_ptr<term>
-function_call::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) {
+function_call::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const {
     std::vector<shared_ptr<assignment_testable>> args;
     args.reserve(_terms.size());
     std::transform(_terms.begin(), _terms.end(), std::back_inserter(args),
@@ -572,7 +572,7 @@ function_call::raw::execute(scalar_function& fun, std::vector<shared_ptr<term>> 
 }
 
 assignment_testable::test_result
-function_call::raw::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+function_call::raw::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     // Note: Functions.get() will return null if the function doesn't exist, or throw is no function matching
     // the arguments can be found. We may get one of those if an undefined/wrong function is used as argument
     // of another, existing, function. In that case, we return true here because we'll throw a proper exception

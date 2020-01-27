@@ -64,7 +64,7 @@ operator<<(std::ostream&out, constants::type t)
 }
 
 bytes
-constants::literal::parsed_value(data_type validator)
+constants::literal::parsed_value(data_type validator) const
 {
     try {
         if (_type == type::HEX && validator == bytes_type) {
@@ -82,7 +82,7 @@ constants::literal::parsed_value(data_type validator)
 }
 
 assignment_testable::test_result
-constants::literal::test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver)
+constants::literal::test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const
 {
     auto receiver_type = receiver->type->as_cql3_type();
     if (receiver_type.is_collection() || receiver_type.is_user_type()) {
@@ -155,7 +155,7 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, ::sha
 }
 
 ::shared_ptr<term>
-constants::literal::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver)
+constants::literal::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const
 {
     if (!is_assignable(test_assignment(db, keyspace, receiver))) {
         throw exceptions::invalid_request_exception(format("Invalid {} constant ({}) for \"{}\" of type {}",

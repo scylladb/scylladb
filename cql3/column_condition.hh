@@ -151,7 +151,7 @@ public:
                     std::move(collection_element), operator_type::IN);
         }
 
-        ::shared_ptr<column_condition> prepare(database& db, const sstring& keyspace, const column_definition& receiver);
+        ::shared_ptr<column_condition> prepare(database& db, const sstring& keyspace, const column_definition& receiver) const;
     };
 };
 

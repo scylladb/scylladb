@@ -66,7 +66,7 @@ user_types::literal::literal(elements_map_type entries)
         : _entries(std::move(entries)) {
 }
 
-shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, receiver);
     auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
     bool all_terminal = true;
@@ -109,7 +109,7 @@ shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keysp
     }
 }
 
-void user_types::literal::validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+void user_types::literal::validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     if (!receiver->type->is_user_type()) {
         throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", receiver->name, receiver->type->as_cql3_type()));
     }
@@ -120,7 +120,7 @@ void user_types::literal::validate_assignable_to(database& db, const sstring& ke
         if (_entries.count(field) == 0) {
             continue;
         }
-        shared_ptr<term::raw> value = _entries[field];
+        const shared_ptr<term::raw>& value = _entries.at(field);
         auto&& field_spec = field_spec_of(receiver, i);
         if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, field_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver->name, field, field_spec->type->as_cql3_type()));
@@ -128,7 +128,7 @@ void user_types::literal::validate_assignable_to(database& db, const sstring& ke
     }
 }
 
-assignment_testable::test_result user_types::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+assignment_testable::test_result user_types::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     try {
         validate_assignable_to(db, keyspace, receiver);
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;

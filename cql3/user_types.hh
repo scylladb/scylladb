@@ -63,11 +63,11 @@ public:
         elements_map_type _entries;
 
         literal(elements_map_type entries);
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override;
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override;
     private:
-        void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver);
+        void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const;
     public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override;
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override;
         virtual sstring assignment_testable_source_context() const override;
         virtual sstring to_string() const override;
     };

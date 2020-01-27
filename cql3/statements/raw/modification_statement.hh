@@ -91,7 +91,7 @@ protected:
     // Must be called before processing WHERE clause, because to perform sanity checks there
     // we need to know what kinds of conditions (static, regular) the statement has.
     void prepare_conditions(database& db, schema_ptr schema, variable_specifications& bound_names,
-            cql3::statements::modification_statement& stmt);
+            cql3::statements::modification_statement& stmt) const;
 };
 
 }

@@ -99,7 +99,7 @@ public:
      * Most caller should just call the isAssignable() method on the result, though functions have a use for
      * testing "strong" equality to decide the most precise overload to pick when multiple could match.
      */
-    virtual test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) = 0;
+    virtual test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const = 0;
 
     // for error reporting
     virtual sstring assignment_testable_source_context() const = 0;

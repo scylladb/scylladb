@@ -36,7 +36,7 @@ tuples::component_spec_of(shared_ptr<column_specification> column, size_t compon
 }
 
 shared_ptr<term>
-tuples::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+tuples::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, receiver);
     std::vector<shared_ptr<term>> values;
     bool all_terminal = true;

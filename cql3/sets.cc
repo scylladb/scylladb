@@ -35,7 +35,7 @@ sets::value_spec_of(shared_ptr<column_specification> column) {
 }
 
 shared_ptr<term>
-sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, receiver);
 
     if (_elements.empty()) {
@@ -85,7 +85,7 @@ sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_
 }
 
 void
-sets::literal::validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+sets::literal::validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     if (!dynamic_pointer_cast<const set_type_impl>(receiver->type)) {
         // We've parsed empty maps as a set literal to break the ambiguity so
         // handle that case now
@@ -105,7 +105,7 @@ sets::literal::validate_assignable_to(database& db, const sstring& keyspace, sha
 }
 
 assignment_testable::test_result
-sets::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+sets::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     if (!dynamic_pointer_cast<const set_type_impl>(receiver->type)) {
         // We've parsed empty maps as a set literal to break the ambiguity so handle that case now
         if (dynamic_pointer_cast<const map_type_impl>(receiver->type) && _elements.empty()) {

@@ -64,11 +64,11 @@ public:
         explicit literal(std::vector<shared_ptr<term::raw>> elements)
             : _elements(std::move(elements)) {
         }
-        shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver);
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override;
     private:
-        void validate_assignable_to(database& db, const sstring keyspace, shared_ptr<column_specification> receiver);
+        void validate_assignable_to(database& db, const sstring keyspace, shared_ptr<column_specification> receiver) const;
     public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override;
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override;
         virtual sstring to_string() const override;
     };
 

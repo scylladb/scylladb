@@ -51,7 +51,7 @@ lists::uuid_index_spec_of(shared_ptr<column_specification> column) {
 
 
 shared_ptr<term>
-lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
@@ -86,7 +86,7 @@ lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column
 }
 
 void
-lists::literal::validate_assignable_to(database& db, const sstring keyspace, shared_ptr<column_specification> receiver) {
+lists::literal::validate_assignable_to(database& db, const sstring keyspace, shared_ptr<column_specification> receiver) const {
     if (!dynamic_pointer_cast<const list_type_impl>(receiver->type)) {
         throw exceptions::invalid_request_exception(format("Invalid list literal for {} of type {}",
                 *receiver->name, receiver->type->as_cql3_type()));
@@ -101,7 +101,7 @@ lists::literal::validate_assignable_to(database& db, const sstring keyspace, sha
 }
 
 assignment_testable::test_result
-lists::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+lists::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     if (!dynamic_pointer_cast<const list_type_impl>(receiver->type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }

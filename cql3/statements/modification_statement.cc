@@ -551,7 +551,7 @@ modification_statement::prepare(database& db, variable_specifications& bound_nam
 
 void
 modification_statement::prepare_conditions(database& db, schema_ptr schema, variable_specifications& bound_names,
-        cql3::statements::modification_statement& stmt)
+        cql3::statements::modification_statement& stmt) const
 {
     if (_if_not_exists || _if_exists || !_conditions.empty()) {
         if (stmt.is_counter()) {
