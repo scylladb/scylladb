@@ -203,7 +203,7 @@ private:
         future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_query(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit);
         future<std::unique_ptr<cql_server::response>> process_prepare(uint16_t stream, request_reader in, service::client_state& client_state);
         future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_execute(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit);
-        future<std::unique_ptr<cql_server::response>> process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit);
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit);
         future<std::unique_ptr<cql_server::response>> process_register(uint16_t stream, request_reader in, service::client_state& client_state);
 
         std::unique_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state) const;
@@ -228,6 +228,9 @@ private:
                 service::client_state& cs, service_permit permit);
         future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         process_query_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
+                service::client_state& cs, service_permit permit);
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+        process_batch_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
                 service::client_state& cs, service_permit permit);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);

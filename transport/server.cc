@@ -426,7 +426,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         case cql_binary_opcode::QUERY:         return process_query(stream, std::move(in), client_state, std::move(permit));
         case cql_binary_opcode::PREPARE:       return wrap_in_foreign(process_prepare(stream, std::move(in), client_state));
         case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), client_state, std::move(permit));
-        case cql_binary_opcode::BATCH:         return wrap_in_foreign(process_batch(stream, std::move(in), client_state, std::move(permit)));
+        case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), client_state, std::move(permit));
         case cql_binary_opcode::REGISTER:      return wrap_in_foreign(process_register(stream, std::move(in), client_state));
         default:                               throw exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop)));
         }
@@ -953,10 +953,11 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connectio
     });
 }
 
-future<std::unique_ptr<cql_server::response>>
-cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit)
-{
-    if (_version == 1) {
+static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
+process_batch_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
+        uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
+        const cql3::cql_config& cql_config, const ::timeout_config& timeout_config, service_permit permit, bool init_trace) {
+    if (version == 1) {
         throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
     }
 
@@ -970,7 +971,9 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
     modifications.reserve(n);
     values.reserve(n);
 
-    tracing::begin(client_state.get_trace_state(), "Execute batch of CQL3 queries", client_state.get_client_address());
+    if (init_trace) {
+        tracing::begin(client_state.get_trace_state(), "Execute batch of CQL3 queries", client_state.get_client_address());
+    }
 
     for ([[gnu::unused]] auto i : boost::irange(0u, n)) {
         const auto kind = in.read_byte();
@@ -982,9 +985,11 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
         switch (kind) {
         case 0: {
             auto query = in.read_long_string_view();
-            stmt_ptr = _server._query_processor.local().get_statement(query, client_state);
+            stmt_ptr = qp.local().get_statement(query, client_state);
             ps = stmt_ptr->checked_weak_from_this();
-            tracing::add_query(client_state.get_trace_state(), query);
+            if (init_trace) {
+                tracing::add_query(client_state.get_trace_state(), query);
+            }
             break;
         }
         case 1: {
@@ -993,17 +998,18 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
 
             // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
             // look for the prepared statement and then authorize it.
-            ps = _server._query_processor.local().get_prepared(client_state.user(), cache_key);
+            ps = qp.local().get_prepared(client_state.user(), cache_key);
             if (!ps) {
-                ps = _server._query_processor.local().get_prepared(cache_key);
+                ps = qp.local().get_prepared(cache_key);
                 if (!ps) {
                     throw exceptions::prepared_query_not_found_exception(id);
                 }
                 // authorize a particular prepared statement only once
                 needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
             }
-
-            tracing::add_query(client_state.get_trace_state(), ps->raw_cql_statement);
+            if (init_trace) {
+                tracing::add_query(client_state.get_trace_state(), ps->raw_cql_statement);
+            }
             break;
         }
         default:
@@ -1017,13 +1023,15 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
         }
 
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
-        tracing::add_table_name(client_state.get_trace_state(), modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
-        tracing::add_prepared_statement(client_state.get_trace_state(), ps);
+        if (init_trace) {
+            tracing::add_table_name(client_state.get_trace_state(), modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
+            tracing::add_prepared_statement(client_state.get_trace_state(), ps);
+        }
 
         modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
 
         std::vector<cql3::raw_value_view> tmp;
-        in.read_value_view_list(_version, tmp);
+        in.read_value_view_list(version, tmp);
 
         auto stmt = ps->statement;
         if (stmt->get_bound_terms() != tmp.size()) {
@@ -1036,18 +1044,60 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
     auto q_state = std::make_unique<cql_query_state>(client_state, std::move(permit));
     auto& query_state = q_state->query_state;
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
-    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*in.read_options(_version < 3 ? 1 : _version, _cql_serialization_format, this->timeout_config(), _server._cql_config)), std::move(values)));
+    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*in.read_options(version < 3 ? 1 : version, serialization_format,
+                                                                     timeout_config, cql_config)), std::move(values)));
     auto& options = *q_state->options;
 
-    tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
-    tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
-    tracing::add_prepared_query_options(client_state.get_trace_state(), options);
-    tracing::trace(client_state.get_trace_state(), "Creating a batch statement");
+    if (init_trace) {
+        tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
+        tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
+        tracing::add_prepared_query_options(client_state.get_trace_state(), options);
+        tracing::trace(client_state.get_trace_state(), "Creating a batch statement");
+    }
 
-    auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
-    return _server._query_processor.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries))
-            .then([this, stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state()] (auto msg) {
-        return make_result(stream, *msg, trace_state, _version);
+    auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
+    return qp.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries))
+            .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
+        if (msg->move_to_shard()) {
+            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
+        } else {
+            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
+            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(make_foreign(make_result(stream, *msg, trace_state, version)));
+        }
+    });
+}
+
+future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+cql_server::connection::process_batch_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
+        service::client_state& cs, service_permit permit) {
+    return smp::submit_to(shard, _server._config.bounce_request_smp_service_group,
+            [this, s = std::ref(_server.container()), is = std::move(is), cs = cs.move_to_other_shard(), stream, permit = std::move(permit)] () {
+        service::client_state client_state = cs.get();
+        cql_server& server = s.get().local();
+        return do_with(bytes_ostream(), std::move(client_state), [this, &server, is = std::move(is), stream]
+                                              (bytes_ostream& linearization_buffer, service::client_state& client_state) {
+            request_reader in(is, linearization_buffer);
+            return process_batch_internal(client_state, server._query_processor, in, stream, _version, _cql_serialization_format,
+                    server._cql_config, server.timeout_config(), /* FIXME */empty_service_permit(), false).then([] (auto msg) {
+                // result here has to be foreign ptr
+                return std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg));
+            });
+        });
+    });
+}
+
+future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit) {
+    fragmented_temporary_buffer::istream is = in.get_stream();
+
+    return process_batch_internal(client_state, _server._query_processor, in, stream,
+            _version, _cql_serialization_format,  _server._cql_config, _server.timeout_config(), permit, true)
+            .then([stream, &client_state, this, is, permit] (std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned> msg) mutable {
+        unsigned* shard = std::get_if<unsigned>(&msg);
+        if (shard) {
+            return process_batch_on_shard(*shard, stream, is, client_state, std::move(permit));
+        }
+        return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg)));
     });
 }
 
