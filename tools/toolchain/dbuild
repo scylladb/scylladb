@@ -108,6 +108,7 @@ MAVEN_LOCAL_REPO="$HOME/.m2"
 mkdir -p "$MAVEN_LOCAL_REPO"
 
 docker_common_args=(
+       --pids-limit -1 \
        --network host \
        -u "$(id -u):$(id -g)" \
        "${group_args[@]}" \
