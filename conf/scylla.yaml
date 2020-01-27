@@ -244,7 +244,6 @@ batch_size_fail_threshold_in_kb: 50
 # experimental_features:
 #     - cdc
 #     - lwt
-#     - udf
 
 # The directory where hints files are stored if hinted handoff is enabled.
 # hints_directory: /var/lib/scylla/hints

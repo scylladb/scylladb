@@ -78,7 +78,7 @@ namespace db {
 
 /// Enumeration of all valid values for the `experimental` config entry.
 struct experimental_features_t {
-    enum feature { LWT, UDF, CDC };
+    enum feature { LWT, CDC };
     static std::unordered_map<sstring, feature> map(); // See enum_option.
 };
 

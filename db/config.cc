@@ -692,7 +692,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , developer_mode(this, "developer_mode", value_status::Used, false, "Relax environment checks. Setting to true can reduce performance and reliability significantly.")
     , skip_wait_for_gossip_to_settle(this, "skip_wait_for_gossip_to_settle", value_status::Used, -1, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.")
     , experimental(this, "experimental", value_status::Used, false, "Set to true to unlock all experimental features.")
-    , experimental_features(this, "experimental_features", value_status::Used, {}, "Unlock experimental features provided as the option arguments (possible values: 'lwt', 'cdc', 'udf'). Can be repeated.")
+    , experimental_features(this, "experimental_features", value_status::Used, {}, "Unlock experimental features provided as the option arguments (possible values: 'lwt' and 'cdc'). Can be repeated.")
     , lsa_reclamation_step(this, "lsa_reclamation_step", value_status::Used, 1, "Minimum number of segments to reclaim in a single step")
     , prometheus_port(this, "prometheus_port", value_status::Used, 9180, "Prometheus port, set to zero to disable")
     , prometheus_address(this, "prometheus_address", value_status::Used, "0.0.0.0", "Prometheus listening address")
@@ -855,7 +855,7 @@ const db::extensions& db::config::extensions() const {
 std::unordered_map<sstring, db::experimental_features_t::feature> db::experimental_features_t::map() {
     // We decided against using the construct-on-first-use idiom here:
     // https://github.com/scylladb/scylla/pull/5369#discussion_r353614807
-    return {{"lwt", LWT}, {"udf", UDF}, {"cdc", CDC}};
+    return {{"lwt", LWT}, {"cdc", CDC}};
 }
 
 template struct utils::config_file::named_value<seastar::log_level>;
