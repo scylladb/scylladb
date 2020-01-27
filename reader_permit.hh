@@ -22,6 +22,7 @@
 #pragma once
 
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/file.hh>
 #include "seastarx.hh"
 
 struct reader_resources {
@@ -112,3 +113,5 @@ public:
 };
 
 reader_permit no_reader_permit();
+
+file make_tracked_file(file f, reader_permit p);

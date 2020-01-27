@@ -198,9 +198,9 @@ class tracking_file_impl : public file_impl {
     }
 
 public:
-    tracking_file_impl(file file, reader_resource_tracker resource_tracker)
+    tracking_file_impl(file file, reader_permit permit)
         : _tracked_file(std::move(file))
-        , _permit(resource_tracker.get_permit()) {
+        , _permit(std::move(permit)) {
     }
 
     tracking_file_impl(const tracking_file_impl&) = delete;
@@ -270,6 +270,10 @@ public:
     }
 };
 
+file make_tracked_file(file f, reader_permit p) {
+    return file(make_shared<tracking_file_impl>(f, std::move(p)));
+}
+
 file reader_resource_tracker::track(file f) const {
-    return file(make_shared<tracking_file_impl>(f, *this));
+    return file(make_shared<tracking_file_impl>(f, this->get_permit()));
 }

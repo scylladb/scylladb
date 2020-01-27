@@ -22,7 +22,6 @@
 #pragma once
 
 #include <map>
-#include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
 #include "db/timeout_clock.hh"
 #include "reader_permit.hh"
