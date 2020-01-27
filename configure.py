@@ -1139,7 +1139,6 @@ for m in ['debug', 'release', 'sanitize']:
     modes[m]['cxxflags'] += ' ' + dbgflag
 
 seastar_cflags = args.user_cflags
-seastar_cflags += ' -Wno-error'
 if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
