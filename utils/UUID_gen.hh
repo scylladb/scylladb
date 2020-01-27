@@ -77,7 +77,7 @@ private:
     // placement of this singleton is important.  It needs to be instantiated *AFTER* the other statics.
     static thread_local const std::unique_ptr<UUID_gen> instance;
 
-    int64_t last_nanos = 0;
+    uint64_t last_nanos = 0;
 
     UUID_gen()
     {
@@ -322,6 +322,10 @@ public:
         return (uuid.timestamp() / 10000) + START_EPOCH;
     }
 
+    static uint64_t make_nanos_since(int64_t millis) {
+        return (static_cast<uint64_t>(millis) - static_cast<uint64_t>(START_EPOCH)) * 10000;
+    }
+
 private:
 
     // needs to return two different values for the same when.
@@ -333,7 +337,7 @@ private:
         using namespace std::chrono;
         int64_t millis = duration_cast<milliseconds>(
                 system_clock::now().time_since_epoch()).count();
-        int64_t nanos_since = (millis - START_EPOCH) * 10000;
+        uint64_t nanos_since = make_nanos_since(millis);
         if (nanos_since > last_nanos)
             last_nanos = nanos_since;
         else
@@ -344,7 +348,7 @@ private:
 
     int64_t create_time_unsafe(int64_t when, int nanos)
     {
-        uint64_t nanos_since = ((when - START_EPOCH) * 10000) + nanos;
+        uint64_t nanos_since = make_nanos_since(when) + static_cast<uint64_t>(static_cast<int64_t>(nanos));
         return create_time(nanos_since);
     }
 
