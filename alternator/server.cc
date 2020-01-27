@@ -57,6 +57,9 @@ inline std::vector<std::string_view> split(std::string_view text, char separator
     return tokens;
 }
 
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
 // DynamoDB HTTP error responses are structured as follows
 // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html
 // Our handlers throw an exception to report an error. If the exception
@@ -65,9 +68,9 @@ inline std::vector<std::string_view> split(std::string_view text, char separator
 // Internal Server Error.
 class api_handler : public handler_base {
 public:
-    api_handler(const future_json_function& _handle) : _f_handle(
-         [_handle](std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
-         return seastar::futurize_apply(_handle, std::move(req)).then_wrapped([rep = std::move(rep)](future<json::json_return_type> resf) mutable {
+    api_handler(const std::function<future<executor::request_return_type>(std::unique_ptr<request> req)>& _handle) : _f_handle(
+         [this, _handle](std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+         return seastar::futurize_apply(_handle, std::move(req)).then_wrapped([this, rep = std::move(rep)](future<executor::request_return_type> resf) mutable {
              if (resf.failed()) {
                  // Exceptions of type api_error are wrapped as JSON and
                  // returned to the client as expected. Other types of
@@ -86,20 +89,24 @@ public:
                              format("Internal server error: {}", std::current_exception()),
                              reply::status_type::internal_server_error);
                  }
-                 // FIXME: what is this version number?
-                 rep->_content += "{\"__type\":\"com.amazonaws.dynamodb.v20120810#" + ret._type + "\"," +
-                         "\"message\":\"" + ret._msg + "\"}";
-                 rep->_status = ret._http_code;
-                 slogger.trace("api_handler error case: {}", rep->_content);
+                 generate_error_reply(*rep, ret);
                  return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
              }
-             slogger.trace("api_handler success case");
              auto res = resf.get0();
-             if (res._body_writer) {
-                 rep->write_body("json", std::move(res._body_writer));
-             } else {
-                 rep->_content += res._res;
-             }
+             std::visit(overloaded {
+                 [&] (const json::json_return_type& json_return_value) {
+                     slogger.trace("api_handler success case");
+                     if (json_return_value._body_writer) {
+                         rep->write_body("json", std::move(json_return_value._body_writer));
+                     } else {
+                         rep->_content += json_return_value._res;
+                     }
+                 },
+                 [&] (const api_error& err) {
+                     generate_error_reply(*rep, err);
+                 }
+             }, res);
+
              return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
          });
     }), _type("json") { }
@@ -115,6 +122,13 @@ public:
     }
 
 protected:
+    void generate_error_reply(reply& rep, const api_error& err) {
+        rep._content += "{\"__type\":\"com.amazonaws.dynamodb.v20120810#" + err._type + "\"," +
+                "\"message\":\"" + err._msg + "\"}";
+        rep._status = err._http_code;
+        slogger.trace("api_handler error case: {}", rep._content);
+    }
+
     future_handler_function _f_handle;
     sstring _type;
 };
@@ -214,7 +228,7 @@ future<> server::verify_signature(const request& req) {
     });
 }
 
-future<json::json_return_type> server::handle_api_request(std::unique_ptr<request>&& req) {
+future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request>&& req) {
     sstring target = req->get_header(TARGET);
     std::vector<std::string_view> split_target = split(target, '.');
     //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)

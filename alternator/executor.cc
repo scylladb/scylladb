@@ -304,7 +304,7 @@ static rjson::value generate_arn_for_table(const schema& schema) {
     return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", schema.ks_name(), schema.cf_name()));
 }
 
-future<json::json_return_type> executor::describe_table(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::describe_table(client_state& client_state, std::string content) {
     _stats.api_operations.describe_table++;
     rjson::value request = rjson::parse(content);
     elogger.trace("Describing table {}", request);
@@ -381,10 +381,10 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
     rjson::value response = rjson::empty_object();
     rjson::set(response, "Table", std::move(table_description));
     elogger.trace("returning {}", response);
-    return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
+    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
 
-future<json::json_return_type> executor::delete_table(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::delete_table(client_state& client_state, std::string content) {
     _stats.api_operations.delete_table++;
     rjson::value request = rjson::parse(content);
     elogger.trace("Deleting table {}", request);
@@ -393,8 +393,8 @@ future<json::json_return_type> executor::delete_table(client_state& client_state
     tracing::add_table_name(client_state.get_trace_state(), KEYSPACE_NAME, table_name);
 
     if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
-        throw api_error("ResourceNotFoundException",
-                format("Requested resource not found: Table: {} not found", table_name));
+        return make_ready_future<request_return_type>(api_error("ResourceNotFoundException",
+                format("Requested resource not found: Table: {} not found", table_name)));
     }
     return _mm.announce_column_family_drop(KEYSPACE_NAME, table_name, false, service::migration_manager::drop_views::yes).then([table_name = std::move(table_name)] {
         // FIXME: need more attributes?
@@ -404,7 +404,7 @@ future<json::json_return_type> executor::delete_table(client_state& client_state
         rjson::value response = rjson::empty_object();
         rjson::set(response, "TableDescription", std::move(table_description));
         elogger.trace("returning {}", response);
-        return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
     });
 }
 
@@ -487,7 +487,7 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
 }
 
 
-future<json::json_return_type> executor::create_table(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::create_table(client_state& client_state, std::string content) {
     _stats.api_operations.create_table++;
     rjson::value table_info = rjson::parse(content);
     elogger.trace("Creating table {}", table_info);
@@ -509,14 +509,17 @@ future<json::json_return_type> executor::create_table(client_state& client_state
     std::string billing_mode = get_string_attribute(table_info, "BillingMode", "PROVISIONED");
     if (billing_mode == "PAY_PER_REQUEST") {
         if (rjson::find(table_info, "ProvisionedThroughput")) {
-            throw api_error("ValidationException", "When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified.");
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    "When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified."));
         }
     } else if (billing_mode == "PROVISIONED") {
         if (!rjson::find(table_info, "ProvisionedThroughput")) {
-            throw api_error("ValidationException", "When BillingMode=PROVISIONED, ProvisionedThroughput must be specified.");
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    "When BillingMode=PROVISIONED, ProvisionedThroughput must be specified."));
         }
     } else {
-        throw api_error("ValidationException", "Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED.");
+        return make_ready_future<request_return_type>(api_error("ValidationException",
+                "Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED."));
     }
 
     schema_ptr partial_schema = builder.build();
@@ -529,12 +532,12 @@ future<json::json_return_type> executor::create_table(client_state& client_state
     std::vector<sstring> where_clauses;
     if (gsi) {
         if (!gsi->IsArray()) {
-            throw api_error("ValidationException", "GlobalSecondaryIndexes must be an array.");
+            return make_ready_future<request_return_type>(api_error("ValidationException", "GlobalSecondaryIndexes must be an array."));
         }
         for (const rjson::value& g : gsi->GetArray()) {
             const rjson::value* index_name = rjson::find(g, "IndexName");
             if (!index_name || !index_name->IsString()) {
-                throw api_error("ValidationException", "GlobalSecondaryIndexes IndexName must be a string.");
+                return make_ready_future<request_return_type>(api_error("ValidationException", "GlobalSecondaryIndexes IndexName must be a string."));
             }
             std::string vname(view_name(table_name, index_name->GetString()));
             elogger.trace("Adding GSI {}", index_name->GetString());
@@ -596,14 +599,15 @@ future<json::json_return_type> executor::create_table(client_state& client_state
             schema_builder view_builder(KEYSPACE_NAME, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(l);
             if (view_hash_key != hash_key) {
-                throw api_error("ValidationException", "LocalSecondaryIndex hash key must match the base table hash key");
+                return make_ready_future<request_return_type>(api_error("ValidationException",
+                        "LocalSecondaryIndex hash key must match the base table hash key"));
             }
             add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
             if (view_range_key.empty()) {
-                throw api_error("ValidationException", "LocalSecondaryIndex must specify a sort key");
+                return make_ready_future<request_return_type>(api_error("ValidationException", "LocalSecondaryIndex must specify a sort key"));
             }
             if (view_range_key == hash_key) {
-                throw api_error("ValidationException", "LocalSecondaryIndex sort key cannot be the same as hash key");
+                return make_ready_future<request_return_type>(api_error("ValidationException", "LocalSecondaryIndex sort key cannot be the same as hash key"));
               }
             if (view_range_key != range_key) {
                 add_column(builder, view_range_key, attribute_definitions, column_kind::regular_column);
@@ -628,10 +632,10 @@ future<json::json_return_type> executor::create_table(client_state& client_state
         }
     }
     if (rjson::find(table_info, "SSESpecification")) {
-        throw api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported.");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported."));
     }
     if (rjson::find(table_info, "StreamSpecification")) {
-        throw api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported.");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported."));
     }
     // FIXME: we should read the Tags property, and save them somewhere.
 
@@ -661,10 +665,10 @@ future<json::json_return_type> executor::create_table(client_state& client_state
             rjson::value status = rjson::empty_object();
             supplement_table_info(table_info, *schema);
             rjson::set(status, "TableDescription", std::move(table_info));
-            return make_ready_future<json::json_return_type>(make_jsonable(std::move(status)));
+            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
         });
     }).handle_exception_type([table_name = std::move(table_name)] (exceptions::already_exists_exception&) {
-        return make_exception_future<json::json_return_type>(
+        return make_exception_future<executor::request_return_type>(
                 api_error("ResourceInUseException",
                         format("Table {} already exists", table_name)));
     });
@@ -843,7 +847,7 @@ public:
     virtual ~rmw_operation() = default;
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }
-    future<json::json_return_type> execute(service::storage_proxy& proxy,
+    future<executor::request_return_type> execute(service::storage_proxy& proxy,
             service::client_state& client_state,
             bool needs_read_before_write,
             stats& stats);
@@ -895,7 +899,7 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
     return desired_shard;
 }
 
-future<json::json_return_type> rmw_operation::execute(service::storage_proxy& proxy,
+future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
         service::client_state& client_state,
         bool needs_read_before_write,
         stats& stats) {
@@ -910,14 +914,12 @@ future<json::json_return_type> rmw_operation::execute(service::storage_proxy& pr
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, stats).then([this, &client_state, &proxy] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(previous_item);
                 if (!m) {
-                    // FIXME: for better performance, return api_error instead of
-                    // an exception future containing it. see issue #5472.
-                    return make_exception_future<json::json_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
+                    return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
                 }
                 return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
                     // Without special options on what to return, all these
                     // operations return nothing. FIXME: support those options
-                    return make_ready_future<json::json_return_type>(json_string(""));
+                    return make_ready_future<executor::request_return_type>(json_string(""));
                 });
             });
         }
@@ -925,7 +927,7 @@ future<json::json_return_type> rmw_operation::execute(service::storage_proxy& pr
         std::optional<mutation> m = apply(nullptr);
         assert(m); // !needs_read_before_write, so apply() did not check a condition
         return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
-            return make_ready_future<json::json_return_type>(json_string(""));
+            return make_ready_future<executor::request_return_type>(json_string(""));
         });
     }
     // If we're still here, we need to do this write using LWT:
@@ -939,11 +941,9 @@ future<json::json_return_type> rmw_operation::execute(service::storage_proxy& pr
             {timeout, empty_service_permit(), client_state, client_state.get_trace_state()},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([read_command] (bool is_applied) {
         if (!is_applied) {
-            // FIXME: for better performance, return api_error instead of
-            // an exception future containing it. see issue #5472.
-            return make_exception_future<json::json_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
+            return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
         }
-        return make_ready_future<json::json_return_type>(json_string(""));
+        return make_ready_future<executor::request_return_type>(json_string(""));
     });
 }
 
@@ -1033,7 +1033,7 @@ public:
     virtual ~put_item_operation() = default;
 };
 
-future<json::json_return_type> executor::put_item(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::put_item(client_state& client_state, std::string content) {
     _stats.api_operations.put_item++;
     auto start_time = std::chrono::steady_clock::now();
     rjson::value request = rjson::parse(content);
@@ -1119,7 +1119,7 @@ public:
     virtual ~delete_item_operation() = default;
 };
 
-future<json::json_return_type> executor::delete_item(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::delete_item(client_state& client_state, std::string content) {
     _stats.api_operations.delete_item++;
     auto start_time = std::chrono::steady_clock::now();
     rjson::value request = rjson::parse(content);
@@ -1171,7 +1171,7 @@ struct primary_key_equal {
     }
 };
 
-future<json::json_return_type> executor::batch_write_item(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::batch_write_item(client_state& client_state, std::string content) {
     _stats.api_operations.batch_write_item++;
     rjson::value batch_info = rjson::parse(content);
     rjson::value& request_items = batch_info["RequestItems"];
@@ -1185,7 +1185,7 @@ future<json::json_return_type> executor::batch_write_item(client_state& client_s
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
             if (!request.IsObject() || request.MemberCount() != 1) {
-                throw api_error("ValidationException", format("Invalid BatchWriteItem request: {}", request));
+                return make_ready_future<request_return_type>(api_error("ValidationException", format("Invalid BatchWriteItem request: {}", request)));
             }
             auto r = request.MemberBegin();
             const std::string r_name = r->name.GetString();
@@ -1196,7 +1196,7 @@ future<json::json_return_type> executor::batch_write_item(client_state& client_s
                 // make_item_mutation returns a mutation with a single clustering row
                 auto mut_key = std::make_pair(mutations.back().key(), mutations.back().partition().clustered_rows().begin()->key());
                 if (used_keys.count(mut_key) > 0) {
-                    throw api_error("ValidationException", "Provided list of item keys contains duplicates");
+                    return make_ready_future<request_return_type>(api_error("ValidationException", "Provided list of item keys contains duplicates"));
                 }
                 used_keys.insert(std::move(mut_key));
             } else if (r_name == "DeleteRequest") {
@@ -1205,11 +1205,11 @@ future<json::json_return_type> executor::batch_write_item(client_state& client_s
                 // make_delete_item_mutation returns a mutation with a single clustering row
                 auto mut_key = std::make_pair(mutations.back().key(), mutations.back().partition().clustered_rows().begin()->key());
                 if (used_keys.count(mut_key) > 0) {
-                    throw api_error("ValidationException", "Provided list of item keys contains duplicates");
+                    return make_ready_future<request_return_type>(api_error("ValidationException", "Provided list of item keys contains duplicates"));
                 }
                 used_keys.insert(std::move(mut_key));
             } else {
-                throw api_error("ValidationException", format("Unknown BatchWriteItem request type: {}", r_name));
+                return make_ready_future<request_return_type>(api_error("ValidationException", format("Unknown BatchWriteItem request type: {}", r_name)));
             }
         }
     }
@@ -1220,7 +1220,7 @@ future<json::json_return_type> executor::batch_write_item(client_state& client_s
         // due to throttling. TODO(sarna): Consider UnprocessedItems when returning.
         rjson::value ret = rjson::empty_object();
         rjson::set(ret, "UnprocessedItems", rjson::empty_object());
-        return make_ready_future<json::json_return_type>(make_jsonable(std::move(ret)));
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
     });
 }
 
@@ -1875,7 +1875,8 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
     auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
     if (return_values != "NONE") {
         // FIXME: Need to support also ALL_OLD, UPDATED_OLD, ALL_NEW and UPDATED_NEW options. See issue #5053.
-        throw api_error("ValidationException", format("Unsupported ReturnValues={} for UpdateItem operation", return_values));
+        throw api_error("ValidationException",
+                format("Unsupported ReturnValues={} for UpdateItem operation", return_values));
     }
     const rjson::value* key = rjson::find(_request, "Key");
     if (!key) {
@@ -2041,7 +2042,7 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item)
                 // we need to verify the old type and/or value is same as
                 // specified before deleting... We don't do this yet.
                 if (it->value.HasMember("Value")) {
-                    throw api_error("ValidationException",
+                     throw api_error("ValidationException",
                             format("UpdateItem DELETE with checking old value not yet supported"));
                 }
                 do_delete(std::move(column_name));
@@ -2070,7 +2071,7 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item)
     return m;
 }
 
-future<json::json_return_type> executor::update_item(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::update_item(client_state& client_state, std::string content) {
     _stats.api_operations.update_item++;
     auto start_time = std::chrono::steady_clock::now();
     rjson::value update_info = rjson::parse(content);
@@ -2118,7 +2119,7 @@ static db::consistency_level get_read_consistency(const rjson::value& request) {
     return consistent_read ? db::consistency_level::LOCAL_QUORUM : db::consistency_level::LOCAL_ONE;
 }
 
-future<json::json_return_type> executor::get_item(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::get_item(client_state& client_state, std::string content) {
     _stats.api_operations.get_item++;
     auto start_time = std::chrono::steady_clock::now();
     rjson::value table_info = rjson::parse(content);
@@ -2157,11 +2158,11 @@ future<json::json_return_type> executor::get_item(client_state& client_state, st
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.get_item_latency._count + 1);
-        return make_ready_future<json::json_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
+        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
     });
 }
 
-future<json::json_return_type> executor::batch_get_item(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::batch_get_item(client_state& client_state, std::string content) {
     // FIXME: In this implementation, an unbounded batch size can cause
     // unbounded response JSON object to be buffered in memory, unbounded
     // parallelism of the requests, and unbounded amount of non-preemptable
@@ -2246,7 +2247,7 @@ future<json::json_return_type> executor::batch_get_item(client_state& client_sta
                 rjson::push_back(response["Responses"][std::get<0>(t)], std::move(*std::get<1>(t)));
             }
         }
-        return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
     });
 }
 
@@ -2346,7 +2347,7 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     return last_evaluated_key;
 }
 
-static future<json::json_return_type> do_query(schema_ptr schema,
+static future<executor::request_return_type> do_query(schema_ptr schema,
         const rjson::value* exclusive_start_key,
         dht::partition_range_vector&& partition_ranges,
         std::vector<query::clustering_range>&& ck_bounds,
@@ -2398,7 +2399,7 @@ static future<json::json_return_type> do_query(schema_ptr schema,
         if (paging_state) {
             rjson::set(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
         }
-        return make_ready_future<json::json_return_type>(make_jsonable(std::move(items)));
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(items)));
     });
 }
 
@@ -2407,7 +2408,7 @@ static future<json::json_return_type> do_query(schema_ptr schema,
 // 2. Filtering - by passing appropriately created restrictions to pager as a last parameter
 // 3. Proper timeouts instead of gc_clock::now() and db::no_timeout
 // 4. Implement parallel scanning via Segments
-future<json::json_return_type> executor::scan(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::scan(client_state& client_state, std::string content) {
     _stats.api_operations.scan++;
     rjson::value request_info = rjson::parse(content);
     elogger.trace("Scanning {}", request_info);
@@ -2415,11 +2416,13 @@ future<json::json_return_type> executor::scan(client_state& client_state, std::s
     schema_ptr schema = get_table_or_view(_proxy, request_info);
 
     if (rjson::find(request_info, "FilterExpression")) {
-        throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException",
+                "FilterExpression is not yet implemented in alternator"));
     }
     if (get_int_attribute(request_info, "Segment") || get_int_attribute(request_info, "TotalSegments")) {
         // FIXME: need to support parallel scan. See issue #5059.
-        throw api_error("ValidationException", "Scan Segment/TotalSegments is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException",
+                "Scan Segment/TotalSegments is not yet implemented in alternator"));
     }
 
     rjson::value* exclusive_start_key = rjson::find(request_info, "ExclusiveStartKey");
@@ -2429,7 +2432,7 @@ future<json::json_return_type> executor::scan(client_state& client_state, std::s
     rjson::value* limit_json = rjson::find(request_info, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : query::max_partitions;
     if (limit <= 0) {
-        throw api_error("ValidationException", "Limit must be greater than 0");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "Limit must be greater than 0"));
     }
 
     auto attrs_to_get = calculate_attrs_to_get(request_info);
@@ -2567,7 +2570,7 @@ calculate_bounds(schema_ptr schema, const rjson::value& conditions) {
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
-future<json::json_return_type> executor::query(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::query(client_state& client_state, std::string content) {
     _stats.api_operations.query++;
     rjson::value request_info = rjson::parse(content);
     elogger.trace("Querying {}", request_info);
@@ -2581,19 +2584,19 @@ future<json::json_return_type> executor::query(client_state& client_state, std::
     rjson::value* limit_json = rjson::find(request_info, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : query::max_partitions;
     if (limit <= 0) {
-        throw api_error("ValidationException", "Limit must be greater than 0");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "Limit must be greater than 0"));
     }
 
     if (rjson::find(request_info, "KeyConditionExpression")) {
-        throw api_error("ValidationException", "KeyConditionExpression is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "KeyConditionExpression is not yet implemented in alternator"));
     }
     if (rjson::find(request_info, "FilterExpression")) {
-        throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "FilterExpression is not yet implemented in alternator"));
     }
     bool forward = get_bool_attribute(request_info, "ScanIndexForward", true);
     if (!forward) {
         // FIXME: need to support the !forward (i.e., reverse sort order) case. See issue #5153.
-        throw api_error("ValidationException", "ScanIndexForward=false is not yet implemented in alternator");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "ScanIndexForward=false is not yet implemented in alternator"));
     }
 
     //FIXME(sarna): KeyConditions are deprecated in favor of KeyConditionExpression
@@ -2611,22 +2614,18 @@ future<json::json_return_type> executor::query(client_state& client_state, std::
         auto pk_defs = filtering_restrictions->get_partition_key_restrictions()->get_column_defs();
         auto ck_defs = filtering_restrictions->get_clustering_columns_restrictions()->get_column_defs();
         if (!pk_defs.empty()) {
-            throw api_error("ValidationException", format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", pk_defs.front()->name_as_text()));
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", pk_defs.front()->name_as_text())));
         }
         if (!ck_defs.empty()) {
-            throw api_error("ValidationException", format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", ck_defs.front()->name_as_text()));
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", ck_defs.front()->name_as_text())));
         }
     }
     return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats);
 }
 
-static void validate_limit(int limit) {
-    if (limit < 1 || limit > 100) {
-        throw api_error("ValidationException", "Limit must be greater than 0 and no greater than 100");
-    }
-}
-
-future<json::json_return_type> executor::list_tables(client_state& client_state, std::string content) {
+future<executor::request_return_type> executor::list_tables(client_state& client_state, std::string content) {
     _stats.api_operations.list_tables++;
     rjson::value table_info = rjson::parse(content);
     elogger.trace("Listing tables {}", table_info);
@@ -2635,7 +2634,9 @@ future<json::json_return_type> executor::list_tables(client_state& client_state,
     rjson::value* limit_json = rjson::find(table_info, "Limit");
     std::string exclusive_start = exclusive_start_json ? exclusive_start_json->GetString() : "";
     int limit = limit_json ? limit_json->GetInt() : 100;
-    validate_limit(limit);
+    if (limit < 1 || limit > 100) {
+        return make_ready_future<request_return_type>(api_error("ValidationException", "Limit must be greater than 0 and no greater than 100"));
+    }
 
     auto table_names = _proxy.get_db().local().get_column_families()
             | boost::adaptors::map_values
@@ -2674,10 +2675,10 @@ future<json::json_return_type> executor::list_tables(client_state& client_state,
         rjson::set(response, "LastEvaluatedTableName", rjson::copy(last_table_name));
     }
 
-    return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
+    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
 
-future<json::json_return_type> executor::describe_endpoints(client_state& client_state, std::string content, std::string host_header) {
+future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, std::string content, std::string host_header) {
     _stats.api_operations.describe_endpoints++;
     rjson::value response = rjson::empty_object();
     // Without having any configuration parameter to say otherwise, we tell
@@ -2687,13 +2688,13 @@ future<json::json_return_type> executor::describe_endpoints(client_state& client
     // A "Host:" header includes both host name and port, exactly what we need
     // to return.
     if (host_header.empty()) {
-        throw api_error("ValidationException", "DescribeEndpoints needs a 'Host:' header in request");
+        return make_ready_future<request_return_type>(api_error("ValidationException", "DescribeEndpoints needs a 'Host:' header in request"));
     }
     rjson::set(response, "Endpoints", rjson::empty_array());
     rjson::push_back(response["Endpoints"], rjson::empty_object());
     rjson::set(response["Endpoints"][0], "Address", rjson::from_string(host_header));
     rjson::set(response["Endpoints"][0], "CachePeriodInMinutes", rjson::value(1440));
-    return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
+    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
 
 // Create the keyspace in which we put all Alternator tables, if it doesn't
