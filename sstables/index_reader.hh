@@ -303,6 +303,14 @@ class index_reader {
         index_consumer _consumer;
         index_consume_entry_context<index_consumer> _context;
 
+        static file get_file(sstable& sst, reader_permit permit, tracing::trace_state_ptr trace_state) {
+            auto f = make_tracked_file(sst._index_file, std::move(permit));
+            if (!trace_state) {
+                return f;
+            }
+            return tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", sst.filename(component_type::Index)));
+        }
+
         inline static file_input_stream_options get_file_input_stream_options(shared_sstable sst, const io_priority_class& pc) {
             file_input_stream_options options;
             options.buffer_size = sst->sstable_buffer_size;
@@ -315,9 +323,7 @@ class index_reader {
             : _consumer(quantity)
             , _context(permit, _consumer,
                        trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema,
-                       trace_state
-                           ? tracing::make_traced_file(sst->_index_file, std::move(trace_state), format("{}:", sst->filename(component_type::Index)))
-                           : sst->_index_file,
+                       get_file(*sst, permit, std::move(trace_state)),
                        get_file_input_stream_options(sst, pc), begin, end - begin,
                        (sst->get_version() == sstable_version_types::mc
                            ? std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header()))
