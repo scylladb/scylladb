@@ -142,16 +142,21 @@ def flag_supported(flag, compiler):
     return try_compile(flags=['-Werror'] + split, compiler=compiler)
 
 
-def gold_supported(compiler):
+def linker_flags(compiler):
     src_main = 'int main(int argc, char **argv) { return 0; }'
+    link_flags = ['-fuse-ld=lld']
+    if try_compile_and_link(source=src_main, flags=link_flags, compiler=compiler):
+        print('Note: using the lld linker')
+        return ' '.join(link_flags)
     link_flags = ['-fuse-ld=gold']
     if try_compile_and_link(source=src_main, flags=link_flags, compiler=compiler):
+        print('Note: using the gold linker')
         threads_flag = '-Wl,--threads'
         if try_compile_and_link(source=src_main, flags=link_flags + [threads_flag], compiler=compiler):
             link_flags.append(threads_flag)
         return ' '.join(link_flags)
     else:
-        print('Note: gold not found; using default system linker')
+        print('Note: neither lld nor gold found; using default system linker')
         return ''
 
 
@@ -1011,7 +1016,7 @@ optimization_flags = [o
                       if flag_supported(flag=o, compiler=args.cxx)]
 modes['release']['cxx_ld_flags'] += ' ' + ' '.join(optimization_flags)
 
-gold_linker_flag = gold_supported(compiler=args.cxx)
+linker_flags = linker_flags(compiler=args.cxx)
 
 dbgflag = '-g -gz' if args.debuginfo else ''
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
@@ -1290,8 +1295,8 @@ with open(buildfile_tmp, 'w') as f:
         builddir = {outdir}
         cxx = {cxx}
         cxxflags = {user_cflags} {warnings} {defines}
-        ldflags = {gold_linker_flag} {user_ldflags}
-        ldflags_build = {gold_linker_flag}
+        ldflags = {linker_flags} {user_ldflags}
+        ldflags_build = {linker_flags}
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
