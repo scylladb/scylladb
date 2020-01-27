@@ -223,15 +223,14 @@ private:
         std::unique_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
 
+        // Helper functions to encapsulate bounce_to_shard processing for query, execute and batch verbs
+        template<typename Process>
         future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-        process_execute_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
-                service::client_state& cs, service_permit permit);
+        process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, Process process_fn);
+        template<typename Process>
         future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-        process_query_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
-                service::client_state& cs, service_permit permit);
-        future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-        process_batch_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
-                service::client_state& cs, service_permit permit);
+        process_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
+                service_permit permit, Process process_fn);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
 

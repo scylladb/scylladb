@@ -752,6 +752,43 @@ std::unique_ptr<cql_server::response>
 make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state,
         cql_protocol_version_type version, bool skip_metadata = false);
 
+template<typename Process>
+future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+cql_server::connection::process_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
+        service::client_state& cs, service_permit permit, Process process_fn) {
+    return _server.container().invoke_on(shard, _server._config.bounce_request_smp_service_group,
+            [this, is = std::move(is), cs = cs.move_to_other_shard(), stream, permit = std::move(permit), process_fn] (cql_server& server) {
+        service::client_state client_state = cs.get();
+        return do_with(bytes_ostream(), std::move(client_state), [this, &server, is = std::move(is), stream, process_fn]
+                                              (bytes_ostream& linearization_buffer, service::client_state& client_state) {
+            request_reader in(is, linearization_buffer);
+            return process_fn(client_state, server._query_processor, in, stream, _version, _cql_serialization_format,
+                    server._cql_config, server.timeout_config(), /* FIXME */empty_service_permit(), false).then([] (auto msg) {
+                // result here has to be foreign ptr
+                return std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg));
+            });
+        });
+    });
+}
+
+template<typename Process>
+future<foreign_ptr<std::unique_ptr<cql_server::response>>>
+cql_server::connection::process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
+        Process process_fn) {
+    fragmented_temporary_buffer::istream is = in.get_stream();
+
+    return process_fn(client_state, _server._query_processor, in, stream,
+            _version, _cql_serialization_format,  _server._cql_config, _server.timeout_config(), permit, true)
+            .then([stream, &client_state, this, is, permit, process_fn]
+                   (std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned> msg) mutable {
+        unsigned* shard = std::get_if<unsigned>(&msg);
+        if (shard) {
+            return process_on_shard(*shard, stream, is, client_state, std::move(permit), process_fn);
+        }
+        return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg)));
+    });
+}
+
 static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
 process_query_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
@@ -784,38 +821,8 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
 }
 
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-cql_server::connection::process_query_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
-        service::client_state& cs, service_permit permit) {
-    return smp::submit_to(shard, _server._config.bounce_request_smp_service_group,
-            [this, s = std::ref(_server.container()), is = std::move(is), cs = cs.move_to_other_shard(), stream, permit = std::move(permit)] () {
-        service::client_state client_state = cs.get();
-        cql_server& server = s.get().local();
-        return do_with(bytes_ostream(), std::move(client_state), [this, &server, is = std::move(is), stream]
-                                              (bytes_ostream& linearization_buffer, service::client_state& client_state) {
-            request_reader in(is, linearization_buffer);
-            return process_query_internal(client_state, server._query_processor, in, stream, _version, _cql_serialization_format,
-                    server._cql_config, server.timeout_config(), /* FIXME */empty_service_permit(), false).then([] (auto msg) {
-                // result here has to be foreign ptr
-                return std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg));
-            });
-        });
-    });
-}
-
-future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit)
-{
-    fragmented_temporary_buffer::istream is = in.get_stream();
-
-    return process_query_internal(client_state, _server._query_processor, in, stream,
-            _version, _cql_serialization_format,  _server._cql_config, _server.timeout_config(), permit, true)
-            .then([stream, &client_state, this, is, permit] (std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned> msg) mutable {
-        unsigned* shard = std::get_if<unsigned>(&msg);
-        if (shard) {
-            return process_query_on_shard(*shard, stream, is, client_state, std::move(permit));
-        }
-        return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg)));
-    });
+cql_server::connection::process_query(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit) {
+    return process(stream, in, client_state, std::move(permit), process_query_internal);
 }
 
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state& client_state)
@@ -846,7 +853,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
     });
 }
 
-future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
+static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
 process_execute_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
         const cql3::cql_config& cql_config, const ::timeout_config& timeout_config, service_permit permit, bool init_trace) {
@@ -919,38 +926,9 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     });
 }
 
-future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-cql_server::connection::process_execute_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
-        service::client_state& cs, service_permit permit) {
-    return smp::submit_to(shard, _server._config.bounce_request_smp_service_group,
-            [this, s = std::ref(_server.container()), is = std::move(is), cs = cs.move_to_other_shard(), stream, permit = std::move(permit)] () {
-        service::client_state client_state = cs.get();
-        cql_server& server = s.get().local();
-        return do_with(bytes_ostream(), std::move(client_state), [this, &server, is = std::move(is), stream]
-                                              (bytes_ostream& linearization_buffer, service::client_state& client_state) {
-            request_reader in(is, linearization_buffer);
-            return process_execute_internal(client_state, server._query_processor, in, stream, _version, _cql_serialization_format,
-                    server._cql_config, server.timeout_config(), /* FIXME */empty_service_permit(), false).then([] (auto msg) {
-                // result here has to be foreign ptr
-                return std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg));
-            });
-        });
-    });
-}
-
 future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::process_execute(uint16_t stream, request_reader in,
         service::client_state& client_state, service_permit permit) {
-    fragmented_temporary_buffer::istream is = in.get_stream();
-
-    return process_execute_internal(client_state, _server._query_processor, in, stream,
-            _version, _cql_serialization_format,  _server._cql_config, _server.timeout_config(), permit, true)
-            .then([stream, &client_state, this, is, permit] (std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned> msg) mutable {
-        unsigned* shard = std::get_if<unsigned>(&msg);
-        if (shard) {
-            return process_execute_on_shard(*shard, stream, is, client_state, std::move(permit));
-        }
-        return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg)));
-    });
+    return process(stream, in, client_state, std::move(permit), process_execute_internal);
 }
 
 static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
@@ -1068,37 +1046,8 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
 }
 
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
-cql_server::connection::process_batch_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
-        service::client_state& cs, service_permit permit) {
-    return smp::submit_to(shard, _server._config.bounce_request_smp_service_group,
-            [this, s = std::ref(_server.container()), is = std::move(is), cs = cs.move_to_other_shard(), stream, permit = std::move(permit)] () {
-        service::client_state client_state = cs.get();
-        cql_server& server = s.get().local();
-        return do_with(bytes_ostream(), std::move(client_state), [this, &server, is = std::move(is), stream]
-                                              (bytes_ostream& linearization_buffer, service::client_state& client_state) {
-            request_reader in(is, linearization_buffer);
-            return process_batch_internal(client_state, server._query_processor, in, stream, _version, _cql_serialization_format,
-                    server._cql_config, server.timeout_config(), /* FIXME */empty_service_permit(), false).then([] (auto msg) {
-                // result here has to be foreign ptr
-                return std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg));
-            });
-        });
-    });
-}
-
-future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 cql_server::connection::process_batch(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit) {
-    fragmented_temporary_buffer::istream is = in.get_stream();
-
-    return process_batch_internal(client_state, _server._query_processor, in, stream,
-            _version, _cql_serialization_format,  _server._cql_config, _server.timeout_config(), permit, true)
-            .then([stream, &client_state, this, is, permit] (std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned> msg) mutable {
-        unsigned* shard = std::get_if<unsigned>(&msg);
-        if (shard) {
-            return process_batch_on_shard(*shard, stream, is, client_state, std::move(permit));
-        }
-        return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::get<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(msg)));
-    });
+    return process(stream, in, client_state, permit, process_batch_internal);
 }
 
 future<std::unique_ptr<cql_server::response>>
