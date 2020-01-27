@@ -133,6 +133,7 @@ fi
 tmpdir=$(mktemp -d)
 
 docker_common_args+=(
+       --pids-limit -1 \
        --network host \
        --cap-add SYS_PTRACE \
        -v "$PWD:$PWD:z" \
