@@ -1058,7 +1058,10 @@ int main(int ac, char** av) {
                         creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
                     }
                 }
-                alternator_server.init(addr, alternator_port, alternator_https_port, creds, cfg->alternator_enforce_authorization()).get();
+                bool alternator_enforce_authorization = cfg->alternator_enforce_authorization();
+                with_scheduling_group(dbcfg.statement_scheduling_group, [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization] {
+                    return alternator_server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization);
+                }).get();
             }
 
             static redis_service redis;
