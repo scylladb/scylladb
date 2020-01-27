@@ -240,7 +240,7 @@ private:
     }
     index_reader& get_index_reader() {
         if (!_index_reader) {
-            _index_reader = std::make_unique<index_reader>(_sst, _consumer.io_priority(), _consumer.trace_state());
+            _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(), _consumer.io_priority(), _consumer.trace_state());
         }
         return *_index_reader;
     }

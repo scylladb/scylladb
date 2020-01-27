@@ -484,19 +484,19 @@ public:
     promoted_index_blocks& get_pi_blocks() { return _pi_blocks; };
 
     // This constructor is used for ka/la format which does not have information about columns fixed lengths
-    promoted_index_blocks_reader(input_stream<char>&& promoted_index_stream, uint32_t num_blocks,
+    promoted_index_blocks_reader(reader_permit permit, input_stream<char>&& promoted_index_stream, uint32_t num_blocks,
                                  const schema& s, uint64_t start, uint64_t maxlen)
-        : continuous_data_consumer(std::move(promoted_index_stream), start, maxlen)
+        : continuous_data_consumer(std::move(permit), std::move(promoted_index_stream), start, maxlen)
         , _total_num_blocks(num_blocks)
         , _num_blocks_left(num_blocks)
         , _s(s)
     {}
 
     // This constructor is used for mc format which requires information about columns fixed lengths for parsing
-    promoted_index_blocks_reader(input_stream<char>&& promoted_index_stream, uint32_t num_blocks,
+    promoted_index_blocks_reader(reader_permit permit, input_stream<char>&& promoted_index_stream, uint32_t num_blocks,
                                  const schema& s, uint64_t start, uint64_t maxlen,
                                  column_values_fixed_lengths&& clustering_values_fixed_lengths)
-        : continuous_data_consumer(std::move(promoted_index_stream), start, maxlen)
+        : continuous_data_consumer(std::move(permit), std::move(promoted_index_stream), start, maxlen)
         , _total_num_blocks{num_blocks}
         , _num_blocks_left{num_blocks}
         , _s{s}
@@ -511,18 +511,18 @@ class promoted_index {
     bool _reader_closed = false;
 
 public:
-    promoted_index(const schema& s, deletion_time del_time, input_stream<char>&& promoted_index_stream,
+    promoted_index(const schema& s, reader_permit permit, deletion_time del_time, input_stream<char>&& promoted_index_stream,
                    uint32_t promoted_index_size, uint32_t blocks_count)
             : _del_time{del_time}
             , _promoted_index_size(promoted_index_size)
-            , _reader{std::move(promoted_index_stream), blocks_count, s, 0, promoted_index_size}
+            , _reader{std::move(permit), std::move(promoted_index_stream), blocks_count, s, 0, promoted_index_size}
     {}
 
-    promoted_index(const schema& s, deletion_time del_time, input_stream<char>&& promoted_index_stream,
+    promoted_index(const schema& s, reader_permit permit, deletion_time del_time, input_stream<char>&& promoted_index_stream,
                    uint32_t promoted_index_size, uint32_t blocks_count, column_values_fixed_lengths clustering_values_fixed_lengths)
             : _del_time{del_time}
             , _promoted_index_size(promoted_index_size)
-            , _reader{std::move(promoted_index_stream), blocks_count, s, 0, promoted_index_size, std::move(clustering_values_fixed_lengths)}
+            , _reader{std::move(permit), std::move(promoted_index_stream), blocks_count, s, 0, promoted_index_size, std::move(clustering_values_fixed_lengths)}
     {}
 
     [[nodiscard]] deletion_time get_deletion_time() const { return _del_time; }

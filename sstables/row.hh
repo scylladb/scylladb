@@ -134,7 +134,7 @@ public:
     }
 
     // The permit for this read
-    reader_permit permit() const {
+    reader_permit& permit() {
         return _permit;
     }
 
@@ -228,7 +228,7 @@ public:
     }
 
     // The permit for this read
-    reader_permit permit() const {
+    reader_permit& permit() {
         return _permit;
     }
 
@@ -521,7 +521,7 @@ public:
                               const shared_sstable sst,
                               row_consumer& consumer,
                               input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-                : continuous_data_consumer(std::move(input), start, maxlen)
+                : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
                 , _consumer(consumer)
                 , _sst(std::move(sst))
     {}
@@ -552,6 +552,10 @@ public:
             assert(0);
         }
         _consumer.reset(el);
+    }
+
+    reader_permit& permit() {
+        return _consumer.permit();
     }
 };
 
@@ -1340,7 +1344,7 @@ public:
                                 input_stream<char> && input,
                                 uint64_t start,
                                 uint64_t maxlen)
-        : continuous_data_consumer(std::move(input), start, maxlen)
+        : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
         , _consumer(consumer)
         , _sst(sst)
         , _header(sst->get_serialization_header())
@@ -1382,6 +1386,10 @@ public:
         }
         // We should not get here unless some enum member is not handled by the switch
         throw std::logic_error(format("Unable to reset - unknown indexable element: {}", el));
+    }
+
+    reader_permit& permit() {
+        return _consumer.permit();
     }
 };
 

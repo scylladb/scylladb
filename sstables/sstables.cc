@@ -2525,7 +2525,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 return do_with(summary_generator(_components->summary),
                         [this, &pc, options = std::move(options), index_file, index_size] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
-                            s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
+                            no_reader_permit(), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
                             (_version == sstable_version_types::mc
                                 ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
                                 : std::optional<column_values_fixed_lengths>{}));
@@ -3232,7 +3232,7 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
         return make_ready_future<bool>(false);
     }
     seastar::shared_ptr<sstables::index_reader> lh_index
-        = seastar::make_shared<sstables::index_reader>(s, default_priority_class(), tracing::trace_state_ptr());
+        = seastar::make_shared<sstables::index_reader>(s, no_reader_permit(), default_priority_class(), tracing::trace_state_ptr());
     return lh_index->advance_lower_and_check_if_present(dk).then([lh_index, s, this] (bool present) {
         return make_ready_future<bool>(present);
     });
