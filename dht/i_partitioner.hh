@@ -149,7 +149,6 @@ public:
 
 inline token_view::token_view(const token& token) : _kind(token._kind), _data(bytes_view(token._data)) {}
 
-token midpoint_unsigned(const token& t1, const token& t2);
 const token& minimum_token();
 const token& maximum_token();
 int tri_compare(token_view t1, token_view t2);
@@ -266,14 +265,6 @@ public:
     virtual token midpoint(const token& left, const token& right) const = 0;
 
     /**
-     * @return A token smaller than all others in the range that is being partitioned.
-     * Not legal to assign to a node or key.  (But legal to use in range scans.)
-     */
-    token get_minimum_token() {
-        return dht::minimum_token();
-    }
-
-    /**
      * @return a token that can be used to route a given key
      * (This is NOT a method to create a token from its string representation;
      * for that, use tokenFactory.fromString.)
@@ -368,18 +359,6 @@ public:
      * @return < 0 if if t1's _data array is less, t2's. 0 if they are equal, and > 0 otherwise. _kind comparison should be done separately.
      */
     virtual int tri_compare(token_view t1, token_view t2) const = 0;
-    /**
-     * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.
-     */
-    bool is_equal(token_view t1, token_view t2) const {
-        return tri_compare(t1, t2) == 0;
-    }
-    /**
-     * @return true if t1's _data array is less then t2's. _kind comparison should be done separately.
-     */
-    bool is_less(token_view t1, token_view t2) const {
-        return tri_compare(t1, t2) < 0;
-    }
 
     /**
      * @return number of shards configured for this partitioner
