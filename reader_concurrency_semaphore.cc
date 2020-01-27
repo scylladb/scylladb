@@ -23,6 +23,9 @@
 #include <seastar/core/print.hh>
 
 #include "reader_concurrency_semaphore.hh"
+#include "utils/exceptions.hh"
+
+static seastar::logger rcslog("reader_concurrency_semaphore");
 
 reader_permit::impl::impl(reader_concurrency_semaphore& semaphore, reader_resources base_cost) : semaphore(semaphore), base_cost(base_cost) {
 }
@@ -31,16 +34,59 @@ reader_permit::impl::~impl() {
     semaphore.signal(base_cost);
 }
 
+reader_permit::memory_units::memory_units(reader_concurrency_semaphore* semaphore, ssize_t memory) : _semaphore(semaphore), _memory(memory) {
+    if (_semaphore && _memory) {
+        _semaphore->consume_memory(_memory);
+    }
+}
+
+reader_permit::memory_units::memory_units(memory_units&& o)
+    : _semaphore(std::exchange(o._semaphore, nullptr))
+    , _memory(std::exchange(o._memory, 0)) {
+}
+
+reader_permit::memory_units::~memory_units() {
+    reset();
+}
+
+reader_permit::memory_units& reader_permit::memory_units::operator=(memory_units&& o) {
+    reset();
+    _semaphore = std::exchange(o._semaphore, nullptr);
+    _memory = std::exchange(o._memory, 0);
+    return *this;
+}
+
+void reader_permit::memory_units::increase(size_t memory) {
+    if (_semaphore) {
+        _semaphore->consume_memory(memory);
+    }
+    _memory += memory;
+}
+
+void reader_permit::memory_units::decrease(size_t memory) {
+    if (memory > _memory) {
+        on_internal_error(rcslog, "reader_permit::memory_units::decrease(): memory underflow");
+    }
+    if (_semaphore) {
+        _semaphore->signal_memory(memory);
+    }
+    _memory -= memory;
+}
+
+void reader_permit::memory_units::reset(size_t memory) {
+    if (_semaphore) {
+        _semaphore->signal_memory(_memory);
+        _semaphore->consume_memory(memory);
+    }
+    _memory = memory;
+}
+
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost)
     : _impl(make_lw_shared<reader_permit::impl>(semaphore, base_cost)) {
 }
 
-void reader_permit::consume_memory(size_t memory) {
-    _impl->semaphore.consume_memory(memory);
-}
-
-void reader_permit::signal_memory(size_t memory) {
-    _impl->semaphore.signal_memory(memory);
+reader_permit::memory_units reader_permit::get_memory_units(size_t memory) {
+    return memory_units(_impl ? &_impl->semaphore : nullptr, memory);
 }
 
 void reader_permit::release() {
@@ -148,7 +194,7 @@ class tracking_file_impl : public file_impl {
     temporary_buffer<uint8_t> make_tracked_buf(temporary_buffer<uint8_t> buf) {
         return seastar::temporary_buffer<uint8_t>(buf.get_write(),
                 buf.size(),
-                make_deleter(buf.release(), std::bind(&reader_permit::signal_memory, _permit, buf.size())));
+                make_deleter(buf.release(), [units = _permit.get_memory_units(buf.size())] () mutable { units.reset(); }));
     }
 
 public:
@@ -218,7 +264,6 @@ public:
         return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([this] (temporary_buffer<uint8_t> buf) {
             if (_permit) {
                 buf = make_tracked_buf(std::move(buf));
-                _permit.consume_memory(buf.size());
             }
             return make_ready_future<temporary_buffer<uint8_t>>(std::move(buf));
         });

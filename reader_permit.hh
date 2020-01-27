@@ -68,6 +68,29 @@ class reader_permit {
     };
 
     friend reader_permit no_reader_permit();
+
+public:
+    class memory_units {
+        reader_concurrency_semaphore* _semaphore = nullptr;
+        size_t _memory = 0;
+
+        friend class reader_permit;
+    private:
+        memory_units(reader_concurrency_semaphore* semaphore, ssize_t memory);
+    public:
+        memory_units(const memory_units&) = delete;
+        memory_units(memory_units&&);
+        ~memory_units();
+        memory_units& operator=(const memory_units&) = delete;
+        memory_units& operator=(memory_units&&);
+        void increase(size_t memory);
+        void decrease(size_t memory);
+        void reset(size_t memory = 0);
+        operator size_t() const {
+            return _memory;
+        }
+    };
+
 private:
     lw_shared_ptr<impl> _impl;
 
@@ -84,8 +107,7 @@ public:
         return bool(_impl);
     }
 
-    void consume_memory(size_t memory);
-    void signal_memory(size_t memory);
+    memory_units get_memory_units(size_t memory = 0);
     void release();
 };
 
