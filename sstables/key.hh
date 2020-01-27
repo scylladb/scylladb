@@ -144,13 +144,13 @@ inline key maximum_key() {
 };
 
 class decorated_key_view {
-    dht::token_view _token;
+    dht::token _token;
     key_view _partition_key;
 public:
-    decorated_key_view(dht::token_view token, key_view partition_key) noexcept
+    decorated_key_view(dht::token token, key_view partition_key) noexcept
         : _token(token), _partition_key(partition_key) { }
 
-    dht::token_view token() const {
+    dht::token token() const {
         return _token;
     }
 

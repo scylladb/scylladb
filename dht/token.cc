@@ -42,7 +42,7 @@ maximum_token() {
     return max_token;
 }
 
-int tri_compare(token_view t1, token_view t2) {
+int tri_compare(const token& t1, const token& t2) {
     if (t1._kind < t2._kind) {
             return -1;
     } else if (t1._kind > t2._kind) {

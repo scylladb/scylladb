@@ -1980,7 +1980,7 @@ public:
     virtual unsigned shard_of(const dht::token& t) const override;
     virtual unsigned shard_of(const dht::token& t, unsigned shard_count, unsigned sharding_ignore_msb) const override;
     virtual dht::token token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans = 1) const override;
-    virtual int tri_compare(dht::token_view t1, dht::token_view t2) const override { return _partitioner.tri_compare(t1, t2); }
+    virtual int tri_compare(const dht::token& t1, const dht::token& t2) const override { return _partitioner.tri_compare(t1, t2); }
 };
 
 unsigned dummy_partitioner::shard_of(const dht::token& t) const {

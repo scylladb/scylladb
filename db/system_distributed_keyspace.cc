@@ -231,7 +231,7 @@ static db::consistency_level quorum_if_many(size_t num_token_owners) {
 }
 
 // --------------- TODO: copy-pasted from murmur3_partitioner; remove this after haaawk's change is merged
-static int64_t long_token(dht::token_view t) {
+static int64_t long_token(const dht::token& t) {
     if (t.is_minimum() || t.is_maximum()) {
         return std::numeric_limits<long>::min();
     }

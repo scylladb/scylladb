@@ -40,23 +40,6 @@ enum class token_kind {
     after_all_keys,
 };
 
-class token_view {
-public:
-    token_kind _kind;
-    int64_t _data;
-
-    token_view(token_kind kind, int64_t data) : _kind(kind), _data(data) {}
-    explicit token_view(const token& token);
-
-    bool is_minimum() const {
-        return _kind == token_kind::before_all_keys;
-    }
-
-    bool is_maximum() const {
-        return _kind == token_kind::after_all_keys;
-    }
-};
-
 class token {
     static inline int64_t normalize(int64_t t) {
         return t == std::numeric_limits<int64_t>::min() ? std::numeric_limits<int64_t>::max() : t;
@@ -105,12 +88,6 @@ public:
         return sizeof(token);
     }
 
-    explicit token(token_view v) : _kind(v._kind), _data(v._data) {}
-
-    operator token_view() const {
-        return token_view(*this);
-    }
-
     bytes data() const {
         auto t = net::hton(_data);
         bytes b(bytes::initialized_later(), sizeof(_data));
@@ -119,13 +96,11 @@ public:
     }
 };
 
-inline token_view::token_view(const token& token) : _kind(token._kind), _data(token._data) {}
-
 const token& minimum_token();
 const token& maximum_token();
-int tri_compare(token_view t1, token_view t2);
-inline bool operator==(token_view t1, token_view t2) { return tri_compare(t1, t2) == 0; }
-inline bool operator<(token_view t1, token_view t2) { return tri_compare(t1, t2) < 0; }
+int tri_compare(const token& t1, const token& t2);
+inline bool operator==(const token& t1, const token& t2) { return tri_compare(t1, t2) == 0; }
+inline bool operator<(const token& t1, const token& t2) { return tri_compare(t1, t2) < 0; }
 
 inline bool operator!=(const token& t1, const token& t2) { return std::rel_ops::operator!=(t1, t2); }
 inline bool operator>(const token& t1, const token& t2) { return std::rel_ops::operator>(t1, t2); }
