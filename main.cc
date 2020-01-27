@@ -469,6 +469,7 @@ int main(int ac, char** av) {
 
     print_starting_message(ac, av, parsed_opts);
 
+    sharded<locator::token_metadata> token_metadata;
     sharded<service::migration_notifier> mm_notifier;
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
@@ -508,7 +509,8 @@ int main(int ac, char** av) {
         tcp_syncookies_sanity();
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
-                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service] {
+                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
+                &token_metadata] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
@@ -662,6 +664,12 @@ int main(int ac, char** av) {
             });
             set_abort_on_internal_error(cfg->abort_on_internal_error());
 
+            supervisor::notify("starting tokens manager");
+            token_metadata.start().get();
+            auto stop_token_metadata = defer_verbose_shutdown("token metadata", [ &token_metadata ] {
+                token_metadata.stop().get();
+            });
+
             supervisor::notify("starting migration manager notifier");
             mm_notifier.start().get();
             auto stop_mm_notifier = defer_verbose_shutdown("migration manager notifier", [ &mm_notifier ] {
@@ -707,7 +715,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata).get();
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.

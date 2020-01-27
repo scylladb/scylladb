@@ -396,6 +396,10 @@ public:
                 create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
             }
 
+            auto token_metadata = ::make_shared<sharded<locator::token_metadata>>();
+            token_metadata->start().get();
+            auto stop_token_metadata = defer([token_metadata] { token_metadata->stop().get(); });
+
             auto mm_notif = ::make_shared<sharded<service::migration_notifier>>();
             mm_notif->start().get();
             auto stop_mm_notify = defer([mm_notif] { mm_notif->stop().get(); });
@@ -438,7 +442,7 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, std::ref(*mm_notif), true).get();
+            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, std::ref(*mm_notif), std::ref(*token_metadata), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
