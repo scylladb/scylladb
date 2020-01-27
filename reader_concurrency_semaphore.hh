@@ -32,7 +32,7 @@ using namespace seastar;
 ///
 /// Before creating a reader one should obtain a permit by calling
 /// `wait_admission()`. This permit can then be used for tracking the
-/// reader's memory consumption via `reader_resource_tracker`.
+/// reader's memory consumption.
 /// The permit should be held onto for the lifetime of the reader
 /// and/or any buffer its tracking.
 /// Reader concurrency is dual limited by count and memory.
@@ -212,25 +212,3 @@ public:
         return _wait_list.size();
     }
 };
-
-class reader_resource_tracker {
-    reader_permit _permit;
-public:
-    explicit reader_resource_tracker(reader_permit permit)
-        : _permit(std::move(permit)) {
-    }
-
-    bool operator==(const reader_resource_tracker& other) const {
-        return _permit == other._permit;
-    }
-
-    file track(file f) const;
-
-    reader_permit get_permit() const {
-        return _permit;
-    }
-};
-
-inline reader_resource_tracker no_resource_tracking() {
-    return reader_resource_tracker{no_reader_permit()};
-}

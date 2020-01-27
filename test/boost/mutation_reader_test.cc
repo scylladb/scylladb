@@ -1085,10 +1085,7 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
         auto permit = semaphore.wait_admission(0).get0();
 
         {
-            reader_resource_tracker resource_tracker(permit);
-
-            auto tracked_file = resource_tracker.track(
-                    file(shared_ptr<file_impl>(make_shared<dummy_file_impl>())));
+            auto tracked_file = make_tracked_file(file(shared_ptr<file_impl>(make_shared<dummy_file_impl>())), permit);
 
             BOOST_REQUIRE_EQUAL(4 * 1024, semaphore.available_resources().memory);
 

@@ -266,7 +266,3 @@ public:
 file make_tracked_file(file f, reader_permit p) {
     return file(make_shared<tracking_file_impl>(f, std::move(p)));
 }
-
-file reader_resource_tracker::track(file f) const {
-    return file(make_shared<tracking_file_impl>(f, this->get_permit()));
-}
