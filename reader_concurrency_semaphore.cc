@@ -190,13 +190,6 @@ class tracking_file_impl : public file_impl {
     file _tracked_file;
     reader_permit _permit;
 
-    // Shouldn't be called if semaphore is NULL.
-    temporary_buffer<uint8_t> make_tracked_buf(temporary_buffer<uint8_t> buf) {
-        return seastar::temporary_buffer<uint8_t>(buf.get_write(),
-                buf.size(),
-                make_deleter(buf.release(), [units = _permit.get_memory_units(buf.size())] () mutable { units.reset(); }));
-    }
-
 public:
     tracking_file_impl(file file, reader_permit permit)
         : _tracked_file(std::move(file))
@@ -263,7 +256,7 @@ public:
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
         return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([this] (temporary_buffer<uint8_t> buf) {
             if (_permit) {
-                buf = make_tracked_buf(std::move(buf));
+                buf = make_tracked_temporary_buffer(std::move(buf), _permit);
             }
             return make_ready_future<temporary_buffer<uint8_t>>(std::move(buf));
         });

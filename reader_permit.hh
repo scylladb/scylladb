@@ -114,4 +114,10 @@ public:
 
 reader_permit no_reader_permit();
 
+template <typename Char>
+temporary_buffer<Char> make_tracked_temporary_buffer(temporary_buffer<Char> buf, reader_permit& permit) {
+    return temporary_buffer<Char>(buf.get_write(), buf.size(),
+            make_deleter(buf.release(), [units = permit.get_memory_units(buf.size())] () mutable { units.reset(); }));
+}
+
 file make_tracked_file(file f, reader_permit p);
