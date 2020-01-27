@@ -56,7 +56,6 @@ public:
     virtual unsigned sharding_ignore_msb() const override;
 private:
     using uint128_t = unsigned __int128;
-    static int64_t normalize(int64_t in);
     token get_token(bytes_view key) const;
     token get_token(uint64_t value) const;
     token bias(uint64_t value) const;      // translate from a zero-baed range

@@ -50,6 +50,7 @@
 #include <utility>
 #include <vector>
 #include <range.hh>
+#include <byteswap.h>
 #include "dht/token.hh"
 
 namespace sstables {
@@ -270,7 +271,7 @@ public:
      * @return bytes that represent the token as required by get_token_validator().
      */
     virtual bytes token_to_bytes(const token& t) const {
-        return bytes(t._data.begin(), t._data.end());
+        return t.data();
     }
 
     /**
@@ -852,8 +853,10 @@ namespace std {
 template<>
 struct hash<dht::token> {
     size_t operator()(const dht::token& t) const {
-        const auto& b = t._data;
-        return read_le<int64_t>(reinterpret_cast<const char*>(b.data()));
+        // We have to reverse the bytes here to keep compatibility with
+        // the behaviour that was here when tokens were represented as
+        // sequence of bytes.
+        return bswap_64(t._data);
     }
 };
 

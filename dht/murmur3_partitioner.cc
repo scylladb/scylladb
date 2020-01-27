@@ -58,14 +58,6 @@ murmur3_partitioner::init_zero_based_shard_start(unsigned shards, unsigned shard
     return ret;
 }
 
-inline
-int64_t
-murmur3_partitioner::normalize(int64_t in) {
-    return in == std::numeric_limits<int64_t>::lowest()
-            ? std::numeric_limits<int64_t>::max()
-            : in;
-}
-
 token
 murmur3_partitioner::get_token(bytes_view key) const {
     if (key.empty()) {
@@ -78,13 +70,7 @@ murmur3_partitioner::get_token(bytes_view key) const {
 
 token
 murmur3_partitioner::get_token(uint64_t value) const {
-    // We don't normalize() the value, since token includes an is-before-everything
-    // indicator.
-    // FIXME: will this require a repair when importing a database?
-    auto t = net::hton(normalize(value));
-    std::array<uint8_t, 8> b;
-    std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
-    return token{token::kind::key, std::move(b)};
+    return token(token::kind::key, value);
 }
 
 token
@@ -110,9 +96,7 @@ inline int64_t long_token(token_view t) {
         return std::numeric_limits<long>::min();
     }
 
-    auto ptr = t._data.get().begin();
-    auto lp = unaligned_cast<const int64_t *>(ptr);
-    return net::ntoh(*lp);
+    return t._data;
 }
 
 uint64_t

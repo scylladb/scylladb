@@ -24,6 +24,7 @@
 #include "bytes.hh"
 #include "utils/managed_bytes.hh"
 
+#include <seastar/net/byteorder.hh>
 #include <fmt/format.h>
 #include <array>
 #include <functional>
@@ -42,9 +43,9 @@ enum class token_kind {
 class token_view {
 public:
     token_kind _kind;
-    std::reference_wrapper<const std::array<uint8_t, 8>> _data;
+    int64_t _data;
 
-    token_view(token_kind kind, const std::array<uint8_t, 8>& data) : _kind(kind), _data(data) {}
+    token_view(token_kind kind, int64_t data) : _kind(kind), _data(data) {}
     explicit token_view(const token& token);
 
     bool is_minimum() const {
@@ -57,37 +58,35 @@ public:
 };
 
 class token {
+    static inline int64_t normalize(int64_t t) {
+        return t == std::numeric_limits<int64_t>::min() ? std::numeric_limits<int64_t>::max() : t;
+    }
 public:
     using kind = token_kind;
     kind _kind;
-    // _data can be interpreted as a big endian binary fraction
-    // in the range [0.0, 1.0).
-    //
-    // So, [] == 0.0
-    //     [0x00] == 0.0
-    //     [0x80] == 0.5
-    //     [0x00, 0x80] == 1/512
-    //     [0xff, 0x80] == 1 - 1/512
-    std::array<uint8_t, 8> _data;
+    int64_t _data;
 
     token() : _kind(kind::before_all_keys) {
     }
 
-    token(kind k, const std::array<uint8_t, 8>& d) : _kind(std::move(k)), _data(d) {
-    }
+    token(kind k, int64_t d)
+        : _kind(std::move(k))
+        , _data(normalize(d)) { }
 
     token(kind k, const bytes& b) : _kind(std::move(k)) {
-        if (b.size() != 8) {
-            throw std::runtime_error(fmt::format("Wrong token bytes size: expected 8 but got {}", b.size()));
+        if (b.size() != sizeof(_data)) {
+            throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
         }
-        std::copy_n(b.begin(), 8, _data.begin());
+        std::copy_n(b.begin(), sizeof(_data), reinterpret_cast<int8_t *>(&_data));
+        _data = net::ntoh(_data);
     }
 
     token(kind k, bytes_view b) : _kind(std::move(k)) {
-        if (b.size() != 8) {
-            throw std::runtime_error(fmt::format("Wrong token bytes size: expected 8 but got {}", b.size()));
+        if (b.size() != sizeof(_data)) {
+            throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
         }
-        std::copy_n(b.begin(), 8, _data.begin());
+        std::copy_n(b.begin(), sizeof(_data), reinterpret_cast<int8_t *>(&_data));
+        _data = net::ntoh(_data);
     }
 
     bool is_minimum() const {
@@ -112,8 +111,11 @@ public:
         return token_view(*this);
     }
 
-    bytes_view data() const {
-        return bytes_view(reinterpret_cast<const int8_t*>(_data.data()), _data.size());
+    bytes data() const {
+        auto t = net::hton(_data);
+        bytes b(bytes::initialized_later(), sizeof(_data));
+        std::copy_n(reinterpret_cast<int8_t*>(&t), sizeof(_data), b.begin());
+        return b;
     }
 };
 

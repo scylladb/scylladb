@@ -133,11 +133,8 @@ void endpoints_check(
     }
 }
 
-auto d2t = [](double d) {
-    unsigned long l = net::hton(static_cast<unsigned long>(d*(std::numeric_limits<unsigned long>::max())));
-    std::array<uint8_t, 8> a;
-    memcpy(a.data(), &l, 8);
-    return a;
+auto d2t = [](double d) -> int64_t {
+    return static_cast<unsigned long>(d*(std::numeric_limits<unsigned long>::max()));
 };
 
 /**

@@ -29,8 +29,8 @@
 
 namespace dht {
 
-static const token min_token{ token::kind::before_all_keys, std::array<uint8_t, 8>{} };
-static const token max_token{ token::kind::after_all_keys, std::array<uint8_t, 8>{} };
+static const token min_token{ token::kind::before_all_keys, 0 };
+static const token max_token{ token::kind::after_all_keys, 0 };
 
 const token&
 minimum_token() {

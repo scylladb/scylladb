@@ -43,16 +43,11 @@ debug(Args&&... args) {
 }
 
 static dht::token token_from_long(uint64_t value) {
-    auto t = net::hton(value);
-    std::array<uint8_t, 8> b;
-    std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
-    return { dht::token::kind::key, std::move(b) };
+    return dht::token(dht::token::kind::key, value);
 }
 
 static int64_t long_from_token(dht::token token) {
-    int64_t data;
-    std::copy_n(token._data.data(), 8, reinterpret_cast<char*>(&data));
-    return net::ntoh(data);
+    return token._data;
 }
 
 SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {

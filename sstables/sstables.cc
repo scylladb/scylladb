@@ -573,7 +573,7 @@ future<> parse(sstable_version_types v, random_access_reader& in, summary& s) {
                         auto position = seastar::read_le<uint64_t>(buf.get());
                         auto token = dht::global_partitioner().get_token(key_view(key_data));
                         s.add_summary_data(token.data());
-                        s.entries.push_back({ dht::token(dht::token::kind::key, std::move(token._data)), key_data, position });
+                        s.entries.push_back({ token, key_data, position });
                         return make_ready_future<>();
                     });
                 });
@@ -1886,8 +1886,8 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
             auto&& right_token = right.token();
             auto right_exclusive = !right.has_key() && right.bound() == dht::ring_position::token_bound::start;
             sm.token_ranges.elements.push_back(disk_token_range{
-                {left_exclusive, to_bytes(left_token.data())},
-                {right_exclusive, to_bytes(right_token.data())}});
+                {left_exclusive, left_token.data()},
+                {right_exclusive, right_token.data()}});
         }
     }
     return sm;
@@ -1971,7 +1971,7 @@ void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key
         state.next_data_offset_to_write_summary += state.summary_byte_cost * entry_size;
         s.add_summary_data(token.data());
         auto key_data = s.add_summary_data(key);
-        s.entries.push_back({ dht::token(dht::token::kind::key, token._data), key_data, index_offset });
+        s.entries.push_back({ dht::token(dht::token::kind::key, std::move(token._data)), key_data, index_offset });
     }
 }
 
@@ -2500,7 +2500,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         }
         void consume_entry(index_entry&& ie, uint64_t index_offset) {
             auto token = dht::global_partitioner().get_token(ie.get_key());
-            maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), ie.position(), index_offset, _state);
+            maybe_add_summary_entry(_summary, dht::token(dht::token::kind::key, std::move(token._data)), ie.get_key_bytes(), ie.position(), index_offset, _state);
             if (!first_key) {
                 first_key = key(to_bytes(ie.get_key_bytes()));
             } else {
