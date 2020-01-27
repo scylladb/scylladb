@@ -853,13 +853,8 @@ template<>
 struct hash<dht::token> {
     size_t operator()(const dht::token& t) const {
         const auto& b = t._data;
-        if (b.size() == sizeof(size_t)) { // practically always
-            return read_le<size_t>(reinterpret_cast<const char*>(b.data()));
-        }
-        return hash_large_token(b);
+        return read_le<int64_t>(reinterpret_cast<const char*>(b.data()));
     }
-private:
-    size_t hash_large_token(const std::array<uint8_t, 8>& b) const;
 };
 
 template <>

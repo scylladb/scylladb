@@ -468,14 +468,3 @@ split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s) {
 }
 
 }
-
-namespace std {
-
-size_t
-hash<dht::token>::hash_large_token(const std::array<uint8_t, 8>& b) const {
-    std::array<uint64_t, 2> result;
-    utils::murmur_hash::hash3_x64_128(b.begin(), 8, 0, result);
-    return result[0];
-}
-
-}
