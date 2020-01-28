@@ -345,10 +345,6 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
             BOOST_CHECK_EQUAL(str, "hej bubba cow");
             (*count)++;
             return make_ready_future<>();
-        }).then([](auto s) {
-            return do_with(std::move(s), [](auto& s) {
-                return s->done();
-            });
         }).then([count] {
             return *count;
         });
@@ -446,10 +442,6 @@ SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
                                 auto&& [buf, rp] = buf_rp;
                                 BOOST_CHECK_EQUAL(rp, rps->at(0));
                                 return make_ready_future<>();
-                            }).then([](auto s) {
-                                return do_with(std::move(s), [](auto& s) {
-                                    return s->done();
-                                });
                             }).then_wrapped([](auto&& f) {
                                 try {
                                     f.get();
@@ -489,10 +481,6 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                             return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, service::get_local_commitlog_priority(), [rps](db::commitlog::buffer_and_replay_position buf_rp) {
                                 BOOST_FAIL("Should not reach");
                                 return make_ready_future<>();
-                            }).then([](auto s) {
-                                return do_with(std::move(s), [](auto& s) {
-                                    return s->done();
-                                });
                             }).then_wrapped([](auto&& f) {
                                 try {
                                     f.get();
@@ -530,10 +518,6 @@ SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
                         auto seg = segments[0];
                         return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, service::get_local_commitlog_priority(), [](db::commitlog::buffer_and_replay_position buf_rp) {
                             return make_exception_future(std::runtime_error("I am in a throwing mode"));
-                        }).then([](auto s) {
-                            return do_with(std::move(s), [](auto& s) {
-                                return s->done();
-                            });
                         }).then_wrapped([](auto&& f) {
                             try {
                                 f.get();

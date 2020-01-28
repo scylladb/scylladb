@@ -1862,7 +1862,7 @@ const db::commitlog::config& db::commitlog::active_config() const {
 
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
-future<std::unique_ptr<subscription<db::commitlog::buffer_and_replay_position>>>
+future<>
 db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
     struct work {
     private:
@@ -2117,7 +2117,7 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
             w->s.set_exception(ep);
         });
 
-        return std::make_unique<subscription<buffer_and_replay_position>>(std::move(ret));
+        return ret.done();
     });
 }
 

@@ -227,10 +227,7 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
 
     return db::commitlog::read_log_file(file, fname_prefix, service::get_local_commitlog_priority(),
             std::bind(&impl::process, this, s.get(), std::placeholders::_1),
-            p, &exts).then([](auto s) {
-        auto f = s->done();
-        return f.finally([s = std::move(s)] {});
-    }).then_wrapped([s](future<> f) {
+            p, &exts).then_wrapped([s](future<> f) {
         try {
             f.get();
         } catch (commitlog::segment_data_corruption_error& e) {

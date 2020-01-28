@@ -386,7 +386,7 @@ public:
         }
     };
 
-    static future<std::unique_ptr<subscription<buffer_and_replay_position>>> read_log_file(
+    static future<> read_log_file(
             const sstring&, const sstring&, seastar::io_priority_class read_io_prio_class, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
 private:
     commitlog(config);
