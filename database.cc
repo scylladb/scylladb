@@ -1027,11 +1027,23 @@ keyspace_metadata::keyspace_metadata(sstring name,
     }
 }
 
-void keyspace_metadata::validate() const {
+void keyspace_metadata::validate(locator::token_metadata& tm) const {
     using namespace locator;
+    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), tm, strategy_options());
+}
 
-    auto& ss = service::get_local_storage_service();
-    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), ss.get_token_metadata(), strategy_options());
+void database::validate_keyspace_update(keyspace_metadata& ksm) {
+    ksm.validate(service::get_local_storage_service().get_token_metadata());
+    if (!has_keyspace(ksm.name())) {
+        throw exceptions::configuration_exception(format("Cannot update non existing keyspace '{}'.", ksm.name()));
+    }
+}
+
+void database::validate_new_keyspace(keyspace_metadata& ksm) {
+    ksm.validate(service::get_local_storage_service().get_token_metadata());
+    if (has_keyspace(ksm.name())) {
+        throw exceptions::already_exists_exception{ksm.name()};
+    }
 }
 
 std::vector<schema_ptr> keyspace_metadata::tables() const {

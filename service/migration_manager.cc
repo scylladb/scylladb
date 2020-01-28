@@ -590,11 +590,10 @@ future<> migration_manager::announce_keyspace_update(lw_shared_ptr<keyspace_meta
 }
 
 future<> migration_manager::announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally) {
-    ksm->validate();
     auto& proxy = get_local_storage_proxy();
-    if (!proxy.get_db().local().has_keyspace(ksm->name())) {
-        throw exceptions::configuration_exception(format("Cannot update non existing keyspace '{}'.", ksm->name()));
-    }
+    auto& db = proxy.get_db().local();
+
+    db.validate_keyspace_update(*ksm);
     mlogger.info("Update Keyspace: {}", ksm);
     auto mutations = db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
     return announce(std::move(mutations), announce_locally);
@@ -607,11 +606,10 @@ future<>migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata
 
 future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally)
 {
-    ksm->validate();
     auto& proxy = get_local_storage_proxy();
-    if (proxy.get_db().local().has_keyspace(ksm->name())) {
-        throw exceptions::already_exists_exception{ksm->name()};
-    }
+    auto& db = proxy.get_db().local();
+
+    db.validate_new_keyspace(*ksm);
     mlogger.info("Create new Keyspace: {}", ksm);
     auto mutations = db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
     return announce(std::move(mutations), announce_locally);

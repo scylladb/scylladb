@@ -1106,7 +1106,7 @@ public:
                  std::map<sstring, sstring> options,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    void validate() const;
+    void validate(locator::token_metadata& tm) const;
     const sstring& name() const {
         return _name;
     }
@@ -1438,6 +1438,8 @@ public:
     keyspace& find_keyspace(const sstring& name);
     const keyspace& find_keyspace(const sstring& name) const;
     bool has_keyspace(const sstring& name) const;
+    void validate_keyspace_update(keyspace_metadata& ksm);
+    void validate_new_keyspace(keyspace_metadata& ksm);
     future<> update_keyspace(const sstring& name);
     void drop_keyspace(const sstring& name);
     const auto& keyspaces() const { return _keyspaces; }
