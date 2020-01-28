@@ -459,7 +459,6 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     fragmented_temporary_buffer::ostream _buffer_ostream;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     time_point _sync_time;
-    uint64_t _write_waiters = 0;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
     uint64_t _num_allocs = 0;
