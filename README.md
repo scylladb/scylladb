@@ -38,6 +38,10 @@ Please see [HACKING.md](HACKING.md) for detailed information on building and dev
 ./build/release/scylla --help
 ```
 
+## Testing
+
+See [test.py manual](docs/testing.md).
+
 ## Scylla APIs and compatibility
 By default, Scylla is compatible with Apache Cassandra and its APIs - CQL and
 Thrift. There is also experimental support for the API of Amazon DynamoDB,
