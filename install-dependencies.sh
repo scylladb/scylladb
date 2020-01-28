@@ -86,6 +86,7 @@ fedora_packages=(
     ethtool
     hwloc
     glibc-langpack-en
+    lld
 )
 
 centos_packages=(
