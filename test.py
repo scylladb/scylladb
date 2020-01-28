@@ -268,7 +268,7 @@ class CqlTest(Test):
         self.result = os.path.join(suite.path, self.shortname + ".result")
         self.tmpfile = os.path.join(options.tmpdir, self.mode, self.uname + ".reject")
         self.reject = os.path.join(suite.path, self.shortname + ".reject")
-        self.args = shlex.split("-c2 -m2G --input={} --output={} --log={}".format(
+        self.args = shlex.split("-c1 -m2G --input={} --output={} --log={}".format(
             self.cql, self.tmpfile, self.log_filename))
         self.args += UnitTest.standard_args
         self.is_executed_ok = False
