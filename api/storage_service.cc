@@ -78,20 +78,20 @@ static std::vector<ss::token_range> describe_ring(const sstring& keyspace) {
     return res;
 }
 
-void set_storage_service(http_context& ctx, routes& r) {
-    using ks_cf_func = std::function<future<json::json_return_type>(std::unique_ptr<request>, sstring, std::vector<sstring>)>;
+using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<request>, sstring, std::vector<sstring>)>;
 
-    auto wrap_ks_cf = [&ctx](ks_cf_func f) {
-        return [&ctx, f = std::move(f)](std::unique_ptr<request> req) {
-            auto keyspace = validate_keyspace(ctx, req->param);
-            auto column_families = split_cf(req->get_query_param("cf"));
-            if (column_families.empty()) {
-                column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
-            }
-            return f(std::move(req), std::move(keyspace), std::move(column_families));
-        };
+static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
+    return [&ctx, f = std::move(f)](std::unique_ptr<request> req) {
+        auto keyspace = validate_keyspace(ctx, req->param);
+        auto column_families = split_cf(req->get_query_param("cf"));
+        if (column_families.empty()) {
+            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+        }
+        return f(ctx, std::move(req), std::move(keyspace), std::move(column_families));
     };
+}
 
+void set_storage_service(http_context& ctx, routes& r) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {
             return make_ready_future<json::json_return_type>(id.to_sstring());
@@ -222,64 +222,6 @@ void set_storage_service(http_context& ctx, routes& r) {
                 req.get_query_param("key")));
     });
 
-    ss::get_snapshot_details.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().get_snapshot_details().then([] (auto result) {
-            std::vector<ss::snapshots> res;
-            for (auto& map: result) {
-                ss::snapshots all_snapshots;
-                all_snapshots.key = map.first;
-
-                std::vector<ss::snapshot> snapshot;
-                for (auto& cf: map.second) {
-                    ss::snapshot s;
-                    s.ks = cf.ks;
-                    s.cf = cf.cf;
-                    s.live = cf.live;
-                    s.total = cf.total;
-                    snapshot.push_back(std::move(s));
-                }
-                all_snapshots.value = std::move(snapshot);
-                res.push_back(std::move(all_snapshots));
-            }
-            return make_ready_future<json::json_return_type>(std::move(res));
-        });
-    });
-
-    ss::take_snapshot.set(r, [](std::unique_ptr<request> req) {
-        auto tag = req->get_query_param("tag");
-        auto column_family = req->get_query_param("cf");
-
-        std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
-
-        auto resp = make_ready_future<>();
-        if (column_family.empty()) {
-            resp = service::get_local_storage_service().take_snapshot(tag, keynames);
-        } else {
-            if (keynames.size() > 1) {
-                throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
-            }
-            resp = service::get_local_storage_service().take_column_family_snapshot(keynames[0], column_family, tag);
-        }
-        return resp.then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    ss::del_snapshot.set(r, [](std::unique_ptr<request> req) {
-        auto tag = req->get_query_param("tag");
-
-        std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
-        return service::get_local_storage_service().clear_snapshot(tag, keynames).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    ss::true_snapshots_size.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().true_snapshots_size().then([] (int64_t size) {
-            return make_ready_future<json::json_return_type>(size);
-        });
-    });
-
     ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = split_cf(req->get_query_param("cf"));
@@ -326,32 +268,7 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::scrub.set(r, wrap_ks_cf([&ctx](std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
-        // TODO: respect this
-        auto skip_corrupted = req->get_query_param("skip_corrupted");
-
-        auto f = make_ready_future<>();
-        if (!req_param<bool>(*req, "disable_snapshot", false)) {
-            auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
-            f = parallel_for_each(column_families, [keyspace, tag](sstring cf) {
-                return service::get_local_storage_service().take_column_family_snapshot(keyspace, cf, tag);
-            });
-        }
-
-        return f.then([&ctx, keyspace, column_families] {
-            return ctx.db.invoke_on_all([=] (database& db) {
-                return do_for_each(column_families, [=, &db](sstring cfname) {
-                    auto& cm = db.get_compaction_manager();
-                    auto& cf = db.find_column_family(keyspace, cfname);
-                    return cm.perform_sstable_scrub(&cf);
-                });
-            });
-        }).then([]{
-            return make_ready_future<json::json_return_type>(0);
-        });
-    }));
-
-    ss::upgrade_sstables.set(r, wrap_ks_cf([&ctx](std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+    ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         return ctx.db.invoke_on_all([=] (database& db) {
@@ -1035,6 +952,91 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
+}
+
+void set_snapshot(http_context& ctx, routes& r) {
+    ss::get_snapshot_details.set(r, [](std::unique_ptr<request> req) {
+        return service::get_local_storage_service().get_snapshot_details().then([] (auto result) {
+            std::vector<ss::snapshots> res;
+            for (auto& map: result) {
+                ss::snapshots all_snapshots;
+                all_snapshots.key = map.first;
+
+                std::vector<ss::snapshot> snapshot;
+                for (auto& cf: map.second) {
+                    ss::snapshot s;
+                    s.ks = cf.ks;
+                    s.cf = cf.cf;
+                    s.live = cf.live;
+                    s.total = cf.total;
+                    snapshot.push_back(std::move(s));
+                }
+                all_snapshots.value = std::move(snapshot);
+                res.push_back(std::move(all_snapshots));
+            }
+            return make_ready_future<json::json_return_type>(std::move(res));
+        });
+    });
+
+    ss::take_snapshot.set(r, [](std::unique_ptr<request> req) {
+        auto tag = req->get_query_param("tag");
+        auto column_family = req->get_query_param("cf");
+
+        std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
+
+        auto resp = make_ready_future<>();
+        if (column_family.empty()) {
+            resp = service::get_local_storage_service().take_snapshot(tag, keynames);
+        } else {
+            if (keynames.size() > 1) {
+                throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
+            }
+            resp = service::get_local_storage_service().take_column_family_snapshot(keynames[0], column_family, tag);
+        }
+        return resp.then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    ss::del_snapshot.set(r, [](std::unique_ptr<request> req) {
+        auto tag = req->get_query_param("tag");
+
+        std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
+        return service::get_local_storage_service().clear_snapshot(tag, keynames).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    ss::true_snapshots_size.set(r, [](std::unique_ptr<request> req) {
+        return service::get_local_storage_service().true_snapshots_size().then([] (int64_t size) {
+            return make_ready_future<json::json_return_type>(size);
+        });
+    });
+
+    ss::scrub.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+        // TODO: respect this
+        auto skip_corrupted = req->get_query_param("skip_corrupted");
+
+        auto f = make_ready_future<>();
+        if (!req_param<bool>(*req, "disable_snapshot", false)) {
+            auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
+            f = parallel_for_each(column_families, [keyspace, tag](sstring cf) {
+                return service::get_local_storage_service().take_column_family_snapshot(keyspace, cf, tag);
+            });
+        }
+
+        return f.then([&ctx, keyspace, column_families] {
+            return ctx.db.invoke_on_all([=] (database& db) {
+                return do_for_each(column_families, [=, &db](sstring cfname) {
+                    auto& cm = db.get_compaction_manager();
+                    auto& cf = db.find_column_family(keyspace, cfname);
+                    return cm.perform_sstable_scrub(&cf);
+                });
+            });
+        }).then([]{
+            return make_ready_future<json::json_return_type>(0);
+        });
+    }));
 }
 
 }
