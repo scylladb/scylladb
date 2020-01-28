@@ -58,6 +58,7 @@ private:
 
 struct virtual_reader {
     flat_mutation_reader operator()(schema_ptr schema,
+            reader_permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,

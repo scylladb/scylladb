@@ -673,8 +673,8 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
         streamed_mutation::forwarding _fwd;
         mutation_reader::forwarding _fwd_mr;
 
-        flat_mutation_reader operator()(reader_resource_tracker tracker) {
-            return _ms.make_reader(std::move(_s), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr, tracker);
+        flat_mutation_reader operator()(reader_permit permit) {
+            return _ms.make_reader(std::move(_s), std::move(permit), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr);
         }
     };
 
@@ -683,7 +683,6 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
         mutation_source_and_params reader_factory;
     };
     struct admitted_state {
-        lw_shared_ptr<reader_concurrency_semaphore::reader_permit> permit;
         flat_mutation_reader reader;
     };
     std::variant<pending_state, admitted_state> _state;
@@ -703,9 +702,9 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
         }
 
         return std::get<pending_state>(_state).semaphore.wait_admission(new_reader_base_cost,
-                timeout).then([this, fn = std::move(fn)] (lw_shared_ptr<reader_concurrency_semaphore::reader_permit> permit) mutable {
+                timeout).then([this, fn = std::move(fn)] (reader_permit permit) mutable {
             auto reader_factory = std::move(std::get<pending_state>(_state).reader_factory);
-            _state.emplace<admitted_state>(admitted_state{permit, reader_factory(reader_resource_tracker(permit))});
+            _state.emplace<admitted_state>(admitted_state{reader_factory(std::move(permit))});
             return fn(std::get<admitted_state>(_state).reader);
         });
     }
@@ -786,13 +785,13 @@ snapshot_source make_empty_snapshot_source() {
 
 mutation_source make_empty_mutation_source() {
     return mutation_source([](schema_ptr s,
+            reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr tr,
             streamed_mutation::forwarding fwd,
-            mutation_reader::forwarding,
-            reader_resource_tracker) {
+            mutation_reader::forwarding) {
         return make_empty_flat_reader(s);
     }, [] {
         return [] (const dht::decorated_key& key) {
@@ -803,6 +802,7 @@ mutation_source make_empty_mutation_source() {
 
 mutation_source make_combined_mutation_source(std::vector<mutation_source> addends) {
     return mutation_source([addends = std::move(addends)] (schema_ptr s,
+            reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& slice,
             const io_priority_class& pc,
@@ -811,7 +811,7 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
         std::vector<flat_mutation_reader> rd;
         rd.reserve(addends.size());
         for (auto&& ms : addends) {
-            rd.emplace_back(ms.make_reader(s, pr, slice, pc, tr, fwd));
+            rd.emplace_back(ms.make_reader(s, permit, pr, slice, pc, tr, fwd));
         }
         return make_combined_reader(s, std::move(rd), fwd);
     });

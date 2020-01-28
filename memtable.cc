@@ -346,7 +346,7 @@ protected:
                                     const io_priority_class& pc,
                                     streamed_mutation::forwarding fwd,
                                     mutation_reader::forwarding fwd_mr) {
-        auto ret = _memtable->_underlying->make_reader(_schema, delegate, slice, pc, nullptr, fwd, fwd_mr);
+        auto ret = _memtable->_underlying->make_reader(_schema, no_reader_permit(), delegate, slice, pc, nullptr, fwd, fwd_mr);
         _memtable = {};
         _last = {};
         return ret;
@@ -742,6 +742,7 @@ logalloc::occupancy_stats memtable::occupancy() const {
 
 mutation_source memtable::as_data_source() {
     return mutation_source([mt = shared_from_this()] (schema_ptr s,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,

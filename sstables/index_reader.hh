@@ -209,11 +209,11 @@ public:
             std::unique_ptr<promoted_index> index;
             if (promoted_index_stream) {
                 if (is_mc_format()) {
-                    index = std::make_unique<promoted_index>(_s, *_deletion_time, std::move(*promoted_index_stream),
+                    index = std::make_unique<promoted_index>(_s, continuous_data_consumer::_permit, *_deletion_time, std::move(*promoted_index_stream),
                                   promoted_index_size,
                                   _num_pi_blocks, *_ck_values_fixed_lengths);
                 } else {
-                     index = std::make_unique<promoted_index>(_s, *_deletion_time, std::move(*promoted_index_stream),
+                     index = std::make_unique<promoted_index>(_s, continuous_data_consumer::_permit, *_deletion_time, std::move(*promoted_index_stream),
                                    promoted_index_size, _num_pi_blocks);
                 }
             }
@@ -233,10 +233,10 @@ public:
         return proceed::yes;
     }
 
-    index_consume_entry_context(IndexConsumer& consumer, trust_promoted_index trust_pi, const schema& s,
+    index_consume_entry_context(reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi, const schema& s,
             file index_file, file_input_stream_options options, uint64_t start,
             uint64_t maxlen, std::optional<column_values_fixed_lengths> ck_values_fixed_lengths)
-        : continuous_data_consumer(make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
+        : continuous_data_consumer(std::move(permit), make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
         , _consumer(consumer), _index_file(index_file), _options(options)
         , _entry_offset(start), _trust_pi(trust_pi), _s(s), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
     {}
@@ -294,6 +294,7 @@ future<> close_index_list(shared_index_lists::list_ptr& list) {
 // If eof() then the lower bound cursor is positioned past all partitions in the sstable.
 class index_reader {
     shared_sstable _sstable;
+    reader_permit _permit;
     const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
     shared_index_lists _index_lists;
@@ -301,6 +302,14 @@ class index_reader {
     struct reader {
         index_consumer _consumer;
         index_consume_entry_context<index_consumer> _context;
+
+        static file get_file(sstable& sst, reader_permit permit, tracing::trace_state_ptr trace_state) {
+            auto f = make_tracked_file(sst._index_file, std::move(permit));
+            if (!trace_state) {
+                return f;
+            }
+            return tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", sst.filename(component_type::Index)));
+        }
 
         inline static file_input_stream_options get_file_input_stream_options(shared_sstable sst, const io_priority_class& pc) {
             file_input_stream_options options;
@@ -310,13 +319,11 @@ class index_reader {
             return options;
         }
 
-        reader(shared_sstable sst, const io_priority_class& pc, tracing::trace_state_ptr trace_state, uint64_t begin, uint64_t end, uint64_t quantity)
+        reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state, uint64_t begin, uint64_t end, uint64_t quantity)
             : _consumer(quantity)
-            , _context(_consumer,
+            , _context(permit, _consumer,
                        trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema,
-                       trace_state
-                           ? tracing::make_traced_file(sst->_index_file, std::move(trace_state), format("{}:", sst->filename(component_type::Index)))
-                           : sst->_index_file,
+                       get_file(*sst, permit, std::move(trace_state)),
                        get_file_input_stream_options(sst, pc), begin, end - begin,
                        (sst->get_version() == sstable_version_types::mc
                            ? std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header()))
@@ -384,7 +391,7 @@ private:
                 end = summary.entries[summary_idx + 1].position;
             }
 
-            return do_with(std::make_unique<reader>(_sstable, _pc, _trace_state, position, end, quantity), [this, summary_idx] (auto& entries_reader) {
+            return do_with(std::make_unique<reader>(_sstable, _permit, _pc, _trace_state, position, end, quantity), [this, summary_idx] (auto& entries_reader) {
                 return entries_reader->_context.consume_input().then_wrapped([this, summary_idx, &entries_reader] (future<> f) {
                     std::exception_ptr ex;
                     if (f.failed()) {
@@ -634,8 +641,9 @@ private:
     }
 
 public:
-    index_reader(shared_sstable sst, const io_priority_class& pc, tracing::trace_state_ptr trace_state)
+    index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state)
         : _sstable(std::move(sst))
+        , _permit(std::move(permit))
         , _pc(pc)
         , _trace_state(std::move(trace_state))
     {

@@ -61,7 +61,7 @@ class test_consumer final : public data_consumer::continuous_data_consumer<test_
 
 public:
     test_consumer(uint64_t tested_value)
-        : continuous_data_consumer(prepare_stream(tested_value), 0, calculate_length(tested_value))
+        : continuous_data_consumer(no_reader_permit(), prepare_stream(tested_value), 0, calculate_length(tested_value))
         , _tested_value(tested_value)
     { }
 

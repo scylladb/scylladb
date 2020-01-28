@@ -30,6 +30,7 @@
 #include <seastar/util/variant_utils.hh>
 #include <seastar/net/byteorder.hh>
 #include "bytes.hh"
+#include "reader_permit.hh"
 
 #include <variant>
 
@@ -60,6 +61,7 @@ class continuous_data_consumer {
         return static_cast<StateProcessor&>(*this);
     };
 protected:
+    reader_permit _permit;
     input_stream<char> _input;
     sstables::reader_position_tracker _stream_position;
     // remaining length of input to read (if <0, continue until end of file).
@@ -124,7 +126,7 @@ private:
                 data.trim_front(len);
                 return read_status::ready;
             } else {
-                _read_bytes = temporary_buffer<char>(len);
+                _read_bytes = make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit);
                 std::copy(data.begin(), data.end(), _read_bytes.get_write());
                 _pos = data.size();
                 data.trim(0);
@@ -192,7 +194,7 @@ protected:
             return read_status::ready;
         } else {
             // copy what we have so far, read the rest later
-            _read_bytes = temporary_buffer<char>(len);
+            _read_bytes = make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit);
             std::copy(data.begin(), data.end(),_read_bytes.get_write());
             _read_bytes_where = &where;
             _pos = data.size();
@@ -245,7 +247,7 @@ protected:
                 data.trim_front(len);
                 return read_bytes(data, static_cast<uint32_t>(_u64), where);
             } else {
-                _read_bytes = temporary_buffer<char>(len);
+                _read_bytes = make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit);
                 std::copy(data.begin(), data.end(), _read_bytes.get_write());
                 _pos = data.size();
                 data.trim(0);
@@ -370,8 +372,8 @@ private:
         state_processor().verify_end_state();
     }
 public:
-    continuous_data_consumer(input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-            : _input(std::move(input)), _stream_position(sstables::reader_position_tracker{start, maxlen}), _remain(maxlen) {}
+    continuous_data_consumer(reader_permit permit, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
+            : _permit(std::move(permit)), _input(std::move(input)), _stream_position(sstables::reader_position_tracker{start, maxlen}), _remain(maxlen) {}
 
     future<> consume_input() {
         return _input.consume(state_processor());

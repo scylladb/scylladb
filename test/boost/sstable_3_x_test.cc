@@ -92,7 +92,7 @@ public:
         return sstables::test(_sst).read_indexes();
     }
     flat_mutation_reader read_rows_flat() {
-        return _sst->read_rows_flat(_sst->_schema);
+        return _sst->read_rows_flat(_sst->_schema, no_reader_permit());
     }
 
     const stats_metadata& get_stats_metadata() const {
@@ -103,16 +103,15 @@ public:
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc = default_priority_class(),
-            reader_resource_tracker resource_tracker = no_resource_tracking(),
             tracing::trace_state_ptr trace_state = {},
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor()) {
         return _sst->read_range_rows_flat(_sst->_schema,
+                                          no_reader_permit(),
                                           range,
                                           slice,
                                           pc,
-                                          std::move(resource_tracker),
                                           std::move(trace_state),
                                           fwd,
                                           fwd_mr,
@@ -263,7 +262,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
         auto r = assert_that(sst.read_range_rows_flat(query::full_partition_range,
                                                       UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA->full_slice(),
                                                       default_priority_class(),
-                                                      no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes));
         r.produces_partition_start(to_key(1))
@@ -312,7 +310,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
         auto r = assert_that(sst.read_range_rows_flat(query::full_partition_range,
                                                       slice,
                                                       default_priority_class(),
-                                                      no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes));
 
@@ -523,7 +520,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
         auto rd = sst.read_range_rows_flat(query::full_partition_range,
                                            UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA->full_slice(),
                                            default_priority_class(),
-                                           no_resource_tracking(),
                                            tracing::trace_state_ptr(),
                                            streamed_mutation::forwarding::yes);
         rd.set_max_buffer_size(1);
@@ -564,7 +560,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
         auto rd = sst.read_range_rows_flat(query::full_partition_range,
                                                       slice,
                                                       default_priority_class(),
-                                                      no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes);
         rd.set_max_buffer_size(1);
@@ -752,7 +747,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombst
         auto r = make_assertions(sst.read_range_rows_flat(query::full_partition_range,
                                            UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA->full_slice(),
                                            default_priority_class(),
-                                           no_resource_tracking(),
                                            tracing::trace_state_ptr(),
                                            streamed_mutation::forwarding::yes));
         std::array<int32_t, 2> rt_deletion_times {1534898600, 1534899416};
@@ -890,7 +884,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombst
         auto r = make_assertions(sst.read_range_rows_flat(query::full_partition_range,
                                                       slice,
                                                       default_priority_class(),
-                                                      no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes));
 
@@ -1087,7 +1080,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
         auto r = make_assertions(sst.read_range_rows_flat(query::full_partition_range,
                                            UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA->full_slice(),
                                            default_priority_class(),
-                                           no_resource_tracking(),
                                            tracing::trace_state_ptr(),
                                            streamed_mutation::forwarding::yes));
 
@@ -1156,7 +1148,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
         auto r = make_assertions(sst.read_range_rows_flat(query::full_partition_range,
                                                       slice,
                                                       default_priority_class(),
-                                                      no_resource_tracking(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes));
         const tombstone tomb = make_tombstone(1525385507816568, 1535592075);
@@ -3016,7 +3007,7 @@ static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s
     sstables::compact_sstables(sstables::compaction_descriptor(std::move(sstables)), *cf, new_sstable, replacer_fn_no_op()).get();
 
     auto compacted_sst = open_sstable(env, s, tmp.path().string(), new_generation);
-    return compacted_sst->as_mutation_source().make_reader(s, query::full_partition_range, s->full_slice());
+    return compacted_sst->as_mutation_source().make_reader(s, no_reader_permit(), query::full_partition_range, s->full_slice());
 }
 
 SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
@@ -4558,7 +4549,7 @@ static sstring get_read_index_test_path(sstring table_name) {
 }
 
 static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
-    return std::make_unique<index_reader>(sst, default_priority_class(), tracing::trace_state_ptr());
+    return std::make_unique<index_reader>(sst, no_reader_permit(), default_priority_class(), tracing::trace_state_ptr());
 }
 
 shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name, int64_t gen = 1) {
@@ -4765,7 +4756,6 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
     auto r = assert_that(sst.read_range_rows_flat(query::full_partition_range,
                                                   s->full_slice(),
                                                   default_priority_class(),
-                                                  no_resource_tracking(),
                                                   tracing::trace_state_ptr(),
                                                   streamed_mutation::forwarding::yes));
     r.produces_partition_start(to_pkey(0))
@@ -5113,7 +5103,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
         sst->load().get();
 
         BOOST_REQUIRE_EXCEPTION(
-            assert_that(sst->read_rows_flat(read_schema))
+            assert_that(sst->read_rows_flat(read_schema, no_reader_permit()))
                 .produces_partition_start(dk)
                 .produces_row(to_ck(0), {{val2_cdef, int32_type->decompose(int32_t(200))}})
                 .produces_row(to_ck(1), {{val2_cdef, int32_type->decompose(int32_t(201))}})

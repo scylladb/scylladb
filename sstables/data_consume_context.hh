@@ -180,14 +180,14 @@ inline data_consume_context<DataConsumeRowsContext> data_consume_rows(const sche
     // can be beneficial if the user wants to fast_forward_to() on the
     // returned context, and may make small skips.
     auto input = sst->data_stream(toread.start, last_end - toread.start, consumer.io_priority(),
-            consumer.resource_tracker(), consumer.trace_state(), sst->_partition_range_history);
+            consumer.permit(), consumer.trace_state(), sst->_partition_range_history);
     return {s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start };
 }
 
 template <typename DataConsumeRowsContext>
 inline data_consume_context<DataConsumeRowsContext> data_consume_single_partition(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
     auto input = sst->data_stream(toread.start, toread.end - toread.start, consumer.io_priority(),
-            consumer.resource_tracker(), consumer.trace_state(), sst->_single_partition_history);
+            consumer.permit(), consumer.trace_state(), sst->_single_partition_history);
     return {s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start };
 }
 

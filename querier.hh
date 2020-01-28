@@ -155,7 +155,7 @@ public:
         : _schema(schema)
         , _range(std::make_unique<dht::partition_range>(std::move(range)))
         , _slice(std::make_unique<query::partition_slice>(std::move(slice)))
-        , _reader(ms.make_reader(schema, *_range, *_slice, pc, std::move(trace_ptr),
+        , _reader(ms.make_reader(schema, no_reader_permit(), *_range, *_slice, pc, std::move(trace_ptr),
                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
         , _compaction_state(make_lw_shared<compact_for_query_state<OnlyLive>>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
     }

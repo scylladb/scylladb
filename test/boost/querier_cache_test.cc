@@ -162,7 +162,7 @@ public:
         : _sem(reader_concurrency_semaphore::no_limits{})
         , _cache(_sem, cache_size, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
-        , _mutation_source([this] (schema_ptr, const dht::partition_range& range) {
+        , _mutation_source([this] (schema_ptr, reader_permit, const dht::partition_range& range) {
             auto rd = flat_mutation_reader_from_mutations(_mutations, range);
             rd.set_max_buffer_size(max_reader_buffer_size);
             return rd;
@@ -679,7 +679,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         BOOST_CHECK_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 0);
 
         // Drain all resources of the semaphore
-        std::vector<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> permits;
+        std::vector<reader_permit> permits;
         const auto resources = semaphore.available_resources();
         permits.reserve(resources.count);
         const auto per_permit_memory  = resources.memory / resources.count;

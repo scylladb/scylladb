@@ -295,7 +295,8 @@ flat_mutation_reader read_context::create_reader(
     rm.rparts->read_operation = table.read_in_progress();
     rm.state = reader_state::used;
 
-    return table.as_mutation_source().make_reader(std::move(schema), *rm.rparts->range, *rm.rparts->slice, pc, std::move(trace_state));
+    return table.as_mutation_source().make_reader(std::move(schema), no_reader_permit(), *rm.rparts->range, *rm.rparts->slice, pc,
+            std::move(trace_state));
 }
 
 void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept {
@@ -584,6 +585,7 @@ static future<reconcilable_result> do_query_mutations(
         return ctx->lookup_readers().then([&ctx, s = std::move(s), &cmd, &ranges, trace_state, timeout,
                 accounter = std::move(accounter)] () mutable {
             auto ms = mutation_source([&] (schema_ptr s,
+                    reader_permit permit,
                     const dht::partition_range& pr,
                     const query::partition_slice& ps,
                     const io_priority_class& pc,
@@ -592,8 +594,8 @@ static future<reconcilable_result> do_query_mutations(
                     mutation_reader::forwarding fwd_mr) {
                 return make_multishard_combining_reader(ctx, dht::global_partitioner(), std::move(s), pr, ps, pc, std::move(trace_state), fwd_mr);
             });
-            auto reader = make_flat_multi_range_reader(s, std::move(ms), ranges, cmd.slice, service::get_local_sstable_query_read_priority(),
-                    trace_state, mutation_reader::forwarding::no);
+            auto reader = make_flat_multi_range_reader(s, std::move(ms), ranges, cmd.slice,
+                    service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
 
             auto compaction_state = make_lw_shared<compact_for_mutation_query_state>(*s, cmd.timestamp, cmd.slice, cmd.row_limit,
                     cmd.partition_limit);

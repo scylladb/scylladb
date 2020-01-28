@@ -22,16 +22,17 @@
 #pragma once
 
 #include <map>
-#include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
 #include "db/timeout_clock.hh"
-#include "seastarx.hh"
+#include "reader_permit.hh"
+
+using namespace seastar;
 
 /// Specific semaphore for controlling reader concurrency
 ///
 /// Before creating a reader one should obtain a permit by calling
 /// `wait_admission()`. This permit can then be used for tracking the
-/// reader's memory consumption via `reader_resource_tracker`.
+/// reader's memory consumption.
 /// The permit should be held onto for the lifetime of the reader
 /// and/or any buffer its tracking.
 /// Reader concurrency is dual limited by count and memory.
@@ -51,65 +52,9 @@
 /// constructor parameter).
 class reader_concurrency_semaphore {
 public:
-    struct resources {
-        int count = 0;
-        ssize_t memory = 0;
+    using resources = reader_resources;
 
-        resources() = default;
-
-        resources(int count, ssize_t memory)
-            : count(count)
-            , memory(memory) {
-        }
-
-        bool operator>=(const resources& other) const {
-            return count >= other.count && memory >= other.memory;
-        }
-
-        resources& operator-=(const resources& other) {
-            count -= other.count;
-            memory -= other.memory;
-            return *this;
-        }
-
-        resources& operator+=(const resources& other) {
-            count += other.count;
-            memory += other.memory;
-            return *this;
-        }
-
-        explicit operator bool() const {
-            return count >= 0 && memory >= 0;
-        }
-    };
-
-    class reader_permit {
-        reader_concurrency_semaphore& _semaphore;
-        const resources _base_cost;
-    public:
-        reader_permit(reader_concurrency_semaphore& semaphore, resources base_cost)
-            : _semaphore(semaphore)
-            , _base_cost(base_cost) {
-        }
-
-        ~reader_permit() {
-            _semaphore.signal(_base_cost);
-        }
-
-        reader_permit(const reader_permit&) = delete;
-        reader_permit& operator=(const reader_permit&) = delete;
-
-        reader_permit(reader_permit&& other) = delete;
-        reader_permit& operator=(reader_permit&& other) = delete;
-
-        void consume_memory(size_t memory) {
-            _semaphore.consume_memory(memory);
-        }
-
-        void signal_memory(size_t memory) {
-            _semaphore.signal_memory(memory);
-        }
-    };
+    friend class reader_permit;
 
     class inactive_read {
     public:
@@ -147,9 +92,9 @@ public:
 
 private:
     struct entry {
-        promise<lw_shared_ptr<reader_permit>> pr;
+        promise<reader_permit> pr;
         resources res;
-        entry(promise<lw_shared_ptr<reader_permit>>&& pr, resources r) : pr(std::move(pr)), res(r) {}
+        entry(promise<reader_permit>&& pr, resources r) : pr(std::move(pr)), res(r) {}
     };
 
     class expiry_handler {
@@ -254,10 +199,10 @@ public:
         return _inactive_read_stats;
     }
 
-    future<lw_shared_ptr<reader_permit>> wait_admission(size_t memory, db::timeout_clock::time_point timeout = db::no_timeout);
+    future<reader_permit> wait_admission(size_t memory, db::timeout_clock::time_point timeout = db::no_timeout);
 
     /// Consume the specific amount of resources without waiting.
-    lw_shared_ptr<reader_permit> consume_resources(resources r);
+    reader_permit consume_resources(resources r);
 
     const resources available_resources() const {
         return _resources;
@@ -267,26 +212,3 @@ public:
         return _wait_list.size();
     }
 };
-
-class reader_resource_tracker {
-    lw_shared_ptr<reader_concurrency_semaphore::reader_permit> _permit;
-public:
-    reader_resource_tracker() = default;
-    explicit reader_resource_tracker(lw_shared_ptr<reader_concurrency_semaphore::reader_permit> permit)
-        : _permit(std::move(permit)) {
-    }
-
-    bool operator==(const reader_resource_tracker& other) const {
-        return _permit == other._permit;
-    }
-
-    file track(file f) const;
-
-    lw_shared_ptr<reader_concurrency_semaphore::reader_permit> get_permit() const {
-        return _permit;
-    }
-};
-
-inline reader_resource_tracker no_resource_tracking() {
-    return {};
-}

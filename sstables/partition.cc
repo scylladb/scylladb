@@ -139,13 +139,13 @@ class sstable_mutation_reader : public mp_row_consumer_reader {
     read_monitor& _monitor;
 public:
     sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
+         reader_permit permit,
          const io_priority_class &pc,
-         reader_resource_tracker resource_tracker,
          tracing::trace_state_ptr trace_state,
          streamed_mutation::forwarding fwd,
          read_monitor& mon)
         : mp_row_consumer_reader(std::move(schema), std::move(sst))
-        , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), std::move(trace_state), fwd, _sst)
+        , _consumer(this, _schema, std::move(permit), _schema->full_slice(), pc, std::move(trace_state), fwd, _sst)
         , _initialize([this] {
             _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer);
             _monitor.on_read_started(_context->reader_position());
@@ -155,16 +155,16 @@ public:
         , _monitor(mon) { }
     sstable_mutation_reader(shared_sstable sst,
          schema_ptr schema,
+         reader_permit permit,
          const dht::partition_range& pr,
          const query::partition_slice& slice,
          const io_priority_class& pc,
-         reader_resource_tracker resource_tracker,
          tracing::trace_state_ptr trace_state,
          streamed_mutation::forwarding fwd,
          mutation_reader::forwarding fwd_mr,
          read_monitor& mon)
         : mp_row_consumer_reader(std::move(schema), std::move(sst))
-        , _consumer(this, _schema, slice, pc, std::move(resource_tracker), std::move(trace_state), fwd, _sst)
+        , _consumer(this, _schema, std::move(permit), slice, pc, std::move(trace_state), fwd, _sst)
         , _initialize([this, pr, &pc, &slice, fwd_mr] () mutable {
             auto f = get_index_reader().advance_to(pr);
             return f.then([this, &pc, &slice, fwd_mr] () mutable {
@@ -183,16 +183,16 @@ public:
         , _monitor(mon) { }
     sstable_mutation_reader(shared_sstable sst,
                             schema_ptr schema,
+                            reader_permit permit,
                             dht::ring_position_view key,
                             const query::partition_slice& slice,
                             const io_priority_class& pc,
-                            reader_resource_tracker resource_tracker,
                             tracing::trace_state_ptr trace_state,
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon)
         : mp_row_consumer_reader(std::move(schema), std::move(sst))
-        , _consumer(this, _schema, slice, pc, std::move(resource_tracker), std::move(trace_state), fwd, _sst)
+        , _consumer(this, _schema, std::move(permit), slice, pc, std::move(trace_state), fwd, _sst)
         , _single_partition_read(true)
         , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
             position_in_partition_view pos = get_slice_upper_bound(*_schema, slice, key);
@@ -240,7 +240,7 @@ private:
     }
     index_reader& get_index_reader() {
         if (!_index_reader) {
-            _index_reader = std::make_unique<index_reader>(_sst, _consumer.io_priority(), _consumer.trace_state());
+            _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(), _consumer.io_priority(), _consumer.trace_state());
         }
         return *_index_reader;
     }
@@ -479,22 +479,23 @@ void mp_row_consumer_reader::on_next_partition(dht::decorated_key key, tombstone
     _sst->get_stats().on_partition_read();
 }
 
-flat_mutation_reader sstable::read_rows_flat(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
+flat_mutation_reader sstable::read_rows_flat(schema_ptr schema, reader_permit permit, const io_priority_class& pc,
+        streamed_mutation::forwarding fwd) {
     get_stats().on_sstable_partition_read();
     if (_version == version_types::mc) {
         return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
-            shared_from_this(), std::move(schema), pc, no_resource_tracking(), tracing::trace_state_ptr(), fwd, default_read_monitor());
+            shared_from_this(), std::move(schema), std::move(permit), pc, tracing::trace_state_ptr(), fwd, default_read_monitor());
     }
-    return make_flat_mutation_reader<sstable_mutation_reader<>>(shared_from_this(), std::move(schema), pc,
-            no_resource_tracking(), tracing::trace_state_ptr(), fwd, default_read_monitor());
+    return make_flat_mutation_reader<sstable_mutation_reader<>>(shared_from_this(), std::move(schema), std::move(permit), pc,
+            tracing::trace_state_ptr(), fwd, default_read_monitor());
 }
 
 flat_mutation_reader
 sstables::sstable::read_row_flat(schema_ptr schema,
+                                 reader_permit permit,
                                  dht::ring_position_view key,
                                  const query::partition_slice& slice,
                                  const io_priority_class& pc,
-                                 reader_resource_tracker resource_tracker,
                                  tracing::trace_state_ptr trace_state,
                                  streamed_mutation::forwarding fwd,
                                  read_monitor& mon)
@@ -502,19 +503,19 @@ sstables::sstable::read_row_flat(schema_ptr schema,
     get_stats().on_single_partition_read();
     if (_version == version_types::mc) {
         return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
-            shared_from_this(), std::move(schema), std::move(key), slice, pc,
-            std::move(resource_tracker), std::move(trace_state), fwd, mutation_reader::forwarding::no, mon);
+            shared_from_this(), std::move(schema), std::move(permit), std::move(key), slice, pc,
+            std::move(trace_state), fwd, mutation_reader::forwarding::no, mon);
     }
-    return make_flat_mutation_reader<sstable_mutation_reader<>>(shared_from_this(), std::move(schema), std::move(key), slice, pc,
-            std::move(resource_tracker), std::move(trace_state), fwd, mutation_reader::forwarding::no, mon);
+    return make_flat_mutation_reader<sstable_mutation_reader<>>(shared_from_this(), std::move(schema), std::move(permit), std::move(key), slice, pc,
+            std::move(trace_state), fwd, mutation_reader::forwarding::no, mon);
 }
 
 flat_mutation_reader
 sstable::read_range_rows_flat(schema_ptr schema,
+                         reader_permit permit,
                          const dht::partition_range& range,
                          const query::partition_slice& slice,
                          const io_priority_class& pc,
-                         reader_resource_tracker resource_tracker,
                          tracing::trace_state_ptr trace_state,
                          streamed_mutation::forwarding fwd,
                          mutation_reader::forwarding fwd_mr,
@@ -522,10 +523,10 @@ sstable::read_range_rows_flat(schema_ptr schema,
     get_stats().on_range_partition_read();
     if (_version == version_types::mc) {
         return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
-            shared_from_this(), std::move(schema), range, slice, pc, std::move(resource_tracker), std::move(trace_state), fwd, fwd_mr, mon);
+            shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
     }
     return make_flat_mutation_reader<sstable_mutation_reader<>>(
-        shared_from_this(), std::move(schema), range, slice, pc, std::move(resource_tracker), std::move(trace_state), fwd, fwd_mr, mon);
+        shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
 }
 
 }

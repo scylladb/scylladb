@@ -65,7 +65,7 @@
 // row into one buffer, the byte_views remain valid until consume_row_end()
 // is called.]
 class row_consumer {
-    reader_resource_tracker _resource_tracker;
+    reader_permit _permit;
     tracing::trace_state_ptr _trace_state;
     const io_priority_class& _pc;
 
@@ -78,8 +78,8 @@ public:
      */
     constexpr static bool is_setting_range_tombstone_start_supported = false;
 
-    row_consumer(reader_resource_tracker resource_tracker, tracing::trace_state_ptr trace_state, const io_priority_class& pc)
-        : _resource_tracker(resource_tracker)
+    row_consumer(reader_permit permit, tracing::trace_state_ptr trace_state, const io_priority_class& pc)
+        : _permit(std::move(permit))
         , _trace_state(std::move(trace_state))
         , _pc(pc) {
     }
@@ -133,9 +133,9 @@ public:
         return _pc;
     }
 
-    // The restriction that applies to this consumer
-    reader_resource_tracker resource_tracker() const {
-        return _resource_tracker;
+    // The permit for this read
+    reader_permit& permit() {
+        return _permit;
     }
 
     tracing::trace_state_ptr trace_state() const {
@@ -144,7 +144,7 @@ public:
 };
 
 class consumer_m {
-    reader_resource_tracker _resource_tracker;
+    reader_permit _permit;
     tracing::trace_state_ptr _trace_state;
     const io_priority_class& _pc;
 public:
@@ -162,8 +162,8 @@ public:
         skip_row
     };
 
-    consumer_m(reader_resource_tracker resource_tracker, tracing::trace_state_ptr trace_state, const io_priority_class& pc)
-    : _resource_tracker(resource_tracker)
+    consumer_m(reader_permit permit, tracing::trace_state_ptr trace_state, const io_priority_class& pc)
+    : _permit(std::move(permit))
     , _trace_state(std::move(trace_state))
     , _pc(pc) {
     }
@@ -227,9 +227,9 @@ public:
         return _pc;
     }
 
-    // The restriction that applies to this consumer
-    reader_resource_tracker resource_tracker() const {
-        return _resource_tracker;
+    // The permit for this read
+    reader_permit& permit() {
+        return _permit;
     }
 
     tracing::trace_state_ptr trace_state() const {
@@ -521,7 +521,7 @@ public:
                               const shared_sstable sst,
                               row_consumer& consumer,
                               input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-                : continuous_data_consumer(std::move(input), start, maxlen)
+                : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
                 , _consumer(consumer)
                 , _sst(std::move(sst))
     {}
@@ -552,6 +552,10 @@ public:
             assert(0);
         }
         _consumer.reset(el);
+    }
+
+    reader_permit& permit() {
+        return _consumer.permit();
     }
 };
 
@@ -1340,7 +1344,7 @@ public:
                                 input_stream<char> && input,
                                 uint64_t start,
                                 uint64_t maxlen)
-        : continuous_data_consumer(std::move(input), start, maxlen)
+        : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
         , _consumer(consumer)
         , _sst(sst)
         , _header(sst->get_serialization_header())
@@ -1382,6 +1386,10 @@ public:
         }
         // We should not get here unless some enum member is not handled by the switch
         throw std::logic_error(format("Unable to reset - unknown indexable element: {}", el));
+    }
+
+    reader_permit& permit() {
+        return _consumer.permit();
     }
 };
 
