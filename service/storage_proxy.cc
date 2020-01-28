@@ -1167,9 +1167,7 @@ future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool a
 }
 
 static std::vector<gms::inet_address>
-replica_ids_to_endpoints(const std::vector<utils::UUID>& replica_ids) {
-    const auto& tm = get_local_storage_service().get_token_metadata();
-
+replica_ids_to_endpoints(locator::token_metadata& tm, const std::vector<utils::UUID>& replica_ids) {
     std::vector<gms::inet_address> endpoints;
     endpoints.reserve(replica_ids.size());
 
@@ -1183,9 +1181,7 @@ replica_ids_to_endpoints(const std::vector<utils::UUID>& replica_ids) {
 }
 
 static std::vector<utils::UUID>
-endpoints_to_replica_ids(const std::vector<gms::inet_address>& endpoints) {
-    const auto& tm = get_local_storage_service().get_token_metadata();
-
+endpoints_to_replica_ids(locator::token_metadata& tm, const std::vector<gms::inet_address>& endpoints) {
     std::vector<utils::UUID> replica_ids;
     replica_ids.reserve(endpoints.size());
 
@@ -3735,7 +3731,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         auto token_range = dht::token_range::make_singular(pr.start()->value().token());
         auto it = query_options.preferred_replicas.find(token_range);
         const auto replicas = it == query_options.preferred_replicas.end()
-            ? std::vector<gms::inet_address>{} : replica_ids_to_endpoints(it->second);
+            ? std::vector<gms::inet_address>{} : replica_ids_to_endpoints(get_local_storage_service().get_token_metadata(), it->second);
 
         auto read_executor = get_read_executor(cmd, schema, std::move(pr), cl, repair_decision,
                                                query_options.trace_state, replicas, is_read_non_local,
@@ -3760,7 +3756,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         return rex->execute(timeout).then_wrapped([lc, rex, used_replicas, token_range = std::move(token_range)] (
                     future<foreign_ptr<lw_shared_ptr<query::result>>> f) mutable {
             if (!f.failed()) {
-                used_replicas->emplace(std::move(token_range), endpoints_to_replica_ids(rex->used_targets()));
+                used_replicas->emplace(std::move(token_range), endpoints_to_replica_ids(get_local_storage_service().get_token_metadata(), rex->used_targets()));
             }
             if (lc.is_start()) {
                 rex->get_cf()->add_coordinator_read_latency(lc.stop().latency());
@@ -3805,7 +3801,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 
     const auto preferred_replicas_for_range = [&preferred_replicas] (const dht::partition_range& r) {
         auto it = preferred_replicas.find(r.transform(std::mem_fn(&dht::ring_position::token)));
-        return it == preferred_replicas.end() ? std::vector<gms::inet_address>{} : replica_ids_to_endpoints(it->second);
+        return it == preferred_replicas.end() ? std::vector<gms::inet_address>{} : replica_ids_to_endpoints(get_local_storage_service().get_token_metadata(), it->second);
     };
     const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
@@ -3935,7 +3931,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 // 1) The list of replicas is determined for each vnode
                 // separately and thus this makes lookups more convenient.
                 // 2) On the next page the ranges might not be merged.
-                auto replica_ids = endpoints_to_replica_ids(e->used_targets());
+                auto replica_ids = endpoints_to_replica_ids(get_local_storage_service().get_token_metadata(), e->used_targets());
                 for (auto& r : ranges_per_exec[e.get()]) {
                     used_replicas.emplace(std::move(r), replica_ids);
                 }
