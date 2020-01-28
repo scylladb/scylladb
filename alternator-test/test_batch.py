@@ -20,6 +20,7 @@
 # so they are actually tested by other tests as well.
 
 import pytest
+import random
 from botocore.exceptions import ClientError
 from util import random_string, full_scan, full_query, multiset
 
@@ -43,6 +44,19 @@ def test_basic_batch_write_item(test_table):
         assert item['c'] == "batch_ck{}".format(i)
         assert item['attribute'] == str(i)
         assert item['another'] == 'xyz' 
+
+# Try a batch which includes both multiple writes to the same partition
+# and several partitions. The LWT code collects multiple mutations to the
+# same partition together, and we want to test that this worked correctly.
+def test_batch_write_item_mixed(test_table):
+    partitions = [random_string() for i in range(4)]
+    items = [{'p': p, 'c': str(i)} for p in partitions for i in range(4)]
+    with test_table.batch_writer() as batch:
+        # Reorder items randomly, just for the heck of it
+        for item in random.sample(items, len(items)):
+            batch.put_item(item)
+    for item in items:
+        assert test_table.get_item(Key={'p': item['p'], 'c': item['c']}, ConsistentRead=True)['Item'] == item
 
 # Test batch write to a table with only a hash key
 def test_batch_write_hash_only(test_table_s):
