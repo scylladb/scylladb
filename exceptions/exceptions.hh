@@ -98,6 +98,13 @@ public:
     sstring get_message() const { return what(); }
 };
 
+class server_exception : public cassandra_exception {
+public:
+    server_exception(sstring msg) noexcept
+        : exceptions::cassandra_exception{exceptions::exception_code::SERVER_ERROR, std::move(msg)}
+    { }
+};
+
 class protocol_exception : public cassandra_exception {
 public:
     protocol_exception(sstring msg) noexcept

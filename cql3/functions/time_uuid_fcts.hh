@@ -61,6 +61,16 @@ make_now_fct() {
     });
 }
 
+static int64_t get_valid_timestamp(const data_value& ts_obj) {
+    auto ts = value_cast<db_clock::time_point>(ts_obj);
+    int64_t ms = ts.time_since_epoch().count();
+    auto nanos_since = utils::UUID_gen::make_nanos_since(ms);
+    if (!utils::UUID_gen::is_valid_nanos_since(nanos_since)) {
+        throw exceptions::server_exception(format("{}: timestamp is out of range. Must be in milliseconds since epoch", ms));
+    }
+    return ms;
+}
+
 inline
 shared_ptr<function>
 make_min_timeuuid_fct() {
@@ -74,8 +84,7 @@ make_min_timeuuid_fct() {
         if (ts_obj.is_null()) {
             return {};
         }
-        auto ts = value_cast<db_clock::time_point>(ts_obj);
-        auto uuid = utils::UUID_gen::min_time_UUID(ts.time_since_epoch().count());
+        auto uuid = utils::UUID_gen::min_time_UUID(get_valid_timestamp(ts_obj));
         return {timeuuid_type->decompose(uuid)};
     });
 }
@@ -85,7 +94,6 @@ shared_ptr<function>
 make_max_timeuuid_fct() {
     return make_native_scalar_function<true>("maxtimeuuid", timeuuid_type, { timestamp_type },
             [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
-        // FIXME: should values be a vector<optional<bytes>>?
         auto& bb = values[0];
         if (!bb) {
             return {};
@@ -94,10 +102,20 @@ make_max_timeuuid_fct() {
         if (ts_obj.is_null()) {
             return {};
         }
-        auto ts = value_cast<db_clock::time_point>(ts_obj);
-        auto uuid = utils::UUID_gen::max_time_UUID(ts.time_since_epoch().count());
+        auto uuid = utils::UUID_gen::max_time_UUID(get_valid_timestamp(ts_obj));
         return {timeuuid_type->decompose(uuid)};
     });
+}
+
+inline utils::UUID get_valid_timeuuid(bytes raw) {
+    if (!utils::UUID_gen::is_valid_UUID(raw)) {
+        throw exceptions::server_exception(format("invalid timeuuid: size={}", raw.size()));
+    }
+    auto uuid = utils::UUID_gen::get_UUID(raw);
+    if (!uuid.is_timestamp()) {
+        throw exceptions::server_exception(format("{}: Not a timeuuid: version={}", uuid, uuid.version()));
+    }
+    return uuid;
 }
 
 inline
@@ -110,7 +128,7 @@ make_date_of_fct() {
         if (!bb) {
             return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb))));
         return {timestamp_type->decompose(ts)};
     });
 }
@@ -125,7 +143,7 @@ make_unix_timestamp_of_fct() {
         if (!bb) {
             return {};
         }
-        return {long_type->decompose(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb)))};
+        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)))};
     });
 }
 
@@ -176,7 +194,7 @@ make_timeuuidtodate_fct() {
         if (!bb) {
             return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb))));
         auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
         return {simple_date_type->decompose(to_simple_date(ts))};
     });
@@ -211,7 +229,7 @@ make_timeuuidtotimestamp_fct() {
         if (!bb) {
             return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb))));
         return {timestamp_type->decompose(ts)};
     });
 }
@@ -245,8 +263,12 @@ make_timeuuidtounixtimestamp_fct() {
         if (!bb) {
             return {};
         }
-        return {long_type->decompose(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb)))};
+        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)))};
     });
+}
+
+inline bytes time_point_to_long(const data_value& v) {
+    return data_value(get_valid_timestamp(v)).serialize();
 }
 
 inline
@@ -263,7 +285,7 @@ make_timestamptounixtimestamp_fct() {
         if (ts_obj.is_null()) {
             return {};
         }
-        return {long_type->decompose(ts_obj)};
+        return time_point_to_long(ts_obj);
     });
 }
 
@@ -282,7 +304,7 @@ make_datetounixtimestamp_fct() {
             return {};
         }
         auto from_simple_date = get_castas_fctn(timestamp_type, simple_date_type);
-        return {long_type->decompose(from_simple_date(simple_date_obj))};
+        return time_point_to_long(from_simple_date(simple_date_obj));
     });
 }
 

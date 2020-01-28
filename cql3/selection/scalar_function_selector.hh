@@ -82,12 +82,6 @@ public:
             : abstract_function_selector_for<functions::scalar_function>(
                 dynamic_pointer_cast<functions::scalar_function>(std::move(fun)), std::move(arg_selectors)) {
     }
-
-    virtual sstring assignment_testable_source_context() const override {
-        // FIXME:
-        return "FIXME";
-    }
-
 };
 
 }
