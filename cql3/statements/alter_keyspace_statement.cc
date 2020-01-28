@@ -42,7 +42,6 @@
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
 #include "db/system_keyspace.hh"
 #include "database.hh"
 
@@ -94,7 +93,7 @@ void cql3::statements::alter_keyspace_statement::validate(service::storage_proxy
 
 future<shared_ptr<cql_transport::event::schema_change>> cql3::statements::alter_keyspace_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const {
     auto old_ksm = service::get_local_storage_proxy().get_db().local().find_keyspace(_name).metadata();
-    const auto& tm = service::get_local_storage_service().get_token_metadata();
+    const auto& tm = proxy.get_token_metadata();
     return service::get_local_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm, tm), is_local_only).then([this] {
         using namespace cql_transport;
         return make_shared<event::schema_change>(

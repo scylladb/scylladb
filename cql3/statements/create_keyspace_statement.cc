@@ -43,7 +43,6 @@
 #include "prepared_statement.hh"
 #include "database.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
 #include "transport/messages/result_message.hh"
 
 #include <regex>
@@ -109,8 +108,8 @@ void create_keyspace_statement::validate(service::storage_proxy&, const service:
 
 future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
 {
-    return make_ready_future<>().then([this, is_local_only] {
-        const auto& tm = service::get_local_storage_service().get_token_metadata();
+    return make_ready_future<>().then([this, p = proxy.shared_from_this(), is_local_only] {
+        const auto& tm = p->get_token_metadata();
         return service::get_local_migration_manager().announce_new_keyspace(_attrs->as_ks_metadata(_name, tm), is_local_only);
     }).then_wrapped([this] (auto&& f) {
         try {
@@ -147,9 +146,8 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
 
 future<::shared_ptr<messages::result_message>>
 create_keyspace_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
-    return schema_altering_statement::execute(proxy, state, options).then([this] (::shared_ptr<messages::result_message> msg) {
-        bool multidc = service::get_local_storage_service().get_token_metadata().
-                                get_topology().get_datacenter_endpoints().size() > 1;
+    return schema_altering_statement::execute(proxy, state, options).then([this, p = proxy.shared_from_this()] (::shared_ptr<messages::result_message> msg) {
+        bool multidc = p->get_token_metadata().get_topology().get_datacenter_endpoints().size() > 1;
         bool simple = _attrs->get_replication_strategy_class() == "SimpleStrategy";
 
         if (multidc && simple) {
