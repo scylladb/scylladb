@@ -59,11 +59,15 @@ public:
         return (most_sig_bits >> 12) & 0xf;
     }
 
+    bool is_timestamp() const {
+        return version() == 1;
+    }
+
     int64_t timestamp() const {
         //if (version() != 1) {
         //     throw new UnsupportedOperationException("Not a time-based UUID");
         //}
-        assert(version() == 1);
+        assert(is_timestamp());
 
         return ((most_sig_bits & 0xFFF) << 48) |
                (((most_sig_bits >> 16) & 0xFFFF) << 32) |

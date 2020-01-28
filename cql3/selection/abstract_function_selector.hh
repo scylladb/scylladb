@@ -92,6 +92,14 @@ public:
             : abstract_function_selector(fun, std::move(arg_selectors))
             , _tfun(dynamic_pointer_cast<T>(fun)) {
     }
+
+    const functions::function_name& name() const {
+        return _tfun->name();
+    }
+
+    virtual sstring assignment_testable_source_context() const override {
+        return format("{}", this->name());
+    }
 };
 
 }

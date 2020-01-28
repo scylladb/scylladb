@@ -79,11 +79,6 @@ public:
                     dynamic_pointer_cast<functions::aggregate_function>(func), std::move(arg_selectors))
             , _aggregate(fun()->new_aggregate()) {
     }
-
-    virtual sstring assignment_testable_source_context() const override {
-        // FIXME:
-        return "FIXME";
-    }
 };
 
 }
