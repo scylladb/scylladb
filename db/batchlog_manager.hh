@@ -60,6 +60,7 @@ namespace db {
 struct batchlog_manager_config {
     std::chrono::duration<double> write_request_timeout;
     uint64_t replay_rate = std::numeric_limits<uint64_t>::max();
+    std::chrono::milliseconds delay;
 };
 
 class batchlog_manager {
@@ -80,6 +81,7 @@ private:
     db_clock::duration _write_request_timeout;
     uint64_t _replay_rate;
     timer<clock_type> _timer;
+    std::chrono::milliseconds _delay;
     semaphore _sem{1};
     seastar::gate _gate;
     unsigned _cpu = 0;

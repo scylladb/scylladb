@@ -78,7 +78,8 @@ const uint32_t db::batchlog_manager::page_size;
 db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, batchlog_manager_config config)
         : _qp(qp)
         , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
-        , _replay_rate(config.replay_rate) {
+        , _replay_rate(config.replay_rate)
+        , _delay(config.delay) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("batchlog_manager", {
@@ -125,8 +126,8 @@ future<> db::batchlog_manager::start() {
                 _timer.arm(lowres_clock::now() + std::chrono::milliseconds(replay_interval));
             });
         });
-        auto ring_delay = service::get_local_storage_service().get_ring_delay();
-        _timer.arm(lowres_clock::now() + ring_delay);
+
+        _timer.arm(lowres_clock::now() + _delay);
     }
     return make_ready_future<>();
 }
