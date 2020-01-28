@@ -43,7 +43,6 @@
 #include "gms/endpoint_state.hh"
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
-#include "service/storage_service.hh"
 #include "log.hh"
 #include "db/config.hh"
 #include <iostream>
@@ -58,24 +57,10 @@ constexpr std::chrono::milliseconds failure_detector::DEFAULT_MAX_PAUSE;
 
 using clk = arrival_window::clk;
 
-static clk::duration get_initial_value() {
-    auto& cfg = service::get_local_storage_service().db().local().get_config();
-    return std::chrono::milliseconds(cfg.fd_initial_value_ms());
-}
-
-clk::duration arrival_window::get_max_interval() {
-    auto& cfg = service::get_local_storage_service().db().local().get_config();
-    return std::chrono::milliseconds(cfg.fd_max_interval_ms());
-}
-
-static clk::duration get_min_interval() {
-    return gossiper::INTERVAL;
-}
-
 void arrival_window::add(clk::time_point value, const gms::inet_address& ep) {
     if (_tlast > clk::time_point::min()) {
         auto inter_arrival_time = value - _tlast;
-        if (inter_arrival_time <= get_max_interval() && inter_arrival_time >= get_min_interval()) {
+        if (inter_arrival_time <= _max_interval && inter_arrival_time >= _min_interval) {
             _arrival_intervals.add(inter_arrival_time.count());
         } else  {
             logger.debug("failure_detector: Ignoring interval time of {} for {}, mean={}, size={}", inter_arrival_time.count(), ep, mean(), size());
@@ -84,7 +69,7 @@ void arrival_window::add(clk::time_point value, const gms::inet_address& ep) {
         // We use a very large initial interval since the "right" average depends on the cluster size
         // and it's better to err high (false negatives, which will be corrected by waiting a bit longer)
         // than low (false positives, which cause "flapping").
-        _arrival_intervals.add(get_initial_value().count());
+        _arrival_intervals.add(_initial.count());
     }
     _tlast = value;
 }
@@ -124,7 +109,7 @@ void failure_detector::report(inet_address ep) {
     auto it = _arrival_samples.find(ep);
     if (it == _arrival_samples.end()) {
         // avoid adding an empty ArrivalWindow to the Map
-        auto heartbeat_window = arrival_window(SAMPLE_SIZE);
+        auto heartbeat_window = arrival_window(SAMPLE_SIZE, _initial, _max_interval, gossiper::INTERVAL);
         heartbeat_window.add(now, ep);
         _arrival_samples.emplace(ep, heartbeat_window);
     } else {

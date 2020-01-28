@@ -128,7 +128,9 @@ gossiper::gossiper(abort_source& as, feature_service& features, locator::token_m
         , _feature_service(features)
         , _token_metadata(tokens)
         , _cfg(cfg)
-        , _fd(cfg.phi_convict_threshold()) {
+        , _fd(cfg.phi_convict_threshold(),
+                std::chrono::milliseconds(cfg.fd_initial_value_ms()),
+                std::chrono::milliseconds(cfg.fd_max_interval_ms())) {
     // Gossiper's stuff below runs only on CPU0
     if (engine().cpu_id() != 0) {
         return;
