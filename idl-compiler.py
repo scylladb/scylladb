@@ -739,8 +739,7 @@ def sort_dependencies():
         [cls, namespaces, parent_template_param] = local_types[k]
         dep_tree[k] = get_dependency(cls)
     while (len(dep_tree) > 0):
-        found = set()
-        found = found | {k for k in dep_tree if not dep_tree[k]}
+        found = sorted(k for k in dep_tree if not dep_tree[k])
         res = res + [k for k in found]
         for k in found:
             dep_tree.pop(k)

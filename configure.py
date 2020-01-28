@@ -1366,7 +1366,11 @@ with open(buildfile_tmp, 'w') as f:
                 # name, we also add a global typedef to avoid compilation errors.
                 command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/$in $
                      && {antlr3_exec} $builddir/{mode}/gen/$in $
+                     && sed -i -e '/^.*On :.*$$/d' build/{mode}/gen/${{stem}}Lexer.hpp $
+                     && sed -i -e '/^.*On :.*$$/d' build/{mode}/gen/${{stem}}Lexer.cpp $
+                     && sed -i -e '/^.*On :.*$$/d' build/{mode}/gen/${{stem}}Parser.hpp $
                      && sed -i -e 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' $
+                        -e '/^.*On :.*$$/d' $
                         -e '1i using ExceptionBaseType = int;' $
                         -e 's/^{{/{{ ExceptionBaseType\* ex = nullptr;/; $
                             s/ExceptionBaseType\* ex = new/ex = new/; $
