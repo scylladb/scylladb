@@ -32,7 +32,7 @@
 #include "dht/i_partitioner.hh"
 #include "partition_range_compat.hh"
 #include "range.hh"
-#include "service/storage_service.hh"
+#include "service/storage_proxy.hh"
 #include "mutation_fragment.hh"
 #include "sstables/sstables.hh"
 #include "db/timeout_clock.hh"
@@ -190,9 +190,8 @@ static system_keyspace::range_estimates estimate(const column_family& cf, const 
  * Returns the primary ranges for the local node.
  */
 static future<std::vector<token_range>> get_local_ranges(database& db) {
-    auto& ss = service::get_local_storage_service();
-    return db::system_keyspace::get_local_tokens().then([&ss] (auto&& tokens) {
-        auto ranges = ss.get_token_metadata().get_primary_ranges_for(std::move(tokens));
+    return db::system_keyspace::get_local_tokens().then([&db] (auto&& tokens) {
+        auto ranges = db.get_token_metadata().get_primary_ranges_for(std::move(tokens));
         std::vector<token_range> local_ranges;
         auto to_bytes = [](const std::optional<dht::token_range::bound>& b) {
             assert(b);
