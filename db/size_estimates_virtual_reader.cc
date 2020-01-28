@@ -191,7 +191,7 @@ static system_keyspace::range_estimates estimate(const column_family& cf, const 
  */
 static future<std::vector<token_range>> get_local_ranges() {
     auto& ss = service::get_local_storage_service();
-    return ss.get_local_tokens().then([&ss] (auto&& tokens) {
+    return db::system_keyspace::get_local_tokens().then([&ss] (auto&& tokens) {
         auto ranges = ss.get_token_metadata().get_primary_ranges_for(std::move(tokens));
         std::vector<token_range> local_ranges;
         auto to_bytes = [](const std::optional<dht::token_range::bound>& b) {

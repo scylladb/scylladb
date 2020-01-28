@@ -520,6 +520,12 @@ enum class bootstrap_state {
     future<std::unordered_set<dht::token>> get_saved_tokens();
 
     /*
+     * Gets this node's non-empty set of tokens.
+     * TODO: maybe get this data from token_metadata instance?
+     */
+    future<std::unordered_set<dht::token>> get_local_tokens();
+
+    /*
      * Read the CDC streams generation timestamp announced by this node from persistent storage.
      * Used to initialize a restarting node.
      */

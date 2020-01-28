@@ -2001,18 +2001,6 @@ void storage_service::set_mode(mode m, sstring msg, bool log) {
     }
 }
 
-future<std::unordered_set<dht::token>> storage_service::get_local_tokens() {
-    return db::system_keyspace::get_saved_tokens().then([] (auto&& tokens) {
-        // should not be called before initServer sets this
-        if (tokens.empty()) {
-            auto err = format("get_local_tokens: tokens is empty");
-            slogger.error("{}", err);
-            throw std::runtime_error(err);
-        }
-        return tokens;
-    });
-}
-
 sstring storage_service::get_release_version() {
     return version::release();
 }
@@ -2092,7 +2080,8 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
         return seastar::async([&ss, do_bind] {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
-                ss.set_gossip_tokens(ss.get_local_tokens().get0(), cdc::get_local_streams_timestamp().get0());
+                ss.set_gossip_tokens(db::system_keyspace::get_local_tokens().get0(),
+                        cdc::get_local_streams_timestamp().get0());
                 ss._gossiper.force_newer_generation();
                 ss._gossiper.start_gossiping(get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
                     ss._initialized = true;
@@ -2964,7 +2953,8 @@ void storage_service::leave_ring() {
     update_pending_ranges().get();
 
     auto expire_time = _gossiper.compute_expire_time().time_since_epoch().count();
-    _gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.left(get_local_tokens().get0(), expire_time)).get();
+    _gossiper.add_local_application_state(gms::application_state::STATUS,
+            value_factory.left(db::system_keyspace::get_local_tokens().get0(), expire_time)).get();
     auto delay = std::max(get_ring_delay(), gms::gossiper::INTERVAL);
     slogger.info("Announcing that I have left the ring for {}ms", delay.count());
     sleep_abortable(delay, _abort_source).get();
@@ -2998,7 +2988,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
 }
 
 future<> storage_service::start_leaving() {
-    return _gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(get_local_tokens().get0())).then([this] {
+    return _gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(db::system_keyspace::get_local_tokens().get0())).then([this] {
         _token_metadata.add_leaving_endpoint(get_broadcast_address());
         return update_pending_ranges();
     });

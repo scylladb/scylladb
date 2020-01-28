@@ -1777,6 +1777,17 @@ future<std::unordered_set<dht::token>> get_saved_tokens() {
     });
 }
 
+future<std::unordered_set<dht::token>> get_local_tokens() {
+    return get_saved_tokens().then([] (auto&& tokens) {
+        if (tokens.empty()) {
+            auto err = format("get_local_tokens: tokens is empty");
+            slogger.error("{}", err);
+            throw std::runtime_error(err);
+        }
+        return tokens;
+    });
+}
+
 future<std::optional<db_clock::time_point>> get_saved_cdc_streams_timestamp() {
     return execute_cql(format("SELECT streams_timestamp FROM system.{} WHERE key = ?", v3::CDC_LOCAL), sstring(v3::CDC_LOCAL))
             .then([] (::shared_ptr<cql3::untyped_result_set> msg)-> std::optional<db_clock::time_point> {

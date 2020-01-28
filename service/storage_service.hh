@@ -932,11 +932,7 @@ private:
     {
         HintedHandOffManager.instance.scheduleHintDelivery(host);
     }
-#endif
-public:
-    future<std::unordered_set<dht::token>> get_local_tokens();
 
-#if 0
     /* These methods belong to the MBean interface */
 
     public List<String> getTokens()
@@ -957,6 +953,7 @@ public:
         return strTokens;
     }
 #endif
+public:
 
     sstring get_release_version();
 
