@@ -69,11 +69,7 @@ struct virtual_reader {
     }
 };
 
-/**
- * Returns the primary ranges for the local node.
- * Used for testing as well.
- */
-future<std::vector<token_range>> get_local_ranges();
+future<std::vector<token_range>> test_get_local_ranges();
 
 } // namespace size_estimates
 

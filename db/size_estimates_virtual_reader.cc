@@ -186,7 +186,10 @@ static system_keyspace::range_estimates estimate(const column_family& cf, const 
     return {cf.schema(), r.start, r.end, count, count > 0 ? hist.mean() : 0};
 }
 
-future<std::vector<token_range>> get_local_ranges() {
+/**
+ * Returns the primary ranges for the local node.
+ */
+static future<std::vector<token_range>> get_local_ranges() {
     auto& ss = service::get_local_storage_service();
     return ss.get_local_tokens().then([&ss] (auto&& tokens) {
         auto ranges = ss.get_token_metadata().get_primary_ranges_for(std::move(tokens));
@@ -217,6 +220,10 @@ future<std::vector<token_range>> get_local_ranges() {
         });
         return local_ranges;
     });
+}
+
+future<std::vector<token_range>> test_get_local_ranges() {
+    return get_local_ranges();
 }
 
 size_estimates_mutation_reader::size_estimates_mutation_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice, streamed_mutation::forwarding fwd)
