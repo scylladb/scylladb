@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include <fmt/format.h>
+#include <fmt/ostream.h>
 #include <unordered_map>
 #include <iosfwd>
 #include <string_view>
@@ -149,6 +151,7 @@ public:
             }
         };
         liveness _liveness;
+        std::vector<T> _allowed_values;
     protected:
         updateable_value_source<T>& the_value() {
             any_value* av =_cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
@@ -169,6 +172,7 @@ public:
             : config_src(file, name, &config_type_for<T>, desc)
             , _value_status(vs)
             , _liveness(liveness_)
+            , _allowed_values(std::move(allowed_values))
         {
             file->add(*this, std::make_unique<the_value_type>(std::move(t)));
         }
@@ -186,10 +190,16 @@ public:
             return _source > config_source::None;
         }
         MyType & operator()(const T& t) {
+            if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
+                throw std::invalid_argument(format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
+            }
             the_value().set(t);
             return *this;
         }
         MyType & operator()(T&& t, config_source src = config_source::None) {
+            if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
+                throw std::invalid_argument(format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
+            }
             the_value().set(std::move(t));
             if (src > config_source::None) {
                 _source = src;

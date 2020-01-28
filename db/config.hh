@@ -59,9 +59,13 @@ struct seed_provider_type {
     bool operator==(const seed_provider_type& other) const {
         return class_name == other.class_name && parameters == other.parameters;
     }
+    friend std::ostream& operator<<(std::ostream& os, const seed_provider_type&);
 };
 
+std::ostream& operator<<(std::ostream& os, const db::seed_provider_type& s);
+
 }
+
 
 namespace utils {
 

@@ -425,15 +425,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If not using vnodes, comment #num_tokens : 256 or set num_tokens : 1 and use initial_token. If you already have an existing cluster with one token per node and wish to migrate to vnodes, see Enabling virtual nodes on an existing production cluster.\n"
         "Note: If using DataStax Enterprise, the default setting of this property depends on the type of node and type of install.")
     , partitioner(this, "partitioner", value_status::Used, "org.apache.cassandra.dht.Murmur3Partitioner",
-        "Distributes rows (by partition key) across all nodes in the cluster. Any IPartitioner may be used, including your own as long as it is in the class path. For new clusters use the default partitioner.\n"
-        "Scylla provides the following partitioners for backwards compatibility:\n"
-        "\n"
-        "\tRandomPartitioner\n"
-        "\tByteOrderedPartitioner\n"
-        "\tOrderPreservingPartitioner (deprecated)\n"
+        "Distributes rows (by partition key) across all nodes in the cluster. At the moment, only Murmur3Partitioner is supported. For new clusters use the default partitioner.\n"
         "\n"
         "Related information: Partitioners"
-        , {"org.apache.cassandra.dht.Murmur3Partitioner", "org.apache.cassandra.dht.RandomPartitioner", "org.apache.cassandra.dht.ByteOrderedPartitioner", "org.apache.cassandra.dht.OrderPreservingPartitioner"})
+        , {"org.apache.cassandra.dht.Murmur3Partitioner"})
     , storage_port(this, "storage_port", value_status::Used, 7000,
         "The port for inter-node communication.")
     /* Advanced automatic backup setting */
@@ -615,7 +610,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\torg.apache.cassandra.auth.AllowAllAuthenticator : Disables authentication; no checks are performed.\n"
         "\torg.apache.cassandra.auth.PasswordAuthenticator : Authenticates users with user names and hashed passwords stored in the system_auth.credentials table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
         "Related information: Internal authentication"
-        , {"org.apache.cassandra.auth.AllowAllAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator"})
+        , {"AllowAllAuthenticator", "PasswordAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator", "org.apache.cassandra.auth.AllowAllAuthenticator", "com.scylladb.auth.TransitionalAuthenticator"})
     , internode_authenticator(this, "internode_authenticator", value_status::Unused, "enabled",
         "Internode authentication backend. It implements org.apache.cassandra.auth.AllowAllInternodeAuthenticator to allows or disallow connections from peer nodes.")
     , authorizer(this, "authorizer", value_status::Used, "org.apache.cassandra.auth.AllowAllAuthorizer",
@@ -624,7 +619,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tAllowAllAuthorizer : Disables authorization; allows any action to any user.\n"
         "\tCassandraAuthorizer : Stores permissions in system_auth.permissions table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
         "Related information: Object permissions"
-        , {"org.apache.cassandra.auth.AllowAllAuthorizer", "org.apache.cassandra.auth.CassandraAuthorizer"})
+        , {"AllowAllAuthorizer", "CassandraAuthorizer", "org.apache.cassandra.auth.AllowAllAuthorizer", "org.apache.cassandra.auth.CassandraAuthorizer", "com.scylladb.auth.TransitionalAuthorizer"})
     , role_manager(this, "role_manager", value_status::Used, "org.apache.cassandra.auth.CassandraRoleManager",
         "The role-management backend, used to maintain grantts and memberships between roles.\n"
         "The available role-managers are:\n"
@@ -790,6 +785,16 @@ void db::config::maybe_in_workdir(named_value<string_list>& tos, const char* sub
 }
 
 const sstring db::config::default_tls_priority("SECURE128:-VERS-TLS1.0");
+
+
+namespace db {
+
+std::ostream& operator<<(std::ostream& os, const db::seed_provider_type& s) {
+    os << "seed_provider_type{class=" << s.class_name << ", params=" << s.parameters << "}";
+    return os;
+}
+
+}
 
 namespace utils {
 
