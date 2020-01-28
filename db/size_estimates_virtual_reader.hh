@@ -69,7 +69,7 @@ struct virtual_reader {
     }
 };
 
-future<std::vector<token_range>> test_get_local_ranges();
+future<std::vector<token_range>> test_get_local_ranges(database& db);
 
 } // namespace size_estimates
 

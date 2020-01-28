@@ -189,7 +189,7 @@ static system_keyspace::range_estimates estimate(const column_family& cf, const 
 /**
  * Returns the primary ranges for the local node.
  */
-static future<std::vector<token_range>> get_local_ranges() {
+static future<std::vector<token_range>> get_local_ranges(database& db) {
     auto& ss = service::get_local_storage_service();
     return db::system_keyspace::get_local_tokens().then([&ss] (auto&& tokens) {
         auto ranges = ss.get_token_metadata().get_primary_ranges_for(std::move(tokens));
@@ -222,8 +222,8 @@ static future<std::vector<token_range>> get_local_ranges() {
     });
 }
 
-future<std::vector<token_range>> test_get_local_ranges() {
-    return get_local_ranges();
+future<std::vector<token_range>> test_get_local_ranges(database& db) {
+    return get_local_ranges(db);
 }
 
 size_estimates_mutation_reader::size_estimates_mutation_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice, streamed_mutation::forwarding fwd)
@@ -244,7 +244,7 @@ future<> size_estimates_mutation_reader::get_next_partition() {
         _end_of_stream = true;
         return make_ready_future<>();
     }
-    return get_local_ranges().then([&db, this] (auto&& ranges) {
+    return get_local_ranges(db).then([&db, this] (auto&& ranges) {
         auto estimates = this->estimates_for_current_keyspace(db, std::move(ranges));
         auto mutations = db::system_keyspace::make_size_estimates_mutation(*_current_partition, std::move(estimates));
         ++_current_partition;
