@@ -807,7 +807,12 @@ public:
                 // (Note: wait_for_pending(pos) waits for operation _at_ pos (and before),
                 replay_position rp(me->_desc.id, position_type(fp));
                 return me->_pending_ops.wait_for_pending(rp, timeout).then([me, fp] {
-                    assert(me->_flush_pos > fp);
+                    assert(me->_segment_manager->cfg.mode != sync_mode::BATCH || me->_flush_pos > fp);
+                    if (me->_flush_pos <= fp) {
+                        // previous op we were waiting for was not sync one, so it did not flush
+                        // force flush here
+                        return me->do_flush(fp);
+                    }
                     return make_ready_future<sseg_ptr>(me);
                 });
             }
