@@ -104,10 +104,6 @@ murmur3_partitioner::bias(uint64_t n) const {
     return get_token(n - uint64_t(std::numeric_limits<int64_t>::min()));
 }
 
-sstring murmur3_partitioner::to_sstring(const token& t) const {
-    return seastar::to_sstring<sstring>(long_token(t));
-}
-
 dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
     auto lp = boost::lexical_cast<long>(t);
     if (lp == std::numeric_limits<long>::min()) {

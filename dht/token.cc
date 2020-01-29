@@ -59,7 +59,7 @@ std::ostream& operator<<(std::ostream& out, const token& t) {
     } else if (t._kind == token::kind::before_all_keys) {
         out << "minimum token";
     } else {
-        out << global_partitioner().to_sstring(t);
+        out << t.to_sstring();
     }
     return out;
 }
@@ -70,6 +70,10 @@ inline int64_t long_token(const token& t) {
     }
 
     return t._data;
+}
+
+sstring token::to_sstring() const {
+    return seastar::to_sstring<sstring>(long_token(*this));
 }
 
 // Assuming that x>=y, return the positive difference x-y.

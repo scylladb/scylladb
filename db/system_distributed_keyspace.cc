@@ -231,14 +231,6 @@ static db::consistency_level quorum_if_many(size_t num_token_owners) {
 }
 
 // --------------- TODO: copy-pasted from murmur3_partitioner; remove this after haaawk's change is merged
-static int64_t long_token(const dht::token& t) {
-    if (t.is_minimum() || t.is_maximum()) {
-        return std::numeric_limits<long>::min();
-    }
-
-    return t._data;
-}
-
 static int64_t normalize(int64_t in) {
     return in == std::numeric_limits<int64_t>::lowest()
             ? std::numeric_limits<int64_t>::max()
@@ -261,10 +253,6 @@ static dht::token token_from_string(const sstring& t) {
     }
 }
 
-static sstring string_from_token(const dht::token& t) {
-    return seastar::to_sstring<sstring>(long_token(t));
-}
-
 // ---------------
 
 static list_type_impl::native_type prepare_cdc_generation_description(const cdc::topology_description& description) {
@@ -276,7 +264,7 @@ static list_type_impl::native_type prepare_cdc_generation_description(const cdc:
         }
 
         ret.push_back(make_tuple_value(cdc_token_range_description_type,
-                { data_value(string_from_token(e.token_range_end))
+                { data_value(e.token_range_end.to_sstring())
                 , make_list_value(cdc_streams_list_type, std::move(streams))
                 , data_value(int8_t(e.sharding_ignore_msb))
                 }));

@@ -3341,10 +3341,10 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
         auto addresses = entry.second;
         token_range_endpoints tr;
         if (range.start()) {
-            tr._start_token = dht::global_partitioner().to_sstring(range.start()->value());
+            tr._start_token = range.start()->value().to_sstring();
         }
         if (range.end()) {
-            tr._end_token = dht::global_partitioner().to_sstring(range.end()->value());
+            tr._end_token = range.end()->value().to_sstring();
         }
         for (auto endpoint : addresses) {
             endpoint_details details;

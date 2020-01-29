@@ -183,12 +183,6 @@ public:
     virtual token get_token(const schema& s, partition_key_view key) const = 0;
     virtual token get_token(const sstables::key_view& key) const = 0;
 
-
-    /**
-     * @return a partitioner-specific string representation of this token
-     */
-    virtual sstring to_sstring(const dht::token& t) const = 0;
-
     /**
      * @return a token from its partitioner-specific string representation
      */

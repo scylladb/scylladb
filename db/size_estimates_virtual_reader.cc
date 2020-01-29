@@ -193,7 +193,7 @@ future<std::vector<token_range>> get_local_ranges() {
         std::vector<token_range> local_ranges;
         auto to_bytes = [](const std::optional<dht::token_range::bound>& b) {
             assert(b);
-            return utf8_type->decompose(dht::global_partitioner().to_sstring(b->value()));
+            return utf8_type->decompose(b->value().to_sstring());
         };
         // We merge the ranges to be compatible with how Cassandra shows it's size estimates table.
         // All queries will be on that table, where all entries are text and there's no notion of

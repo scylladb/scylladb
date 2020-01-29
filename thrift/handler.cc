@@ -813,8 +813,8 @@ public:
             for (auto&& s : splits) {
                 res.emplace_back();
                 assert(s.first.start() && s.first.end());
-                auto start_token = dht::global_partitioner().to_sstring(s.first.start()->value());
-                auto end_token = dht::global_partitioner().to_sstring(s.first.end()->value());
+                auto start_token = s.first.start()->value().to_sstring();
+                auto end_token = s.first.end()->value().to_sstring();
                 res.back().__set_start_token(bytes_to_string(to_bytes_view(start_token)));
                 res.back().__set_end_token(bytes_to_string(to_bytes_view(end_token)));
                 res.back().__set_row_count(s.second);

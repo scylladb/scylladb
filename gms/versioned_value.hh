@@ -133,14 +133,14 @@ public:
     public:
         sstring make_full_token_string(const std::unordered_set<token>& tokens) {
             return ::join(";", tokens | boost::adaptors::transformed([] (const token& t) {
-                return dht::global_partitioner().to_sstring(t); })
+                return t.to_sstring(); })
             );
         }
         sstring make_token_string(const std::unordered_set<token>& tokens) {
             if (tokens.empty()) {
                 return "";
             }
-            return dht::global_partitioner().to_sstring(*tokens.begin());
+            return tokens.begin()->to_sstring();
         }
 
         sstring make_cdc_streams_timestamp_string(std::optional<db_clock::time_point> t) {

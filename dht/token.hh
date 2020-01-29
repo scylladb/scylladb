@@ -96,6 +96,11 @@ public:
     }
 
     /**
+     * @return a string representation of this token
+     */
+    sstring to_sstring() const;
+
+    /**
      * Calculate a token representing the approximate "middle" of the given
      * range.
      *
