@@ -23,6 +23,7 @@
 
 #include "bytes.hh"
 #include "utils/managed_bytes.hh"
+#include "types.hh"
 
 #include <seastar/net/byteorder.hh>
 #include <fmt/format.h>
@@ -131,6 +132,8 @@ public:
      * @return the mapping from 'token' to 'percentage of the ring owned by that token'.
      */
     static std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens);
+
+    static data_type get_token_validator();
 
 };
 

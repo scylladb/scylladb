@@ -1969,7 +1969,6 @@ public:
     virtual dht::token get_token(const schema& s, partition_key_view key) const override { return _partitioner.get_token(s, key); }
     virtual dht::token get_token(const sstables::key_view& key) const override { return _partitioner.get_token(key); }
     virtual bool preserves_order() override { return _partitioner.preserves_order(); }
-    virtual data_type get_token_validator() override { return _partitioner.get_token_validator(); }
     virtual const sstring name() const override { return _partitioner.name(); }
     virtual unsigned shard_of(const dht::token& t) const override;
     virtual unsigned shard_of(const dht::token& t, unsigned shard_count, unsigned sharding_ignore_msb) const override;

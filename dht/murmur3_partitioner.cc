@@ -104,11 +104,6 @@ murmur3_partitioner::bias(uint64_t n) const {
     return get_token(n - uint64_t(std::numeric_limits<int64_t>::min()));
 }
 
-data_type
-murmur3_partitioner::get_token_validator() {
-    return long_type;
-}
-
 unsigned
 murmur3_partitioner::shard_of(const token& t) const {
     return shard_of(t, _shard_count, _sharding_ignore_msb_bits);

@@ -192,8 +192,6 @@ public:
      */
     virtual bool preserves_order() = 0;
 
-    virtual data_type get_token_validator() = 0;
-
     /**
      * @return name of partitioner.
      */

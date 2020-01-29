@@ -180,4 +180,9 @@ token::describe_ownership(const std::vector<token>& sorted_tokens) {
     return ownerships;
 }
 
+data_type
+token::get_token_validator() {
+    return long_type;
+}
+
 } // namespace dht

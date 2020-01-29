@@ -56,7 +56,7 @@ private:
 public:
     token_fct(schema_ptr s)
             : native_scalar_function("token",
-                    dht::global_partitioner().get_token_validator(),
+                    dht::token::get_token_validator(),
                     s->partition_key_type()->types())
                     , _schema(s) {
     }
