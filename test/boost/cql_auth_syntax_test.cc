@@ -32,6 +32,44 @@
 #include "cql3/util.hh"
 
 //
+// Test basic CQL string quoting
+//
+BOOST_AUTO_TEST_CASE(maybe_quote) {
+    std::string s(65536, 'x');
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote(s), s);
+    s += " " + std::string(65536, 'y');
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote(s), "\"" + s + "\"");
+
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("a"), "a");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("z"), "z");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("b0"), "b0");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("y9"), "y9");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("c_d"), "c_d");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("x8_"), "x8_");
+
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote(""), "\"\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("0"), "\"0\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("9"), "\"9\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("_"), "\"_\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("A"), "\"A\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("To"), "\"To\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("zeD"), "\"zeD\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("hello world"), "\"hello world\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("hello_world01234"), "hello_world01234");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("hello world01234"), "\"hello world01234\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("hello world\"1234"), "\"hello world\"\"1234\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("hello_world01234hello_world01234"), "hello_world01234hello_world01234");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("hello world01234hello_world01234"), "\"hello world01234hello_world01234\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("hello world\"1234hello_world\"1234"), "\"hello world\"\"1234hello_world\"\"1234\"");
+
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("\""), "\"\"\"\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("[\"]"), "\"[\"\"]\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("\"\""), "\"\"\"\"\"\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("\"hell0\""), "\"\"\"hell0\"\"\"");
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("hello \"my\" world"), "\"hello \"\"my\"\" world\"");
+}
+
+//
 // These tests verify that all excepted variations of CQL syntax related to access-control ("auth") functionality are
 // accepted by the parser. They do not verify that invalid syntax is rejected, nor do they verify the correctness of
 // anything other than syntax (valid and invalid options for a particular authenticator, for example).
