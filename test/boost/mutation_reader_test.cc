@@ -1971,18 +1971,13 @@ public:
     virtual bool preserves_order() override { return _partitioner.preserves_order(); }
     virtual const sstring name() const override { return _partitioner.name(); }
     virtual unsigned shard_of(const dht::token& t) const override;
-    virtual unsigned shard_of(const dht::token& t, unsigned shard_count, unsigned sharding_ignore_msb) const override;
     virtual dht::token token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans = 1) const override;
 };
 
 unsigned dummy_partitioner::shard_of(const dht::token& t) const {
-    return shard_of(t, _partitioner.shard_count(), 0);
-}
-
-unsigned dummy_partitioner::shard_of(const dht::token& t, unsigned shard_count, unsigned sharding_ignore_msb) const {
     auto it = boost::find(_tokens, t);
     // Unknown tokens are assigned to shard 0
-    return it == _tokens.end() ? 0 : std::distance(_tokens.begin(), it) % shard_count;
+    return it == _tokens.end() ? 0 : std::distance(_tokens.begin(), it) % _partitioner.shard_count();
 }
 
 dht::token dummy_partitioner::token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans) const {

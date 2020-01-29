@@ -25,9 +25,12 @@
 #include <utility>
 
 #include "dht/token.hh"
+#include "dht/token-sharding.hh"
 #include "dht/i_partitioner.hh"
 
 namespace dht {
+
+using uint128_t = unsigned __int128;
 
 inline int64_t long_token(const token& t) {
     if (t.is_minimum() || t.is_maximum()) {
@@ -183,6 +186,91 @@ token::describe_ownership(const std::vector<token>& sorted_tokens) {
 data_type
 token::get_token_validator() {
     return long_type;
+}
+
+static uint64_t unbias(const token& t) {
+    return uint64_t(long_token(t)) + uint64_t(std::numeric_limits<int64_t>::min());
+}
+
+static token bias(uint64_t n) {
+    return token(token::kind::key, n - uint64_t(std::numeric_limits<int64_t>::min()));
+}
+
+inline
+unsigned
+zero_based_shard_of(uint64_t token, unsigned shards, unsigned sharding_ignore_msb_bits) {
+    // This is the master function, the inverses have to match it wrt. rounding errors.
+    token <<= sharding_ignore_msb_bits;
+    // Treat "token" as a fraction in the interval [0, 1); compute:
+    //    shard = floor((0.token) * shards)
+    return (uint128_t(token) * shards) >> 64;
+}
+
+std::vector<uint64_t>
+init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits) {
+    // computes the inverse of zero_based_shard_of(). ret[s] will return the smallest token that belongs to s
+    if (shards == 1) {
+        // Avoid the while loops below getting confused finding the "edge" between two nonexistent shards
+        return std::vector<uint64_t>(1, uint64_t(0));
+    }
+    auto ret = std::vector<uint64_t>(shards);
+    for (auto s : boost::irange<unsigned>(0, shards)) {
+        uint64_t token = (uint128_t(s) << 64) / shards;
+        token >>= sharding_ignore_msb_bits;   // leftmost bits are ignored by zero_based_shard_of
+        // token is the start of the next shard, and can be slightly before due to rounding errors; adjust
+        while (zero_based_shard_of(token, shards, sharding_ignore_msb_bits) != s) {
+            ++token;
+        }
+        ret[s] = token;
+    }
+    return ret;
+}
+
+unsigned
+shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t) {
+    switch (t._kind) {
+        case token::kind::before_all_keys:
+            return 0;
+        case token::kind::after_all_keys:
+            return shard_count - 1;
+        case token::kind::key:
+            uint64_t adjusted = unbias(t);
+            return zero_based_shard_of(adjusted, shard_count, sharding_ignore_msb_bits);
+    }
+    abort();
+}
+
+token
+token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t, shard_id shard, unsigned spans) {
+    uint64_t n = 0;
+    switch (t._kind) {
+        case token::kind::before_all_keys:
+            break;
+        case token::kind::after_all_keys:
+            return maximum_token();
+        case token::kind::key:
+            n = unbias(t);
+            break;
+    }
+    auto s = zero_based_shard_of(n, shard_count, sharding_ignore_msb_bits);
+
+    if (!sharding_ignore_msb_bits) {
+        // This ought to be the same as the else branch, but avoids shifts by 64
+        n = shard_start[shard];
+        if (spans > 1 || shard <= s) {
+            return maximum_token();
+        }
+    } else {
+        auto left_part = n >> (64 - sharding_ignore_msb_bits);
+        left_part += spans - unsigned(shard > s);
+        if (left_part >= (1u << sharding_ignore_msb_bits)) {
+            return maximum_token();
+        }
+        left_part <<= (64 - sharding_ignore_msb_bits);
+        auto right_part = shard_start[shard];
+        n = left_part | right_part;
+    }
+    return bias(n);
 }
 
 } // namespace dht

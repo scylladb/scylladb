@@ -22,6 +22,7 @@
 #include "i_partitioner.hh"
 #include <seastar/core/reactor.hh>
 #include "dht/murmur3_partitioner.hh"
+#include "dht/token-sharding.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"
 #include "utils/murmur_hash.hh"
@@ -34,6 +35,25 @@
 #include <seastar/core/thread.hh>
 
 namespace dht {
+
+i_partitioner::i_partitioner(unsigned shard_count, unsigned sharding_ignore_msb_bits)
+    : _shard_count(shard_count)
+    // if one shard, ignore sharding_ignore_msb_bits as they will just cause needless
+    // range breaks
+    , _sharding_ignore_msb_bits(shard_count > 1 ? sharding_ignore_msb_bits : 0)
+    , _shard_start(init_zero_based_shard_start(_shard_count, _sharding_ignore_msb_bits))
+{}
+
+unsigned
+i_partitioner::shard_of(const token& t) const {
+    return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
+}
+
+token
+i_partitioner::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
+    return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
+}
+
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
     return out << "{key: " << dk._key << ", token:" << dk._token << "}";

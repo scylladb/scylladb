@@ -29,6 +29,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/token-sharding.hh"
 #include "locator/token_metadata.hh"
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
@@ -177,7 +178,7 @@ topology_description generate_topology_description(
             auto it = std::lower_bound(tokens.begin(), tokens.end(), token);
             auto& entry = entries[it != tokens.end() ? std::distance(tokens.begin(), it) : 0];
 
-            auto shard_id = partitioner.shard_of(token, entry.streams.size(), entry.sharding_ignore_msb);
+            auto shard_id = dht::shard_of(entry.streams.size(), entry.sharding_ignore_msb, token);
             assert(shard_id < entry.streams.size());
 
             if (!entry.streams[shard_id].is_set()) {

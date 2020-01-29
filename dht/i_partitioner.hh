@@ -150,8 +150,10 @@ using decorated_key_opt = std::optional<decorated_key>;
 class i_partitioner {
 protected:
     unsigned _shard_count;
+    unsigned _sharding_ignore_msb_bits;
+    std::vector<uint64_t> _shard_start;
 public:
-    explicit i_partitioner(unsigned shard_count) : _shard_count(shard_count) {}
+    i_partitioner(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
     virtual ~i_partitioner() {}
 
     /**
@@ -200,12 +202,7 @@ public:
     /**
      * Calculates the shard that handles a particular token.
      */
-    virtual unsigned shard_of(const token& t) const = 0;
-
-    /**
-     * Calculates the shard that handles a particular token using custom shard_count and sharding_ignore_msb.
-     */
-    virtual unsigned shard_of(const token& t, unsigned shard_count, unsigned sharding_ignore_msb) const = 0;
+    virtual unsigned shard_of(const token& t) const;
 
     /**
      * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
@@ -218,7 +215,7 @@ public:
      *
      * On overflow, maximum_token() is returned.
      */
-    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const = 0;
+    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
 
     /**
      * @return number of shards configured for this partitioner
@@ -231,8 +228,8 @@ public:
         return "biased-token-round-robin";
     }
 
-    virtual unsigned sharding_ignore_msb() const {
-        return 0;
+    unsigned sharding_ignore_msb() const {
+        return _sharding_ignore_msb_bits;
     }
 };
 
