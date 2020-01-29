@@ -142,11 +142,25 @@ void repl(seastar::app_template& app) {
             // Print the statement
             std_cout << stmt.str();
             Json::Value json;
+
+            auto execute = [&json, &stmt, &e] () mutable {
+                return seastar::async([&] () mutable -> std::optional<unsigned> {
+                    auto qo = repl_options();
+                    auto msg = e.execute_cql(stmt.str(), std::move(qo)).get0();
+                    if (msg->move_to_shard()) {
+                        return *msg->move_to_shard();
+                    }
+                    json_visitor visitor(json);
+                    msg->accept(visitor);
+                    return std::nullopt;
+                });
+            };
+
             try {
-                auto qo = repl_options();
-                auto msg = e.execute_cql(stmt.str(), std::move(qo)).get0();
-                json_visitor visitor(json);
-                msg->accept(visitor);
+                auto shard = execute().get0();
+                if (shard) {
+                    smp::submit_to(*shard, std::move(execute)).get();
+                }
             } catch (std::exception& e) {
                 json["status"] = "error";
                 json["message"] = fmt::format("{}", e);
