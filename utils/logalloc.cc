@@ -158,13 +158,13 @@ logging::logger migrators::_logger("lsa-migrator-sanitizer");
 #else
 
 class migrators : public migrators_base, public enable_lw_shared_from_this<migrators> {
-    std::deque<uint32_t> _unused_ids;
+    std::vector<uint32_t> _unused_ids;
 
 public:
     uint32_t add(const migrate_fn_type* m) {
         if (!_unused_ids.empty()) {
-            auto idx = _unused_ids.front();
-            _unused_ids.pop_front();
+            uint32_t idx = _unused_ids.back();
+            _unused_ids.pop_back();
             _migrators[idx] = m;
             return idx;
         }
