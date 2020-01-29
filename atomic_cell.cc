@@ -21,6 +21,7 @@
 
 #include "atomic_cell.hh"
 #include "atomic_cell_or_collection.hh"
+#include "counters.hh"
 #include "types.hh"
 
 /// LSA mirator for cells with irrelevant type
@@ -218,7 +219,9 @@ std::ostream&
 operator<<(std::ostream& os, const atomic_cell_view& acv) {
     if (acv.is_live()) {
         return fmt_print(os, "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
-            to_hex(acv.value().linearize()),
+            acv.is_counter_update()
+                    ? "counter_update_value=" + to_sstring(acv.counter_update_value())
+                    : to_hex(acv.value().linearize()),
             acv.timestamp(),
             acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
             acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);
@@ -238,8 +241,21 @@ operator<<(std::ostream& os, const atomic_cell_view::printer& acvp) {
     auto& type = acvp._type;
     auto& acv = acvp._cell;
     if (acv.is_live()) {
+        std::ostringstream cell_value_string_builder;
+        if (type.is_counter()) {
+            if (acv.is_counter_update()) {
+                cell_value_string_builder << "counter_update_value=" << acv.counter_update_value();
+            } else {
+                cell_value_string_builder << "shards: ";
+                counter_cell_view::with_linearized(acv, [&cell_value_string_builder] (counter_cell_view& ccv) {
+                    cell_value_string_builder << ::join(", ", ccv.shards());
+                });
+            }
+        } else {
+            cell_value_string_builder << type.to_string(acv.value().linearize());
+        }
         return fmt_print(os, "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
-            type.to_string(acv.value().linearize()),
+            cell_value_string_builder.str(),
             acv.timestamp(),
             acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
             acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);
