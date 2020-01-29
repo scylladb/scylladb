@@ -118,6 +118,11 @@ public:
      */
     static dht::token from_sstring(const sstring& t);
 
+    /**
+     * @return a token from its byte representation
+     */
+    static dht::token from_bytes(bytes_view bytes);
+
 };
 
 const token& minimum_token();

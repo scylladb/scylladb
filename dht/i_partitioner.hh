@@ -183,11 +183,6 @@ public:
     virtual token get_token(const schema& s, partition_key_view key) const = 0;
     virtual token get_token(const sstables::key_view& key) const = 0;
 
-    /**
-     * @return a token from its partitioner-specific byte representation
-     */
-    virtual dht::token from_bytes(bytes_view bytes) const = 0;
-
     // FIXME: token.tokenFactory
     //virtual token.tokenFactory gettokenFactory() = 0;
 
