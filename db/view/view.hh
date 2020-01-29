@@ -122,7 +122,7 @@ future<> mutate_MV(
         db::view::stats& stats,
         cf_stats& cf_stats,
         db::timeout_semaphore_units pending_view_updates,
-        service::allow_hints allow_hints = service::allow_hints::yes);
+        service::allow_hints allow_hints);
 
 /**
  * create_virtual_column() adds a "virtual column" to a schema builder.

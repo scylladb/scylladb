@@ -2108,7 +2108,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             std::move(existings)).then([this, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
         //FIXME: discarded future.
-        (void)db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats, std::move(units)).handle_exception([] (auto ignored) { });
+        (void)db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats, std::move(units), service::allow_hints::yes).handle_exception([] (auto ignored) { });
     });
 }
 
