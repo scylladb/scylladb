@@ -65,7 +65,7 @@ public:
         auto key = partition_key::from_optional_exploded(*_schema, parameters);
         auto tok = dht::global_partitioner().get_token(*_schema, key);
         warn(unimplemented::cause::VALIDATION);
-        return dht::global_partitioner().token_to_bytes(tok);
+        return tok.data();
     }
 };
 

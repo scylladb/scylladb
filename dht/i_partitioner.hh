@@ -228,13 +228,6 @@ public:
     }
 
     /**
-     * @return bytes that represent the token as required by get_token_validator().
-     */
-    virtual bytes token_to_bytes(const token& t) const {
-        return t.data();
-    }
-
-    /**
      * @return number of shards configured for this partitioner
      */
     unsigned shard_count() const {
