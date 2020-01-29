@@ -7,6 +7,7 @@
 #include <link.h>
 #include <seastar/core/align.hh>
 #include <sstream>
+#include <cassert>
 
 using namespace seastar;
 
