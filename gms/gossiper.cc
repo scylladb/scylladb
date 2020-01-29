@@ -2255,8 +2255,7 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
     return common_features;
 }
 
-void gossiper::check_knows_remote_features(sstring local_features_string, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const {
-    std::set<sstring> local_features = to_feature_set(local_features_string);
+void gossiper::check_knows_remote_features(std::set<sstring>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const {
     auto local_endpoint = get_broadcast_address();
     auto common_features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::yes);
     if (boost::range::includes(local_features, common_features)) {

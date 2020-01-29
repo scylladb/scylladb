@@ -2253,12 +2253,9 @@ public:
 
     sstring get_config_supported_features();
     std::set<sstring> get_config_supported_features_set();
-    sstring get_known_features();
+private:
     std::set<sstring> get_known_features_set();
-
-private:
     future<> set_cql_ready(bool ready);
-private:
     void notify_down(inet_address endpoint);
     void notify_left(inet_address endpoint);
     void notify_up(inet_address endpoint);
