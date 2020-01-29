@@ -1431,6 +1431,10 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
 }
 
 future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+    if (timeout <= db::timeout_clock::now()) {
+        update_write_metrics_for_timed_out_write();
+        return make_exception_future<mutation>(timed_out_error{});
+    }
   return update_write_metrics(seastar::futurize_apply([&] {
     if (!s->is_synced()) {
         throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
@@ -1527,9 +1531,19 @@ Future database::update_write_metrics(Future&& f) {
     });
 }
 
+void database::update_write_metrics_for_timed_out_write() {
+    ++_stats->total_writes;
+    ++_stats->total_writes_failed;
+    ++_stats->total_writes_timedout;
+}
+
 future<> database::apply(schema_ptr s, const frozen_mutation& m, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
+    }
+    if (timeout <= db::timeout_clock::now()) {
+        update_write_metrics_for_timed_out_write();
+        return make_exception_future<>(timed_out_error{});
     }
     return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), timeout, sync));
 }

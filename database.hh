@@ -1361,6 +1361,7 @@ private:
 
     template<typename Future>
     Future update_write_metrics(Future&& f);
+    void update_write_metrics_for_timed_out_write();
 public:
     static utils::UUID empty_version;
 
