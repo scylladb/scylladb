@@ -123,6 +123,16 @@ public:
      */
     static dht::token from_bytes(bytes_view bytes);
 
+    /**
+     * Calculate the deltas between tokens in the ring in order to compare
+     *  relative sizes.
+     *
+     * @param sortedtokens a sorted List of tokens
+     * @return the mapping from 'token' to 'percentage of the ring owned by that token'.
+     */
+    static std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens);
+
+
 };
 
 const token& minimum_token();

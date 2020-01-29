@@ -192,15 +192,6 @@ public:
      */
     virtual bool preserves_order() = 0;
 
-    /**
-     * Calculate the deltas between tokens in the ring in order to compare
-     *  relative sizes.
-     *
-     * @param sortedtokens a sorted List of tokens
-     * @return the mapping from 'token' to 'percentage of the ring owned by that token'.
-     */
-    virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens) = 0;
-
     virtual data_type get_token_validator() = 0;
 
     /**

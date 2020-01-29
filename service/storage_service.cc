@@ -2056,7 +2056,7 @@ storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_add
 
 future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
     return run_with_no_api_lock([] (storage_service& ss) {
-        auto token_map = dht::global_partitioner().describe_ownership(ss._token_metadata.sorted_tokens());
+        auto token_map = dht::token::describe_ownership(ss._token_metadata.sorted_tokens());
         // describeOwnership returns tokens in an unspecified order, let's re-order them
         std::map<gms::inet_address, float> ownership;
         for (auto entry : token_map) {
@@ -2092,7 +2092,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             }
             keyspace_name = "system_traces";
         }
-        auto token_ownership = dht::global_partitioner().describe_ownership(ss._token_metadata.sorted_tokens());
+        auto token_ownership = dht::token::describe_ownership(ss._token_metadata.sorted_tokens());
 
         std::map<gms::inet_address, float> final_ownership;
 

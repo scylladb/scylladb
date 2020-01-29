@@ -41,7 +41,6 @@ public:
     virtual token get_token(const schema& s, partition_key_view key) const override;
     virtual token get_token(const sstables::key_view& key) const override;
     virtual bool preserves_order() override { return false; }
-    virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens) override;
     virtual data_type get_token_validator() override;
     virtual int tri_compare(const token& t1, const token& t2) const override;
 
