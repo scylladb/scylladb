@@ -221,13 +221,6 @@ public:
     virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const = 0;
 
     /**
-     * Gets the first shard of the minimum token.
-     */
-    unsigned shard_of_minimum_token() const {
-        return 0;  // hardcoded for now; unlikely to change
-    }
-
-    /**
      * @return number of shards configured for this partitioner
      */
     unsigned shard_count() const {

@@ -135,6 +135,13 @@ public:
 
     static data_type get_token_validator();
 
+    /**
+     * Gets the first shard of the minimum token.
+     */
+    static unsigned shard_of_minimum_token() {
+        return 0;  // hardcoded for now; unlikely to change
+    }
+
 };
 
 const token& minimum_token();
