@@ -103,6 +103,11 @@ public:
      */
     static token midpoint(const token& left, const token& right);
 
+    /**
+     * @return a randomly generated token
+     */
+    static token get_random_token();
+
 };
 
 const token& minimum_token();

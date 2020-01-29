@@ -104,4 +104,8 @@ token token::midpoint(const token& t1, const token& t2) {
     return token{kind::key, mid};
 }
 
+token token::get_random_token() {
+    return {kind::key, dht::get_random_number<int64_t>()};
+}
+
 } // namespace dht

@@ -187,7 +187,7 @@ SEASTAR_TEST_CASE(test_query_size_estimates_virtual_table) {
 
 SEASTAR_TEST_CASE(test_query_view_built_progress_virtual_table) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto rand = [] { return dht::global_partitioner().get_random_token(); };
+        auto rand = [] { return dht::token::get_random_token(); };
         auto next_token = rand();
         auto next_token_str = dht::global_partitioner().to_sstring(next_token);
         db::system_keyspace::register_view_for_building("ks", "v1", rand()).get();

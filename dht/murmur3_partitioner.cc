@@ -86,11 +86,6 @@ murmur3_partitioner::get_token(const schema& s, partition_key_view key) const {
     return get_token(hash[0]);
 }
 
-token murmur3_partitioner::get_random_token() {
-    auto rand = dht::get_random_number<uint64_t>();
-    return get_token(rand);
-}
-
 inline int64_t long_token(const token& t) {
     if (t.is_minimum() || t.is_maximum()) {
         return std::numeric_limits<long>::min();

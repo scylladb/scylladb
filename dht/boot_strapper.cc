@@ -106,7 +106,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata met
 std::unordered_set<token> boot_strapper::get_random_tokens(token_metadata metadata, size_t num_tokens) {
     std::unordered_set<token> tokens;
     while (tokens.size() < num_tokens) {
-        auto token = global_partitioner().get_random_token();
+        auto token = dht::token::get_random_token();
         auto ep = metadata.get_endpoint(token);
         if (!ep) {
             tokens.emplace(token);

@@ -199,11 +199,6 @@ public:
      */
     virtual dht::token from_bytes(bytes_view bytes) const = 0;
 
-    /**
-     * @return a randomly generated token
-     */
-    virtual token get_random_token() = 0;
-
     // FIXME: token.tokenFactory
     //virtual token.tokenFactory gettokenFactory() = 0;
 

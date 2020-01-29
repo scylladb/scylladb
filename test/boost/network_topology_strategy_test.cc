@@ -469,7 +469,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
     return std::move(replicas.get_vector());
 }
 
-static void test_equivalence(token_metadata& tm, snitch_ptr& snitch, dht::murmur3_partitioner& partitioner, const std::unordered_map<sstring, size_t>& datacenters) {
+static void test_equivalence(token_metadata& tm, snitch_ptr& snitch, const std::unordered_map<sstring, size_t>& datacenters) {
     class my_network_topology_strategy : public network_topology_strategy {
     public:
         using network_topology_strategy::network_topology_strategy;
@@ -485,7 +485,7 @@ static void test_equivalence(token_metadata& tm, snitch_ptr& snitch, dht::murmur
                                                                     })));
 
     for (size_t i = 0; i < 1000; ++i) {
-        auto token = partitioner.get_random_token();
+        auto token = dht::token::get_random_token();
         auto expected = calculate_natural_endpoints(token, tm, snitch, datacenters);
         auto actual = nts.calculate_natural_endpoints(token, tm);
 
@@ -565,7 +565,6 @@ SEASTAR_TEST_CASE(testCalculateEndpoints) {
         constexpr size_t VNODES = 64;
         constexpr size_t RUNS = 10;
 
-        dht::murmur3_partitioner partitioner;
         std::unordered_map<sstring, size_t> datacenters = {
                         { "rf1", 1 },
                         { "rf3", 3 },
@@ -589,10 +588,10 @@ SEASTAR_TEST_CASE(testCalculateEndpoints) {
 
             for (auto& node : nodes) {
                 for (size_t i = 0; i < VNODES; ++i) {
-                    tm.update_normal_token(partitioner.get_random_token(), node);
+                    tm.update_normal_token(dht::token::get_random_token(), node);
                 }
             }
-            test_equivalence(tm, snitch, partitioner, datacenters);
+            test_equivalence(tm, snitch, datacenters);
         }
 
         return i_endpoint_snitch::stop_snitch();

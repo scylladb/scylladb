@@ -55,7 +55,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
         .with_column("v", bytes_type)
         .build();
 
-    dht::token tok = dht::global_partitioner().get_random_token();
+    dht::token tok = dht::token::get_random_token();
 
     auto key1 = dht::decorated_key{tok,
                                    partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key1"))))};

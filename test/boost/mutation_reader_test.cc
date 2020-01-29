@@ -1971,7 +1971,6 @@ public:
     virtual sstring to_sstring(const dht::token& t) const override { return _partitioner.to_sstring(t); }
     virtual dht::token from_sstring(const sstring& t) const override { return _partitioner.from_sstring(t); }
     virtual dht::token from_bytes(bytes_view bytes) const override { return _partitioner.from_bytes(bytes); }
-    virtual dht::token get_random_token() override { return _partitioner.get_random_token(); }
     virtual bool preserves_order() override { return _partitioner.preserves_order(); }
     virtual std::map<dht::token, float> describe_ownership(const std::vector<dht::token>& sorted_tokens) override { return _partitioner.describe_ownership(sorted_tokens); }
     virtual data_type get_token_validator() override { return _partitioner.get_token_validator(); }
