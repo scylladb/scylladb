@@ -94,6 +94,15 @@ public:
         std::copy_n(reinterpret_cast<int8_t*>(&t), sizeof(_data), b.begin());
         return b;
     }
+
+    /**
+     * Calculate a token representing the approximate "middle" of the given
+     * range.
+     *
+     * @return The approximate midpoint between left and right.
+     */
+    static token midpoint(const token& left, const token& right);
+
 };
 
 const token& minimum_token();

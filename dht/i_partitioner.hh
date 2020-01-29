@@ -176,14 +176,6 @@ public:
     }
 
     /**
-     * Calculate a token representing the approximate "middle" of the given
-     * range.
-     *
-     * @return The approximate midpoint between left and right.
-     */
-    virtual token midpoint(const token& left, const token& right) const = 0;
-
-    /**
      * @return a token that can be used to route a given key
      * (This is NOT a method to create a token from its string representation;
      * for that, use tokenFactory.fromString.)

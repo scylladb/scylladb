@@ -73,7 +73,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_wraparound_1) {
     BOOST_REQUIRE(t1 > t2);
     // Even without knowing what the midpoint is, it needs to be inside the
     // wrapped range, i.e., between t1 and inf, OR between -inf and t2
-    auto midpoint = partitioner.midpoint(t1, t2);
+    auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
     // We can also calculate the actual value the midpoint should have:
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x8800'0000'0000'0000));
@@ -84,7 +84,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_wraparound_2) {
     auto t2 = token_from_long(0x9000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 > t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
+    auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x7800'0000'0000'0000));
 }
@@ -219,9 +219,8 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_ordering) {
 SEASTAR_THREAD_TEST_CASE(test_token_no_wraparound_1) {
     auto t1 = token_from_long(0x5000'0000'0000'0000);
     auto t2 = token_from_long(0x7000'0000'0000'0000);
-    dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 < t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
+    auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x6000'0000'0000'0000));
 }
@@ -608,7 +607,7 @@ do_test_selective_token_range_sharder(const dht::i_partitioner& part, const sche
                 }
                 BOOST_REQUIRE(end_shard == shard);
             }
-            auto midpoint = part.midpoint(
+            auto midpoint = dht::token::midpoint(
                     range_shard->start() ? range_shard->start()->value() : dht::minimum_token(),
                     range_shard->end() ? range_shard->end()->value() : dht::minimum_token());
             auto mid_shard = part.shard_of(midpoint);

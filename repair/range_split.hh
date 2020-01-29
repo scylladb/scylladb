@@ -57,7 +57,7 @@ public:
             // The use of minimum_token() here twice is not a typo - because wrap-
             // around token ranges are supported by midpoint(), the beyond-maximum
             // token can also be represented by minimum_token().
-            auto midpoint = dht::global_partitioner().midpoint(
+            auto midpoint = dht::token::midpoint(
                     range.start() ? range.start()->value() : dht::minimum_token(),
                     range.end() ? range.end()->value() : dht::minimum_token());
             // This shouldn't happen, but if the range included just one token, we
