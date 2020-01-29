@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2019 ScyllaDB
 #
 # This file is part of Scylla.
