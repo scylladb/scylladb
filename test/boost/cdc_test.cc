@@ -196,6 +196,20 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
     }, mk_cdc_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_table) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        // Conflict on CREATE which enables cdc log
+        e.execute_cql("CREATE TABLE ks.tbl_scylla_cdc_log (a int PRIMARY KEY)").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY) WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
+        e.require_table_does_not_exist("ks", "tbl").get();
+
+        // Conflict on ALTER which enables cdc log
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY)").get();
+        e.require_table_exists("ks", "tbl").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE ks.tbl WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
+    }, mk_cdc_test_config()).get();
+}
+
 static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
     auto rs = rows.rs().result_set().rows();
     std::vector<std::vector<bytes_opt>> results;
