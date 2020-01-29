@@ -132,7 +132,6 @@ public:
      */
     static std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens);
 
-
 };
 
 const token& minimum_token();

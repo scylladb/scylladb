@@ -237,11 +237,6 @@ public:
     }
 
     /**
-     * @return < 0 if if t1's _data array is less, t2's. 0 if they are equal, and > 0 otherwise. _kind comparison should be done separately.
-     */
-    virtual int tri_compare(const token& t1, const token& t2) const = 0;
-
-    /**
      * @return number of shards configured for this partitioner
      */
     unsigned shard_count() const {
@@ -255,10 +250,6 @@ public:
     virtual unsigned sharding_ignore_msb() const {
         return 0;
     }
-
-    friend bool operator==(const token& t1, const token& t2);
-    friend bool operator<(const token& t1, const token& t2);
-    friend int tri_compare(const token& t1, const token& t2);
 };
 
 //

@@ -29,6 +29,14 @@
 
 namespace dht {
 
+inline int64_t long_token(const token& t) {
+    if (t.is_minimum() || t.is_maximum()) {
+        return std::numeric_limits<long>::min();
+    }
+
+    return t._data;
+}
+
 static const token min_token{ token::kind::before_all_keys, 0 };
 static const token max_token{ token::kind::after_all_keys, 0 };
 
@@ -48,7 +56,13 @@ int tri_compare(const token& t1, const token& t2) {
     } else if (t1._kind > t2._kind) {
             return 1;
     } else if (t1._kind == token_kind::key) {
-        return global_partitioner().tri_compare(t1, t2);
+        auto l1 = long_token(t1);
+        auto l2 = long_token(t2);
+        if (l1 == l2) {
+            return 0;
+        } else {
+            return l1 < l2 ? -1 : 1;
+        }
     }
     return 0;
 }
@@ -62,14 +76,6 @@ std::ostream& operator<<(std::ostream& out, const token& t) {
         out << t.to_sstring();
     }
     return out;
-}
-
-inline int64_t long_token(const token& t) {
-    if (t.is_minimum() || t.is_maximum()) {
-        return std::numeric_limits<long>::min();
-    }
-
-    return t._data;
 }
 
 sstring token::to_sstring() const {

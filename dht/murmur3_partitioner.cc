@@ -104,17 +104,6 @@ murmur3_partitioner::bias(uint64_t n) const {
     return get_token(n - uint64_t(std::numeric_limits<int64_t>::min()));
 }
 
-int murmur3_partitioner::tri_compare(const token& t1, const token& t2) const {
-    auto l1 = long_token(t1);
-    auto l2 = long_token(t2);
-
-    if (l1 == l2) {
-        return 0;
-    } else {
-        return l1 < l2 ? -1 : 1;
-    }
-}
-
 data_type
 murmur3_partitioner::get_token_validator() {
     return long_type;

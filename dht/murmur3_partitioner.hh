@@ -42,7 +42,6 @@ public:
     virtual token get_token(const sstables::key_view& key) const override;
     virtual bool preserves_order() override { return false; }
     virtual data_type get_token_validator() override;
-    virtual int tri_compare(const token& t1, const token& t2) const override;
 
     virtual unsigned shard_of(const token& t) const override;
     virtual unsigned shard_of(const token& t, unsigned shard_count, unsigned sharding_ignore_msb) const override;
