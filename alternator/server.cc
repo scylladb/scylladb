@@ -282,6 +282,9 @@ server::server(seastar::sharded<executor>& e)
         {"BatchWriteItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.batch_write_item(client_state, req->content); }},
         {"BatchGetItem", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.batch_get_item(client_state, req->content); }},
         {"Query", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.query(client_state, req->content); }},
+        {"TagResource", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.tag_resource(client_state, req->content); }},
+        {"UntagResource", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.untag_resource(client_state, req->content); }},
+        {"ListTagsOfResource", [] (executor& e, executor::client_state& client_state, std::unique_ptr<request> req) { return e.list_tags_of_resource(client_state, req->content); }},
     } {
 }
 
