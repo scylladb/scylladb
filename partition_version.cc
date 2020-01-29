@@ -90,7 +90,7 @@ GCC6_CONCEPT(
 template<typename U, typename Domain, typename CoDomain>
 concept bool Mapper() {
     return requires(U obj, const Domain& src) {
-        { obj(src) } -> const CoDomain&
+        { obj(src) } -> const CoDomain&;
     };
 }
 

@@ -53,7 +53,7 @@ GCC6_CONCEPT(
 template<typename T>
 concept bool Writer() {
     return requires(T& wr, const char* data, size_t size) {
-        { wr.write(data, size) } -> void
+        { wr.write(data, size) } -> void;
     };
 }
 )

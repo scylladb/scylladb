@@ -82,7 +82,7 @@ concept bool RowConsumer() {
         { t.io_priority() } -> const io_priority_class&;
         { t.is_mutation_end() } -> bool;
         { t.setup_for_partition(pk) } -> void;
-        { t.push_ready_fragments() } -> void
+        { t.push_ready_fragments() } -> void;
         { t.maybe_skip() } -> std::optional<position_in_partition_view>;
         { t.fast_forward_to(std::move(cr), timeout) } -> std::optional<position_in_partition_view>;
     };

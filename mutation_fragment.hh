@@ -636,8 +636,8 @@ GCC6_CONCEPT(
     template<typename F>
     concept bool StreamedMutationTranformer() {
         return requires(F f, mutation_fragment mf, schema_ptr s) {
-            { f(std::move(mf)) } -> mutation_fragment
-            { f(s) } -> schema_ptr
+            { f(std::move(mf)) } -> mutation_fragment;
+            { f(s) } -> schema_ptr;
         };
     }
 )
