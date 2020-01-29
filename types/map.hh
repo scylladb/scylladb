@@ -54,7 +54,6 @@ public:
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
     static int32_t compare_maps(data_type keys_comparator, data_type values_comparator,
                         bytes_view o1, bytes_view o2);
-    virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     using abstract_type::deserialize;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,

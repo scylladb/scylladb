@@ -48,7 +48,6 @@ public:
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
-    virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const = 0;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const = 0;
     data_value deserialize_value(bytes_view v, cql_serialization_format sf) const {
         return deserialize(v, sf);
