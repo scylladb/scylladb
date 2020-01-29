@@ -803,8 +803,8 @@ public:
     void describe_splits_ex(thrift_fn::function<void(std::vector<CfSplit>  const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
         with_cob(std::move(cob), std::move(exn_cob), [&]{
             dht::token_range_vector ranges;
-            auto tstart = start_token.empty() ? dht::minimum_token() : dht::global_partitioner().from_sstring(sstring(start_token));
-            auto tend = end_token.empty() ? dht::maximum_token() : dht::global_partitioner().from_sstring(sstring(end_token));
+            auto tstart = start_token.empty() ? dht::minimum_token() : dht::token::from_sstring(sstring(start_token));
+            auto tend = end_token.empty() ? dht::maximum_token() : dht::token::from_sstring(sstring(end_token));
             range<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});
             auto cf = sstring(cfName);
             auto splits = service::get_local_storage_service().get_splits(current_keyspace(), cf, std::move(r), keys_per_split);
@@ -1714,7 +1714,7 @@ private:
             auto start = range.start_key.empty()
                        ? dht::ring_position::starting_at(dht::minimum_token())
                        : partitioner.decorate_key(s, key_from_thrift(s, to_bytes(range.start_key)));
-            auto end = dht::ring_position::ending_at(partitioner.from_sstring(sstring(range.end_token)));
+            auto end = dht::ring_position::ending_at(dht::token::from_sstring(sstring(range.end_token)));
             if (end.token().is_minimum()) {
                 end = dht::ring_position::ending_at(dht::maximum_token());
             } else if (end.less_compare(s, start)) {
@@ -1725,8 +1725,8 @@ private:
         }
 
         // Token range can wrap; the start token is exclusive.
-        auto start = dht::ring_position::ending_at(partitioner.from_sstring(sstring(range.start_token)));
-        auto end = dht::ring_position::ending_at(partitioner.from_sstring(sstring(range.end_token)));
+        auto start = dht::ring_position::ending_at(dht::token::from_sstring(sstring(range.start_token)));
+        auto end = dht::ring_position::ending_at(dht::token::from_sstring(sstring(range.end_token)));
         if (end.token().is_minimum()) {
             end = dht::ring_position::ending_at(dht::maximum_token());
         }

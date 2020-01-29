@@ -169,7 +169,7 @@ static system_keyspace::range_estimates estimate(const column_family& cf, const 
     int64_t count{0};
     utils::estimated_histogram hist{0};
     auto from_bytes = [] (auto& b) {
-        return dht::global_partitioner().from_sstring(utf8_type->to_string(b));
+        return dht::token::from_sstring(utf8_type->to_string(b));
     };
     dht::token_range_vector ranges;
     ::compat::unwrap_into(

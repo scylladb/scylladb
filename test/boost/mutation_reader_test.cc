@@ -1968,7 +1968,6 @@ public:
 
     virtual dht::token get_token(const schema& s, partition_key_view key) const override { return _partitioner.get_token(s, key); }
     virtual dht::token get_token(const sstables::key_view& key) const override { return _partitioner.get_token(key); }
-    virtual dht::token from_sstring(const sstring& t) const override { return _partitioner.from_sstring(t); }
     virtual dht::token from_bytes(bytes_view bytes) const override { return _partitioner.from_bytes(bytes); }
     virtual bool preserves_order() override { return _partitioner.preserves_order(); }
     virtual std::map<dht::token, float> describe_ownership(const std::vector<dht::token>& sorted_tokens) override { return _partitioner.describe_ownership(sorted_tokens); }

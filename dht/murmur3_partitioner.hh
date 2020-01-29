@@ -44,7 +44,6 @@ public:
     virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens) override;
     virtual data_type get_token_validator() override;
     virtual int tri_compare(const token& t1, const token& t2) const override;
-    virtual dht::token from_sstring(const sstring& t) const override;
     virtual dht::token from_bytes(bytes_view bytes) const override;
 
     virtual unsigned shard_of(const token& t) const override;

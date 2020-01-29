@@ -184,11 +184,6 @@ public:
     virtual token get_token(const sstables::key_view& key) const = 0;
 
     /**
-     * @return a token from its partitioner-specific string representation
-     */
-    virtual dht::token from_sstring(const sstring& t) const = 0;
-
-    /**
      * @return a token from its partitioner-specific byte representation
      */
     virtual dht::token from_bytes(bytes_view bytes) const = 0;

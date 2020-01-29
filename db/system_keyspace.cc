@@ -1519,8 +1519,8 @@ std::unordered_set<dht::token> decode_tokens(set_type_impl::native_type& tokens)
     std::unordered_set<dht::token> tset;
     for (auto& t: tokens) {
         auto str = value_cast<sstring>(t);
-        assert(str == dht::global_partitioner().from_sstring(str).to_sstring());
-        tset.insert(dht::global_partitioner().from_sstring(str));
+        assert(str == dht::token::from_sstring(str).to_sstring());
+        tset.insert(dht::token::from_sstring(str));
     }
     return tset;
 }
@@ -2134,11 +2134,11 @@ future<std::vector<view_build_progress>> load_view_build_progress() {
         for (auto& row : *cql_result) {
             auto ks_name = row.get_as<sstring>("keyspace_name");
             auto cf_name = row.get_as<sstring>("view_name");
-            auto first_token = dht::global_partitioner().from_sstring(row.get_as<sstring>("first_token"));
+            auto first_token = dht::token::from_sstring(row.get_as<sstring>("first_token"));
             auto next_token_sstring = row.get_opt<sstring>("next_token");
             std::optional<dht::token> next_token;
             if (next_token_sstring) {
-                next_token = dht::global_partitioner().from_sstring(std::move(next_token_sstring).value());
+                next_token = dht::token::from_sstring(std::move(next_token_sstring).value());
             }
             auto cpu_id = row.get_as<int32_t>("cpu_id");
             progress.emplace_back(view_build_progress{

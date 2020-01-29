@@ -79,7 +79,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata met
         blogger.debug("tokens manually specified as {}", initial_tokens);
         std::unordered_set<token> tokens;
         for (auto& token_string : initial_tokens) {
-            auto token = dht::global_partitioner().from_sstring(token_string);
+            auto token = dht::token::from_sstring(token_string);
             if (metadata.get_endpoint(token)) {
                 throw std::runtime_error(format("Bootstrapping to existing token {} is not allowed (decommission/removenode the old node first).", token_string));
             }

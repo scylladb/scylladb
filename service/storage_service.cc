@@ -402,7 +402,7 @@ std::unordered_set<token> get_replace_tokens() {
     }
     tokens.erase("");
     for (auto token_string : tokens) {
-        auto token = dht::global_partitioner().from_sstring(token_string);
+        auto token = dht::token::from_sstring(token_string);
         ret.insert(token);
     }
     return ret;
@@ -804,7 +804,7 @@ void storage_service::join_token_ring(int delay) {
                 }
             } else {
                 for (auto token_string : initial_tokens) {
-                    auto token = dht::global_partitioner().from_sstring(token_string);
+                    auto token = dht::token::from_sstring(token_string);
                     _bootstrap_tokens.insert(token);
                 }
                 slogger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
@@ -1645,7 +1645,7 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     std::unordered_set<token> ret;
     boost::split(tokens, tokens_string, boost::is_any_of(";"));
     for (auto str : tokens) {
-        auto t = dht::global_partitioner().from_sstring(str);
+        auto t = dht::token::from_sstring(str);
         slogger.trace("endpoint={}, token_str={} token={}", endpoint, str, t);
         ret.emplace(std::move(t));
     }

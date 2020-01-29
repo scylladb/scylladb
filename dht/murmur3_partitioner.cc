@@ -104,15 +104,6 @@ murmur3_partitioner::bias(uint64_t n) const {
     return get_token(n - uint64_t(std::numeric_limits<int64_t>::min()));
 }
 
-dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
-    auto lp = boost::lexical_cast<long>(t);
-    if (lp == std::numeric_limits<long>::min()) {
-        return minimum_token();
-    } else {
-        return get_token(uint64_t(lp));
-    }
-}
-
 dht::token murmur3_partitioner::from_bytes(bytes_view bytes) const {
     if (bytes.size() != sizeof(int64_t)) {
         throw runtime_exception(format("Invalid token. Should have size {:d}, has size {:d}\n", sizeof(int64_t), bytes.size()));

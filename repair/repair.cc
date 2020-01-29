@@ -1232,8 +1232,8 @@ private:
                 throw(std::runtime_error("range must have two components "
                         "separated by ':', got '" + range + "'"));
             }
-            auto tok_start = dht::global_partitioner().from_sstring(token_strings[0]);
-            auto tok_end = dht::global_partitioner().from_sstring(token_strings[1]);
+            auto tok_start = dht::token::from_sstring(token_strings[0]);
+            auto tok_end = dht::token::from_sstring(token_strings[1]);
             auto rng = wrapping_range<dht::token>(
                     ::range<dht::token>::bound(tok_start, false),
                     ::range<dht::token>::bound(tok_end, true));
@@ -1377,12 +1377,12 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::optional<::range<dht::token>::bound> tok_end;
         if (!options.start_token.empty()) {
             tok_start = ::range<dht::token>::bound(
-                dht::global_partitioner().from_sstring(options.start_token),
+                dht::token::from_sstring(options.start_token),
                 true);
         }
         if (!options.end_token.empty()) {
             tok_end = ::range<dht::token>::bound(
-                dht::global_partitioner().from_sstring(options.end_token),
+                dht::token::from_sstring(options.end_token),
                 false);
         }
         dht::token_range given_range_complement(tok_end, tok_start);

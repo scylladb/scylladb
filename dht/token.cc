@@ -112,4 +112,13 @@ token token::get_random_token() {
     return {kind::key, dht::get_random_number<int64_t>()};
 }
 
+token token::from_sstring(const sstring& t) {
+    auto lp = boost::lexical_cast<long>(t);
+    if (lp == std::numeric_limits<long>::min()) {
+        return minimum_token();
+    } else {
+        return token(kind::key, uint64_t(lp));
+    }
+}
+
 } // namespace dht

@@ -1894,7 +1894,7 @@ private:
 public:
     future<> move(sstring new_token) {
         // FIXME: getPartitioner().getTokenFactory().validate(newToken);
-        return move(dht::global_partitioner().from_sstring(new_token));
+        return move(dht::token::from_sstring(new_token));
     }
 
 private:

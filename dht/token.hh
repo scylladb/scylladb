@@ -113,6 +113,11 @@ public:
      */
     static token get_random_token();
 
+    /**
+     * @return a token from string representation
+     */
+    static dht::token from_sstring(const sstring& t);
+
 };
 
 const token& minimum_token();
