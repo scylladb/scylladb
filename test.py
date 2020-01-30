@@ -641,7 +641,7 @@ async def main():
     for mode in options.modes:
         write_junit_report(options.tmpdir, mode)
 
-    return 0 if not failed_tests else -1
+    return 0 if not failed_tests else 1
 
 if __name__ == "__main__":
     colorama.init()
