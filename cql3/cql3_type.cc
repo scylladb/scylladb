@@ -441,7 +441,7 @@ sstring maybe_quote(const sstring& identifier) {
     // string needs no quoting if it matches [a-z][a-z0-9_]*
     // quotes ('"') in the string are doubled
     bool need_quotes;
-    bool has_quotes;
+    size_t has_quotes;
     auto c = *p;
     if ('a' <= c && c <= 'z') {
         need_quotes = false;
@@ -450,11 +450,11 @@ sstring maybe_quote(const sstring& identifier) {
         need_quotes = true;
         has_quotes = (c == '"');
     }
-    while ((++p != ep) && !has_quotes) {
+    while ((++p != ep)) {
         c = *p;
         if (!(('a' <= c && c <= 'z') || ('0' <= c && c <= '9') || (c == '_'))) {
             need_quotes = true;
-            has_quotes = (c == '"');
+            has_quotes += (c == '"');
         }
     }
 
@@ -465,7 +465,12 @@ sstring maybe_quote(const sstring& identifier) {
         return make_sstring("\"", identifier, "\"");
     }
     static const std::regex double_quote_re("\"");
-    return '"' + std::regex_replace(identifier.c_str(), double_quote_re, "\"\"") + '"';
+    std::string result;
+    result.reserve(2 + identifier.size() + has_quotes);
+    result.push_back('"');
+    std::regex_replace(std::back_inserter(result), identifier.begin(), identifier.end(), double_quote_re, "\"\"");
+    result.push_back('"');
+    return result;
 }
 
 }
