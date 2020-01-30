@@ -555,7 +555,6 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     }
     slogger.info("Starting up server gossip");
 
-    _gossiper.register_(this->shared_from_this());
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
     _gossiper.start_gossiping(generation_number, app_states, gms::bind_messaging_port(bool(do_bind))).get();
 
