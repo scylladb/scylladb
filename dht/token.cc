@@ -34,7 +34,7 @@ using uint128_t = unsigned __int128;
 
 inline int64_t long_token(const token& t) {
     if (t.is_minimum() || t.is_maximum()) {
-        return std::numeric_limits<long>::min();
+        return std::numeric_limits<int64_t>::min();
     }
 
     return t._data;
