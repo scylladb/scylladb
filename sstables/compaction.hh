@@ -30,6 +30,8 @@
 #include <seastar/core/thread.hh>
 #include <functional>
 
+class flat_mutation_reader;
+
 namespace sstables {
 
     enum class compaction_type;
@@ -42,9 +44,12 @@ namespace sstables {
         };
         struct upgrade {
         };
+        struct scrub {
+            bool skip_corrupted;
+        };
 
     private:
-        using options_variant = std::variant<regular, cleanup, upgrade>;
+        using options_variant = std::variant<regular, cleanup, upgrade, scrub>;
 
     private:
         options_variant _options;
@@ -64,6 +69,10 @@ namespace sstables {
 
         static compaction_options make_upgrade() {
             return compaction_options(upgrade{});
+        }
+
+        static compaction_options make_scrub(bool skip_corrupted) {
+            return compaction_options(scrub{skip_corrupted});
         }
 
         template <typename... Visitor>
@@ -211,4 +220,7 @@ namespace sstables {
     // and possibly doesn't contain any tombstone that covers cells in other sstables.
     std::unordered_set<sstables::shared_sstable>
     get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
+
+    // For tests, can drop after we virtualize sstables.
+    flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_corrupted);
 }
