@@ -34,6 +34,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/scheduling.hh>
 #include "utils/UUID_gen.hh"
 #include "service/migration_manager.hh"
 #include "sstables/compaction_manager.hh"
@@ -49,7 +50,6 @@
 #include "db/view/view_builder.hh"
 #include "db/view/node_view_update_backlog.hh"
 #include "distributed_loader.hh"
-
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
@@ -442,7 +442,9 @@ public:
             service::storage_proxy::config spcfg;
             spcfg.available_memory = memory::stats().total_memory();
             db::view::node_update_backlog b(smp::count, 10ms);
-            proxy.start(std::ref(*db), spcfg, std::ref(b)).get();
+            scheduling_group_key_config sg_conf =
+                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
+            proxy.start(std::ref(*db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0()).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
             mm.start(std::ref(*mm_notif)).get();

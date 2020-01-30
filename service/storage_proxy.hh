@@ -47,6 +47,7 @@
 #include "query-result-set.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/core/scheduling_specific.hh>
 #include "db/consistency_level_type.hh"
 #include "db/read_repair_decision.hh"
 #include "db/write_type.hh"
@@ -181,6 +182,7 @@ public:
 
     using write_stats = storage_proxy_stats::write_stats;
     using stats = storage_proxy_stats::stats;
+    using global_stats = storage_proxy_stats::global_stats;
 
     class coordinator_query_options {
         clock_type::time_point _timeout;
@@ -249,7 +251,8 @@ private:
     db::hints::resource_manager _hints_resource_manager;
     std::optional<db::hints::manager> _hints_manager;
     db::hints::manager _hints_for_views_manager;
-    stats _stats;
+    scheduling_group_key _stats_key;
+    storage_proxy_stats::global_stats _global_stats;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
     std::default_random_engine _urandom;
@@ -397,7 +400,8 @@ private:
     template<typename Range>
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 public:
-    storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog);
+    storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
+            scheduling_group_key stats_key);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;
@@ -541,7 +545,20 @@ public:
     future<> drain_on_shutdown();
 
     const stats& get_stats() const {
-        return _stats;
+        return scheduling_group_get_specific<storage_proxy_stats::stats>(_stats_key);
+    }
+    stats& get_stats() {
+        return scheduling_group_get_specific<storage_proxy_stats::stats>(_stats_key);
+    }
+    const global_stats& get_global_stats() const {
+        return _global_stats;
+    }
+    global_stats& get_global_stats() {
+        return _global_stats;
+    }
+
+    scheduling_group_key get_stats_key() const {
+        return _stats_key;
     }
 
     static unsigned cas_shard(dht::token token);

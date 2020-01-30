@@ -27,6 +27,7 @@
 #include "db/config.hh"
 #include "utils/histogram.hh"
 #include "database.hh"
+#include "seastar/core/scheduling_specific.hh"
 
 namespace api {
 
@@ -34,12 +35,70 @@ namespace sp = httpd::storage_proxy_json;
 using proxy = service::storage_proxy;
 using namespace json;
 
-static future<utils::rate_moving_average>  sum_timed_rate(distributed<proxy>& d, utils::timed_rate_moving_average proxy::stats::*f) {
-    return d.map_reduce0([f](const proxy& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average(),
-            std::plus<utils::rate_moving_average>());
+
+/**
+ * This function implement a two dimentional map reduce where
+ * the first level is a distributed storage_proxy class and the
+ * second level is the stats per scheduling group class.
+ * @param d -  a reference to the storage_proxy distributed class.
+ * @param mapper -  the internal mapper that is used to map the internal
+ * stat class into a value of type `V`.
+ * @param reducer - the reducer that is used in both outer and inner
+ * aggregations.
+ * @param initial_value - the initial value to use for both aggregations
+ * @return A future that resolves to the result of the aggregation.
+ */
+template<typename V, typename Reducer, typename InnerMapper>
+future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
+        InnerMapper mapper, Reducer reducer, V initial_value) {
+    return d.map_reduce0( [mapper, reducer, initial_value] (const service::storage_proxy& sp) {
+        return map_reduce_scheduling_group_specific<service::storage_proxy_stats::stats>(
+                mapper, reducer, initial_value, sp.get_stats_key());
+    }, initial_value, reducer);
 }
 
-static future<json::json_return_type>  sum_timed_rate_as_obj(distributed<proxy>& d, utils::timed_rate_moving_average proxy::stats::*f) {
+/**
+ * This function implement a two dimentional map reduce where
+ * the first level is a distributed storage_proxy class and the
+ * second level is the stats per scheduling group class.
+ * @param d -  a reference to the storage_proxy distributed class.
+ * @param f - a field pointer which is the implicit internal reducer.
+ * @param reducer - the reducer that is used in both outer and inner
+ * aggregations.
+ * @param initial_value - the initial value to use for both aggregations* @return
+ * @return A future that resolves to the result of the aggregation.
+ */
+template<typename V, typename Reducer, typename F>
+future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
+        V F::*f, Reducer reducer, V initial_value) {
+    return two_dimensional_map_reduce(d, [f] (F& stats) {
+        return stats.*f;
+    }, reducer, initial_value);
+}
+
+/**
+ * A partial Specialization of sum_stats for the storage proxy
+ * case where the get stats function doesn't return a
+ * stats object with fields but a per scheduling group
+ * stats object, the name was also changed since functions
+ * partial specialization is not supported in C++.
+ *
+ */
+template<typename V, typename F>
+future<json::json_return_type>  sum_stats_storage_proxy(distributed<proxy>& d, V F::*f) {
+    return two_dimensional_map_reduce(d, [f] (F& stats) { return stats.*f; }, std::plus<V>(), V(0)).then([] (V val) {
+        return make_ready_future<json::json_return_type>(val);
+    });
+}
+
+
+static future<utils::rate_moving_average>  sum_timed_rate(distributed<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
+    return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
+        return (stats.*f).rate();
+    }, std::plus<utils::rate_moving_average>(), utils::rate_moving_average());
+}
+
+static future<json::json_return_type>  sum_timed_rate_as_obj(distributed<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
     return sum_timed_rate(d, f).then([](const utils::rate_moving_average& val) {
         httpd::utils_json::rate_moving_average m;
         m = val;
@@ -51,26 +110,69 @@ httpd::utils_json::rate_moving_average_and_histogram get_empty_moving_average() 
     return timer_to_json(utils::rate_moving_average_and_histogram());
 }
 
-static future<json::json_return_type>  sum_timed_rate_as_long(distributed<proxy>& d, utils::timed_rate_moving_average proxy::stats::*f) {
+static future<json::json_return_type>  sum_timed_rate_as_long(distributed<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
     return sum_timed_rate(d, f).then([](const utils::rate_moving_average& val) {
         return make_ready_future<json::json_return_type>(val.count);
     });
 }
 
-static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx, utils::estimated_histogram proxy::stats::*f) {
-    return ctx.sp.map_reduce0([f](const proxy& p) {return p.get_stats().*f;}, utils::estimated_histogram(),
-            utils::estimated_histogram_merge).then([](const utils::estimated_histogram& val) {
+static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx, utils::estimated_histogram service::storage_proxy_stats::stats::*f) {
+
+    return two_dimensional_map_reduce(ctx.sp, f, utils::estimated_histogram_merge,
+            utils::estimated_histogram()).then([](const utils::estimated_histogram& val) {
         utils_json::estimated_histogram res;
         res = val;
         return make_ready_future<json::json_return_type>(res);
     });
 }
 
-static future<json::json_return_type>  total_latency(http_context& ctx, utils::timed_rate_moving_average_and_histogram proxy::stats::*f) {
-    return ctx.sp.map_reduce0([f](const proxy& p) {return (p.get_stats().*f).hist.mean * (p.get_stats().*f).hist.count;}, 0.0,
-            std::plus<double>()).then([](double val) {
+static future<json::json_return_type>  total_latency(http_context& ctx, utils::timed_rate_moving_average_and_histogram service::storage_proxy_stats::stats::*f) {
+    return two_dimensional_map_reduce(ctx.sp, [f] (service::storage_proxy_stats::stats& stats) {
+            return (stats.*f).hist.mean * (stats.*f).hist.count;
+        }, std::plus<double>(), 0.0).then([](double val) {
         int64_t res = val;
         return make_ready_future<json::json_return_type>(res);
+    });
+}
+
+/**
+ * A partial Specialization of sum_histogram_stats
+ * for the storage proxy case where the get stats
+ * function doesn't return a stats object with
+ * fields but a per scheduling group stats object,
+ * the name was also changed since function partial
+ * specialization is not supported in C++.
+ */
+template<typename F>
+future<json::json_return_type>
+sum_histogram_stats_storage_proxy(distributed<proxy>& d,
+        utils::timed_rate_moving_average_and_histogram F::*f) {
+    return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
+        return (stats.*f).hist;
+    }, std::plus<utils::ihistogram>(), utils::ihistogram()).
+            then([](const utils::ihistogram& val) {
+        return make_ready_future<json::json_return_type>(to_json(val));
+    });
+}
+
+/**
+ * A partial Specialization of sum_timer_stats for the
+ * storage proxy case where the get stats function
+ * doesn't return a stats object with fields but a
+ * per scheduling group stats object, the name
+ * was also changed since partial function specialization
+ * is not supported in C++.
+ */
+template<typename F>
+future<json::json_return_type>
+sum_timer_stats_storage_proxy(distributed<proxy>& d,
+        utils::timed_rate_moving_average_and_histogram F::*f) {
+
+    return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
+        return (stats.*f).rate();
+    }, std::plus<utils::rate_moving_average_and_histogram>(),
+            utils::rate_moving_average_and_histogram()).then([](const utils::rate_moving_average_and_histogram& val) {
+        return make_ready_future<json::json_return_type>(timer_to_json(val));
     });
 }
 
@@ -223,15 +325,15 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_read_repair_attempted.set(r, [&ctx](std::unique_ptr<request> req)  {
-        return sum_stats(ctx.sp, &proxy::stats::read_repair_attempts);
+        return sum_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read_repair_attempts);
     });
 
     sp::get_read_repair_repaired_blocking.set(r, [&ctx](std::unique_ptr<request> req)  {
-        return sum_stats(ctx.sp, &proxy::stats::read_repair_repaired_blocking);
+        return sum_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read_repair_repaired_blocking);
     });
 
     sp::get_read_repair_repaired_background.set(r, [&ctx](std::unique_ptr<request> req)  {
-        return sum_stats(ctx.sp, &proxy::stats::read_repair_repaired_background);
+        return sum_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read_repair_repaired_background);
     });
 
     sp::get_schema_versions.set(r, [](std::unique_ptr<request> req)  {
@@ -284,71 +386,71 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_read_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::read_timeouts);
+        return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::read_timeouts);
     });
 
     sp::get_read_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::read_unavailables);
+        return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::read_unavailables);
     });
 
     sp::get_range_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::range_slice_timeouts);
+        return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::range_slice_timeouts);
     });
 
     sp::get_range_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::range_slice_unavailables);
+        return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::range_slice_unavailables);
     });
 
     sp::get_write_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::write_timeouts);
+        return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::write_timeouts);
     });
 
     sp::get_write_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_long(ctx.sp, &proxy::stats::write_unavailables);
+        return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::write_unavailables);
     });
 
     sp::get_read_metrics_timeouts_rates.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_obj(ctx.sp, &proxy::stats::read_timeouts);
+        return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::read_timeouts);
     });
 
     sp::get_read_metrics_unavailables_rates.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_obj(ctx.sp, &proxy::stats::read_unavailables);
+        return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::read_unavailables);
     });
 
     sp::get_range_metrics_timeouts_rates.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_obj(ctx.sp, &proxy::stats::range_slice_timeouts);
+        return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::range_slice_timeouts);
     });
 
     sp::get_range_metrics_unavailables_rates.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_obj(ctx.sp, &proxy::stats::range_slice_unavailables);
+        return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::range_slice_unavailables);
     });
 
     sp::get_write_metrics_timeouts_rates.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_obj(ctx.sp, &proxy::stats::write_timeouts);
+        return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::write_timeouts);
     });
 
     sp::get_write_metrics_unavailables_rates.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timed_rate_as_obj(ctx.sp, &proxy::stats::write_unavailables);
+        return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::write_unavailables);
     });
 
     sp::get_range_metrics_latency_histogram_depricated.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_histogram_stats(ctx.sp, &proxy::stats::range);
+        return sum_histogram_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::range);
     });
 
     sp::get_write_metrics_latency_histogram_depricated.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_histogram_stats(ctx.sp, &proxy::stats::write);
+        return sum_histogram_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::write);
     });
 
     sp::get_read_metrics_latency_histogram_depricated.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_histogram_stats(ctx.sp, &proxy::stats::read);
+        return sum_histogram_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read);
     });
 
     sp::get_range_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timer_stats(ctx.sp, &proxy::stats::range);
+        return sum_timer_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::range);
     });
 
     sp::get_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timer_stats(ctx.sp, &proxy::stats::write);
+        return sum_timer_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::write);
     });
     sp::get_cas_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
         return sum_timer_stats(ctx.sp, &proxy::stats::cas_write);
@@ -367,30 +469,30 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_read_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timer_stats(ctx.sp, &proxy::stats::read);
+        return sum_timer_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read);
     });
 
     sp::get_read_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_estimated_histogram(ctx, &proxy::stats::estimated_read);
+        return sum_estimated_histogram(ctx, &service::storage_proxy_stats::stats::estimated_read);
     });
 
     sp::get_read_latency.set(r, [&ctx](std::unique_ptr<request> req) {
-        return total_latency(ctx, &proxy::stats::read);
+        return total_latency(ctx, &service::storage_proxy_stats::stats::read);
     });
     sp::get_write_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_estimated_histogram(ctx, &proxy::stats::estimated_write);
+        return sum_estimated_histogram(ctx, &service::storage_proxy_stats::stats::estimated_write);
     });
 
     sp::get_write_latency.set(r, [&ctx](std::unique_ptr<request> req) {
-        return total_latency(ctx, &proxy::stats::write);
+        return total_latency(ctx, &service::storage_proxy_stats::stats::write);
     });
 
     sp::get_range_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timer_stats(ctx.sp, &proxy::stats::range);
+        return sum_timer_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::range);
     });
 
     sp::get_range_latency.set(r, [&ctx](std::unique_ptr<request> req) {
-        return total_latency(ctx, &proxy::stats::range);
+        return total_latency(ctx, &service::storage_proxy_stats::stats::range);
     });
 }
 

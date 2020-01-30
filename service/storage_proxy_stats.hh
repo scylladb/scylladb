@@ -33,7 +33,7 @@ namespace storage_proxy_stats {
 // split statistics counters
 struct split_stats {
     static seastar::metrics::label datacenter_label;
-    static seastar::metrics::label op_type_label;
+
 private:
     struct stats_counter {
         uint64_t val = 0;
@@ -108,8 +108,6 @@ struct write_stats {
     // forwarded by a coordinator to a replica
     uint64_t reads_coordinator_outside_replica_set = 0;
     uint64_t background_writes = 0; // client no longer waits for the write
-    uint64_t background_write_bytes = 0;
-    uint64_t queued_write_bytes = 0;
     uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
     uint64_t throttled_base_writes = 0; // current number of base writes delayed due to view update backlog
     uint64_t background_writes_failed = 0;
@@ -122,11 +120,15 @@ public:
     write_stats();
     write_stats(const sstring& category, bool auto_register_stats);
 
-    void register_metrics_local();
-    void register_metrics_for(gms::inet_address ep);
+    void register_stats();
+    void register_split_metrics_local();
+    void register_split_metrics_for(gms::inet_address ep);
+protected:
+    seastar::metrics::metric_groups _metrics;
 };
 
 struct stats : public write_stats {
+    seastar::metrics::metric_groups _metrics;
     utils::timed_rate_moving_average read_timeouts;
     utils::timed_rate_moving_average read_unavailables;
     utils::timed_rate_moving_average range_slice_timeouts;
@@ -192,9 +194,31 @@ struct stats : public write_stats {
 
 public:
     stats();
+    void register_stats();
+    void register_split_metrics_local();
+    void register_split_metrics_for(gms::inet_address ep);
+};
 
-    void register_metrics_local();
-    void register_metrics_for(gms::inet_address ep);
+ /*** This struct represents stats that has meaning (only or also)
+ * globally. For example background_write_bytes are used to decide
+ * if to throttle requests and it make little sense to check it
+ * per scheduling group, on the other hand this statistic has value
+ * in figuring out how much load each scheduling group generates
+ * on the system, this statistic should be handled elsewhere, i.e:
+ * in the write_stats struct.
+ */
+struct global_write_stats {
+    seastar::metrics::metric_groups _metrics;
+    uint64_t background_write_bytes = 0;
+    uint64_t queued_write_bytes = 0;
+    void register_stats();
+};
+
+/***
+ *  Following the convention of stats and write_stats
+ */
+struct global_stats : public global_write_stats {
+    void register_stats();
 };
 
 }
