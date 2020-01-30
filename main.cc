@@ -962,6 +962,12 @@ int main(int ac, char** av) {
             ss.init_messaging_service_part().get();
             api::set_server_messaging_service(ctx).get();
             api::set_server_storage_service(ctx).get();
+
+            gossiper.local().register_(ss.shared_from_this());
+            auto stop_listening = defer_verbose_shutdown("storage service notifications", [&gossiper, &ss] {
+                gossiper.local().unregister_(ss.shared_from_this()).get();
+            });
+
             ss.init_server_without_the_messaging_service_part().get();
             api::set_server_snapshot(ctx).get();
             auto stop_snapshots = defer_verbose_shutdown("snapshots", [] {
