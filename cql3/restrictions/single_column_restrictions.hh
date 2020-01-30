@@ -102,15 +102,6 @@ public:
         return r;
     }
 
-    virtual std::vector<bytes_opt> values(const query_options& options) const override {
-        std::vector<bytes_opt> r;
-        for (auto&& e : _restrictions) {
-            auto&& value = e.second->value(options);
-            r.emplace_back(value);
-        }
-        return r;
-    }
-
     virtual bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
         auto it = _restrictions.find(std::addressof(cdef));
         return (it != _restrictions.end()) ? it->second->value(options) : bytes_opt{};
