@@ -25,7 +25,7 @@
 #include <seastar/util/noncopyable_function.hh>
 
 inline
-void eventually(noncopyable_function<void ()> f, size_t max_attempts = 12) {
+void eventually(noncopyable_function<void ()> f, size_t max_attempts = 17) {
     size_t attempts = 0;
     while (true) {
         try {
@@ -43,7 +43,7 @@ void eventually(noncopyable_function<void ()> f, size_t max_attempts = 12) {
 
 inline
 bool eventually_true(noncopyable_function<bool ()> f) {
-    const unsigned max_attempts = 10;
+    const unsigned max_attempts = 15;
     unsigned attempts = 0;
     while (true) {
         if (f()) {
