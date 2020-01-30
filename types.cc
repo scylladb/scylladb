@@ -1479,24 +1479,39 @@ static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::na
 
 static size_t concrete_serialized_size(const boost::multiprecision::cpp_int& num);
 
-static void serialize_varint(bytes::iterator& out, const boost::multiprecision::cpp_int& num) {
-    boost::multiprecision::cpp_int pnum = boost::multiprecision::abs(num);
-
-    std::vector<uint8_t> b;
-    auto size = concrete_serialized_size(num);
-    b.reserve(size);
-    if (num.sign() < 0) {
-        pnum -= 1;
-    }
-    for (unsigned i = 0; i < size; i++) {
-        auto v = boost::multiprecision::integer_modulus(pnum, 256);
-        pnum >>= 8;
-        if (num.sign() < 0) {
-            v = ~v;
+static void serialize_varint_aux(bytes::iterator& out, const boost::multiprecision::cpp_int& num, uint8_t mask) {
+    struct inserter_with_prefix {
+        bytes::iterator& out;
+        uint8_t mask;
+        bool first = true;
+        inserter_with_prefix& operator*() {
+            return *this;
         }
-        b.push_back(v);
+        inserter_with_prefix& operator=(uint8_t value) {
+            if (first) {
+                if (value & 0x80) {
+                    *out++ = 0 ^ mask;
+                }
+                first = false;
+            }
+            *out = value ^ mask;
+            return *this;
+        }
+        inserter_with_prefix& operator++() {
+            ++out;
+            return *this;
+        }
+    };
+
+    export_bits(num, inserter_with_prefix{out, mask}, 8);
+}
+
+static void serialize_varint(bytes::iterator& out, const boost::multiprecision::cpp_int& num) {
+    if (num < 0) {
+        serialize_varint_aux(out, -num - 1, 0xff);
+    } else {
+        serialize_varint_aux(out, num, 0);
     }
-    out = std::copy(b.crbegin(), b.crend(), out);
 }
 
 static void serialize(const abstract_type& t, const void* value, bytes::iterator& out);
@@ -2095,12 +2110,19 @@ static size_t concrete_serialized_size(const string_type_impl::native_type& v) {
 static size_t concrete_serialized_size(const bytes_type_impl::native_type& v) { return v.size(); }
 static size_t concrete_serialized_size(const inet_addr_type_impl::native_type& v) { return v.get().size(); }
 
-static size_t concrete_serialized_size(const boost::multiprecision::cpp_int& num) {
-    if (!num) {
+static size_t concrete_serialized_size_aux(const boost::multiprecision::cpp_int& num) {
+    if (num) {
+        return align_up(boost::multiprecision::msb(num) + 2, 8u) / 8;
+    } else {
         return 1;
     }
-    auto pnum = abs(num);
-    return align_up(boost::multiprecision::msb(pnum) + 2, 8u) / 8;
+}
+
+static size_t concrete_serialized_size(const boost::multiprecision::cpp_int& num) {
+    if (num < 0) {
+        return concrete_serialized_size_aux(-num - 1);
+    }
+    return concrete_serialized_size_aux(num);
 }
 
 static size_t concrete_serialized_size(const varint_type_impl::native_type& v) {
