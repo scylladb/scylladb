@@ -115,6 +115,7 @@ static const sstring COMPUTED_COLUMNS_FEATURE = "COMPUTED_COLUMNS";
 static const sstring CDC_FEATURE = "CDC";
 static const sstring NONFROZEN_UDTS_FEATURE = "NONFROZEN_UDTS";
 static const sstring HINTED_HANDOFF_SEPARATE_CONNECTION_FEATURE = "HINTED_HANDOFF_SEPARATE_CONNECTION";
+static const sstring LWT_FEATURE = "LWT";
 
 static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 
@@ -178,6 +179,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _cdc_feature(_feature_service, CDC_FEATURE)
         , _nonfrozen_udts(_feature_service, NONFROZEN_UDTS_FEATURE)
         , _hinted_handoff_separate_connection(_feature_service, HINTED_HANDOFF_SEPARATE_CONNECTION_FEATURE)
+        , _lwt_feature(_feature_service, LWT_FEATURE)
         , _la_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::la)
         , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
@@ -238,7 +240,8 @@ void storage_service::enable_all_features() {
         std::ref(_computed_columns),
         std::ref(_cdc_feature),
         std::ref(_nonfrozen_udts),
-        std::ref(_hinted_handoff_separate_connection)
+        std::ref(_hinted_handoff_separate_connection),
+        std::ref(_lwt_feature)
     })
     {
         if (features.count(f.name())) {
@@ -366,6 +369,9 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
         }
         if (config.check_experimental(db::experimental_features_t::CDC)) {
             features.insert(CDC_FEATURE);
+        }
+        if (config.check_experimental(db::experimental_features_t::LWT)) {
+            features.insert(LWT_FEATURE);
         }
     }
     if (!sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {

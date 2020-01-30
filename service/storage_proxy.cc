@@ -751,9 +751,10 @@ static future<std::optional<paxos_response_handler::ballot_and_data>> sleep_and_
  */
 future<paxos_response_handler::ballot_and_data>
 paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write) {
-    if (!_proxy->get_db().local().get_config().check_experimental(db::experimental_features_t::LWT)) {
-        throw std::runtime_error("Paxos is currently disabled. Start Scylla with --experimental-features=lwt to enable.");
+    if (!service::get_local_storage_service().cluster_supports_lwt()) {
+        throw std::runtime_error("The cluster does not support Paxos. Upgrade all the nodes to the version with LWT support.");
     }
+
     return do_with(api::timestamp_type(0), shared_from_this(), [this, &cs, &contentions, is_write]
             (api::timestamp_type& min_timestamp_micros_to_use, shared_ptr<paxos_response_handler>& prh) {
         return repeat_until_value([this, &contentions, &cs, &min_timestamp_micros_to_use, is_write] {

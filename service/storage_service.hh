@@ -346,6 +346,7 @@ private:
     gms::feature _cdc_feature;
     gms::feature _nonfrozen_udts;
     gms::feature _hinted_handoff_separate_connection;
+    gms::feature _lwt_feature;
 
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
     seastar::named_semaphore _feature_listeners_sem = {1, named_semaphore_exception_factory{"feature listeners"}};
@@ -2381,6 +2382,11 @@ public:
 
     bool cluster_supports_hinted_handoff_separate_connection() {
         return bool(_hinted_handoff_separate_connection);
+    }
+
+    // Returns schema features which all nodes in the cluster advertise as supported.
+    bool cluster_supports_lwt() {
+        return bool(_lwt_feature);
     }
 
     // Returns schema features which all nodes in the cluster advertise as supported.
