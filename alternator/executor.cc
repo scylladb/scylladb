@@ -881,14 +881,12 @@ public:
     }
 };
 
-static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) {
+static mutation make_item_mutation(const rjson::value& item, schema_ptr schema, api::timestamp_type ts) {
     partition_key pk = pk_from_json(item, schema);
     clustering_key ck = ck_from_json(item, schema);
 
     mutation m(schema, pk);
     attribute_collector attrs_collector;
-
-    auto ts = api::new_timestamp();
 
     auto& row = m.partition().clustered_row(*schema, ck);
 
@@ -1013,15 +1011,15 @@ public:
     // conditional expression, apply() should return an empty optional.
     // apply() may throw if it encounters input errors not discovered during
     // the constructor.
-    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) = 0;
+    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) = 0;
     // Convert the above apply() into the signature needed by cas_request:
     virtual std::optional<mutation> apply(query::result& qr, const query::partition_slice& slice, api::timestamp_type ts) override {
         if (qr.row_count()) {
             auto selection = cql3::selection::selection::wildcard(_schema);
             auto previous_item = describe_item(_schema, slice, *selection, qr, {});
-            return apply(std::make_unique<rjson::value>(std::move(previous_item)));
+            return apply(std::make_unique<rjson::value>(std::move(previous_item)), ts);
         } else {
-            return apply(std::unique_ptr<rjson::value>());
+            return apply(std::unique_ptr<rjson::value>(), ts);
         }
     }
     virtual ~rmw_operation() = default;
@@ -1093,7 +1091,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, stats).then([this, &client_state, &proxy] (std::unique_ptr<rjson::value> previous_item) mutable {
-                std::optional<mutation> m = apply(previous_item);
+                std::optional<mutation> m = apply(previous_item, api::new_timestamp());
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
                 }
@@ -1105,7 +1103,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             });
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
-        std::optional<mutation> m = apply(nullptr);
+        std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         assert(m); // !needs_read_before_write, so apply() did not check a condition
         return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
             return make_ready_future<executor::request_return_type>(json_string(""));
@@ -1193,7 +1191,7 @@ public:
         }
         _condition_expression = get_parsed_condition_expression(_request);
     }
-    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) override {
+    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) override {
         std::unordered_set<std::string> used_attribute_values;
         std::unordered_set<std::string> used_attribute_names;
         if (!verify_expected(_request, previous_item) ||
@@ -1209,7 +1207,7 @@ public:
             verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
             verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
         }
-        return make_item_mutation(_item, schema());
+        return make_item_mutation(_item, schema(), ts);
     }
     virtual ~put_item_operation() = default;
 };
@@ -1251,13 +1249,13 @@ static void check_key(const rjson::value& key, const schema_ptr& schema) {
     }
 }
 
-static mutation make_delete_item_mutation(const rjson::value& key, schema_ptr schema) {
+static mutation make_delete_item_mutation(const rjson::value& key, schema_ptr schema, api::timestamp_type ts) {
     partition_key pk = pk_from_json(key, schema);
     clustering_key ck = ck_from_json(key, schema);
     check_key(key, schema);
     mutation m(schema, pk);
     auto& row = m.partition().clustered_row(*schema, ck);
-    row.apply(tombstone(api::new_timestamp(), gc_clock::now()));
+    row.apply(tombstone(ts, gc_clock::now()));
     return m;
 }
 
@@ -1279,7 +1277,7 @@ public:
         }
         _condition_expression = get_parsed_condition_expression(_request);
     }
-    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) override {
+    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) override {
         std::unordered_set<std::string> used_attribute_values;
         std::unordered_set<std::string> used_attribute_names;
         if (!verify_expected(_request, previous_item) ||
@@ -1295,7 +1293,7 @@ public:
             verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
             verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
         }
-        return make_delete_item_mutation(_key, schema());
+        return make_delete_item_mutation(_key, schema(), ts);
     }
     virtual ~delete_item_operation() = default;
 };
@@ -1484,7 +1482,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 // the operations themselves, and mutation_cas_request will
                 // call make_item_mutation() or make_delete_item_mutation() in
                 // its apply(), with the right timestamp.
-                mutations.push_back(make_item_mutation(item, schema));
+                mutations.push_back(make_item_mutation(item, schema, api::new_timestamp()));
                 // make_item_mutation returns a mutation with a single clustering row
                 auto mut_key = std::make_pair(mutations.back().key(), mutations.back().partition().clustered_rows().begin()->key());
                 if (used_keys.count(mut_key) > 0) {
@@ -1493,7 +1491,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 used_keys.insert(std::move(mut_key));
             } else if (r_name == "DeleteRequest") {
                 const rjson::value& key = (r->value)["Key"];
-                mutations.push_back(make_delete_item_mutation(key, schema));
+                mutations.push_back(make_delete_item_mutation(key, schema, api::new_timestamp()));
                 // make_delete_item_mutation returns a mutation with a single clustering row
                 auto mut_key = std::make_pair(mutations.back().key(), mutations.back().partition().clustered_rows().begin()->key());
                 if (used_keys.count(mut_key) > 0) {
@@ -2158,7 +2156,7 @@ public:
 
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
     virtual ~update_item_operation() = default;
-    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item) override;
+    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) override;
 };
 
 update_item_operation::update_item_operation(service::storage_proxy& proxy, rjson::value&& update_info)
@@ -2219,7 +2217,7 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
 }
 
 std::optional<mutation>
-update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item) {
+update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) {
     std::unordered_set<std::string> used_attribute_values;
     std::unordered_set<std::string> used_attribute_names;
     if (!verify_expected(_request, previous_item) ||
@@ -2235,7 +2233,6 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item)
     mutation m(_schema, _pk);
     auto& row = m.partition().clustered_row(*_schema, _ck);
     attribute_collector attrs_collector;
-    auto ts = api::new_timestamp();
     auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
         const column_definition* cdef = _schema->get_column_definition(column_name);
         if (cdef) {
