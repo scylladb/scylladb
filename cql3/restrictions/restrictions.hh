@@ -70,8 +70,6 @@ public:
      */
     virtual std::vector<const column_definition*> get_column_defs() const = 0;
 
-    virtual std::vector<bytes_opt> values(const query_options& options) const = 0;
-
     virtual bytes_opt value_for(const column_definition& cdef, const query_options& options) const {
         throw exceptions::invalid_request_exception("Single value can be obtained from single-column restrictions only");
     }
