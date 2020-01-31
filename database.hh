@@ -835,7 +835,7 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> cleanup_sstables(sstables::compaction_descriptor descriptor, bool is_actual_cleanup);
+    future<> cleanup_sstables(sstables::compaction_descriptor descriptor);
 
     future<bool> snapshot_exists(sstring name);
 

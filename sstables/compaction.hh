@@ -87,7 +87,9 @@ namespace sstables {
         std::optional<compaction_weight_registration> weight_registration;
         // Calls compaction manager's task for this compaction to release reference to exhausted sstables.
         std::function<void(const std::vector<shared_sstable>& exhausted_sstables)> release_exhausted;
-        bool cleanup;
+        // The options passed down to the compaction code.
+        // This also selects the kind of compaction to do.
+        compaction_options options = compaction_options::make_regular();
 
         compaction_descriptor() = default;
 
@@ -97,12 +99,12 @@ namespace sstables {
         explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level = default_level,
                                        uint64_t max_sstable_bytes = default_max_sstable_bytes,
                                        utils::UUID run_identifier = utils::make_random_uuid(),
-                                       bool cleanup = false)
+                                       compaction_options options = compaction_options::make_regular())
             : sstables(std::move(sstables))
             , level(level)
             , max_sstable_bytes(max_sstable_bytes)
             , run_identifier(run_identifier)
-            , cleanup(cleanup)
+            , options(options)
         {}
     };
 

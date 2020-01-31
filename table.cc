@@ -1337,16 +1337,17 @@ static bool needs_cleanup(const sstables::shared_sstable& sst,
     return true;
 }
 
-future<> table::cleanup_sstables(sstables::compaction_descriptor descriptor, bool is_actual_cleanup) {
+future<> table::cleanup_sstables(sstables::compaction_descriptor descriptor) {
     dht::token_range_vector r;
 
-    if (is_actual_cleanup) {
+    if (descriptor.options.type() == sstables::compaction_type::Cleanup) {
         r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
     }
 
-    return do_with(std::move(descriptor.sstables), std::move(r), std::move(descriptor.release_exhausted), [this, is_actual_cleanup] (auto& sstables, auto& owned_ranges, auto& release_fn) {
-        return do_for_each(sstables, [this, &owned_ranges, &release_fn, is_actual_cleanup] (auto& sst) {
-            if (is_actual_cleanup && !owned_ranges.empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
+    return do_with(std::move(descriptor.sstables), std::move(r), std::move(descriptor.release_exhausted),
+            [this, options = descriptor.options] (auto& sstables, auto& owned_ranges, auto& release_fn) {
+        return do_for_each(sstables, [this, &owned_ranges, &release_fn, options] (auto& sst) {
+            if (options.type() == sstables::compaction_type::Cleanup && !owned_ranges.empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
                 return make_ready_future<>();
             }
 
@@ -1356,13 +1357,13 @@ future<> table::cleanup_sstables(sstables::compaction_descriptor descriptor, boo
             // twice the disk space used by those sstables.
             static thread_local named_semaphore sem(1, named_semaphore_exception_factory{"cleanup sstables"});
 
-            return with_semaphore(sem, 1, [this, &sst, &release_fn, is_actual_cleanup] {
+            return with_semaphore(sem, 1, [this, &sst, &release_fn, options] {
                 // release reference to sstables cleaned up, otherwise space usage from their data and index
                 // components cannot be reclaimed until all of them are cleaned.
                 auto sstable_level = sst->get_sstable_level();
                 auto run_identifier = sst->run_identifier();
                 auto descriptor = sstables::compaction_descriptor({ std::move(sst) }, sstable_level,
-                    sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, is_actual_cleanup);
+                    sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, options);
                 descriptor.release_exhausted = release_fn;
                 return this->compact_sstables(std::move(descriptor));
             });

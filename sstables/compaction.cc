@@ -1062,21 +1062,35 @@ compaction_type compaction_options::type() const {
     return index_to_type[_options.index()];
 }
 
-template <typename ...Params>
-static std::unique_ptr<compaction> make_compaction(bool cleanup, Params&&... params) {
-    if (cleanup) {
-        return std::make_unique<cleanup_compaction>(std::forward<Params>(params)...);
-    } else {
-        return std::make_unique<regular_compaction>(std::forward<Params>(params)...);
-    }
+static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::compaction_descriptor descriptor,
+        std::function<shared_sstable()> creator, replacer_fn replacer) {
+    struct {
+        column_family& cf;
+        sstables::compaction_descriptor&& descriptor;
+        std::function<shared_sstable()>&& creator;
+        replacer_fn&& replacer;
+
+        std::unique_ptr<compaction> operator()(compaction_options::regular) {
+            return std::make_unique<regular_compaction>(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+        }
+        std::unique_ptr<compaction> operator()(compaction_options::cleanup) {
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+        }
+        std::unique_ptr<compaction> operator()(compaction_options::upgrade) {
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+        }
+    } visitor_factory{cf, std::move(descriptor), std::move(creator), std::move(replacer)};
+
+    return descriptor.options.visit(visitor_factory);
 }
 
 future<compaction_info>
 compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator, replacer_fn replacer) {
     if (descriptor.sstables.empty()) {
-        throw std::runtime_error(format("Called compaction with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
+        throw std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}", compaction_name(descriptor.options.type()),
+                cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
-    auto c = make_compaction(descriptor.cleanup, cf, std::move(descriptor), std::move(creator), std::move(replacer));
+    auto c = make_compaction(cf, std::move(descriptor), std::move(creator), std::move(replacer));
     if (c->contains_multi_fragment_runs()) {
         auto gc_writer = c->make_garbage_collected_sstable_writer();
         return compaction::run(std::move(c), std::move(gc_writer));
