@@ -1971,7 +1971,7 @@ void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key
         state.next_data_offset_to_write_summary += state.summary_byte_cost * entry_size;
         s.add_summary_data(token.data());
         auto key_data = s.add_summary_data(key);
-        s.entries.push_back({ dht::token(dht::token::kind::key, std::move(token._data)), key_data, index_offset });
+        s.entries.push_back({ token, key_data, index_offset });
     }
 }
 
@@ -2500,7 +2500,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         }
         void consume_entry(index_entry&& ie, uint64_t index_offset) {
             auto token = dht::global_partitioner().get_token(ie.get_key());
-            maybe_add_summary_entry(_summary, dht::token(dht::token::kind::key, std::move(token._data)), ie.get_key_bytes(), ie.position(), index_offset, _state);
+            maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), ie.position(), index_offset, _state);
             if (!first_key) {
                 first_key = key(to_bytes(ie.get_key_bytes()));
             } else {
