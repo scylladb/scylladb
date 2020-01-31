@@ -486,7 +486,9 @@ inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task)
 
 inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration will_stop) {
     bool retry = false;
-    const char* retry_msg = will_stop ? "will stop" : "retrying";
+    const char* stop_msg = "stopping";
+    const char* retry_msg = "retrying";
+    const char* decision_msg = will_stop ? stop_msg : retry_msg;
 
     try {
         f.get();
@@ -494,15 +496,18 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration w
         // We want compaction stopped here to be retried because this may have
         // happened at user request (using nodetool stop), and to mimic C*
         // behavior, compaction is retried later on.
-        cmlog.info("compaction info: {}: {}", e.what(), retry_msg);
-        retry = true;
+        // The compaction might request to not try again (e.retry()), in this
+        // case we won't retry.
+        retry = e.retry();
+        decision_msg = !retry ? stop_msg : decision_msg;
+        cmlog.info("compaction info: {}: {}", e.what(), decision_msg);
     } catch (storage_io_error& e) {
         cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
         retry = false;
         // FIXME discarded future.
         (void)stop();
     } catch (...) {
-        cmlog.error("compaction failed: {}: {}", std::current_exception(), retry_msg);
+        cmlog.error("compaction failed: {}: {}", std::current_exception(), decision_msg);
         retry = true;
     }
     return retry;
