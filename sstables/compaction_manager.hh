@@ -181,7 +181,7 @@ public:
     future<> perform_sstable_upgrade(column_family* cf, bool exclude_current_version);
 
     // Submit a column family to be scrubbed and wait for its termination.
-    future<> perform_sstable_scrub(column_family* cf);
+    future<> perform_sstable_scrub(column_family* cf, bool skip_corrupted);
 
     // Submit a column family for major compaction.
     future<> submit_major_compaction(column_family* cf);

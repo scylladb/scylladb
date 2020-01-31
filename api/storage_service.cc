@@ -1026,8 +1026,7 @@ void set_snapshot(http_context& ctx, routes& r) {
     });
 
     ss::scrub.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
-        // TODO: respect this
-        auto skip_corrupted = req->get_query_param("skip_corrupted");
+        const auto skip_corrupted = req_param<bool>(*req, "skip_corrupted", false);
 
         auto f = make_ready_future<>();
         if (!req_param<bool>(*req, "disable_snapshot", false)) {
@@ -1037,12 +1036,12 @@ void set_snapshot(http_context& ctx, routes& r) {
             });
         }
 
-        return f.then([&ctx, keyspace, column_families] {
+        return f.then([&ctx, keyspace, column_families, skip_corrupted] {
             return ctx.db.invoke_on_all([=] (database& db) {
                 return do_for_each(column_families, [=, &db](sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
-                    return cm.perform_sstable_scrub(&cf);
+                    return cm.perform_sstable_scrub(&cf, skip_corrupted);
                 });
             });
         }).then([]{
