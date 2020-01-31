@@ -1346,7 +1346,7 @@ future<> table::cleanup_sstables(sstables::compaction_descriptor descriptor, boo
 
     return do_with(std::move(descriptor.sstables), std::move(r), std::move(descriptor.release_exhausted), [this, is_actual_cleanup] (auto& sstables, auto& owned_ranges, auto& release_fn) {
         return do_for_each(sstables, [this, &owned_ranges, &release_fn, is_actual_cleanup] (auto& sst) {
-            if (!owned_ranges.empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
+            if (is_actual_cleanup && !owned_ranges.empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
                 return make_ready_future<>();
             }
 
