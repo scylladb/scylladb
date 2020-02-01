@@ -1526,7 +1526,7 @@ with open(buildfile_tmp, 'w') as f:
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = build/{mode}/seastar\n'.format(**locals()))
         f.write('  target = seastar\n'.format(**locals()))
-        f.write('build build/{mode}/seastar/libseastar_testing.a: ninja\n'
+        f.write('build build/{mode}/seastar/libseastar_testing.a: ninja | always\n'
                 .format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  subdir = build/{mode}/seastar\n'.format(**locals()))
@@ -1558,7 +1558,7 @@ with open(buildfile_tmp, 'w') as f:
         rule configure
           command = {python} configure.py $configure_args
           generator = 1
-        build build.ninja: configure | configure.py SCYLLA-VERSION-GEN
+        build build.ninja: configure | configure.py SCYLLA-VERSION-GEN seastar/CMakeLists.txt
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
