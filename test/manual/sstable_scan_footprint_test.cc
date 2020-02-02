@@ -260,17 +260,17 @@ int main(int argc, char** argv) {
             table& tab = env.local_db().find_column_family("ks", "test");
             auto s = tab.schema();
 
-            auto value = data_value(tests::random::get_bytes(100));
+            auto value = serialized(tests::random::get_bytes(100));
             auto& value_cdef = *s->get_column_definition("value");
-            auto pk = partition_key::from_single_value(*s, data_value(0).serialize());
+            auto pk = partition_key::from_single_value(*s, serialized(0));
             uint64_t rows = 0;
             auto gen = [s, &rows, ck = 0, pk, &value_cdef, value] () mutable -> mutation {
                 auto ts = api::new_timestamp();
                 mutation m(s, pk);
                 for (int i = 0; i < 1000; ++i) {
-                    auto ckey = clustering_key::from_single_value(*s, data_value(ck).serialize());
+                    auto ckey = clustering_key::from_single_value(*s, serialized(ck));
                     auto& row = m.partition().clustered_row(*s, ckey);
-                    row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value.serialize()));
+                    row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value));
                     ++rows;
                     ++ck;
                 }

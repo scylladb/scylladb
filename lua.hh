@@ -41,6 +41,6 @@ struct runtime_config {
 runtime_config make_runtime_config(const db::config& config);
 
 sstring compile(const runtime_config& cfg, const std::vector<sstring>& arg_names, sstring script);
-seastar::future<bytes> run_script(bitcode_view bitcode, const std::vector<data_value>& values,
-                                  data_type return_type, const runtime_config& cfg);
+seastar::future<bytes_opt> run_script(bitcode_view bitcode, const std::vector<data_value>& values,
+                                      data_type return_type, const runtime_config& cfg);
 }

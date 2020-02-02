@@ -658,7 +658,7 @@ struct from_lua_visitor {
         }
         std::sort(elements.begin(), elements.end(), [&](const data_value& a, const data_value& b) {
             // FIXME: this is madness, we have to be able to compare without serializing!
-            return element_type->less(a.serialize(), b.serialize());
+            return element_type->less(a.serialize_nonnull(), b.serialize_nonnull());
         });
         return make_set_value(t.shared_from_this(), std::move(elements));
     }
@@ -677,7 +677,7 @@ struct from_lua_visitor {
         }
         std::sort(elements.begin(), elements.end(), [&](const map_pair& a, const map_pair& b) {
             // FIXME: this is madness, we have to be able to compare without serializing!
-            return key_type->less(a.first.serialize(), b.first.serialize());
+            return key_type->less(a.first.serialize_nonnull(), b.first.serialize_nonnull());
         });
         return make_map_value(t.shared_from_this(), std::move(elements));
     }
@@ -888,10 +888,13 @@ db_clock::time_point timestamp_return_visitor::operator()(const lua_table&) {
 }
 
 static data_value convert_from_lua(lua_slice_state &l, const data_type& type) {
+    if (lua_isnil(l, -1)) {
+        return data_value::make_null(type);
+    }
     return ::visit(*type, from_lua_visitor{l});
 }
 
-static bytes convert_return(lua_slice_state &l, const data_type& return_type) {
+static bytes_opt convert_return(lua_slice_state &l, const data_type& return_type) {
     int num_return_vals = lua_gettop(l);
     if (num_return_vals != 1) {
         throw exceptions::invalid_request_exception(
@@ -1065,7 +1068,7 @@ lua::runtime_config lua::make_runtime_config(const db::config& config) {
 }
 
 // run the script for at most max_instructions
-future<bytes> lua::run_script(lua::bitcode_view bitcode, const std::vector<data_value>& values, data_type return_type, const lua::runtime_config& cfg) {
+future<bytes_opt> lua::run_script(lua::bitcode_view bitcode, const std::vector<data_value>& values, data_type return_type, const lua::runtime_config& cfg) {
     lua_slice_state l = load_script(cfg, bitcode);
     unsigned nargs = values.size();
     if (!lua_checkstack(l, nargs)) {
@@ -1088,7 +1091,7 @@ future<bytes> lua::run_script(lua::bitcode_view bitcode, const std::vector<data_
         auto start = ::now();
         switch (lua_resume(l, nullptr, nargs)) {
         case LUA_OK:
-            return make_ready_future<bytes_opt>(convert_return(l, return_type));
+            return make_ready_future<std::optional<bytes_opt>>(convert_return(l, return_type));
         case LUA_YIELD: {
             nargs = 0;
             elapsed += ::now() - start;
@@ -1096,7 +1099,7 @@ future<bytes> lua::run_script(lua::bitcode_view bitcode, const std::vector<data_
                 millisecond ms = elapsed;
                 throw exceptions::invalid_request_exception(format("lua execution timeout: {}ms elapsed", ms.count()));
             }
-            return make_ready_future<bytes_opt>(bytes_opt());
+            return make_ready_future<std::optional<bytes_opt>>(std::nullopt);
         }
         default:
             throw exceptions::invalid_request_exception(std::string("lua execution failed: ") +

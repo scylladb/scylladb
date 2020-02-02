@@ -38,13 +38,27 @@ public:
     using runtime_error::runtime_error;
 };
 
+class non_null_data_value {
+    data_value _v;
+
+public:
+    explicit non_null_data_value(data_value&& v);
+    operator const data_value&() const {
+        return _v;
+    }
+};
+
+inline bool operator==(const non_null_data_value& x, const non_null_data_value& y) {
+    return static_cast<const data_value&>(x) == static_cast<const data_value&>(y);
+}
+
 // Result set row is a set of cells that are associated with a row
 // including regular column cells, partition keys, as well as static values.
 class result_set_row {
     schema_ptr _schema;
-    std::unordered_map<sstring, data_value> _cells;
+    const std::unordered_map<sstring, non_null_data_value> _cells;
 public:
-    result_set_row(schema_ptr schema, std::unordered_map<sstring, data_value>&& cells)
+    result_set_row(schema_ptr schema, std::unordered_map<sstring, non_null_data_value>&& cells)
         : _schema{schema}
         , _cells{std::move(cells)}
     { }
@@ -55,7 +69,7 @@ public:
         if (it == _cells.end()) {
             return nullptr;
         }
-        return &it->second;
+        return &static_cast<const data_value&>(it->second);
     }
     // Look up a deserialized row cell value by column name
     template<typename T>
@@ -70,7 +84,7 @@ public:
     const T*
     get_ptr(const sstring& column_name) const {
         const auto *value = get_data_value(column_name);
-        if (value == nullptr || value->is_null()) {
+        if (value == nullptr) {
             return nullptr;
         }
         return &value_cast<T>(*value);
@@ -84,7 +98,7 @@ public:
         }
         throw no_value(column_name);
     }
-    const std::unordered_map<sstring, data_value>& cells() const { return _cells; }
+    const std::unordered_map<sstring, non_null_data_value>& cells() const { return _cells; }
     friend inline bool operator==(const result_set_row& x, const result_set_row& y);
     friend inline bool operator!=(const result_set_row& x, const result_set_row& y);
     friend std::ostream& operator<<(std::ostream& out, const result_set_row& row);
@@ -106,7 +120,7 @@ class result_set {
     std::vector<result_set_row> _rows;
 public:
     static result_set from_raw_result(schema_ptr, const partition_slice&, const result&);
-    result_set(schema_ptr s, const std::vector<result_set_row>& rows)
+    result_set(schema_ptr s, std::vector<result_set_row>&& rows)
         : _schema(std::move(s)), _rows{std::move(rows)}
     { }
     explicit result_set(const mutation&);

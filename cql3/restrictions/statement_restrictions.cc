@@ -818,7 +818,7 @@ bool single_column_restriction::contains::is_satisfied_by(bytes_view collection_
         const bool value_matches = with_linearized(*fragmented_val, [&] (bytes_view val) {
             auto exists_in = [&](auto&& range) {
                 auto found = std::find_if(range.begin(), range.end(), [&] (auto&& element) {
-                    return element_type->compare(element.serialize(), val) == 0;
+                    return element_type->compare(element.serialize_nonnull(), val) == 0;
                 });
                 return found != range.end();
             };
@@ -851,7 +851,7 @@ bool single_column_restriction::contains::is_satisfied_by(bytes_view collection_
             }
             auto found = with_linearized(*k, [&] (bytes_view k_bv) {
               return std::find_if(data_map.begin(), data_map.end(), [&] (auto&& element) {
-                return map_key_type->compare(element.first.serialize(), k_bv) == 0;
+                return map_key_type->compare(element.first.serialize_nonnull(), k_bv) == 0;
               });
             });
             if (found == data_map.end()) {
@@ -866,12 +866,12 @@ bool single_column_restriction::contains::is_satisfied_by(bytes_view collection_
             }
             auto found = with_linearized(*map_key, [&] (bytes_view map_key_bv) {
               return std::find_if(data_map.begin(), data_map.end(), [&] (auto&& element) {
-                return map_key_type->compare(element.first.serialize(), map_key_bv) == 0;
+                return map_key_type->compare(element.first.serialize_nonnull(), map_key_bv) == 0;
               });
             });
             if (found == data_map.end()
                 || with_linearized(*map_value, [&] (bytes_view map_value_bv) {
-                     return element_type->compare(found->second.serialize(), map_value_bv);
+                     return element_type->compare(found->second.serialize_nonnull(), map_value_bv);
                    }) != 0) {
                 return false;
             }

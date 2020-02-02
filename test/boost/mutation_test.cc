@@ -836,7 +836,7 @@ SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_
         assert_that(query::result_set::from_raw_result(s, slice, m.query(slice)))
             .has_only(a_row()
                 .with_column("pk", data_value(bytes("key1")))
-                .and_only_that());
+                .with_column("v", data_value::make_null(bytes_type)));
     });
 }
 
@@ -847,16 +847,12 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
             .with_column("ck", bytes_type, column_kind::clustering_key)
             .with_column("v1", bytes_type, column_kind::regular_column)
             .with_column("v2", bytes_type, column_kind::regular_column)
-            .with_column("v3", bytes_type, column_kind::regular_column)
             .build();
 
         mutation m(s, partition_key::from_single_value(*s, "key1"));
         m.set_clustered_cell(clustering_key::from_single_value(*s, bytes("ck:A")),
             *s->get_column_definition("v1"),
             atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v1:value")))));
-        m.set_clustered_cell(clustering_key::from_single_value(*s, bytes("ck:A")),
-            *s->get_column_definition("v2"),
-            atomic_cell::make_live(*bytes_type, 2, data_value::make_null(bytes_type).serialize()));
 
         auto slice = partition_slice_builder(*s).build();
 
@@ -865,8 +861,7 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
                 .with_column("pk", data_value(bytes("key1")))
                 .with_column("ck", data_value(bytes("ck:A")))
                 .with_column("v1", data_value(bytes("v1:value")))
-                .with_column("v2", data_value::make_null(bytes_type))
-                .and_only_that());
+                .with_column("v2", data_value::make_null(bytes_type)));
     });
 }
 
@@ -1566,12 +1561,12 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
 
         {
             mutation m(s, pk);
-            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize(), t1, ttl));
-            m.set_clustered_cell(ckey1, *s->get_column_definition("v2"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v2.serialize(), t2, ttl));
-            m.set_clustered_cell(ckey1, *s->get_column_definition("v3"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v3.serialize(), t3, ttl));
-            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize(), t1, ttl));
-            m.set_static_cell(*s->get_column_definition("s2"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v2.serialize(), t2, ttl));
-            m.set_static_cell(*s->get_column_definition("s3"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v3.serialize(), t3, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize_nonnull(), t1, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v2"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v2.serialize_nonnull(), t2, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v3"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v3.serialize_nonnull(), t3, ttl));
+            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize_nonnull(), t1, ttl));
+            m.set_static_cell(*s->get_column_definition("s2"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v2.serialize_nonnull(), t2, ttl));
+            m.set_static_cell(*s->get_column_definition("s3"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v3.serialize_nonnull(), t3, ttl));
 
             assert_that(results_at_time(m, t0))
                     .has_only(a_row()
@@ -1602,8 +1597,8 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
 
         {
             mutation m(s, pk);
-            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize(), t1, ttl));
-            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize(), t3, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize_nonnull(), t1, ttl));
+            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize_nonnull(), t3, ttl));
 
             assert_that(results_at_time(m, t2))
                     .has_only(a_row().with_column("s1", v1).and_only_that());

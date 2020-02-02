@@ -399,7 +399,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, listval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize() });
         });
 
         e.execute_cql("insert into cf (k, listval) values (0, [1]);").get();
@@ -407,7 +407,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, listval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({data_value(1)})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({data_value(1)})).serialize() });
         });
 
         e.execute_cql("update cf set listval = listval + [2] where k = 0;").get();
@@ -415,7 +415,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, listval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({1, 2})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({1, 2})).serialize() });
         });
 
         e.execute_cql("update cf set listval = [0] + listval where k = 0;").get();
@@ -423,7 +423,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, listval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({0, 1, 2})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({0, 1, 2})).serialize() });
         });
 
         e.execute_cql("update cf set listval[1] = 10 where k = 0;").get();
@@ -431,7 +431,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, listval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({0, 10, 2})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({0, 10, 2})).serialize() });
         });
 
         e.execute_cql("delete listval[1] from cf where k = 0;").get();
@@ -439,7 +439,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, listval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({0, 2})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({0, 2})).serialize() });
         });
 
         e.execute_cql("insert into cf (k, listval) values (0, []);").get();
@@ -459,7 +459,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, frozenlistval, asciival from mv_frozenlistval where frozenlistval = [1, 2, 3]").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize()}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         e.execute_cql("insert into cf (k, frozenlistval) values (0, [3, 2, 1]);").get();
@@ -467,13 +467,13 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, frozenlistval, asciival from mv_frozenlistval where frozenlistval = [3, 2, 1]").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({3, 2, 1})).serialize()}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({3, 2, 1})).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         e.execute_cql("insert into cf (k, frozenlistval) values (0, []);").get();
         eventually([&] {
         auto msg = e.execute_cql("select k, frozenlistval, asciival from mv_frozenlistval where frozenlistval = []").get0();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({})).serialize()} , {ascii_type->decompose("ascii text")} }});
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({})).serialize() , {ascii_type->decompose("ascii text")} }});
         });
 
         // ================ sets ================
@@ -483,9 +483,9 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, setval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_set_value(set_type, set_type_impl::native_type({
+                .with_row({ {int32_type->decompose(0)}, make_set_value(set_type, set_type_impl::native_type({
                     utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9798"),
-                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize()} });
+                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize() });
         });
 
         e.execute_cql("insert into cf (k, setval) values (0, {6bddc89a-5644-11e4-97fc-56847afe9798, 6bddc89a-5644-11e4-97fc-56847afe9798, 6bddc89a-5644-11e4-97fc-56847afe9799});").get();
@@ -493,9 +493,9 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, setval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_set_value(set_type, set_type_impl::native_type({
+                .with_row({ {int32_type->decompose(0)}, make_set_value(set_type, set_type_impl::native_type({
                     utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9798"),
-                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize()} });
+                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize() });
         });
 
         e.execute_cql("update cf set setval = setval + {6bddc89a-5644-0000-97fc-56847afe9799} where k = 0;").get();
@@ -503,10 +503,10 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, setval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_set_value(set_type, set_type_impl::native_type({
+                .with_row({ {int32_type->decompose(0)}, make_set_value(set_type, set_type_impl::native_type({
                     utils::UUID("6bddc89a-5644-0000-97fc-56847afe9799"),
                     utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9798"),
-                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize()} });
+                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize() });
         });
 
         e.execute_cql("update cf set setval = setval - {6bddc89a-5644-0000-97fc-56847afe9799} where k = 0;").get();
@@ -514,9 +514,9 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, setval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_set_value(set_type, set_type_impl::native_type({
+                .with_row({ {int32_type->decompose(0)}, make_set_value(set_type, set_type_impl::native_type({
                     utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9798"),
-                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize()} });
+                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize() });
         });
 
         e.execute_cql("insert into cf (k, setval) values (0, {});").get();
@@ -533,7 +533,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, frozensetval from mv_frozensetval  where frozensetval = {}").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_set_value(set_type, set_type_impl::native_type({})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_set_value(set_type, set_type_impl::native_type({})).serialize() });
         });
 
         e.execute_cql("insert into cf (k, frozensetval) values (0, {6bddc89a-5644-11e4-97fc-56847afe9798, 6bddc89a-5644-11e4-97fc-56847afe9799});").get();
@@ -541,9 +541,9 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, frozensetval, asciival from mv_frozensetval where frozensetval = {6bddc89a-5644-11e4-97fc-56847afe9798, 6bddc89a-5644-11e4-97fc-56847afe9799}").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_set_value(set_type, set_type_impl::native_type({
+                .with_row({ {int32_type->decompose(0)}, make_set_value(set_type, set_type_impl::native_type({
                     utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9798"),
-                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize()}, {ascii_type->decompose("ascii text")} });
+                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         e.execute_cql("insert into cf (k, frozensetval) values (0, {6bddc89a-0000-11e4-97fc-56847afe9799, 6bddc89a-5644-11e4-97fc-56847afe9798});").get();
@@ -551,9 +551,9 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, frozensetval, asciival from mv_frozensetval where frozensetval = {6bddc89a-0000-11e4-97fc-56847afe9799, 6bddc89a-5644-11e4-97fc-56847afe9798}").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_set_value(set_type, set_type_impl::native_type({
+                .with_row({ {int32_type->decompose(0)}, make_set_value(set_type, set_type_impl::native_type({
                     utils::UUID("6bddc89a-0000-11e4-97fc-56847afe9799"),
-                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9798")})).serialize()}, {ascii_type->decompose("ascii text")} });
+                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9798")})).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         // ================ maps ================
@@ -563,8 +563,8 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, mapval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_map_value(map_type, map_type_impl::native_type({
-                    {sstring("a"), 1}, {sstring("b"), 2}})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_map_value(map_type, map_type_impl::native_type({
+                    {sstring("a"), 1}, {sstring("b"), 2}})).serialize() });
         });
 
         e.execute_cql("update cf set mapval['c'] = 3 where k = 0;").get();
@@ -572,8 +572,8 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, mapval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_map_value(map_type, map_type_impl::native_type({
-                    {sstring("a"), 1}, {sstring("b"), 2}, {sstring("c"), 3}})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_map_value(map_type, map_type_impl::native_type({
+                    {sstring("a"), 1}, {sstring("b"), 2}, {sstring("c"), 3}})).serialize() });
         });
 
         e.execute_cql("update cf set mapval['b'] = 10 where k = 0;").get();
@@ -581,8 +581,8 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, mapval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_map_value(map_type, map_type_impl::native_type({
-                    {sstring("a"), 1}, {sstring("b"), 10}, {sstring("c"), 3}})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_map_value(map_type, map_type_impl::native_type({
+                    {sstring("a"), 1}, {sstring("b"), 10}, {sstring("c"), 3}})).serialize() });
         });
 
         e.execute_cql("delete mapval['b'] from cf where k = 0;").get();
@@ -590,8 +590,8 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, mapval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_map_value(map_type, map_type_impl::native_type({
-                    {sstring("a"), 1}, {sstring("c"), 3}})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_map_value(map_type, map_type_impl::native_type({
+                    {sstring("a"), 1}, {sstring("c"), 3}})).serialize() });
         });
 
         e.execute_cql("insert into cf (k, mapval) values (0, {});").get();
@@ -608,8 +608,8 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, frozenmapval, asciival from mv_frozenmapval where frozenmapval = {'a': 1, 'b': 2}").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_map_value(map_type, map_type_impl::native_type({
-                    {sstring("a"), 1}, {sstring("b"), 2}})).serialize()}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, make_map_value(map_type, map_type_impl::native_type({
+                    {sstring("a"), 1}, {sstring("b"), 2}})).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         e.execute_cql("insert into cf (k, frozenmapval) values (0, {'a': 1, 'b': 2, 'c': 3});").get();
@@ -617,8 +617,8 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, frozenmapval, asciival from mv_frozenmapval where frozenmapval = {'a': 1, 'b': 2, 'c': 3}").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_map_value(map_type, map_type_impl::native_type({
-                    {sstring("a"), 1}, {sstring("b"), 2}, {sstring("c"), 3}})).serialize()}, {ascii_type->decompose("ascii text")} });
+                .with_row({ {int32_type->decompose(0)}, make_map_value(map_type, map_type_impl::native_type({
+                    {sstring("a"), 1}, {sstring("b"), 2}, {sstring("c"), 3}})).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         // ================ tuples ================
@@ -628,9 +628,9 @@ SEASTAR_TEST_CASE(test_all_types) {
         auto msg = e.execute_cql("select k, tupleval, asciival from mv_tupleval where tupleval = (1, 'foobar', 6bddc89a-5644-11e4-97fc-56847afe9799)").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_tuple_value(tuple_type, tuple_type_impl::native_type({
+                .with_row({ {int32_type->decompose(0)}, make_tuple_value(tuple_type, tuple_type_impl::native_type({
                     1, data_value::make(ascii_type, std::make_unique<sstring>("foobar")),
-                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize()}, {ascii_type->decompose("ascii text")} });
+                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         e.execute_cql("insert into cf (k, tupleval) values (0, (1, null, 6bddc89a-5644-11e4-97fc-56847afe9799));").get();
@@ -640,9 +640,9 @@ SEASTAR_TEST_CASE(test_all_types) {
         msg = e.execute_cql("select k, tupleval, asciival from mv_tupleval where tupleval = (1, null, 6bddc89a-5644-11e4-97fc-56847afe9799)").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_tuple_value(tuple_type, tuple_type_impl::native_type({
+                .with_row({ {int32_type->decompose(0)}, make_tuple_value(tuple_type, tuple_type_impl::native_type({
                     1, data_value::make_null(ascii_type),
-                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize()}, {ascii_type->decompose("ascii text")} });
+                    utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         // ================ UDTs ================
@@ -654,7 +654,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799")},
-                            {make_set_value(udt_set_type, set_type_impl::native_type({sstring("bar"), sstring("foo")})).serialize()},
+                            make_set_value(udt_set_type, set_type_impl::native_type({sstring("bar"), sstring("foo")})).serialize(),
                             {ascii_type->decompose("ascii text")} }});
         });
 
@@ -664,7 +664,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799")},
-                            {make_set_value(udt_set_type, set_type_impl::native_type({sstring("bar"), sstring("foo")})).serialize()},
+                            make_set_value(udt_set_type, set_type_impl::native_type({sstring("bar"), sstring("foo")})).serialize(),
                             {ascii_type->decompose("ascii text")} }});
         });
 
@@ -676,7 +676,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_rows({{ {int32_type->decompose(0)}, {}, {uuid_type->from_string("6bddc89a-5644-11e4-97fc-56847afe9799")},
-                            {make_set_value(udt_set_type, set_type_impl::native_type({sstring("bar"), sstring("foo")})).serialize()},
+                            make_set_value(udt_set_type, set_type_impl::native_type({sstring("bar"), sstring("foo")})).serialize(),
                             {ascii_type->decompose("ascii text")} }});
         });
 
@@ -1264,7 +1264,7 @@ SEASTAR_TEST_CASE(test_collections) {
         auto msg = e.execute_cql("select p, lv from mv where v = 0").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize() });
         });
 
         e.execute_cql("insert into cf (p, v) values (1, 1)").get();
@@ -1273,7 +1273,7 @@ SEASTAR_TEST_CASE(test_collections) {
         auto msg = e.execute_cql("select p, lv from mv where v = 1").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(1)}, {make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize()} });
+                .with_row({ {int32_type->decompose(1)}, make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize() });
         });
     });
 }
