@@ -61,7 +61,7 @@ private:
     walker_type _walker;
     filter_type _filter;
     dir_entry_types _expected_type;
-    subscription<directory_entry> _listing;
+    future<> _listing_done;
     fs::path _dir;
     show_hidden _show_hidden;
 

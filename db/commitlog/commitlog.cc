@@ -1081,15 +1081,15 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
         sstring _dirname;
         file _file;
         sstring _fname_prefix;
-        subscription<directory_entry> _list;
+        future<> _list_done;
         std::vector<db::commitlog::descriptor> _result;
 
         helper(helper&&) = default;
         helper(sstring n, sstring fname_prefix, file && f)
-                : _dirname(std::move(n)), _file(std::move(f)), _fname_prefix(std::move(fname_prefix)), _list(
+                : _dirname(std::move(n)), _file(std::move(f)), _fname_prefix(std::move(fname_prefix)), _list_done(
                         _file.list_directory(
                                 std::bind(&helper::process, this,
-                                        std::placeholders::_1))) {
+                                        std::placeholders::_1)).done()) {
         }
 
         future<> process(directory_entry de) {
@@ -1112,7 +1112,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
         }
 
         future<> done() {
-            return _list.done();
+            return std::move(_list_done);
         }
 
         static bool is_cassandra_segment(sstring name) {
