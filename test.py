@@ -641,6 +641,8 @@ async def main():
     for mode in options.modes:
         write_junit_report(options.tmpdir, mode)
 
+    # Note: failure codes must be in the ranges 0-124, 126-127,
+    #       to cooperate with git bisect's expectations
     return 0 if not failed_tests else 1
 
 if __name__ == "__main__":
