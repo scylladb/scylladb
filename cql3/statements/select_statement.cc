@@ -341,6 +341,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     if (db::is_serial_consistency(options.get_consistency())) {
         unsigned shard = dht::shard_of(key_ranges[0].start()->value().as_decorated_key().token());
         if (engine().cpu_id() != shard) {
+            proxy.get_stats().replica_cross_shard_ops++;
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
         }
