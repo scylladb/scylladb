@@ -1064,6 +1064,29 @@ public:
     enum class write_isolation {
         FORBID_RMW, LWT_ALWAYS, LWT_RMW_ONLY, UNSAFE_RMW
     };
+    static constexpr auto WRITE_ISOLATION_TAG_KEY = "system:write_isolation";
+
+    static write_isolation get_write_isolation_for_schema(schema_ptr schema) {
+        const auto& tags = get_tags_of_table(schema);
+        auto it = tags.find(WRITE_ISOLATION_TAG_KEY);
+        if (it == tags.end() || it->second.empty()) {
+            // By default, fall back to always enforcing LWT
+            return write_isolation::LWT_ALWAYS;
+        }
+        switch (it->second[0]) {
+        case 'f':
+            return write_isolation::FORBID_RMW;
+        case 'a':
+            return write_isolation::LWT_ALWAYS;
+        case 'o':
+            return write_isolation::LWT_RMW_ONLY;
+        case 'u':
+            return write_isolation::UNSAFE_RMW;
+        default:
+            // In case of an incorrect tag, fall back to the safest option: LWT_ALWAYS
+            return write_isolation::LWT_ALWAYS;
+        }
+    }
 
 protected:
     // The full request JSON
@@ -1074,14 +1097,15 @@ protected:
     schema_ptr _schema;
     partition_key _pk = partition_key::make_empty();
     clustering_key _ck = clustering_key::make_empty();
-    write_isolation _write_isolation = write_isolation::LWT_ALWAYS;
+    write_isolation _write_isolation;
 public:
     // The constructor of a rmw_operation subclass should parse the request
     // and try to discover as many input errors as it can before really
     // attempting the read or write operations.
     rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
         : _request(std::move(request))
-        , _schema(get_table(proxy, _request)) {
+        , _schema(get_table(proxy, _request))
+        , _write_isolation(get_write_isolation_for_schema(_schema)) {
         // _pk and _ck will be assigned later, by the subclass's constructor
         // (each operation puts the key in a slightly different location in
         // the request).
@@ -1454,10 +1478,15 @@ static future<> do_batch_write(service::storage_proxy& proxy,
     if (mutation_builders.empty()) {
         return make_ready_future<>();
     }
-    // FIXME: Currently, the write isolation option is a constant chosen
-    // during compilation. It should be a per-table configurable option.
-    const rmw_operation::write_isolation write_isolation = rmw_operation::default_write_isolation;
-    if (write_isolation != rmw_operation::write_isolation::LWT_ALWAYS) {
+    // NOTE: technically, do_batch_write could be reworked to use LWT only for part
+    // of the batched requests and not use it for others, but it's not considered
+    // likely that a batch will contain both tables which always demand LWT and ones
+    // that don't - it's fragile to split a batch into multiple storage proxy requests though.
+    // Hence, the decision is conservative - if any table enforces LWT,the whole batch will use it.
+    const bool needs_lwt = boost::algorithm::any_of(mutation_builders | boost::adaptors::map_keys, [] (const schema_ptr& schema) {
+        return rmw_operation::get_write_isolation_for_schema(schema) == rmw_operation::write_isolation::LWT_ALWAYS;
+    });
+    if (!needs_lwt) {
         // Do a normal write, without LWT:
         std::vector<mutation> mutations;
         mutations.reserve(mutation_builders.size());
