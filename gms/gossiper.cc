@@ -1935,7 +1935,8 @@ future<> gossiper::do_stop_gossiping() {
         if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
             logger.info("Announcing shutdown");
             add_local_application_state(application_state::STATUS, _value_factory.shutdown(true)).get();
-            for (inet_address addr : _live_endpoints) {
+            auto live_endpoints = _live_endpoints;
+            for (inet_address addr : live_endpoints) {
                 msg_addr id = get_msg_addr(addr);
                 logger.trace("Sending a GossipShutdown to {}", id);
                 ms().send_gossip_shutdown(id, get_broadcast_address()).then_wrapped([id] (auto&&f) {
