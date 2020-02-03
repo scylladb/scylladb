@@ -1046,6 +1046,25 @@ static dht::partition_range_vector to_partition_ranges(const dht::decorated_key&
 // cas_request, as required by storage_proxy::cas()), but also has optional
 // modes not using LWT.
 class rmw_operation : public service::cas_request, public enable_shared_from_this<rmw_operation> {
+public:
+    // The following options choose which mechanism to use for isolating
+    // parallel write operations:
+    // * The FORBID_RMW option forbids RMW (read-modify-write) operations
+    //   such as conditional updates. For the remaining write-only
+    //   operations, ordinary quorum writes are isolated enough.
+    // * The LWT_ALWAYS option always uses LWT (lightweight transactions)
+    //   for any write operation - whether or not it also has a read.
+    // * The LWT_RMW_ONLY option uses LWT only for RMW operations, and uses
+    //   ordinary quorum writes for write-only operations.
+    //   This option is not safe if the user may send both RMW and write-only
+    //   operations on the same item.
+    // * The UNSAFE_RMW option does read-modify-write operations as separate
+    //   read and write. It is unsafe - concurrent RMW operations are not
+    //   isolated at all. This option will likely be removed in the future.
+    enum class write_isolation {
+        FORBID_RMW, LWT_ALWAYS, LWT_RMW_ONLY, UNSAFE_RMW
+    };
+
 protected:
     // The full request JSON
     rjson::value _request;
@@ -1055,6 +1074,7 @@ protected:
     schema_ptr _schema;
     partition_key _pk = partition_key::make_empty();
     clustering_key _ck = clustering_key::make_empty();
+    write_isolation _write_isolation = write_isolation::LWT_ALWAYS;
 public:
     // The constructor of a rmw_operation subclass should parse the request
     // and try to discover as many input errors as it can before really
@@ -1092,28 +1112,6 @@ public:
             bool needs_read_before_write,
             stats& stats);
     std::optional<shard_id> shard_for_execute(bool needs_read_before_write);
-
-    // The following options choose which mechanism to use for isolating
-    // parallel write operations:
-    // * The FORBID_RMW option forbids RMW (read-modify-write) operations
-    //   such as conditional updates. For the remaining write-only
-    //   operations, ordinary quorum writes are isolated enough.
-    // * The LWT_ALWAYS option always uses LWT (lightweight transactions)
-    //   for any write operation - whether or not it also has a read.
-    // * The LWT_RMW_ONLY option uses LWT only for RMW operations, and uses
-    //   ordinary quorum writes for write-only operations.
-    //   This option is not safe if the user may send both RMW and write-only
-    //   operations on the same item.
-    // * The UNSAFE_RMW option does read-modify-write operations as separate
-    //   read and write. It is unsafe - concurrent RMW operations are not
-    //   isolated at all. This option will likely be removed in the future.
-    enum class write_isolation {
-        FORBID_RMW, LWT_ALWAYS, LWT_RMW_ONLY, UNSAFE_RMW
-    };
-    // FIXME: Currently, the write isolation option is a constant chosen
-    // during compilation. It should be a per-table configurable option.
-    static constexpr write_isolation default_write_isolation = write_isolation::LWT_ALWAYS;
-    const write_isolation _write_isolation = default_write_isolation;
 };
 
 // shard_for_execute() checks whether execute() must be called on a specific
