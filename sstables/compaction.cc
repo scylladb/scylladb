@@ -1056,6 +1056,12 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c, GCConsume
     });
 }
 
+compaction_type compaction_options::type() const {
+    // Maps options_variant indexes to the corresponding compaction_type member.
+    static const compaction_type index_to_type[] = {compaction_type::Compaction, compaction_type::Cleanup, compaction_type::Upgrade};
+    return index_to_type[_options.index()];
+}
+
 template <typename ...Params>
 static std::unique_ptr<compaction> make_compaction(bool cleanup, Params&&... params) {
     if (cleanup) {

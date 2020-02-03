@@ -32,6 +32,48 @@
 
 namespace sstables {
 
+    enum class compaction_type;
+
+    class compaction_options {
+    public:
+        struct regular {
+        };
+        struct cleanup {
+        };
+        struct upgrade {
+        };
+
+    private:
+        using options_variant = std::variant<regular, cleanup, upgrade>;
+
+    private:
+        options_variant _options;
+
+    private:
+        explicit compaction_options(options_variant options) : _options(std::move(options)) {
+        }
+
+    public:
+        static compaction_options make_regular() {
+            return compaction_options(regular{});
+        }
+
+        static compaction_options make_cleanup() {
+            return compaction_options(cleanup{});
+        }
+
+        static compaction_options make_upgrade() {
+            return compaction_options(upgrade{});
+        }
+
+        template <typename... Visitor>
+        auto visit(Visitor&&... visitor) const {
+            return std::visit(std::forward<Visitor>(visitor)..., _options);
+        }
+
+        compaction_type type() const;
+    };
+
     struct compaction_descriptor {
         // List of sstables to be compacted.
         std::vector<sstables::shared_sstable> sstables;
