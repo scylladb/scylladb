@@ -553,7 +553,7 @@ static future<> update_tags(const rjson::value& tags, schema_ptr schema, std::ma
             if (tag_value.empty() || tag_value.size() > 256 || !validate_legal_tag_chars(tag_value)) {
                 throw api_error("ValidationException", "The Tag Value provided is invalid string");
             }
-            tags_map.emplace(tag_key, tag_value);
+            tags_map[sstring(tag_key)] = sstring(tag_value);
         }
     } else if (action == update_tags_action::delete_tags) {
         for (auto it = tags.Begin(); it != tags.End(); ++it) {
