@@ -92,6 +92,8 @@ public:
         std::vector<cql3::raw_value> values,
         db::consistency_level cl = db::consistency_level::ONE) = 0;
 
+    virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) = 0;
+
     virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) = 0;
 
     virtual future<> require_keyspace_exists(const sstring& ks_name) = 0;

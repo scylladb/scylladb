@@ -110,6 +110,7 @@ static constexpr auto AVAILABLE_RANGES = "available_ranges";
 static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
 static constexpr auto BUILT_VIEWS = "built_views";
 static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
+static constexpr auto CDC_LOCAL = "cdc_local";
 }
 
 namespace legacy {
@@ -178,6 +179,11 @@ future<> update_tokens(const std::unordered_set<dht::token>& tokens);
  * Record tokens being used by another node in the PEERS table.
  */
 future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
+
+/*
+ * Save the CDC streams generation timestamp announced by this node in persistent storage.
+ */
+future<> update_cdc_streams_timestamp(db_clock::time_point);
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
 future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
@@ -508,6 +514,12 @@ enum class bootstrap_state {
      * Used to initialize a restarting node.
      */
     future<std::unordered_set<dht::token>> get_saved_tokens();
+
+    /*
+     * Read the CDC streams generation timestamp announced by this node from persistent storage.
+     * Used to initialize a restarting node.
+     */
+    future<std::optional<db_clock::time_point>> get_saved_cdc_streams_timestamp();
 
     future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 

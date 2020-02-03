@@ -65,3 +65,6 @@ gc_clock::time_point to_gc_clock(db_clock::time_point tp) {
 
     return gc_clock::from_time_t(db_clock::to_time_t(tp));
 }
+
+/* For debugging and log messages. */
+std::ostream& operator<<(std::ostream&, db_clock::time_point);

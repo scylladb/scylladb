@@ -65,6 +65,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
+#include "cdc/metadata.hh"
 
 namespace cql_transport {
     class cql_server;
@@ -169,6 +170,15 @@ private:
     std::set<sstring> _disabled_features;
     size_t _service_memory_total;
     semaphore _service_memory_limiter;
+
+    /* For unit tests only.
+     *
+     * Currently used when choosing the timestamp of the first CDC stream generation:
+     * normally we choose a timestamp in the future so other nodes have a chance to learn about it
+     * before it starts operating, but in the single-node-cluster case this is not necessary
+     * and would only slow down tests (by having them wait).
+     */
+    bool _for_testing;
 public:
     storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,/* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
     void isolate_on_error();
@@ -199,6 +209,10 @@ public:
         return _token_metadata;
     }
 
+    cdc::metadata& get_cdc_metadata() {
+        return _cdc_metadata;
+    }
+
     const service::migration_notifier& get_migration_notifier() const {
         return _mnotifier.local();
     }
@@ -208,6 +222,7 @@ public:
     }
 
     future<> gossip_snitch_info();
+    future<> gossip_sharding_info();
 
     distributed<database>& db() {
         return _db;
@@ -220,6 +235,10 @@ private:
     }
     /* This abstraction maintains the token/endpoint metadata information */
     token_metadata _token_metadata;
+
+    // Maintains the set of known CDC generations used to pick streams for log writes (i.e., the partition keys of these log writes).
+    // Updated in response to certain gossip events (see the handle_cdc_generation function).
+    cdc::metadata _cdc_metadata;
 public:
     std::chrono::milliseconds get_ring_delay();
     gms::versioned_value::factory value_factory;
@@ -320,6 +339,14 @@ private:
 private:
     std::unordered_set<token> _bootstrap_tokens;
 
+    /* The timestamp of the CDC streams generation that this node has proposed when joining.
+     * This value is nullopt only when:
+     * 1. this node is being upgraded from a non-CDC version,
+     * 2. this node is starting for the first time or restarting with CDC previously disabled,
+     *    in which case the value should become populated before we leave the join_token_ring procedure.
+     */
+    std::optional<db_clock::time_point> _cdc_streams_ts;
+
     gms::feature _range_tombstones_feature;
     gms::feature _large_partitions_feature;
     gms::feature _materialized_views_feature;
@@ -360,7 +387,9 @@ public:
         _is_bootstrap_mode = false;
     }
 
-    void set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens);
+    /* Broadcasts the chosen tokens through gossip,
+     * together with a CDC streams timestamp (if we start a new CDC generation) and STATUS=NORMAL. */
+    void set_gossip_tokens(const std::unordered_set<dht::token>&, std::optional<db_clock::time_point>);
 #if 0
 
     public void registerDaemon(CassandraDaemon daemon)
@@ -444,9 +473,12 @@ public:
         daemon.deactivate();
     }
 #endif
-public:
-    future<std::unordered_set<token>> prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
+private:
+    // Tokens and the CDC streams timestamp of the replaced node.
+    using replacement_info = std::pair<std::unordered_set<token>, std::optional<db_clock::time_point>>;
+    future<replacement_info> prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
+public:
     future<> check_for_endpoint_collision(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 #if 0
 
@@ -791,8 +823,28 @@ public:
 private:
     void update_peer_info(inet_address endpoint);
     void do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
-    sstring get_application_state_value(inet_address endpoint, application_state appstate);
+
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
+
+    /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
+     * and start using it for CDC log writes if it's not obsolete.
+     */
+    void handle_cdc_generation(std::optional<db_clock::time_point>);
+    /* Returns `true` iff we started using the generation (it was not obsolete),
+     * which means that this node might write some CDC log entries using streams from this generation. */
+    bool do_handle_cdc_generation(db_clock::time_point);
+
+    /* If `handle_cdc_generation` fails, it schedules an asynchronous retry in the background
+     * using `async_handle_cdc_generation`.
+     */
+    void async_handle_cdc_generation(db_clock::time_point);
+
+    /* Scan CDC generation timestamps gossiped by other nodes and retrieve the latest one.
+     * This function should be called once at the end of the node startup procedure
+     * (after the node is started and running normally, it will retrieve generations on gossip events instead).
+     */
+    void scan_cdc_generations();
+
     future<> replicate_to_all_cores();
     future<> do_replicate_to_all_cores();
     serialized_action _replicate_action;

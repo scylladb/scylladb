@@ -333,6 +333,11 @@ public:
     virtual unsigned shard_of(const token& t) const = 0;
 
     /**
+     * Calculates the shard that handles a particular token using custom shard_count and sharding_ignore_msb.
+     */
+    virtual unsigned shard_of(const token& t, unsigned shard_count, unsigned sharding_ignore_msb) const = 0;
+
+    /**
      * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
      *
      * If the `spans` parameter is greater than zero, the result is the same as if the function

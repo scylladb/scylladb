@@ -556,6 +556,14 @@ future<> token_metadata::calculate_pending_ranges(abstract_replication_strategy&
 
 }
 
+size_t token_metadata::count_normal_token_owners() const {
+    std::set<inet_address> eps;
+    for (auto [t, ep]: _token_to_endpoint_map) {
+        eps.insert(ep);
+    }
+    return eps.size();
+}
+
 sstring token_metadata::print_pending_ranges() {
     std::stringstream ss;
 

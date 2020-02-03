@@ -143,6 +143,14 @@ public:
             return dht::global_partitioner().to_sstring(*tokens.begin());
         }
 
+        sstring make_cdc_streams_timestamp_string(std::optional<db_clock::time_point> t) {
+            // We assume that the db_clock epoch is the same on all receiving nodes.
+            if (!t) {
+                return "";
+            }
+            return std::to_string(t->time_since_epoch().count());
+        }
+
         versioned_value clone_with_higher_version(const versioned_value& value) {
             return versioned_value(value.value);
         }
@@ -188,6 +196,10 @@ public:
 
         versioned_value tokens(const std::unordered_set<token>& tokens) {
             return versioned_value(make_full_token_string(tokens));
+        }
+
+        versioned_value cdc_streams_timestamp(std::optional<db_clock::time_point> t) {
+            return versioned_value(make_cdc_streams_timestamp_string(t));
         }
 
         versioned_value removing_nonlocal(const utils::UUID& host_id) {

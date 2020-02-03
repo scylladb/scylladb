@@ -679,6 +679,10 @@ public:
         return _endpoint_to_host_id_map.size();
     }
 
+    /* Returns the number of different endpoints that own tokens in the ring.
+     * Bootstrapping tokens are not taken into account. */
+    size_t count_normal_token_owners() const;
+
 #if 0
     public Set<InetAddress> getAllEndpoints()
     {

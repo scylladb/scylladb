@@ -22,14 +22,130 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <string>
 
-#include "cdc/cdc.hh"
+#include "cdc/log.hh"
+#include "db/config.hh"
+#include "schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "transport/messages/result_message.hh"
+
 #include "types.hh"
 #include "types/tuple.hh"
+#include "types/map.hh"
+#include "types/user.hh"
 
 using namespace std::string_literals;
+
+static logging::logger tlog("cdc_test");
+
+static cql_test_config mk_cdc_test_config() {
+    shared_ptr<db::config> cfg(make_shared<db::config>());
+    auto features = cfg->experimental_features();
+    features.emplace_back(db::experimental_features_t::CDC);
+    cfg->experimental_features(features);
+    return cql_test_config(std::move(cfg));
+};
+
+namespace cdc {
+api::timestamp_type find_timestamp(const schema&, const mutation&);
+utils::UUID generate_timeuuid(api::timestamp_type);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TYPE ut (a int, b int)");
+        cquery_nofail(e, "CREATE TABLE ks.t (pk int, ck int, vstatic int static, vint int, "
+                "vmap map<int, int>, vfmap frozen<map<int, int>>, vut ut, vfut frozen<ut>, primary key (pk, ck))");
+
+        auto schema = schema_builder("ks", "t")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("vstatic", int32_type, column_kind::static_column)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("vint", int32_type)
+            .with_column("vmap", map_type_impl::get_instance(int32_type, int32_type, true))
+            .with_column("vfmap", map_type_impl::get_instance(int32_type, int32_type, false))
+            .with_column("vut", user_type_impl::get_instance("ks", "ut", {to_bytes("a"), to_bytes("b")}, {int32_type, int32_type}, true))
+            .with_column("vfut", user_type_impl::get_instance("ks", "ut", {to_bytes("a"), to_bytes("b")}, {int32_type, int32_type}, false))
+            .build();
+
+        auto check_stmt = [&] (const sstring& query) {
+            auto muts = e.get_modification_mutations(query).get0();
+            BOOST_REQUIRE(!muts.empty());
+
+            for (auto& m: muts) {
+                /* We want to check if `find_timestamp` truly returns this mutation's timestamp.
+                 * The mutation was created very recently (in the `get_modification_mutations` call),
+                 * so we can do it by comparing the returned timestamp with the current time
+                 * -- the difference should be small.
+                 */
+                auto ts = cdc::find_timestamp(*schema, m);
+                BOOST_REQUIRE(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        api::timestamp_clock::duration(api::new_timestamp() - ts))
+                    < std::chrono::milliseconds(5000));
+            }
+        };
+
+        check_stmt("INSERT INTO ks.t (pk, ck) VALUES (0, 0)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vint) VALUES (0,0,0)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vmap) VALUES (0,0,{0:0})");
+        check_stmt("INSERT INTO ks.t (pk, ck, vfmap) VALUES (0,0,{0:0})");
+        check_stmt("INSERT INTO ks.t (pk, ck, vut) VALUES (0,0,{b:0})");
+        check_stmt("INSERT INTO ks.t (pk, ck, vfut) VALUES (0,0,{b:0})");
+        check_stmt("INSERT INTO ks.t (pk, ck, vint) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vmap) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vfmap) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vut) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, ck, vfut) VALUES (0,0,null)");
+        check_stmt("INSERT INTO ks.t (pk, vstatic) VALUES (0, 0)");
+        check_stmt("UPDATE ks.t SET vint = 0 WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vmap = {0:0} WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vmap[0] = 0 WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vfmap = {0:0} WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vut = {b:0} WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vut.b = 0 WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vfut = {b:0} WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vint = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vmap = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vmap[0] = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vfmap = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vut = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vut.b = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vfut = null WHERE pk = 0 AND ck = 0");
+        check_stmt("UPDATE ks.t SET vstatic = 0 WHERE pk = 0");
+        check_stmt("DELETE FROM ks.t WHERE pk = 0 and ck = 0");
+        check_stmt("DELETE FROM ks.t WHERE pk = 0 and ck > 0");
+        check_stmt("DELETE FROM ks.t WHERE pk = 0 and ck > 0 and ck <= 1");
+        check_stmt("DELETE FROM ks.t WHERE pk = 0");
+        check_stmt("DELETE vint FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vmap FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vmap[0] FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vfmap FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vut FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vut.b FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vfut FROM t WHERE pk = 0 AND ck = 0");
+        check_stmt("DELETE vstatic FROM t WHERE pk = 0");
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_generate_timeuuid) {
+    auto seed = std::random_device{}();
+    tlog.info("test_generate_timeuuid seed: {}", seed);
+
+    std::mt19937 rnd_engine(seed);
+    std::uniform_int_distribution<api::timestamp_type> dist(1505959942168984, 1649959942168984);
+
+    for (int i = 0; i < 1000; ++i) {
+        auto t1 = dist(rnd_engine);
+        auto t2 = dist(rnd_engine);
+        auto tuuid1 = cdc::generate_timeuuid(t1);
+        auto tuuid2 = cdc::generate_timeuuid(t2);
+
+        auto cmp = timeuuid_type->compare(timeuuid_type->decompose(tuuid1), timeuuid_type->decompose(tuuid2));
+        BOOST_REQUIRE((t1 == t2) || (t1 < t2 && cmp < 0) || (t1 > t2 && cmp > 0));
+        BOOST_REQUIRE(utils::UUID_gen::micros_timestamp(tuuid1) == t1 && utils::UUID_gen::micros_timestamp(tuuid2) == t2);
+    }
+}
 
 SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
     do_with_cql_env_thread([](cql_test_env& e) {
@@ -45,19 +161,8 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
                     e.local_db().find_schema("ks", "tbl")->cdc_options().enabled());
             if (exp.enabled) {
                 e.require_table_exists("ks", cdc::log_name("tbl")).get();
-                e.require_table_exists("ks", cdc::desc_name("tbl")).get();
-                auto msg = e.execute_cql(format("select node_ip, shard_id from ks.{};", cdc::desc_name("tbl"))).get0();
-                std::vector<std::vector<bytes_opt>> expected_rows;
-                expected_rows.reserve(smp::count);
-                auto ip = inet_addr_type->decompose(
-                        utils::fb_utilities::get_broadcast_address().addr());
-                for (int i = 0; i < static_cast<int>(smp::count); ++i) {
-                    expected_rows.push_back({ip, int32_type->decompose(i)});
-                }
-                assert_that(msg).is_rows().with_rows_ignore_order(std::move(expected_rows));
             } else {
                 e.require_table_does_not_exist("ks", cdc::log_name("tbl")).get();
-                e.require_table_does_not_exist("ks", cdc::desc_name("tbl")).get();
             }
             BOOST_REQUIRE_EQUAL(exp.preimage,
                     e.local_db().find_schema("ks", "tbl")->cdc_options().preimage());
@@ -81,7 +186,6 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
             assert_cdc(alter2_expected);
             e.execute_cql("DROP TABLE ks.tbl").get();
             e.require_table_does_not_exist("ks", cdc::log_name("tbl")).get();
-            e.require_table_does_not_exist("ks", cdc::desc_name("tbl")).get();
         };
 
         test("", "{'enabled':'true'}", "{'enabled':'false'}", {false}, {true}, {false});
@@ -89,7 +193,7 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
         test("WITH cdc = {'enabled':'false'}", "{'enabled':'true'}", "{'enabled':'false'}", {false}, {true}, {false});
         test("", "{'enabled':'true','preimage':'true','postimage':'true','ttl':'1'}", "{'enabled':'false'}", {false}, {true, true, true, 1}, {false});
         test("WITH cdc = {'enabled':'true','preimage':'true','postimage':'true','ttl':'1'}", "{'enabled':'false'}", "{'enabled':'true','preimage':'false','postimage':'true','ttl':'2'}", {true, true, true, 1}, {false}, {true, false, true, 2});
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
 
 static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
@@ -206,7 +310,7 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11
         assert_row(1, 11);
         BOOST_REQUIRE(actual_i == actual_end);
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
@@ -257,7 +361,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
         };
         test(true);
         test(false);
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_add_columns) {
@@ -281,7 +385,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
         auto kokos = *updates.back()[kokos_index];
 
         BOOST_REQUIRE_EQUAL(data_value("kaka"), value_cast<tuple_type_impl::native_type>(kokos_type->deserialize(bytes_view(kokos))).at(1));
-    }).get();
+    }, mk_cdc_test_config()).get();
 }
 
 // #5582 - just quickly test that we can create the cdc enabled table on a different shard 
@@ -299,5 +403,5 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_across_shards) {
         auto rows = select_log(e, "tbl");
 
         BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::update).empty());
-    }).get();
+    }, mk_cdc_test_config()).get();
 }

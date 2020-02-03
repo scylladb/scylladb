@@ -78,12 +78,15 @@
 #include "distributed_loader.hh"
 #include "database.hh"
 #include <seastar/core/metrics.hh>
+#include "cdc/generation.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
 using inet_address = gms::inet_address;
 
 using namespace std::chrono_literals;
+
+extern logging::logger cdc_log;
 
 namespace service {
 
@@ -153,6 +156,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _disabled_features(std::move(disabled_features))
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
+        , _for_testing(for_testing)
         , _range_tombstones_feature(_feature_service, RANGE_TOMBSTONES_FEATURE)
         , _large_partitions_feature(_feature_service, LARGE_PARTITIONS_FEATURE)
         , _materialized_views_feature(_feature_service, MATERIALIZED_VIEWS_FEATURE)
@@ -454,8 +458,12 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         if (!is_auto_bootstrap()) {
             throw std::runtime_error("Trying to replace_address with auto_bootstrap disabled will not work, check your configuration");
         }
-        _bootstrap_tokens = prepare_replacement_info(loaded_peer_features).get0();
+
+        std::tie(_bootstrap_tokens, _cdc_streams_ts) = prepare_replacement_info(loaded_peer_features).get0();
+        // kbraun: I think we don't have to gossip tokens nor streams timestmap when HIBERNATEd
+        // (any state for this node will be ignored by other nodes anyway), but since TOKENS was already there, I added CDC_STREAMS_TIMESTAMP too.
         app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens));
+        app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(_cdc_streams_ts));
         app_states.emplace(gms::application_state::STATUS, value_factory.hibernate(true));
     } else if (should_bootstrap()) {
         check_for_endpoint_collision(loaded_peer_features).get();
@@ -522,7 +530,21 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     bool restarting_normal_node = db::system_keyspace::bootstrap_complete() && !db().local().is_replacing() && !my_tokens.empty();
     if (restarting_normal_node) {
         slogger.info("Restarting a node in NORMAL status");
+        // This node must know about its chosen tokens before other nodes do
+        // since they may start sending writes to this node after it gossips status = NORMAL.
+        // Therefore we update _token_metadata now, before gossip starts.
         _token_metadata.update_normal_tokens(my_tokens, get_broadcast_address());
+
+        _cdc_streams_ts = db::system_keyspace::get_saved_cdc_streams_timestamp().get0();
+        if (!_cdc_streams_ts && db().local().get_config().check_experimental(db::experimental_features_t::CDC)) {
+            // We could not have completed joining if we didn't generate and persist a CDC streams timestamp,
+            // unless we are restarting after upgrading from non-CDC supported version.
+            // In that case we won't begin a CDC generation: it should be done by one of the nodes
+            // after it learns that it everyone supports the CDC feature.
+            cdc_log.warn(
+                    "Restarting node in NORMAL status with CDC enabled, but no streams timestamp was proposed"
+                    " by this node according to its local tables. Are we upgrading from a non-CDC supported version?");
+        }
     }
 
     // have to start the gossip service before we can see any info on other nodes.  this is necessary
@@ -556,7 +578,10 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     app_states.emplace(gms::application_state::VIEW_BACKLOG, versioned_value(""));
     app_states.emplace(gms::application_state::SCHEMA, value_factory.schema(schema_version));
     if (restarting_normal_node) {
+        // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
+        // Exception: there might be no CDC streams timestamp proposed by us if we're upgrading from a non-CDC version.
         app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(my_tokens));
+        app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(_cdc_streams_ts));
         app_states.emplace(gms::application_state::STATUS, value_factory.normal(my_tokens));
     }
     slogger.info("Starting up server gossip");
@@ -566,6 +591,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
 
     // gossip snitch infos (local DC and rack)
     gossip_snitch_info().get();
+
+    // gossip local partitioner information (shard count and ignore_msb_bits)
+    gossip_sharding_info().get();
 
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
 #if 0
@@ -615,6 +643,34 @@ void storage_service::maybe_start_sys_dist_ks() {
     supervisor::notify("starting system distributed keyspace");
     _sys_dist_ks.start(std::ref(cql3::get_query_processor()), std::ref(service::get_migration_manager())).get();
     _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
+}
+
+/* If we're not a seed node or there are seeds other than us,
+ * wait until we contact any of them and learn what tokens are used by other nodes in the cluster,
+ * with a timeout.
+ *
+ * Returns true if we're the only seed or we've managed to learn the other nodes' tokens before timeouting.
+ */
+// Run in seastar::async context.
+static bool wait_for_other_tokens(const locator::token_metadata& tm,
+        const std::set<inet_address>& seeds, inet_address my_ep, abort_source& as) {
+    if (seeds.size() == 1 && seeds.count(my_ep)) {
+        return true;
+    }
+
+    int retries = 30;
+    while (retries--) {
+        auto& tok_to_ep = tm.get_token_to_endpoint();
+        if (std::any_of(tok_to_ep.begin(), tok_to_ep.end(),
+                [my_ep] (const std::pair<token, inet_address>& p) { return p.second != my_ep; })) {
+            return true;
+        }
+
+        slogger.warn("Couldn't retrieve other nodes' tokens. Retrying again in one second...");
+        sleep_abortable(std::chrono::seconds(1), as).get();
+    }
+
+    return false;
 }
 
 // Runs inside seastar::async context
@@ -768,18 +824,69 @@ void storage_service::join_token_ring(int delay) {
         MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
 #endif
 
-    // At this point our local tokens are chosen (_bootstrap_tokens) and will not be changed unless we bootstrap again.
-    db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
-
     slogger.debug("Setting tokens to {}", _bootstrap_tokens);
     // This node must know about its chosen tokens before other nodes do
     // since they may start sending writes to this node after it gossips status = NORMAL.
     // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
     _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
 
+    if (!db::system_keyspace::bootstrap_complete()) {
+        // If we're not bootstrapping nor replacing, then we shouldn't have chosen a CDC streams timestamp yet.
+        assert(should_bootstrap() || db().local().is_replacing() || !_cdc_streams_ts);
+    }
+
+    if (!_cdc_streams_ts && db().local().get_config().check_experimental(db::experimental_features_t::CDC)) {
+        // If we didn't choose a CDC streams timestamp at this point, then either
+        // 1. we're replacing a node which didn't gossip a CDC streams timestamp for whatever reason,
+        // 2. we've already bootstrapped, but are upgrading from a non-CDC version,
+        // 3. we're starting for the first time, but we're skipping the streaming phase (seed node/auto_bootstrap=off)
+        //    and directly joining the token ring.
+
+        // In the replacing case we won't propose any CDC generation: we're not introducing any new tokens,
+        // so the current generation used by the cluster is fine.
+        // In the case of an upgrading cluster, one of the nodes is responsible for proposing
+        // the first CDC generation. We'll check if it's us.
+        // Finally, if we're simply a new node joining the ring but skipping bootstrapping,
+        // we'll propose a new generation just as normally bootstrapping nodes do.
+
+        if (!db::system_keyspace::bootstrap_complete()) {
+            // Check if we managed to learn about other nodes' tokens (if there are other nodes).
+            // We might have not due to misconfiguration, e.g. skipping the "wait for gossip to settle" phase,
+            // or due to a network partition which didn't allow us to contact other seeds.
+            // But CDC requires that we know other nodes' tokens - they are needed to make a new generation of streams.
+            if (!wait_for_other_tokens(_token_metadata, _gossiper.get_seeds(), get_broadcast_address(), _abort_source)) {
+                throw std::runtime_error(format(
+                    "Can't boot this node because we weren't able to retrieve other nodes' tokens,"
+                    " which is required for CDC to work. Make sure that:\n"
+                    " - you don't use the \"--skip-wait-for-gossip-to-settle\" flag,\n"
+                    " - it is possible to contact other nodes (fix any network issues).\n"
+                    "Configured seeds: {}", _gossiper.get_seeds()));
+            }
+        }
+
+        if (!db().local().is_replacing()
+                && (!db::system_keyspace::bootstrap_complete()
+                    || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
+
+            _cdc_streams_ts = cdc::make_new_cdc_generation(
+                    _bootstrap_tokens, _token_metadata, _gossiper,
+                    _sys_dist_ks.local(), get_ring_delay(), _for_testing);
+        }
+    }
+
+    // Persist the CDC streams timestamp before we persist bootstrap_state = COMPLETED.
+    if (_cdc_streams_ts) {
+        db::system_keyspace::update_cdc_streams_timestamp(*_cdc_streams_ts).get();
+    }
+    // If we crash now, we will choose a new CDC streams timestamp anyway (because we will also choose a new set of tokens).
+    // But if we crash after setting bootstrap_state = COMPLETED, we will keep using the persisted CDC streams timestamp after restarting.
+
+    db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+    // At this point our local tokens and CDC streams timestamp are chosen (_bootstrap_tokens, _cdc_streams_ts) and will not be changed.
+
     replicate_to_all_cores().get();
     // start participating in the ring.
-    set_gossip_tokens(_bootstrap_tokens);
+    set_gossip_tokens(_bootstrap_tokens, _cdc_streams_ts);
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
     // remove the existing info about the replaced node.
@@ -793,6 +900,9 @@ void storage_service::join_token_ring(int delay) {
         slogger.error("{}", err);
         throw std::runtime_error(err);
     }
+
+    // Retrieve the latest CDC generation seen in gossip (if any).
+    scan_cdc_generations();
 
     _auth_service.start(
             permissions_cache_config_from_db_config(_db.local().get_config()),
@@ -821,17 +931,183 @@ void storage_service::mark_existing_views_as_built() {
     }).get();
 }
 
+// Run inside seastar::async context.
+bool storage_service::do_handle_cdc_generation(db_clock::time_point ts) {
+
+    auto gen = _sys_dist_ks.local().read_cdc_topology_description(
+            ts, { _token_metadata.count_normal_token_owners() }).get0();
+    if (!gen) {
+        throw std::runtime_error(format(
+            "Could not find CDC generation with timestamp {} in distributed system tables (current time: {}),"
+            " even though some node gossiped about it.",
+            ts, db_clock::now()));
+    }
+
+    // If we're not gossiping our own generation timestamp (because we've upgraded from a non-CDC/old version,
+    // or we somehow lost it due to a byzantine failure), start gossiping someone else's timestamp.
+    // This is to avoid the upgrade check on every restart (see `should_propose_first_cdc_generation`).
+    // And if we notice that `ts` is higher than our timestamp, we will start gossiping it instead,
+    // so if the node that initially gossiped `ts` leaves the cluster while `ts` is still the latest generation,
+    // the cluster will remember.
+    if (!_cdc_streams_ts || *_cdc_streams_ts < ts) {
+        _cdc_streams_ts = ts;
+        db::system_keyspace::update_cdc_streams_timestamp(ts).get();
+        _gossiper.add_local_application_state(
+                gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(ts)).get();
+    }
+
+    class orer {
+    private:
+        bool _result = false;
+    public:
+        future<> operator()(bool value) {
+            _result = value || _result;
+            return make_ready_future<>();
+        }
+        bool get() {
+            return _result;
+        }
+    };
+
+    // Return `true` iff the generation was inserted on any of our shards.
+    return get_storage_service().map_reduce(orer(), [ts, &gen] (storage_service& ss) {
+        auto gen_ = *gen;
+        return ss._cdc_metadata.insert(ts, std::move(gen_));
+    }).get0();
+}
+
+class ander {
+private:
+    bool _result = true;
+public:
+    future<> operator()(bool value) {
+        _result = value && _result;
+        return make_ready_future<>();
+    }
+    bool get() {
+        return _result;
+    }
+};
+
+void storage_service::async_handle_cdc_generation(db_clock::time_point ts) {
+
+    // It is safe to discard this future: we keep the storage_service, gossiper,
+    // and system distributed keyspace alive for the whole duration of this operation.
+    (void)seastar::async([ts,
+        g = _gossiper.shared_from_this(), ss = this->shared_from_this(), sys_dist_ks = _sys_dist_ks.local_shared()
+    ] {
+        while (true) {
+            sleep_abortable(std::chrono::seconds(5), ss->_abort_source).get();
+            try {
+                bool using_this_gen = ss->do_handle_cdc_generation(ts);
+                if (using_this_gen) {
+                    cdc::update_streams_description(ts, sys_dist_ks,
+                            [ss] { return ss->get_token_metadata().count_normal_token_owners(); }, ss->_abort_source);
+                }
+                return;
+            } catch (...) {
+                if (get_storage_service().map_reduce(ander(), [ts] (storage_service& ss) {
+                    return ss._cdc_metadata.known_or_obsolete(ts);
+                }).get0()) {
+                    return;
+                }
+
+                cdc_log.warn("Could not retrieve CDC streams with timestamp {}: {}. Will retry again.",
+                        ts, std::current_exception());
+            }
+        }
+    });
+}
+
+// Run inside async
+void storage_service::handle_cdc_generation(std::optional<db_clock::time_point> ts) {
+    if (!ts) {
+        return;
+    }
+
+    if (!db::system_keyspace::bootstrap_complete() || !_sys_dist_ks.local_is_initialized()) {
+        // We still haven't finished the startup process.
+        // We will handle this generation in `scan_cdc_generations` (unless there's a newer one).
+        return;
+    }
+
+    if (get_storage_service().map_reduce(ander(), [ts = *ts] (storage_service& ss) {
+        return !ss._cdc_metadata.prepare(ts);
+    }).get0()) {
+        return;
+    }
+
+    bool using_this_gen = false;
+    try {
+        using_this_gen = do_handle_cdc_generation(*ts);
+    } catch(...) {
+        cdc_log.warn("Could not retrieve CDC streams with timestamp {} on gossip event: {}."
+                " Will retry in the background.", *ts, std::current_exception());
+        async_handle_cdc_generation(*ts);
+        return;
+    }
+
+    if (using_this_gen) {
+        cdc::update_streams_description(*ts, _sys_dist_ks.local_shared(),
+               [ss = this->shared_from_this()] { return ss->get_token_metadata().count_normal_token_owners(); }, _abort_source);
+    }
+}
+
+// Runs inside seastar::async context.
+void storage_service::scan_cdc_generations() {
+    std::optional<db_clock::time_point> latest;
+    for (const auto& ep: _gossiper.get_endpoint_states()) {
+        auto ts = cdc::get_streams_timestamp_for(ep.first, _gossiper);
+        if (!latest || (ts && *ts > *latest)) {
+            latest = ts;
+        }
+    }
+
+    if (latest) {
+        cdc_log.info("Latest generation seen during startup: {}", *latest);
+        handle_cdc_generation(latest);
+    } else {
+        cdc_log.info("No generation seen during startup.");
+    }
+}
+
 // Runs inside seastar::async context
 void storage_service::bootstrap() {
     _is_bootstrap_mode = true;
     if (!db().local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
-        // if not an existing token then bootstrap
+
+        // Even if we reached this point before but crashed, we will make a new CDC generation.
+        // It doesn't hurt: other nodes will (potentially) just do more generation switches.
+        // We do this because with this new attempt at bootstrapping we picked a different set of tokens.
+
+        if (db().local().get_config().check_experimental(db::experimental_features_t::CDC)) {
+            // Update pending ranges now, so we correctly count ourselves as a pending replica
+            // when inserting the new CDC generation.
+            _token_metadata.add_bootstrap_tokens(_bootstrap_tokens, get_broadcast_address());
+            update_pending_ranges().get();
+
+            // After we pick a generation timestamp, we start gossiping it, and we stick with it.
+            // We don't do any other generation switches (unless we crash before complecting bootstrap).
+            assert(!_cdc_streams_ts);
+
+            _cdc_streams_ts = cdc::make_new_cdc_generation(
+                    _bootstrap_tokens, _token_metadata, _gossiper,
+                    _sys_dist_ks.local(), get_ring_delay(), _for_testing);
+        } else {
+            // We should not be able to join the cluster if other nodes support CDC but we don't.
+            // The check should have been made somewhere in prepare_to_join (`check_knows_remote_features`).
+            assert(!cluster_supports_cdc());
+        }
+
         _gossiper.add_local_application_state({
+            // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
             { gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens) },
+            { gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(_cdc_streams_ts) },
             { gms::application_state::STATUS, value_factory.bootstrapping(_bootstrap_tokens) },
         }).get();
+
         set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
         _gossiper.wait_for_range_setup().get();
     } else {
@@ -922,6 +1198,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
     slogger.debug("endpoint={} handle_state_bootstrap", endpoint);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
+    auto cdc_streams_ts = cdc::get_streams_timestamp_for(endpoint, _gossiper);
 
     slogger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
 
@@ -940,6 +1217,8 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
         _token_metadata.remove_endpoint(endpoint);
     }
 
+    handle_cdc_generation(cdc_streams_ts);
+
     _token_metadata.add_bootstrap_tokens(tokens, endpoint);
     update_pending_ranges().get();
 
@@ -951,8 +1230,10 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 void storage_service::handle_state_normal(inet_address endpoint) {
     slogger.debug("endpoint={} handle_state_normal", endpoint);
     auto tokens = get_tokens_for(endpoint);
+    auto cdc_streams_ts = cdc::get_streams_timestamp_for(endpoint, _gossiper);
 
     slogger.debug("Node {} state normal, token {}", endpoint, tokens);
+    cdc_log.debug("Node {} state normal, streams timestamp: {}", endpoint, cdc_streams_ts);
 
     if (_token_metadata.is_member(endpoint)) {
         slogger.info("Node {} state jump to normal", endpoint);
@@ -1030,6 +1311,8 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         }
     }
 
+    handle_cdc_generation(cdc_streams_ts);
+
     bool is_member = _token_metadata.is_member(endpoint);
     // Update pending ranges after update of normal tokens immediately to avoid
     // a race where natural endpoint was updated to contain node A, but A was
@@ -1074,14 +1357,19 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     slogger.debug("endpoint={} handle_state_leaving", endpoint);
 
     auto tokens = get_tokens_for(endpoint);
+    auto cdc_streams_ts = cdc::get_streams_timestamp_for(endpoint, _gossiper);
 
     slogger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
+    cdc_log.debug("Node {} state leaving, streams timestamp: {}", endpoint, cdc_streams_ts);
 
     // If the node is previously unknown or tokens do not match, update tokenmetadata to
     // have this node as 'normal' (it must have been using this token before the
     // leave). This way we'll get pending ranges right.
     if (!_token_metadata.is_member(endpoint)) {
+        // FIXME: this code should probably resolve token collisions too, like handle_state_normal
         slogger.info("Node {} state jump to leaving", endpoint);
+
+        handle_cdc_generation(cdc_streams_ts);
         _token_metadata.update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = _token_metadata.get_tokens(endpoint);
@@ -1089,6 +1377,8 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
         if (!std::includes(tokens_.begin(), tokens_.end(), tmp.begin(), tmp.end())) {
             slogger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
             slogger.debug("tokens_={}, tokens={}", tokens_, tmp);
+
+            handle_cdc_generation(cdc_streams_ts);
             _token_metadata.update_normal_tokens(tokens, endpoint);
         }
     }
@@ -1345,16 +1635,8 @@ void storage_service::update_peer_info(gms::inet_address endpoint) {
     }
 }
 
-sstring storage_service::get_application_state_value(inet_address endpoint, application_state appstate) {
-    auto v =_gossiper.get_application_state_ptr(endpoint, appstate);
-    if (!v) {
-        return {};
-    }
-    return v->value;
-}
-
 std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
-    auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
+    auto tokens_string = _gossiper.get_application_state_value(endpoint, application_state::TOKENS);
     slogger.trace("endpoint={}, tokens_string={}", endpoint, tokens_string);
     if (tokens_string.size() == 0) {
         return {}; // boost::split produces one element for emty string
@@ -1371,10 +1653,17 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
 }
 
 // Runs inside seastar::async context
-void storage_service::set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens) {
+// Assumes that no other functions modify CDC_STREAMS_TIMESTAMP, TOKENS or STATUS
+// in the gossiper's local application state while this function runs.
+void storage_service::set_gossip_tokens(
+        const std::unordered_set<dht::token>& tokens, std::optional<db_clock::time_point> cdc_streams_ts) {
+    assert(!tokens.empty());
+
+    // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
     _gossiper.add_local_application_state({
-        { gms::application_state::TOKENS, value_factory.tokens(local_tokens) },
-        { gms::application_state::STATUS, value_factory.normal(local_tokens) }
+        { gms::application_state::TOKENS, value_factory.tokens(tokens) },
+        { gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(cdc_streams_ts) },
+        { gms::application_state::STATUS, value_factory.normal(tokens) }
     }).get();
 }
 
@@ -1639,6 +1928,11 @@ future<> storage_service::gossip_snitch_info() {
     return _gossiper.add_local_application_state({
         { gms::application_state::DC, value_factory.datacenter(dc) },
         { gms::application_state::RACK, value_factory.rack(rack) },
+    });
+}
+
+future<> storage_service::gossip_sharding_info() {
+    return _gossiper.add_local_application_state({
         { gms::application_state::SHARD_COUNT, value_factory.shard_count(smp::count) },
         { gms::application_state::IGNORE_MSB_BITS, value_factory.ignore_msb_bits(dht::global_partitioner().sharding_ignore_msb()) },
     });
@@ -1716,7 +2010,8 @@ void storage_service::remove_endpoint(inet_address endpoint) {
     }).get();
 }
 
-future<std::unordered_set<token>> storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
+future<storage_service::replacement_info>
+storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     if (!db().local().get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
     }
@@ -1733,23 +2028,27 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info(cons
     // make magic happen
     slogger.info("Checking remote features with gossip");
     return _gossiper.do_shadow_round().then([this, loaded_peer_features, replace_address] {
-        auto local_features = get_known_features();
-        _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+        _gossiper.check_knows_remote_features(get_known_features(), loaded_peer_features);
+
         // now that we've gossiped at least once, we should be able to find the node we're replacing
         auto* state = _gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
         if (!state) {
             throw std::runtime_error(format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
         }
-        auto host_id = _gossiper.get_host_id(replace_address);
-        auto* value = state->get_application_state_ptr(application_state::TOKENS);
-        if (!value) {
+
+        auto tokens = get_tokens_for(replace_address);
+        if (tokens.empty()) {
             throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
         }
-        auto tokens = get_tokens_for(replace_address);
+
+        auto cdc_streams_ts = cdc::get_streams_timestamp_for(replace_address, _gossiper);
+        replacement_info ret {tokens, cdc_streams_ts};
+
         // use the replacee's host Id as our own so we receive hints, etc
-        return db::system_keyspace::set_local_host_id(host_id).discard_result().then([this, replace_address, tokens = std::move(tokens)] {
-            return _gossiper.reset_endpoint_state_map().then([tokens = std::move(tokens)] { // clean up since we have what we need
-                return make_ready_future<std::unordered_set<token>>(std::move(tokens));
+        auto host_id = _gossiper.get_host_id(replace_address);
+        return db::system_keyspace::set_local_host_id(host_id).discard_result().then([this, ret = std::move(ret)] () mutable {
+            return _gossiper.reset_endpoint_state_map().then([ret = std::move(ret)] () mutable { // clean up since we have what we need
+                return make_ready_future<replacement_info>(std::move(ret));
             });
         });
     });
@@ -1943,7 +2242,7 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
         return seastar::async([&ss, do_bind] {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
-                ss.set_gossip_tokens(ss.get_local_tokens().get0());
+                ss.set_gossip_tokens(ss.get_local_tokens().get0(), cdc::get_local_streams_timestamp().get0());
                 ss._gossiper.force_newer_generation();
                 ss._gossiper.start_gossiping(get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
                     ss._initialized = true;
