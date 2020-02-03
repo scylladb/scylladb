@@ -152,6 +152,14 @@ implemented, with the following limitations:
   and tagging it later are not atomic operations, so in case of failure it's possible
   for first to succeed (and leave side effects in the form of a table) and for the second
   one to fail, adding no tags to the table.
+### Write isolation policies
+ * By default, alternator will use LWT for all writes. It can, however, be configured
+   per table by tagging it with a 'system:write_isolation' key and one of the following values:
+    * 'a' - always use LWT
+    * 'o' - use LWT only for requests that require read-before-write
+    * 'f' - forbid statements that need read-before-write. Using such statements
+      (e.g. UpdateItem with ConditionExpression) will result in an error
+    * 'u' - (unsafe) perform read-modify-write without any consistency guarantees
 ### Accounting and capping
 * Not yet supported. Mainly for multi-tenant cloud use, we need to track
   resource use of individual requests (the API should also optionally
@@ -209,11 +217,14 @@ before the write (a.k.a. RMW requests - read-modify-write). For example,
 a request may copy an existing attribute, increment an attribute,
 be conditional on some expression involving existing values of attribute,
 or request that the previous values of attributes be returned.
-Alternator currently implements all these RMW operations naively - it simply
-performs a read before the write. This naive approach is **not safe** when
-there are concurrent operations on the same attributes, so it will be revised
-in the future. We will probably use lightweight transactions - a feature
-which already exists in Cassandra and is planned to soon reach Scylla.
+Alternator offers various write isolation policies:
+ * treat every write as transactional (using lightweight transactions - LWT)
+ * use LWT only for RMW requests
+ * forbid the usage of RMW - throw an error if it's attempted,
+   e.g. by using ConditionExpression
+ * (unsafe) perform RMW without consistency guarantees
+By default, alternator will always enforce LWT, but it can be configured
+with table granularity via tags.
 
 DynamoDB allows attributes to be **nested** - a top-level attribute may
 be a list or a map, and each of its elements may further be lists or
