@@ -1167,6 +1167,7 @@ public:
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
     lw_shared_ptr<keyspace_metadata> _metadata;
+    shared_promise<> _populated;
     config _config;
 public:
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg);
@@ -1211,6 +1212,9 @@ public:
 
     sstring column_family_directory(const sstring& base_path, const sstring& name, utils::UUID uuid) const;
     sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
+
+    future<> ensure_populated() const;
+    void mark_as_populated();
 };
 
 class no_such_keyspace : public std::runtime_error {
@@ -1373,6 +1377,7 @@ private:
     template<typename Future>
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
+    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, bool is_bootstrap);
 public:
     static utils::UUID empty_version;
 

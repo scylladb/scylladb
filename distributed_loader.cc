@@ -366,22 +366,6 @@ static std::vector<sstables::shared_sstable> sstables_for_shard(const std::vecto
         | boost::adaptors::filtered([&] (auto& sst) { return belongs_to_shard(sst, shard); }));
 }
 
-static future<> populate(distributed<database>& db, sstring datadir) {
-    return do_with(std::vector<future<>>(), [&db, datadir = std::move(datadir)] (std::vector<future<>>& futures) {
-        // push futures that populate keyspaces into array of futures,
-        // so that the supplied callback will not block scan_dir() from
-        // reading the next entry in the directory.
-        return lister::scan_dir(datadir, { directory_entry_type::directory }, [&db, &futures] (fs::path datadir, directory_entry de) {
-            if (!is_system_keyspace(de.name)) {
-                futures.emplace_back(distributed_loader::populate_keyspace(db, datadir.native(), de.name));
-            }
-            return make_ready_future<>();
-        }).then([&futures] {
-            return execute_futures(futures);
-        });
-    });
-}
-
 void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sstring cf_name) {
     assert(engine().cpu_id() == 0); // NOTE: should always run on shard 0!
 
@@ -847,6 +831,11 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
                     auto& cf = db.find_column_family(cfm);
                     cf.mark_ready_for_writes();
                 }
+                // for system keyspaces, we only do this post all population, and
+                // only as a consistency measure.
+                // change this if it is ever needed to sync system keyspace
+                // population
+                ks.mark_as_populated();
             }
             return make_ready_future<>();
         }).get();
@@ -871,9 +860,57 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
         }).get();
 
         const auto& cfg = db.local().get_config();
-        parallel_for_each(cfg.data_file_directories(), [&db] (sstring directory) {
-            return populate(db, directory);
+        using ks_dirs = std::unordered_multimap<sstring, sstring>;
+
+        ks_dirs dirs;
+
+        parallel_for_each(cfg.data_file_directories(), [&db, &dirs] (sstring directory) {
+            // we want to collect the directories first, so we can get a full set of potential dirs
+            return lister::scan_dir(directory, { directory_entry_type::directory }, [&dirs] (fs::path datadir, directory_entry de) {
+                if (!is_system_keyspace(de.name)) {
+                    dirs.emplace(de.name, datadir.native());
+                }
+                return make_ready_future<>();
+            });
         }).get();
+
+        db.invoke_on_all([&dirs] (database& db) {
+            for (auto& [name, ks] : db.get_keyspaces()) {
+                // mark all user keyspaces that are _not_ on disk as already
+                // populated.
+                if (!dirs.count(ks.metadata()->name())) {
+                    ks.mark_as_populated();
+                }
+            }
+        }).get();
+
+        std::vector<future<>> futures;
+
+        // treat "dirs" as immutable to avoid modifying it while still in 
+        // a range-iteration. Also to simplify the "finally"
+        for (auto i = dirs.begin(); i != dirs.end();) {
+            auto& ks_name = i->first;
+            auto e = dirs.equal_range(ks_name).second;
+            auto j = i++;
+            // might have more than one dir for a keyspace iff data_file_directories is > 1 and
+            // somehow someone placed sstables in more than one of them for a given ks. (import?) 
+            futures.emplace_back(parallel_for_each(j, e, [&](const std::pair<sstring, sstring>& p) {
+                auto& datadir = p.second;
+                return distributed_loader::populate_keyspace(db, datadir, ks_name);
+            }).finally([&] {
+                return db.invoke_on_all([ks_name] (database& db) {
+                    // can be false if running test environment
+                    // or ks_name was just a borked directory not representing
+                    // a keyspace in schema tables.
+                    if (db.has_keyspace(ks_name)) {
+                        db.find_keyspace(ks_name).mark_as_populated();
+                    }
+                    return make_ready_future<>();
+                });
+            }));
+        }
+
+        execute_futures(futures).get();
 
         db.invoke_on_all([] (database& db) {
             return parallel_for_each(db.get_non_system_column_families(), [] (lw_shared_ptr<table> table) {

@@ -583,7 +583,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     using namespace db::schema_tables;
     return do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
-        return create_keyspace(ksm);
+        return create_keyspace(ksm, true /* bootstrap. do not mark populated yet */);
     }).then([&proxy, this] {
         return do_parse_schema_tables(proxy, db::schema_tables::TYPES, [this, &proxy] (schema_result_value_type &v) {
             auto& ks = this->find_keyspace(v.first);
@@ -882,6 +882,17 @@ void keyspace::update_from(::lw_shared_ptr<keyspace_metadata> ksm) {
    create_replication_strategy(_metadata->strategy_options());
 }
 
+future<> keyspace::ensure_populated() const {
+    return _populated.get_shared_future();
+}
+
+void keyspace::mark_as_populated() {
+    if (!_populated.available()) {
+        _populated.set_value();
+    }
+}
+
+
 static bool is_system_table(const schema& s) {
     return s.ks_name() == db::system_keyspace::NAME || s.ks_name() == db::system_distributed_keyspace::NAME;
 }
@@ -1065,13 +1076,26 @@ void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>&
 
 future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
+    return create_keyspace(ksm, false);
+}
+
+future<>
+database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, bool is_bootstrap) {
     auto i = _keyspaces.find(ksm->name());
     if (i != _keyspaces.end()) {
         return make_ready_future<>();
     }
 
     create_in_memory_keyspace(ksm);
-    auto& datadir = _keyspaces.at(ksm->name()).datadir();
+    auto& ks = _keyspaces.at(ksm->name());
+    auto& datadir = ks.datadir();
+
+    // keyspace created by either cql or migration 
+    // is by definition populated
+    if (!is_bootstrap) {
+        ks.mark_as_populated();
+    }
+
     if (datadir != "") {
         return io_check([&datadir] { return touch_directory(datadir); });
     } else {
