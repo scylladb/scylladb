@@ -516,7 +516,7 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
     }
 }
 
-std::map<sstring, sstring> get_tags_of_table(schema_ptr schema) {
+const std::map<sstring, sstring>& get_tags_of_table(schema_ptr schema) {
     auto it = schema->extensions().find(tags_extension::NAME);
     if (it == schema->extensions().end()) {
         throw api_error("ValidationException", format("Table {} does not have valid tagging information", schema->ks_name()));
@@ -592,7 +592,7 @@ static future<> add_tags(service::storage_proxy& proxy, schema_ptr schema, rjson
         return make_exception_future<>(api_error("ValidationException", "The number of tags must be at least 1"));
     }
 
-    auto tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
     return update_tags(rjson::copy(*tags), schema, std::move(tags_map), update_tags_action::add_tags);
 }
 
@@ -627,7 +627,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
 
         schema_ptr schema = get_table_from_arn(_proxy, std::string_view(arn->GetString(), arn->GetStringLength()));
 
-        auto tags_map = get_tags_of_table(schema);
+        std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
         update_tags(*tags, schema, std::move(tags_map), update_tags_action::delete_tags).get();
         return json_string("");
     });
