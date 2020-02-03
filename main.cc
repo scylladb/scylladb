@@ -478,7 +478,7 @@ int main(int ac, char** av) {
     auto& qp = cql3::get_query_processor();
     auto& proxy = service::get_storage_proxy();
     auto& mm = service::get_migration_manager();
-    api::http_context ctx(db, proxy, load_meter);
+    api::http_context ctx(db, proxy, load_meter, token_metadata);
     httpd::http_server_control prometheus_server;
     utils::directories dirs;
     sharded<gms::feature_service> feature_service;
