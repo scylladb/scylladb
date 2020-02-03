@@ -31,7 +31,6 @@
 #include "auth/service.hh"
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
-#include "service/storage_service.hh"
 #include "transport/server.hh"
 #include "db/system_keyspace.hh"
 #include "schema.hh"
@@ -168,7 +167,7 @@ future<> create_keyspace_if_not_exists_impl(db::config& config, int default_repl
         }
         attrs->add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties); 
         attrs->validate();
-        const auto& tm = service::get_local_storage_service().get_token_metadata();
+        const auto& tm = proxy.get_token_metadata();
         return service::get_local_migration_manager().announce_new_keyspace(attrs->as_ks_metadata(name, tm), false);
     };
     auto table_gen = [] (sstring ks_name, sstring cf_name, schema_ptr schema) {
