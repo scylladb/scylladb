@@ -430,43 +430,32 @@ operator<<(std::ostream& os, const cql3_type::raw& r) {
 namespace util {
 
 sstring maybe_quote(const sstring& identifier) {
-    const auto* p = identifier.begin();
-    const auto* ep = identifier.end();
-
     // quote empty string
-    if (__builtin_expect(p == ep, false)) {
+    if (identifier.empty()) {
         return "\"\"";
     }
 
     // string needs no quoting if it matches [a-z][a-z0-9_]*
     // quotes ('"') in the string are doubled
-    bool need_quotes;
-    size_t has_quotes;
-    auto c = *p;
-    if ('a' <= c && c <= 'z') {
-        need_quotes = false;
-        has_quotes = false;
-    } else {
-        need_quotes = true;
-        has_quotes = (c == '"');
-    }
-    while ((++p != ep)) {
-        c = *p;
+    auto c = identifier[0];
+    bool need_quotes = !('a' <= c && c <= 'z');
+    size_t num_quotes = 0;
+    for (char c : identifier) {
         if (!(('a' <= c && c <= 'z') || ('0' <= c && c <= '9') || (c == '_'))) {
             need_quotes = true;
-            has_quotes += (c == '"');
+            num_quotes += (c == '"');
         }
     }
 
     if (!need_quotes) {
         return identifier;
     }
-    if (!has_quotes) {
+    if (num_quotes == 0) {
         return make_sstring("\"", identifier, "\"");
     }
     static const std::regex double_quote_re("\"");
     std::string result;
-    result.reserve(2 + identifier.size() + has_quotes);
+    result.reserve(2 + identifier.size() + num_quotes);
     result.push_back('"');
     std::regex_replace(std::back_inserter(result), identifier.begin(), identifier.end(), double_quote_re, "\"\"");
     result.push_back('"');
