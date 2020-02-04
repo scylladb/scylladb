@@ -78,13 +78,7 @@ public:
 
     // Once large_data_handler is stopped no further updates will be accepted.
     bool stopped() const { return _stopped; }
-    future<> stop() {
-        if (stopped()) {
-            return make_ready_future<>();
-        }
-        _stopped = true;
-        return _sem.wait(max_concurrency);
-    }
+    future<> stop();
 
     void maybe_log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) {
         if (__builtin_expect(rows_count > _rows_count_threshold, false)) {

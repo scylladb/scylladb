@@ -38,6 +38,14 @@ future<> large_data_handler::maybe_record_large_partitions(const sstables::sstab
     return make_ready_future<>();
 }
 
+future<> large_data_handler::stop() {
+    if (stopped()) {
+        return make_ready_future<>();
+    }
+    _stopped = true;
+    return _sem.wait(max_concurrency);
+}
+
 static logging::logger large_data_logger("large_data");
 
 template <typename T> static std::string key_to_str(const T& key, const schema& s) {
