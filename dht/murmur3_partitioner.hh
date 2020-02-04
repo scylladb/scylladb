@@ -29,9 +29,14 @@ namespace dht {
 
 class murmur3_partitioner final : public i_partitioner {
     unsigned _sharding_ignore_msb_bits;
-    std::vector<uint64_t> _shard_start;
+    std::vector<uint64_t> _shard_start = init_zero_based_shard_start(_shard_count, _sharding_ignore_msb_bits);
 public:
-    murmur3_partitioner(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
+    murmur3_partitioner(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0)
+            : i_partitioner(shard_count)
+            // if one shard, ignore sharding_ignore_msb_bits as they will just cause needless
+            // range breaks
+            , _sharding_ignore_msb_bits(shard_count > 1 ? sharding_ignore_msb_bits : 0) {
+    }
     virtual const sstring name() const { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
     virtual token get_token(const schema& s, partition_key_view key) const override;
     virtual token get_token(const sstables::key_view& key) const override;
@@ -49,6 +54,15 @@ public:
     virtual unsigned shard_of(const token& t, unsigned shard_count, unsigned sharding_ignore_msb) const override;
     virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans) const override;
     virtual unsigned sharding_ignore_msb() const override;
+private:
+    using uint128_t = unsigned __int128;
+    static int64_t normalize(int64_t in);
+    token get_token(bytes_view key) const;
+    token get_token(uint64_t value) const;
+    token bias(uint64_t value) const;      // translate from a zero-baed range
+    uint64_t unbias(const token& t) const; // translate to a zero-baed range
+    static unsigned zero_based_shard_of(uint64_t zero_based_token, unsigned shards, unsigned sharding_ignore_msb_bits);
+    static std::vector<uint64_t> init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits);
 };
 
 

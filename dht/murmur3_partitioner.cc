@@ -26,11 +26,11 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/range/irange.hpp>
 
-using uint128_t = unsigned __int128;
+namespace dht {
 
-static inline
+inline
 unsigned
-zero_based_shard_of(uint64_t token, unsigned shards, unsigned sharding_ignore_msb_bits) {
+murmur3_partitioner::zero_based_shard_of(uint64_t token, unsigned shards, unsigned sharding_ignore_msb_bits) {
     // This is the master function, the inverses have to match it wrt. rounding errors.
     token <<= sharding_ignore_msb_bits;
     // Treat "token" as a fraction in the interval [0, 1); compute:
@@ -38,9 +38,8 @@ zero_based_shard_of(uint64_t token, unsigned shards, unsigned sharding_ignore_ms
     return (uint128_t(token) * shards) >> 64;
 }
 
-static
 std::vector<uint64_t>
-init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits) {
+murmur3_partitioner::init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits) {
     // computes the inverse of zero_based_shard_of(). ret[s] will return the smallest token that belongs to s
     if (shards == 1) {
         // Avoid the while loops below getting confused finding the "edge" between two nonexistent shards
@@ -59,39 +58,54 @@ init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits) 
     return ret;
 }
 
-static inline
+inline
 int64_t
-normalize(int64_t in) {
+murmur3_partitioner::normalize(int64_t in) {
     return in == std::numeric_limits<int64_t>::lowest()
             ? std::numeric_limits<int64_t>::max()
             : in;
 }
 
-static
-dht::token
-get_token(uint64_t value) {
-    // We don't normalize() the value, since token includes an is-before-everything
-    // indicator.
-    // FIXME: will this require a repair when importing a database?
-    auto t = net::hton(normalize(value));
-    bytes b(bytes::initialized_later(), 8);
-    std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
-    return dht::token{dht::token::kind::key, std::move(b)};
-}
-
-static
-dht::token
-get_token(bytes_view key) {
+token
+murmur3_partitioner::get_token(bytes_view key) const {
     if (key.empty()) {
-        return dht::minimum_token();
+        return minimum_token();
     }
     std::array<uint64_t, 2> hash;
     utils::murmur_hash::hash3_x64_128(key, 0, hash);
     return get_token(hash[0]);
 }
 
-static inline
-int64_t long_token(dht::token_view t) {
+token
+murmur3_partitioner::get_token(uint64_t value) const {
+    // We don't normalize() the value, since token includes an is-before-everything
+    // indicator.
+    // FIXME: will this require a repair when importing a database?
+    auto t = net::hton(normalize(value));
+    bytes b(bytes::initialized_later(), 8);
+    std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
+    return token{token::kind::key, std::move(b)};
+}
+
+token
+murmur3_partitioner::get_token(const sstables::key_view& key) const {
+    return get_token(bytes_view(key));
+}
+
+token
+murmur3_partitioner::get_token(const schema& s, partition_key_view key) const {
+    std::array<uint64_t, 2> hash;
+    auto&& legacy = key.legacy_form(s);
+    utils::murmur_hash::hash3_x64_128(legacy.begin(), legacy.size(), 0, hash);
+    return get_token(hash[0]);
+}
+
+token murmur3_partitioner::get_random_token() {
+    auto rand = dht::get_random_number<uint64_t>();
+    return get_token(rand);
+}
+
+inline int64_t long_token(token_view t) {
     if (t.is_minimum() || t.is_maximum()) {
         return std::numeric_limits<long>::min();
     }
@@ -105,46 +119,14 @@ int64_t long_token(dht::token_view t) {
     return net::ntoh(*lp);
 }
 
-// translate to a zero-based range
-static inline
 uint64_t
-unbias(const dht::token& t) {
+murmur3_partitioner::unbias(const token& t) const {
     return uint64_t(long_token(t)) + uint64_t(std::numeric_limits<int64_t>::min());
 }
 
-// translate from a zero-based range
-static inline
-dht::token
-bias(uint64_t n) {
+token
+murmur3_partitioner::bias(uint64_t n) const {
     return get_token(n - uint64_t(std::numeric_limits<int64_t>::min()));
-}
-
-namespace dht {
-
-murmur3_partitioner::murmur3_partitioner(unsigned shard_count, unsigned sharding_ignore_msb_bits)
-        : i_partitioner(shard_count)
-        // if one shard, ignore sharding_ignore_msb_bits as they will just cause needless
-        // range breaks
-        , _sharding_ignore_msb_bits(shard_count > 1 ? sharding_ignore_msb_bits : 0)
-        , _shard_start(init_zero_based_shard_start(_shard_count, _sharding_ignore_msb_bits))
-{ }
-
-token
-murmur3_partitioner::get_token(const sstables::key_view& key) const {
-    return ::get_token(bytes_view(key));
-}
-
-token
-murmur3_partitioner::get_token(const schema& s, partition_key_view key) const {
-    std::array<uint64_t, 2> hash;
-    auto&& legacy = key.legacy_form(s);
-    utils::murmur_hash::hash3_x64_128(legacy.begin(), legacy.size(), 0, hash);
-    return ::get_token(hash[0]);
-}
-
-token murmur3_partitioner::get_random_token() {
-    auto rand = dht::get_random_number<uint64_t>();
-    return ::get_token(rand);
 }
 
 sstring murmur3_partitioner::to_sstring(const token& t) const {
@@ -156,7 +138,7 @@ dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
     if (lp == std::numeric_limits<long>::min()) {
         return minimum_token();
     } else {
-        return ::get_token(uint64_t(lp));
+        return get_token(uint64_t(lp));
     }
 }
 
@@ -215,7 +197,7 @@ token murmur3_partitioner::midpoint(const token& t1, const token& t2) const {
         // to the average.
         mid = l2 + positive_subtract(l1, l2)/2 + 0x8000'0000'0000'0000;
     }
-    return ::get_token(mid);
+    return get_token(mid);
 }
 
 static float ratio_helper(int64_t a, int64_t b) {
