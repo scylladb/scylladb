@@ -3091,6 +3091,15 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
 
+static std::map<sstring, sstring> get_network_topology_options(int rf) {
+    std::map<sstring, sstring> options;
+    sstring rf_str = std::to_string(rf);
+    for (const gms::inet_address& addr : gms::get_local_gossiper().get_live_members()) {
+        options.emplace(locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(addr), rf_str);
+    };
+    return options;
+}
+
 // Create the keyspace in which we put the alternator table, if it doesn't
 // already exist.
 // Currently, we automatically configure the keyspace based on the number
@@ -3106,7 +3115,8 @@ future<> executor::create_keyspace(std::string_view keyspace_name) {
             elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} live nodes.",
                     keyspace_name_str, rf, up_endpoint_count);
         }
-        auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", std::to_string(rf)}}, true);
+        auto opts = get_network_topology_options(rf);
+        auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
         return _mm.announce_new_keyspace(ksm, api::new_timestamp(), false);
     });
 }
