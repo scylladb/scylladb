@@ -24,6 +24,7 @@
 #include "compaction_backlog_manager.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
+#include "service/storage_service.hh"
 #include <seastar/core/metrics.hh>
 #include "exceptions.hh"
 #include <cmath>
@@ -585,10 +586,6 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
 }
 
 future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compaction_options options, get_candidates_func get_func) {
-    if (options.type() == sstables::compaction_type::Cleanup && check_for_cleanup(cf)) {
-        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
-            cf->schema()->ks_name(), cf->schema()->cf_name()));
-    }
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
     task->type = options.type();
@@ -616,7 +613,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
         compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
         return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
             return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
-                return cf.cleanup_sstables(std::move(descriptor));
+                return cf.rewrite_sstables(std::move(descriptor));
             });
         }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
             task->compaction_running = false;
@@ -643,8 +640,39 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
     return task->compaction_done.get_future().then([task] {});
 }
 
+static bool needs_cleanup(const sstables::shared_sstable& sst,
+                   const dht::token_range_vector& owned_ranges,
+                   schema_ptr s) {
+    auto first = sst->get_first_partition_key();
+    auto last = sst->get_last_partition_key();
+    auto first_token = dht::global_partitioner().get_token(*s, first);
+    auto last_token = dht::global_partitioner().get_token(*s, last);
+    dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
+
+    // return true iff sst partition range isn't fully contained in any of the owned ranges.
+    for (auto& r : owned_ranges) {
+        if (r.contains(sst_token_range, dht::token_comparator())) {
+            return false;
+        }
+    }
+    return true;
+}
+
 future<> compaction_manager::perform_cleanup(column_family* cf) {
-    return rewrite_sstables(cf, sstables::compaction_options::make_cleanup(), std::bind(&compaction_manager::get_candidates, this, std::placeholders::_1));
+    if (check_for_cleanup(cf)) {
+        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
+            cf->schema()->ks_name(), cf->schema()->cf_name()));
+    }
+    return rewrite_sstables(cf, sstables::compaction_options::make_cleanup(), [this] (const table& table) {
+        auto schema = table.schema();
+        auto owned_ranges = service::get_local_storage_service().get_local_ranges(schema->ks_name());
+        auto sstables = std::vector<sstables::shared_sstable>{};
+        const auto candidates = table.candidates_for_compaction();
+        std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&owned_ranges, schema] (const sstables::shared_sstable& sst) {
+            return owned_ranges.empty() || needs_cleanup(sst, owned_ranges, schema);
+        });
+        return sstables;
+    });
 }
 
 sstables::sstable::version_types get_highest_supported_format();

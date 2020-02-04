@@ -169,6 +169,12 @@ public:
     void submit(column_family* cf);
 
     // Submit a column family to be cleaned up and wait for its termination.
+    //
+    // Performs a cleanup on each sstable of the column family, excluding
+    // those ones that are irrelevant to this node or being compacted.
+    // Cleanup is about discarding keys that are no longer relevant for a
+    // given sstable, e.g. after node loses part of its token range because
+    // of a newly added node.
     future<> perform_cleanup(column_family* cf);
 
     // Submit a column family to be upgraded and wait for its termination.
