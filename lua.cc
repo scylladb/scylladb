@@ -600,7 +600,7 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const varint_type_impl& t) {
-        return get_varint(l, 1);
+        return get_varint(l, -1);
     }
 
     data_value operator()(const duration_type_impl& t) {
