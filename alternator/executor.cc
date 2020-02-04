@@ -3087,20 +3087,21 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-future<> executor::maybe_create_keyspace() {
-    if (_proxy.get_db().local().has_keyspace(KEYSPACE_NAME)) {
+future<> executor::maybe_create_keyspace(std::string_view keyspace_name) {
+    sstring keyspace_name_str(keyspace_name);
+    if (_proxy.get_db().local().has_keyspace(keyspace_name_str)) {
         return make_ready_future<>();
     }
-    return gms::get_up_endpoint_count().then([this] (int up_endpoint_count) {
+    return gms::get_up_endpoint_count().then([this, keyspace_name_str = std::move(keyspace_name_str)] (int up_endpoint_count) {
         int rf = 3;
         if (up_endpoint_count < rf) {
             rf = 1;
             elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} live nodes.",
-                    KEYSPACE_NAME, rf, up_endpoint_count);
+                    keyspace_name_str, rf, up_endpoint_count);
         } else {
-            elogger.info("Creating keyspace '{}' for Alternator with RF={}.", KEYSPACE_NAME, rf);
+            elogger.info("Creating keyspace '{}' for Alternator with RF={}.", keyspace_name_str, rf);
         }
-        auto ksm = keyspace_metadata::new_keyspace(KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", std::to_string(rf)}}, true);
+        auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", std::to_string(rf)}}, true);
         try {
             return _mm.announce_new_keyspace(ksm, api::min_timestamp, false);
         } catch (exceptions::already_exists_exception& ignored) {

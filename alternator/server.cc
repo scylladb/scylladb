@@ -302,7 +302,7 @@ server::server(seastar::sharded<executor>& e)
         : _executor(e), _key_cache(1024, 1min, slogger), _enforce_authorization(false)
       , _callbacks{
         {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, std::unique_ptr<request> req) {
-            return e.maybe_create_keyspace().then([&e, &client_state, req = std::move(req), trace_state = std::move(trace_state)] () mutable { return e.create_table(client_state, std::move(trace_state), req->content); }); }
+            return e.maybe_create_keyspace(executor::KEYSPACE_NAME).then([&e, &client_state, req = std::move(req), trace_state = std::move(trace_state)] { return e.create_table(client_state, std::move(trace_state), req->content); }); }
         },
         {"DescribeTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, std::unique_ptr<request> req) { return e.describe_table(client_state, std::move(trace_state), req->content); }},
         {"DeleteTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, std::unique_ptr<request> req) { return e.delete_table(client_state, std::move(trace_state), req->content); }},
