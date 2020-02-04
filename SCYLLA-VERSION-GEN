@@ -19,6 +19,14 @@ else
 	SCYLLA_RELEASE=$SCYLLA_BUILD.$DATE.$GIT_COMMIT
 fi
 
+if [ -f build/SCYLLA-RELEASE-FILE ]; then
+	RELEASE_FILE=$(cat build/SCYLLA-RELEASE-FILE)
+	GIT_COMMIT_FILE=$(cat build/SCYLLA-RELEASE-FILE |cut -d . -f 3)
+	if [ "$GIT_COMMIT" = "$GIT_COMMIT_FILE" ]; then
+		exit 0
+	fi
+fi
+
 echo "$SCYLLA_VERSION-$SCYLLA_RELEASE"
 mkdir -p build
 echo "$SCYLLA_VERSION" > build/SCYLLA-VERSION-FILE
