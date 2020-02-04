@@ -192,7 +192,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         }
     }
 
-    if (resource.kind() == auth::resource_kind::data && service::get_local_storage_service().cluster_supports_cdc()) {
+    if (service::get_local_storage_service().db().local().features().cluster_supports_cdc() && resource.kind() == auth::resource_kind::data) {
         const auto resource_view = auth::data_resource_view(resource);
         if (resource_view.table()) {
             if (p == auth::permission::DROP) {

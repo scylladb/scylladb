@@ -158,6 +158,10 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         throw exceptions::invalid_request_exception(format("Cannot use 'COMPACT STORAGE' when defining a materialized view"));
     }
 
+    if (_properties.properties()->get_cdc_options().has_value()) {
+        throw exceptions::invalid_request_exception("Cannot enable CDC for a materialized view");
+    }
+
     // View and base tables must be in the same keyspace, to ensure that RF
     // is the same (because we assign a view replica to each base replica).
     // If a keyspace was not specified for the base table name, it is assumed

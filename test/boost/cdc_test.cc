@@ -232,6 +232,16 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
     }, mk_cdc_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_disallow_cdc_on_materialized_view) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY)").get();
+        e.require_table_exists("ks", "tbl").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE MATERIALIZED VIEW ks.mv AS SELECT a FROM ks.tbl PRIMARY KEY (a) WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
+        e.require_table_does_not_exist("ks", "mv").get();
+    }, mk_cdc_test_config()).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         auto test_table = [&e] (const sstring& table_name) {
