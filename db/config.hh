@@ -83,6 +83,7 @@ namespace db {
 struct experimental_features_t {
     enum feature { LWT, UDF, CDC };
     static std::unordered_map<sstring, feature> map(); // See enum_option.
+    static std::vector<enum_option<experimental_features_t>> all();
 };
 
 class config : public utils::config_file {

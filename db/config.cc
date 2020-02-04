@@ -911,6 +911,10 @@ std::unordered_map<sstring, db::experimental_features_t::feature> db::experiment
     return {{"lwt", LWT}, {"udf", UDF}, {"cdc", CDC}};
 }
 
+std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {
+    return {LWT, UDF, CDC};
+}
+
 template struct utils::config_file::named_value<seastar::log_level>;
 
 namespace utils {
