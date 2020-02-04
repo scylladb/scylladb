@@ -45,7 +45,7 @@ public:
     using request_return_type = std::variant<json::json_return_type, api_error>;
     stats _stats;
     static constexpr auto ATTRS_COLUMN_NAME = ":attrs";
-    static constexpr auto KEYSPACE_NAME = "alternator";
+    static constexpr auto KEYSPACE_NAME_PREFIX = "a#";
 
     executor(service::storage_proxy& proxy, service::migration_manager& mm) : _proxy(proxy), _mm(mm) {}
 
@@ -69,7 +69,7 @@ public:
     future<> start();
     future<> stop() { return make_ready_future<>(); }
 
-    future<> maybe_create_keyspace(std::string_view keyspace_name);
+    future<> create_keyspace(std::string_view keyspace_name);
 
     static tracing::trace_state_ptr maybe_trace_query(client_state& client_state, sstring_view op, sstring_view query);
 };
