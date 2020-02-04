@@ -536,10 +536,8 @@ static lua_date_table get_lua_date_table(lua_State* l, int index) {
     return lua_date_table{*year, *month, *day, hour, minute, second};
 }
 
-struct from_lua_visitor;
-
 struct simple_date_return_visitor {
-    from_lua_visitor &outer;
+    lua_slice_state& l;
     template <typename T>
     uint32_t operator()(const T&) {
         throw exceptions::invalid_request_exception("date must be a string, integer or date table");
@@ -557,7 +555,7 @@ struct simple_date_return_visitor {
 };
 
 struct timestamp_return_visitor {
-    from_lua_visitor &outer;
+    lua_slice_state& l;
     template <typename T>
     db_clock::time_point operator()(const T&) {
         throw exceptions::invalid_request_exception("timestamp must be a string, integer or date table");
@@ -831,7 +829,7 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const timestamp_date_base_class& t) {
-        return visit_lua_value(l, -1, timestamp_return_visitor{*this});
+        return visit_lua_value(l, -1, timestamp_return_visitor{l});
     }
 
     data_value operator()(const time_type_impl& t) {
@@ -863,12 +861,12 @@ struct from_lua_visitor {
     }
 
     data_value operator()(const simple_date_type_impl& t) {
-        return simple_date_native_type{visit_lua_value(l, -1, simple_date_return_visitor{*this})};
+        return simple_date_native_type{visit_lua_value(l, -1, simple_date_return_visitor{l})};
     }
 };
 
 uint32_t simple_date_return_visitor::operator()(const lua_table&) {
-    auto table = get_lua_date_table(outer.l, -1);
+    auto table = get_lua_date_table(l, -1);
     if (table.hour || table.minute || table.second) {
         throw exceptions::invalid_request_exception("date type has no hour, minute or second");
     }
@@ -878,7 +876,7 @@ uint32_t simple_date_return_visitor::operator()(const lua_table&) {
 }
 
 db_clock::time_point timestamp_return_visitor::operator()(const lua_table&) {
-    auto table = get_lua_date_table(outer.l, -1);
+    auto table = get_lua_date_table(l, -1);
     boost::gregorian::date date(table.year, table.month, table.day);
     boost::posix_time::time_duration time(table.hour.value_or(12), table.minute.value_or(0), table.second.value_or(0));
     boost::posix_time::ptime timestamp(date, time);
