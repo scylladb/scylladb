@@ -607,8 +607,10 @@ def write_junit_report(tmpdir, mode):
                 continue
             failed += 1
             xml_fail = ET.SubElement(xml_res, 'failure')
-            xml_fail.text = "Test {} {} failed:\n".format(test.path, " ".join(test.args))
-            xml_fail.text += read_log(test.log_filename)
+            xml_fail.text = "Test {} {} failed, check the log at {}".format(
+                test.path,
+                " ".join(test.args),
+                test.log_filename)
     if total == 0:
         return
     xml_results.set("tests", str(total))
