@@ -596,7 +596,7 @@ struct from_lua_visitor {
                 return b;
             }
         };
-        return visit_lua_decimal(l, 1, visitor{});
+        return visit_lua_decimal(l, -1, visitor{});
     }
 
     data_value operator()(const varint_type_impl& t) {
