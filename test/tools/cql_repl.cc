@@ -113,6 +113,9 @@ std::unique_ptr<cql3::query_options> repl_options() {
 
 // Read-evaluate-print-loop for CQL
 void repl(seastar::app_template& app) {
+    auto db_cfg = make_shared<db::config>();
+    db_cfg->enable_user_defined_functions({true}, db::config::config_source::CommandLine);
+    db_cfg->experimental_features({db::experimental_features_t::UDF}, db::config::config_source::CommandLine);
     do_with_cql_env_thread([] (cql_test_env& e) {
 
         // Comments allowed by CQL - -- and //
@@ -167,7 +170,7 @@ void repl(seastar::app_template& app) {
             }
             std_cout << json << std::endl;
         }
-    }).get0();
+    }, db_cfg).get0();
 }
 
 // Reset stdin/stdout/log streams to locations pointed

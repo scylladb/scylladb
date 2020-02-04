@@ -1,0 +1,47 @@
+-- setup
+create table my_table (key int primary key);
+{
+	"status" : "ok"
+}
+insert into my_table (key) values (1);
+{
+	"status" : "ok"
+}
+
+-- test list<varint>
+create function my_func(val int) called on null input returns list<varint> language lua as 'return {1,2,3}';
+{
+	"status" : "ok"
+}
+select my_func(key) from my_table;
+{
+	"rows" : 
+	[
+		{
+			"ks.my_func(key)" : "[1, 2, 3]"
+		}
+	]
+}
+drop function my_func;
+{
+	"status" : "ok"
+}
+
+-- test list<decimal>
+create function my_func(val int) called on null input returns list<decimal> language lua as 'return {1,2,3}';
+{
+	"status" : "ok"
+}
+select my_func(key) from my_table;
+{
+	"rows" : 
+	[
+		{
+			"ks.my_func(key)" : "[1, 2, 3]"
+		}
+	]
+}
+drop function my_func;
+{
+	"status" : "ok"
+}
