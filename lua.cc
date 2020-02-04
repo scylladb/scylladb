@@ -388,7 +388,7 @@ static void visit_decimal_bin_op(lua_State* l, Func&& F) {
         }
     };
 
-    visit_lua_decimal(l, 2, bin_op_visitor{a, F, l});
+    visit_lua_decimal(l, -1, bin_op_visitor{a, F, l});
 }
 
 static int decimal_add(lua_State* l) {
