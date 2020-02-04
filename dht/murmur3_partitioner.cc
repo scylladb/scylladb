@@ -119,21 +119,6 @@ bias(uint64_t n) {
     return get_token(n - uint64_t(std::numeric_limits<int64_t>::min()));
 }
 
-static inline
-unsigned
-shard_of(const dht::token& t, unsigned shard_count, unsigned sharding_ignore_msb) {
-    switch (t._kind) {
-        case dht::token::kind::before_all_keys:
-            return 0;
-        case dht::token::kind::after_all_keys:
-            return shard_count - 1;
-        case dht::token::kind::key:
-            uint64_t adjusted = unbias(t);
-            return zero_based_shard_of(adjusted, shard_count, sharding_ignore_msb);
-    }
-    abort();
-}
-
 namespace dht {
 
 murmur3_partitioner::murmur3_partitioner(unsigned shard_count, unsigned sharding_ignore_msb_bits)
@@ -278,12 +263,21 @@ murmur3_partitioner::get_token_validator() {
 
 unsigned
 murmur3_partitioner::shard_of(const token& t) const {
-    return ::shard_of(t, _shard_count, _sharding_ignore_msb_bits);
+    return shard_of(t, _shard_count, _sharding_ignore_msb_bits);
 }
 
 unsigned
 murmur3_partitioner::shard_of(const token& t, unsigned shard_count, unsigned sharding_ignore_msb) const {
-    return ::shard_of(t, shard_count, sharding_ignore_msb);
+    switch (t._kind) {
+        case dht::token::kind::before_all_keys:
+            return 0;
+        case dht::token::kind::after_all_keys:
+            return shard_count - 1;
+        case dht::token::kind::key:
+            uint64_t adjusted = unbias(t);
+            return zero_based_shard_of(adjusted, shard_count, sharding_ignore_msb);
+    }
+    abort();
 }
 
 token
