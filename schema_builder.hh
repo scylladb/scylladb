@@ -33,6 +33,8 @@ private:
     std::optional<compact_storage> _compact_storage;
     std::optional<table_schema_version> _version;
     std::optional<raw_view_info> _view_info;
+    bool _is_index = false;
+    bool _is_global_index = false;
     schema_builder(const schema::raw_schema&);
 public:
     schema_builder(const sstring& ks_name, const sstring& cf_name,

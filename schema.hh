@@ -635,6 +635,8 @@ private:
     v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
     std::unique_ptr<::view_info> _view_info;
+    bool _is_global_index = false;
+    bool _is_index = false;
 
     const std::array<column_count_type, 3> _offsets;
 
@@ -676,7 +678,7 @@ public:
 private:
     ::shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
     void rebuild();
-    schema(const raw_schema&, std::optional<raw_view_info>);
+    schema(const raw_schema&, std::optional<raw_view_info>, bool is_index, bool is_global_index);
 public:
     // deprecated, use schema_builder.
     schema(std::optional<utils::UUID> id,
@@ -899,6 +901,14 @@ public:
     bool is_view() const {
         return bool(_view_info);
     }
+    bool is_global_index() const {
+        return  _is_global_index;
+    }
+
+    bool is_index() const {
+        return _is_index;
+    }
+
     const query::partition_slice& full_slice() const {
         return *_full_slice;
     }

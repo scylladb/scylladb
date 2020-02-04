@@ -254,7 +254,7 @@ schema::raw_schema::raw_schema(utils::UUID id)
     : _id(id)
 { }
 
-schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info)
+schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info, bool is_index, bool is_global_index)
     : _raw(raw)
     , _offsets([this] {
         if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
@@ -340,6 +340,8 @@ schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info
     rebuild();
     if (raw_view_info) {
         _view_info = std::make_unique<::view_info>(*this, *raw_view_info);
+        _is_index = is_index;
+        _is_global_index = is_global_index;
     }
 }
 
@@ -375,7 +377,7 @@ schema::schema(std::optional<utils::UUID> id,
         build_columns(regular_columns, column_kind::regular_column);
 
         return raw;
-    }(), std::nullopt)
+    }(), std::nullopt, false, false)
 {}
 
 schema::schema(const schema& o)
@@ -385,6 +387,8 @@ schema::schema(const schema& o)
     rebuild();
     if (o.is_view()) {
         _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw());
+        _is_index = o._is_index;
+        _is_global_index = o._is_global_index;
     }
 }
 
@@ -1051,6 +1055,8 @@ schema_builder& schema_builder::with_view_info(utils::UUID base_id, sstring base
 }
 
 schema_builder& schema_builder::with_index(const index_metadata& im) {
+    _is_index = true;
+    _is_global_index = !im.local();
     _raw._indices_by_name.emplace(im.name(), im);
     return *this;
 }
@@ -1105,7 +1111,7 @@ schema_ptr schema_builder::build() {
     }
 
     prepare_dense_schema(new_raw);
-    return make_lw_shared<schema>(schema(new_raw, _view_info));
+    return make_lw_shared<schema>(schema(new_raw, _view_info, _is_index, _is_global_index));
 }
 
 schema_ptr schema_builder::build(compact_storage cp) {
