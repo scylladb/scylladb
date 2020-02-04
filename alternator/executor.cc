@@ -1496,10 +1496,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
             } else {
                 stats.shard_bounce_for_lwt++;
                 // FIXME: create separate smp_service_group
-                // FIXME: don't use the global function get_storage_proxy().
-                // Instead make storage_proxy a peering_sharded_service and
-                // use proxy.container().
-                return service::get_storage_proxy().invoke_on(desired_shard, default_smp_service_group(),
+                return proxy.container().invoke_on(desired_shard, default_smp_service_group(),
                             [cs = client_state.move_to_other_shard(),
                              mb = e.second,
                              dk = e.first.dk,

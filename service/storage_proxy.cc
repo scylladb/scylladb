@@ -4674,7 +4674,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_mutation_done([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_stats().replica_cross_shard_ops += shard != engine().cpu_id();
-        return get_storage_proxy().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
+        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
             sp.got_response(response_id, from, std::move(backlog));
             return netw::messaging_service::no_wait();
         });
@@ -4682,7 +4682,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_mutation_failed([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed, rpc::optional<db::view::update_backlog> backlog) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_stats().replica_cross_shard_ops += shard != engine().cpu_id();
-        return get_storage_proxy().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
+        return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
             sp.got_failure_response(response_id, from, num_failed, std::move(backlog));
             return netw::messaging_service::no_wait();
         });
@@ -4774,7 +4774,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_truncate([this](sstring ksname, sstring cfname) {
         return do_with(utils::make_joinpoint([] { return db_clock::now();}),
                         [this, ksname, cfname](auto& tsf) {
-            return get_storage_proxy().invoke_on_all(_write_smp_service_group, [ksname, cfname, &tsf](storage_proxy& sp) {
+            return container().invoke_on_all(_write_smp_service_group, [ksname, cfname, &tsf](storage_proxy& sp) {
                 return sp._db.local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
             });
         });
@@ -4783,7 +4783,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
         get_stats().replica_cross_shard_ops += shard != engine().cpu_id();
         // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
-        return get_storage_proxy().invoke_on(shard, [v] (auto&& sp) {
+        return container().invoke_on(shard, [v] (auto&& sp) {
             slogger.debug("Schema version request for {}", v);
             return local_schema_registry().get_frozen(v);
         });

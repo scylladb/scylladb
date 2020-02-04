@@ -148,7 +148,7 @@ public:
             const query::partition_slice& slice, api::timestamp_type ts) = 0;
 };
 
-class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber {
+class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
 public:
     using clock_type = lowres_clock;
     struct config {
