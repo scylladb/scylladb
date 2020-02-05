@@ -232,6 +232,34 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
     }, mk_cdc_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto test_table = [&e] (const sstring& table_name) {
+            auto assert_unauthorized = [&e] (const sstring& stmt) {
+                BOOST_TEST_MESSAGE(format("Must throw unauthorized_exception: {}", stmt));
+                BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
+            };
+
+            e.require_table_exists("system_distributed", table_name).get();
+
+            const sstring full_name = "system_distributed." + table_name;
+
+            // Allow MODIFY, SELECT
+            e.execute_cql(format("INSERT INTO {} (time) VALUES (toTimeStamp(now()))", full_name)).get();
+            e.execute_cql(format("UPDATE {} SET expired = toTimeStamp(now()) WHERE time = toTimeStamp(now())", full_name)).get();
+            e.execute_cql(format("DELETE FROM {} WHERE time = toTimeStamp(now())", full_name)).get();
+            e.execute_cql(format("SELECT * FROM {}", full_name)).get();
+
+            // Disallow ALTER, DROP
+            assert_unauthorized(format("ALTER TABLE {} ALTER time TYPE blob", full_name));
+            assert_unauthorized(format("DROP TABLE {}", full_name));
+        };
+
+        test_table("cdc_description");
+        test_table("cdc_topology_description");
+    }, mk_cdc_test_config()).get();
+}
+
 static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
     auto rs = rows.rs().result_set().rows();
     std::vector<std::vector<bytes_opt>> results;

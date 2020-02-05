@@ -200,6 +200,17 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
                     throw exceptions::unauthorized_exception(format("Cannot {} cdc log table {}", auth::permissions::to_string(p), resource));
                 }
             }
+
+            static constexpr auto cdc_topology_description_forbidden_permissions = auth::permission_set::of<
+                    auth::permission::ALTER, auth::permission::DROP>();
+
+            if (cdc_topology_description_forbidden_permissions.contains(p)) {
+                if (ks == db::system_distributed_keyspace::NAME
+                        && (resource_view.table() == db::system_distributed_keyspace::CDC_DESC
+                        || resource_view.table() == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION)) {
+                    throw exceptions::unauthorized_exception(format("Cannot {} {}", auth::permissions::to_string(p), resource));
+                }
+            }
         }
     }
 
