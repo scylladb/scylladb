@@ -1,0 +1,47 @@
+/*
+ * Copyright 2020 ScyllaDB
+ */
+/*
+ * This file is part of Scylla.
+ *
+ * Scylla is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Scylla is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include "serializer.hh"
+#include "db/extensions.hh"
+
+namespace cdc {
+
+class cdc_extension : public schema_extension {
+    std::map<sstring, sstring> _cdc_info;
+public:
+    static constexpr auto NAME = "cdc";
+
+    cdc_extension() = default;
+    explicit cdc_extension(std::map<sstring, sstring> tags) : _cdc_info(std::move(tags)) {}
+    explicit cdc_extension(const bytes& b) : _cdc_info(cdc_extension::deserialize(b)) {}
+    explicit cdc_extension(const sstring& s) {
+        throw std::logic_error("Cannot create cdc info from string");
+    }
+    bytes serialize() const override {
+        return ser::serialize_to_buffer<bytes>(_cdc_info);
+    }
+    static std::map<sstring, sstring> deserialize(const bytes_view& buffer) {
+        return ser::deserialize_from_buffer(buffer, boost::type<std::map<sstring, sstring>>());
+    }
+};
+
+}

@@ -75,6 +75,7 @@
 #include "alternator/server.hh"
 #include "redis/service.hh"
 #include "cdc/log.hh"
+#include "cdc/cdc_extension.hh"
 #include "alternator/tags_extension.hh"
 
 namespace fs = std::filesystem;
@@ -434,6 +435,9 @@ int main(int ac, char** av) {
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension(alternator::tags_extension::NAME, [](db::extensions::schema_ext_config cfg) {
         return std::visit([](auto v) { return ::make_shared<alternator::tags_extension>(v); }, cfg);
+    });
+    ext->add_schema_extension(cdc::cdc_extension::NAME, [](db::extensions::schema_ext_config cfg) {
+        return std::visit([](auto v) { return ::make_shared<cdc::cdc_extension>(v); }, cfg);
     });
 
     auto cfg = make_lw_shared<db::config>(ext);
