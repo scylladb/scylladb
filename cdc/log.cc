@@ -155,7 +155,7 @@ public:
     future<> append_mutations(Iter i, Iter e, schema_ptr s, lowres_clock::time_point, std::vector<mutation>&);
 
 private:
-    void check_that_cdc_log_table_does_not_exist(database& db, const schema& schema, const sstring& logname) {
+    static void check_that_cdc_log_table_does_not_exist(database& db, const schema& schema, const sstring& logname) {
         if (db.has_schema(schema.ks_name(), logname)) {
             throw exceptions::invalid_request_exception(format("Cannot create CDC log table for table {}.{} because a table of name {}.{} already exists",
                     schema.ks_name(), schema.cf_name(),
@@ -228,8 +228,22 @@ namespace cdc {
 using operation_native_type = std::underlying_type_t<operation>;
 using column_op_native_type = std::underlying_type_t<column_op>;
 
+static const sstring cdc_log_suffix = "_scylla_cdc_log";
+
+static bool is_log_name(const std::string_view& table_name) {
+    return boost::ends_with(table_name, cdc_log_suffix);
+}
+
+bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name) {
+    if (!is_log_name(table_name)) {
+        return false;
+    }
+    const auto base_name = sstring(table_name.data(), table_name.size() - cdc_log_suffix.size());
+    const auto base_schema = service::get_local_storage_proxy().get_db().local().find_schema(ks_name, base_name);
+    return bool(base_schema) && base_schema->cdc_options().enabled();
+}
+
 sstring log_name(const sstring& table_name) {
-    static constexpr auto cdc_log_suffix = "_scylla_cdc_log";
     return table_name + cdc_log_suffix;
 }
 

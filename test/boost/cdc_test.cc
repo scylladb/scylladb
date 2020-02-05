@@ -210,6 +210,28 @@ SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_
     }, mk_cdc_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto assert_unauthorized = [&e] (const sstring& stmt) {
+            BOOST_TEST_MESSAGE(format("Must throw unauthorized_exception: {}", stmt));
+            BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
+        };
+
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY) WITH cdc = {'enabled': true}").get();
+        e.require_table_exists("ks", "tbl").get();
+
+        // Allow MODIFY, SELECT, ALTER
+        e.execute_cql("INSERT INTO ks.tbl_scylla_cdc_log (stream_id_1, stream_id_2, time, batch_seq_no) VALUES (0, 0, now(), 0)").get();
+        e.execute_cql("UPDATE ks.tbl_scylla_cdc_log SET ttl = 100 WHERE stream_id_1 = 0 AND stream_id_2 = 0 AND time = now() AND batch_seq_no = 0").get();
+        e.execute_cql("DELETE FROM ks.tbl_scylla_cdc_log WHERE stream_id_1 = 0 AND stream_id_2 = 0 AND time = now() AND batch_seq_no = 0").get();
+        e.execute_cql("SELECT * FROM ks.tbl_scylla_cdc_log").get();
+        e.execute_cql("ALTER TABLE ks.tbl_scylla_cdc_log ALTER ttl TYPE blob").get();
+
+        // Disallow DROP
+        assert_unauthorized("DROP TABLE ks.tbl_scylla_cdc_log");
+    }, mk_cdc_test_config()).get();
+}
+
 static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
     auto rs = rows.rs().result_set().rows();
     std::vector<std::vector<bytes_opt>> results;

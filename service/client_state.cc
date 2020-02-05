@@ -51,6 +51,7 @@
 #include "tracing/trace_keyspace_helper.hh"
 #include "storage_service.hh"
 #include "database.hh"
+#include "cdc/log.hh"
 
 thread_local api::timestamp_type service::client_state::_last_timestamp_micros = 0;
 
@@ -188,6 +189,17 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
     if (alteration_permissions.contains(p)) {
         if (auth::is_protected(*_auth_service, resource)) {
             throw exceptions::unauthorized_exception(format("{} is protected", resource));
+        }
+    }
+
+    if (resource.kind() == auth::resource_kind::data && service::get_local_storage_service().cluster_supports_cdc()) {
+        const auto resource_view = auth::data_resource_view(resource);
+        if (resource_view.table()) {
+            if (p == auth::permission::DROP) {
+                if (cdc::is_log_for_some_table(ks, *resource_view.table())) {
+                    throw exceptions::unauthorized_exception(format("Cannot {} cdc log table {}", auth::permissions::to_string(p), resource));
+                }
+            }
         }
     }
 
