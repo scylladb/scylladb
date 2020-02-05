@@ -129,7 +129,7 @@ inline std::ostream& operator<<(std::ostream& o, indexable_element e) {
 
 class summary_entry {
 public:
-    dht::token_view token;
+    dht::token token;
     bytes_view key;
     uint64_t position;
 

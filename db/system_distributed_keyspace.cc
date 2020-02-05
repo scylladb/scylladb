@@ -230,49 +230,6 @@ static db::consistency_level quorum_if_many(size_t num_token_owners) {
     return num_token_owners > 1 ? db::consistency_level::QUORUM : db::consistency_level::ONE;
 }
 
-// --------------- TODO: copy-pasted from murmur3_partitioner; remove this after haaawk's change is merged
-static int64_t long_token(dht::token_view t) {
-    if (t.is_minimum() || t.is_maximum()) {
-        return std::numeric_limits<long>::min();
-    }
-
-    if (t._data.size() != sizeof(int64_t)) {
-        throw runtime_exception(format("Invalid token. Should have size {:d}, has size {:d}\n", sizeof(int64_t), t._data.size()));
-    }
-
-    auto ptr = t._data.begin();
-    auto lp = unaligned_cast<const int64_t *>(ptr);
-    return net::ntoh(*lp);
-}
-
-static int64_t normalize(int64_t in) {
-    return in == std::numeric_limits<int64_t>::lowest()
-            ? std::numeric_limits<int64_t>::max()
-            : in;
-}
-
-static dht::token get_token(uint64_t value) {
-    auto t = net::hton(normalize(value));
-    bytes b(bytes::initialized_later(), 8);
-    std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
-    return dht::token{dht::token::kind::key, std::move(b)};
-}
-
-static dht::token token_from_string(const sstring& t) {
-    auto lp = boost::lexical_cast<long>(t);
-    if (lp == std::numeric_limits<long>::min()) {
-        return dht::minimum_token();
-    } else {
-        return get_token(uint64_t(lp));
-    }
-}
-
-static sstring string_from_token(const dht::token& t) {
-    return seastar::to_sstring<sstring>(long_token(t));
-}
-
-// ---------------
-
 static list_type_impl::native_type prepare_cdc_generation_description(const cdc::topology_description& description) {
     list_type_impl::native_type ret;
     for (auto& e: description.entries()) {
@@ -282,7 +239,7 @@ static list_type_impl::native_type prepare_cdc_generation_description(const cdc:
         }
 
         ret.push_back(make_tuple_value(cdc_token_range_description_type,
-                { data_value(string_from_token(e.token_range_end))
+                { data_value(e.token_range_end.to_sstring())
                 , make_list_value(cdc_streams_list_type, std::move(streams))
                 , data_value(int8_t(e.sharding_ignore_msb))
                 }));
@@ -313,7 +270,7 @@ static cdc::token_range_description get_token_range_description_from_value(const
         on_internal_error(cdc_log, "get_token_range_description_from_value: stream tuple type size != 3");
     }
 
-    auto token = token_from_string(value_cast<sstring>(tup[0]));
+    auto token = dht::token::from_sstring(value_cast<sstring>(tup[0]));
     auto streams = get_streams_from_list_value(tup[1]);
     auto sharding_ignore_msb = uint8_t(value_cast<int8_t>(tup[2]));
 

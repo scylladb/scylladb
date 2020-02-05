@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "dht/i_partitioner.hh"
+#include "dht/token-sharding.hh"
 #include "utils/exceptions.hh"
 
 #include "cdc/generation.hh"
@@ -38,11 +38,10 @@ static api::timestamp_type to_ts(db_clock::time_point tp) {
 
 static cdc::stream_id get_stream(
         const cdc::token_range_description& entry,
-        dht::token tok,
-        const dht::i_partitioner& p) {
+        dht::token tok) {
     // The ith stream is the stream for the ith shard.
     auto shard_cnt = entry.streams.size();
-    auto shard_id = p.shard_of(tok, shard_cnt, entry.sharding_ignore_msb);
+    auto shard_id = dht::shard_of(shard_cnt, entry.sharding_ignore_msb, tok);
 
     if (shard_id >= shard_cnt) {
         on_internal_error(cdc_log, "get_stream: shard_id out of bounds");
@@ -53,8 +52,7 @@ static cdc::stream_id get_stream(
 
 static cdc::stream_id get_stream(
         const std::vector<cdc::token_range_description>& entries,
-        dht::token tok,
-        const dht::i_partitioner& p) {
+        dht::token tok) {
     if (entries.empty()) {
         on_internal_error(cdc_log, "get_stream: entries empty");
     }
@@ -65,7 +63,7 @@ static cdc::stream_id get_stream(
         it = entries.begin();
     }
 
-    return get_stream(*it, tok, p);
+    return get_stream(*it, tok);
 }
 
 cdc::metadata::container_t::const_iterator cdc::metadata::gen_used_at(api::timestamp_type ts) const {
@@ -78,7 +76,7 @@ cdc::metadata::container_t::const_iterator cdc::metadata::gen_used_at(api::times
     return std::prev(it);
 }
 
-cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok, const dht::i_partitioner& p) {
+cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok) {
     auto now = api::new_timestamp();
     if (ts > now + generation_leeway.count()) {
         throw exceptions::invalid_request_exception(format(
@@ -132,7 +130,7 @@ cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok,
     }
 
     auto& gen = *it->second;
-    auto ret = ::get_stream(gen.entries(), tok, p);
+    auto ret = ::get_stream(gen.entries(), tok);
     _last_stream_timestamp = ts;
     return ret;
 }

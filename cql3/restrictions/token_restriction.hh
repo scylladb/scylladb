@@ -94,7 +94,7 @@ public:
             if (!buf) {
                 throw exceptions::invalid_request_exception("Invalid null token value");
             }
-            auto tk = dht::global_partitioner().from_bytes(*buf);
+            auto tk = dht::token::from_bytes(*buf);
             if (tk.is_minimum() && !is_start(b)) {
                 // The token was parsed as a minimum marker (token::kind::before_all_keys), but
                 // as it appears in the end bound position, it is actually the maximum marker

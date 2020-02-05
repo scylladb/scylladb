@@ -402,7 +402,7 @@ std::unordered_set<token> get_replace_tokens() {
     }
     tokens.erase("");
     for (auto token_string : tokens) {
-        auto token = dht::global_partitioner().from_sstring(token_string);
+        auto token = dht::token::from_sstring(token_string);
         ret.insert(token);
     }
     return ret;
@@ -804,7 +804,7 @@ void storage_service::join_token_ring(int delay) {
                 }
             } else {
                 for (auto token_string : initial_tokens) {
-                    auto token = dht::global_partitioner().from_sstring(token_string);
+                    auto token = dht::token::from_sstring(token_string);
                     _bootstrap_tokens.insert(token);
                 }
                 slogger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
@@ -1645,7 +1645,7 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     std::unordered_set<token> ret;
     boost::split(tokens, tokens_string, boost::is_any_of(";"));
     for (auto str : tokens) {
-        auto t = dht::global_partitioner().from_sstring(str);
+        auto t = dht::token::from_sstring(str);
         slogger.trace("endpoint={}, token_str={} token={}", endpoint, str, t);
         ret.emplace(std::move(t));
     }
@@ -2056,7 +2056,7 @@ storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_add
 
 future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
     return run_with_no_api_lock([] (storage_service& ss) {
-        auto token_map = dht::global_partitioner().describe_ownership(ss._token_metadata.sorted_tokens());
+        auto token_map = dht::token::describe_ownership(ss._token_metadata.sorted_tokens());
         // describeOwnership returns tokens in an unspecified order, let's re-order them
         std::map<gms::inet_address, float> ownership;
         for (auto entry : token_map) {
@@ -2092,7 +2092,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             }
             keyspace_name = "system_traces";
         }
-        auto token_ownership = dht::global_partitioner().describe_ownership(ss._token_metadata.sorted_tokens());
+        auto token_ownership = dht::token::describe_ownership(ss._token_metadata.sorted_tokens());
 
         std::map<gms::inet_address, float> final_ownership;
 
@@ -3341,10 +3341,10 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
         auto addresses = entry.second;
         token_range_endpoints tr;
         if (range.start()) {
-            tr._start_token = dht::global_partitioner().to_sstring(range.start()->value());
+            tr._start_token = range.start()->value().to_sstring();
         }
         if (range.end()) {
-            tr._end_token = dht::global_partitioner().to_sstring(range.end()->value());
+            tr._end_token = range.end()->value().to_sstring();
         }
         for (auto endpoint : addresses) {
             endpoint_details details;

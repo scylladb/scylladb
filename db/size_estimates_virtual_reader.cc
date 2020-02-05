@@ -169,7 +169,7 @@ static system_keyspace::range_estimates estimate(const column_family& cf, const 
     int64_t count{0};
     utils::estimated_histogram hist{0};
     auto from_bytes = [] (auto& b) {
-        return dht::global_partitioner().from_sstring(utf8_type->to_string(b));
+        return dht::token::from_sstring(utf8_type->to_string(b));
     };
     dht::token_range_vector ranges;
     ::compat::unwrap_into(
@@ -193,7 +193,7 @@ future<std::vector<token_range>> get_local_ranges() {
         std::vector<token_range> local_ranges;
         auto to_bytes = [](const std::optional<dht::token_range::bound>& b) {
             assert(b);
-            return utf8_type->decompose(dht::global_partitioner().to_sstring(b->value()));
+            return utf8_type->decompose(b->value().to_sstring());
         };
         // We merge the ranges to be compatible with how Cassandra shows it's size estimates table.
         // All queries will be on that table, where all entries are text and there's no notion of

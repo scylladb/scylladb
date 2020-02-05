@@ -861,7 +861,7 @@ static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_
         exploded_index_ck.push_back(bytes_view(*indexed_column_value));
     } else {
         dht::i_partitioner& partitioner = dht::global_partitioner();
-        token_bytes = partitioner.token_to_bytes(partitioner.get_token(*_schema, last_base_pk));
+        token_bytes = partitioner.get_token(*_schema, last_base_pk).data();
         exploded_index_ck.push_back(bytes_view(token_bytes));
         append_base_key_to_index_ck<partition_key>(exploded_index_ck, last_base_pk, *cdef);
     }
@@ -1040,7 +1040,7 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
             // Computed token column needs to be added to index view restrictions
             const column_definition& token_cdef = *_view_schema->clustering_key_columns().begin();
             auto base_pk = partition_key::from_optional_exploded(*_schema, _restrictions->get_partition_key_restrictions()->values(options));
-            bytes token_value = dht::global_partitioner().token_to_bytes(dht::global_partitioner().get_token(*_schema, base_pk));
+            bytes token_value = dht::global_partitioner().get_token(*_schema, base_pk).data();
             auto token_restriction = ::make_shared<restrictions::single_column_restriction::EQ>(token_cdef, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value)));
             clustering_restrictions->merge_with(token_restriction);
 

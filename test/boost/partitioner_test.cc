@@ -43,16 +43,11 @@ debug(Args&&... args) {
 }
 
 static dht::token token_from_long(uint64_t value) {
-    auto t = net::hton(value);
-    bytes b(bytes::initialized_later(), 8);
-    std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
-    return { dht::token::kind::key, std::move(b) };
+    return dht::token(dht::token::kind::key, value);
 }
 
 static int64_t long_from_token(dht::token token) {
-    int64_t data;
-    std::copy_n(token._data.data(), 8, reinterpret_cast<char*>(&data));
-    return net::ntoh(data);
+    return token._data;
 }
 
 SEASTAR_THREAD_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
@@ -78,7 +73,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_wraparound_1) {
     BOOST_REQUIRE(t1 > t2);
     // Even without knowing what the midpoint is, it needs to be inside the
     // wrapped range, i.e., between t1 and inf, OR between -inf and t2
-    auto midpoint = partitioner.midpoint(t1, t2);
+    auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
     // We can also calculate the actual value the midpoint should have:
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x8800'0000'0000'0000));
@@ -89,7 +84,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_wraparound_2) {
     auto t2 = token_from_long(0x9000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 > t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
+    auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x7800'0000'0000'0000));
 }
@@ -224,9 +219,8 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_ordering) {
 SEASTAR_THREAD_TEST_CASE(test_token_no_wraparound_1) {
     auto t1 = token_from_long(0x5000'0000'0000'0000);
     auto t2 = token_from_long(0x7000'0000'0000'0000);
-    dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 < t2);
-    auto midpoint = partitioner.midpoint(t1, t2);
+    auto midpoint = dht::token::midpoint(t1, t2);
     BOOST_REQUIRE(midpoint > t1 && midpoint < t2);
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x6000'0000'0000'0000));
 }
@@ -243,7 +237,7 @@ void test_partitioner_sharding(const dht::i_partitioner& part, unsigned shards, 
         BOOST_REQUIRE_EQUAL(part.shard_of(lim), i % shards);
         if (i != 0) {
             BOOST_REQUIRE_EQUAL(part.shard_of(prev_token(part, lim)), (i - 1) % shards);
-            BOOST_REQUIRE(part.is_equal(lim, part.token_for_next_shard(prev_token(part, lim), i % shards)));
+            BOOST_REQUIRE_EQUAL(lim, part.token_for_next_shard(prev_token(part, lim), i % shards));
         }
         if (i != (shards << ignorebits) - 1) {
             auto next_shard = (i + 1) % shards;
@@ -613,7 +607,7 @@ do_test_selective_token_range_sharder(const dht::i_partitioner& part, const sche
                 }
                 BOOST_REQUIRE(end_shard == shard);
             }
-            auto midpoint = part.midpoint(
+            auto midpoint = dht::token::midpoint(
                     range_shard->start() ? range_shard->start()->value() : dht::minimum_token(),
                     range_shard->end() ? range_shard->end()->value() : dht::minimum_token());
             auto mid_shard = part.shard_of(midpoint);

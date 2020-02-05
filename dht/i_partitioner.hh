@@ -50,6 +50,8 @@
 #include <utility>
 #include <vector>
 #include <range.hh>
+#include <byteswap.h>
+#include "dht/token.hh"
 
 namespace sstables {
 
@@ -70,7 +72,6 @@ namespace dht {
 // into its users.
 
 class decorated_key;
-class token;
 class ring_position;
 
 using partition_range = nonwrapping_range<ring_position>;
@@ -78,89 +79,6 @@ using token_range = nonwrapping_range<token>;
 
 using partition_range_vector = std::vector<partition_range>;
 using token_range_vector = std::vector<token_range>;
-
-enum class token_kind {
-    before_all_keys,
-    key,
-    after_all_keys,
-};
-
-
-class token_view {
-public:
-    token_kind _kind;
-    bytes_view _data;
-
-    token_view(token_kind kind, bytes_view data) : _kind(kind), _data(data) {}
-    explicit token_view(const token& token);
-
-    bool is_minimum() const {
-        return _kind == token_kind::before_all_keys;
-    }
-
-    bool is_maximum() const {
-        return _kind == token_kind::after_all_keys;
-    }
-};
-
-
-class token {
-public:
-    using kind = token_kind;
-    kind _kind;
-    // _data can be interpreted as a big endian binary fraction
-    // in the range [0.0, 1.0).
-    //
-    // So, [] == 0.0
-    //     [0x00] == 0.0
-    //     [0x80] == 0.5
-    //     [0x00, 0x80] == 1/512
-    //     [0xff, 0x80] == 1 - 1/512
-    managed_bytes _data;
-
-    token() : _kind(kind::before_all_keys) {
-    }
-
-    token(kind k, managed_bytes d) : _kind(std::move(k)), _data(std::move(d)) {
-    }
-
-    bool is_minimum() const {
-        return _kind == kind::before_all_keys;
-    }
-
-    bool is_maximum() const {
-        return _kind == kind::after_all_keys;
-    }
-
-    size_t external_memory_usage() const {
-        return _data.external_memory_usage();
-    }
-
-    size_t memory_usage() const {
-        return sizeof(token) + external_memory_usage();
-    }
-
-    explicit token(token_view v) : _kind(v._kind), _data(v._data) {}
-
-    operator token_view() const {
-        return token_view(*this);
-    }
-};
-
-inline token_view::token_view(const token& token) : _kind(token._kind), _data(bytes_view(token._data)) {}
-
-token midpoint_unsigned(const token& t1, const token& t2);
-const token& minimum_token();
-const token& maximum_token();
-int tri_compare(token_view t1, token_view t2);
-inline bool operator==(token_view t1, token_view t2) { return tri_compare(t1, t2) == 0; }
-inline bool operator<(token_view t1, token_view t2) { return tri_compare(t1, t2) < 0; }
-
-inline bool operator!=(const token& t1, const token& t2) { return std::rel_ops::operator!=(t1, t2); }
-inline bool operator>(const token& t1, const token& t2) { return std::rel_ops::operator>(t1, t2); }
-inline bool operator<=(const token& t1, const token& t2) { return std::rel_ops::operator<=(t1, t2); }
-inline bool operator>=(const token& t1, const token& t2) { return std::rel_ops::operator>=(t1, t2); }
-std::ostream& operator<<(std::ostream& out, const token& t);
 
 template <typename T>
 inline auto get_random_number() {
@@ -232,8 +150,10 @@ using decorated_key_opt = std::optional<decorated_key>;
 class i_partitioner {
 protected:
     unsigned _shard_count;
+    unsigned _sharding_ignore_msb_bits;
+    std::vector<uint64_t> _shard_start;
 public:
-    explicit i_partitioner(unsigned shard_count) : _shard_count(shard_count) {}
+    i_partitioner(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
     virtual ~i_partitioner() {}
 
     /**
@@ -258,49 +178,12 @@ public:
     }
 
     /**
-     * Calculate a token representing the approximate "middle" of the given
-     * range.
-     *
-     * @return The approximate midpoint between left and right.
-     */
-    virtual token midpoint(const token& left, const token& right) const = 0;
-
-    /**
-     * @return A token smaller than all others in the range that is being partitioned.
-     * Not legal to assign to a node or key.  (But legal to use in range scans.)
-     */
-    token get_minimum_token() {
-        return dht::minimum_token();
-    }
-
-    /**
      * @return a token that can be used to route a given key
      * (This is NOT a method to create a token from its string representation;
      * for that, use tokenFactory.fromString.)
      */
     virtual token get_token(const schema& s, partition_key_view key) const = 0;
     virtual token get_token(const sstables::key_view& key) const = 0;
-
-
-    /**
-     * @return a partitioner-specific string representation of this token
-     */
-    virtual sstring to_sstring(const dht::token& t) const = 0;
-
-    /**
-     * @return a token from its partitioner-specific string representation
-     */
-    virtual dht::token from_sstring(const sstring& t) const = 0;
-
-    /**
-     * @return a token from its partitioner-specific byte representation
-     */
-    virtual dht::token from_bytes(bytes_view bytes) const = 0;
-
-    /**
-     * @return a randomly generated token
-     */
-    virtual token get_random_token() = 0;
 
     // FIXME: token.tokenFactory
     //virtual token.tokenFactory gettokenFactory() = 0;
@@ -312,17 +195,6 @@ public:
     virtual bool preserves_order() = 0;
 
     /**
-     * Calculate the deltas between tokens in the ring in order to compare
-     *  relative sizes.
-     *
-     * @param sortedtokens a sorted List of tokens
-     * @return the mapping from 'token' to 'percentage of the ring owned by that token'.
-     */
-    virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens) = 0;
-
-    virtual data_type get_token_validator() = 0;
-
-    /**
      * @return name of partitioner.
      */
     virtual const sstring name() const = 0;
@@ -330,12 +202,7 @@ public:
     /**
      * Calculates the shard that handles a particular token.
      */
-    virtual unsigned shard_of(const token& t) const = 0;
-
-    /**
-     * Calculates the shard that handles a particular token using custom shard_count and sharding_ignore_msb.
-     */
-    virtual unsigned shard_of(const token& t, unsigned shard_count, unsigned sharding_ignore_msb) const = 0;
+    virtual unsigned shard_of(const token& t) const;
 
     /**
      * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
@@ -348,38 +215,7 @@ public:
      *
      * On overflow, maximum_token() is returned.
      */
-    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const = 0;
-
-    /**
-     * Gets the first shard of the minimum token.
-     */
-    unsigned shard_of_minimum_token() const {
-        return 0;  // hardcoded for now; unlikely to change
-    }
-
-    /**
-     * @return bytes that represent the token as required by get_token_validator().
-     */
-    virtual bytes token_to_bytes(const token& t) const {
-        return bytes(t._data.begin(), t._data.end());
-    }
-
-    /**
-     * @return < 0 if if t1's _data array is less, t2's. 0 if they are equal, and > 0 otherwise. _kind comparison should be done separately.
-     */
-    virtual int tri_compare(token_view t1, token_view t2) const = 0;
-    /**
-     * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.
-     */
-    bool is_equal(token_view t1, token_view t2) const {
-        return tri_compare(t1, t2) == 0;
-    }
-    /**
-     * @return true if t1's _data array is less then t2's. _kind comparison should be done separately.
-     */
-    bool is_less(token_view t1, token_view t2) const {
-        return tri_compare(t1, t2) < 0;
-    }
+    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
 
     /**
      * @return number of shards configured for this partitioner
@@ -392,13 +228,9 @@ public:
         return "biased-token-round-robin";
     }
 
-    virtual unsigned sharding_ignore_msb() const {
-        return 0;
+    unsigned sharding_ignore_msb() const {
+        return _sharding_ignore_msb_bits;
     }
-
-    friend bool operator==(token_view t1, token_view t2);
-    friend bool operator<(token_view t1, token_view t2);
-    friend int tri_compare(token_view t1, token_view t2);
 };
 
 //
@@ -955,14 +787,11 @@ namespace std {
 template<>
 struct hash<dht::token> {
     size_t operator()(const dht::token& t) const {
-        const auto& b = t._data;
-        if (b.size() == sizeof(size_t)) { // practically always
-            return read_le<size_t>(reinterpret_cast<const char*>(b.data()));
-        }
-        return hash_large_token(b);
+        // We have to reverse the bytes here to keep compatibility with
+        // the behaviour that was here when tokens were represented as
+        // sequence of bytes.
+        return bswap_64(t._data);
     }
-private:
-    size_t hash_large_token(const managed_bytes& b) const;
 };
 
 template <>

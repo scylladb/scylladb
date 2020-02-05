@@ -66,6 +66,7 @@
 #include "mutation_compactor.hh"
 #include "leveled_manifest.hh"
 #include "utils/observable.hh"
+#include "dht/token.hh"
 
 namespace sstables {
 

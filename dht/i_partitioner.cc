@@ -22,6 +22,7 @@
 #include "i_partitioner.hh"
 #include <seastar/core/reactor.hh>
 #include "dht/murmur3_partitioner.hh"
+#include "dht/token-sharding.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"
 #include "utils/murmur_hash.hh"
@@ -35,106 +36,24 @@
 
 namespace dht {
 
-static const token min_token{ token::kind::before_all_keys, {} };
-static const token max_token{ token::kind::after_all_keys, {} };
+i_partitioner::i_partitioner(unsigned shard_count, unsigned sharding_ignore_msb_bits)
+    : _shard_count(shard_count)
+    // if one shard, ignore sharding_ignore_msb_bits as they will just cause needless
+    // range breaks
+    , _sharding_ignore_msb_bits(shard_count > 1 ? sharding_ignore_msb_bits : 0)
+    , _shard_start(init_zero_based_shard_start(_shard_count, _sharding_ignore_msb_bits))
+{}
 
-const token&
-minimum_token() {
-    return min_token;
-}
-
-const token&
-maximum_token() {
-    return max_token;
-}
-
-// result + overflow bit
-std::pair<bytes, bool>
-add_bytes(bytes_view b1, bytes_view b2, bool carry = false) {
-    auto sz = std::max(b1.size(), b2.size());
-    auto expand = [sz] (bytes_view b) {
-        bytes ret(bytes::initialized_later(), sz);
-        auto bsz = b.size();
-        auto p = std::copy(b.begin(), b.end(), ret.begin());
-        std::fill_n(p, sz - bsz, 0);
-        return ret;
-    };
-    auto eb1 = expand(b1);
-    auto eb2 = expand(b2);
-    auto p1 = eb1.begin();
-    auto p2 = eb2.begin();
-    unsigned tmp = carry;
-    for (size_t idx = 0; idx < sz; ++idx) {
-        tmp += uint8_t(p1[sz - idx - 1]);
-        tmp += uint8_t(p2[sz - idx - 1]);
-        p1[sz - idx - 1] = tmp;
-        tmp >>= std::numeric_limits<uint8_t>::digits;
-    }
-    return { std::move(eb1), bool(tmp) };
-}
-
-bytes
-shift_right(bool carry, bytes b) {
-    unsigned tmp = carry;
-    auto sz = b.size();
-    auto p = b.begin();
-    for (size_t i = 0; i < sz; ++i) {
-        auto lsb = p[i] & 1;
-        p[i] = (tmp << std::numeric_limits<uint8_t>::digits) | uint8_t(p[i]) >> 1;
-        tmp = lsb;
-    }
-    return b;
+unsigned
+i_partitioner::shard_of(const token& t) const {
+    return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
 }
 
 token
-midpoint_unsigned_tokens(const token& t1, const token& t2) {
-    // calculate the average of the two tokens.
-    // before_all_keys is implicit 0, after_all_keys is implicit 1.
-    bool c1 = t1._kind == token::kind::after_all_keys;
-    bool c2 = t1._kind == token::kind::after_all_keys;
-    if (c1 && c2) {
-        // both end-of-range tokens?
-        return t1;
-    }
-    // we can ignore beginning-of-range, since their representation is 0.0
-    auto sum_carry = add_bytes(t1._data, t2._data);
-    auto& sum = sum_carry.first;
-    // if either was end-of-range, we added 0.0, so pretend we added 1.0 and
-    // and got a carry:
-    bool carry = sum_carry.second || c1 || c2;
-    auto avg = shift_right(carry, std::move(sum));
-    if (t1 > t2) {
-        // wrap around the ring.  We really want (t1 + (t2 + 1.0)) / 2, so add 0.5.
-        // example: midpoint(0.9, 0.2) == midpoint(0.9, 1.2) == 1.05 == 0.05
-        //                             == (0.9 + 0.2) / 2 + 0.5 (mod 1)
-        if (avg.size() > 0) {
-            avg[0] ^= 0x80;
-        }
-    }
-    return token{token::kind::key, std::move(avg)};
+i_partitioner::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
+    return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
-int tri_compare(token_view t1, token_view t2) {
-    if (t1._kind < t2._kind) {
-            return -1;
-    } else if (t1._kind > t2._kind) {
-            return 1;
-    } else if (t1._kind == token_kind::key) {
-        return global_partitioner().tri_compare(t1, t2);
-    }
-    return 0;
-}
-
-std::ostream& operator<<(std::ostream& out, const token& t) {
-    if (t._kind == token::kind::after_all_keys) {
-        out << "maximum token";
-    } else if (t._kind == token::kind::before_all_keys) {
-        out << "minimum token";
-    } else {
-        out << global_partitioner().to_sstring(t);
-    }
-    return out;
-}
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
     return out << "{key: " << dk._key << ", token:" << dk._token << "}";
@@ -294,7 +213,7 @@ ring_position_range_sharder::next(const schema& s) {
     if (_done) {
         return {};
     }
-    auto shard = _range.start() ? _partitioner.shard_of(_range.start()->value().token()) : _partitioner.shard_of_minimum_token();
+    auto shard = _range.start() ? _partitioner.shard_of(_range.start()->value().token()) : token::shard_of_minimum_token();
     auto next_shard = shard + 1 < _partitioner.shard_count() ? shard + 1 : 0;
     auto shard_boundary_token = _partitioner.token_for_next_shard(_range.start() ? _range.start()->value().token() : minimum_token(), next_shard);
     auto shard_boundary = ring_position::starting_at(shard_boundary_token);
@@ -566,19 +485,6 @@ split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s) {
         }
     }
     return ret;
-}
-
-}
-
-namespace std {
-
-size_t
-hash<dht::token>::hash_large_token(const managed_bytes& b) const {
-    auto read_bytes = boost::irange<size_t>(0, b.size())
-            | boost::adaptors::transformed([&b] (size_t idx) { return b[idx]; });
-    std::array<uint64_t, 2> result;
-    utils::murmur_hash::hash3_x64_128(read_bytes.begin(), b.size(), 0, result);
-    return result[0];
 }
 
 }

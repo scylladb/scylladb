@@ -55,7 +55,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
         .with_column("v", bytes_type)
         .build();
 
-    dht::token tok = dht::global_partitioner().get_random_token();
+    dht::token tok = dht::token::get_random_token();
 
     auto key1 = dht::decorated_key{tok,
                                    partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key1"))))};
@@ -282,8 +282,8 @@ BOOST_AUTO_TEST_CASE(range_overlap_tests) {
 
 auto get_item(std::string left, std::string right, std::string val) {
     using value_type = std::unordered_set<std::string>;
-    auto l = dht::global_partitioner().from_sstring(left);
-    auto r = dht::global_partitioner().from_sstring(right);
+    auto l = dht::token::from_sstring(left);
+    auto r = dht::token::from_sstring(right);
     auto rg = range<dht::token>({{l, false}}, {r});
     value_type v{val};
     return std::make_pair(locator::token_metadata::range_to_interval(rg), v);
@@ -309,7 +309,7 @@ BOOST_AUTO_TEST_CASE(test_range_interval_map) {
     }
 
     auto search_item = [&mymap] (std::string val) {
-        auto tok = dht::global_partitioner().from_sstring(val);
+        auto tok = dht::token::from_sstring(val);
         auto search = range<token>(tok);
         auto it = mymap.find(locator::token_metadata::range_to_interval(search));
         if (it != mymap.end()) {

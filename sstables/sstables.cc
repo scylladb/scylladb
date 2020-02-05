@@ -572,8 +572,8 @@ future<> parse(sstable_version_types v, random_access_reader& in, summary& s) {
                         // position is little-endian encoded
                         auto position = seastar::read_le<uint64_t>(buf.get());
                         auto token = dht::global_partitioner().get_token(key_view(key_data));
-                        auto token_data = s.add_summary_data(bytes_view(token._data));
-                        s.entries.push_back({ dht::token_view(dht::token::kind::key, token_data), key_data, position });
+                        s.add_summary_data(token.data());
+                        s.entries.push_back({ token, key_data, position });
                         return make_ready_future<>();
                     });
                 });
@@ -1886,8 +1886,8 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
             auto&& right_token = right.token();
             auto right_exclusive = !right.has_key() && right.bound() == dht::ring_position::token_bound::start;
             sm.token_ranges.elements.push_back(disk_token_range{
-                {left_exclusive, to_bytes(bytes_view(left_token._data))},
-                {right_exclusive, to_bytes(bytes_view(right_token._data))}});
+                {left_exclusive, left_token.data()},
+                {right_exclusive, right_token.data()}});
         }
     }
     return sm;
@@ -1969,9 +1969,9 @@ void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key
     if (data_offset >= state.next_data_offset_to_write_summary) {
         auto entry_size = 8 + 2 + key.size();  // offset + key_size.size + key.size
         state.next_data_offset_to_write_summary += state.summary_byte_cost * entry_size;
-        auto token_data = s.add_summary_data(bytes_view(token._data));
+        s.add_summary_data(token.data());
         auto key_data = s.add_summary_data(key);
-        s.entries.push_back({ dht::token_view(dht::token::kind::key, token_data), key_data, index_offset });
+        s.entries.push_back({ token, key_data, index_offset });
     }
 }
 
@@ -3207,8 +3207,8 @@ sstable::compute_shards_for_this_sstable() const {
                 dht::ring_position::ending_at(get_last_decorated_key().token())));
     } else {
         auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
-            auto t1 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.left.token)));
-            auto t2 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.right.token)));
+            auto t1 = dht::token(dht::token::kind::key, bytes_view(dtr.left.token));
+            auto t2 = dht::token(dht::token::kind::key, bytes_view(dtr.right.token));
             return dht::partition_range::make(
                     (dtr.left.exclusive ? dht::ring_position::ending_at : dht::ring_position::starting_at)(std::move(t1)),
                     (dtr.right.exclusive ? dht::ring_position::starting_at : dht::ring_position::ending_at)(std::move(t2)));

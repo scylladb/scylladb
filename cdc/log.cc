@@ -431,7 +431,7 @@ public:
     // more details like tombstones/ttl? Probably not but keep in mind.
     mutation transform(const mutation& m, const cql3::untyped_result_set* rs = nullptr) const {
         auto ts = find_timestamp(*_schema, m);
-        auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token(), _ctx._partitioner);
+        auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token());
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
         auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
 
