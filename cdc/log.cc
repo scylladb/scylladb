@@ -233,7 +233,7 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
         for (const auto& column : columns) {
             auto type = column.type;
             if (is_data_col) {
-                type = tuple_type_impl::get_instance({ /* op */ data_type_for<column_op_native_type>(), /* value */ type, /* ttl */long_type});
+                type = tuple_type_impl::get_instance({ /* op */ data_type_for<column_op_native_type>(), /* value */ type});
             }
             b.with_column("_" + column.name(), type);
         }
@@ -390,6 +390,7 @@ private:
     schema_ptr _schema;
     schema_ptr _log_schema;
     const column_definition& _op_col;
+    const column_definition& _ttl_col;
 
     clustering_key set_pk_columns(const partition_key& pk, api::timestamp_type ts, bytes decomposed_tuuid, int batch_no, mutation& m) const {
         const auto log_ck = clustering_key::from_exploded(
@@ -412,12 +413,17 @@ private:
         m.set_cell(ck, _op_col, atomic_cell::make_live(*_op_col.type, ts, _op_col.type->decompose(operation_native_type(op))));
     }
 
+    void set_ttl(const clustering_key& ck, api::timestamp_type ts, gc_clock::duration ttl, mutation& m) const {
+        m.set_cell(ck, _ttl_col, atomic_cell::make_live(*_ttl_col.type, ts, _ttl_col.type->decompose(ttl.count())));
+    }
+
 public:
     transformer(db_context ctx, schema_ptr s)
         : _ctx(ctx)
         , _schema(std::move(s))
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _op_col(*_log_schema->get_column_definition(to_bytes("operation")))
+        , _ttl_col(*_log_schema->get_column_definition(to_bytes("ttl")))
     {}
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
@@ -513,7 +519,8 @@ public:
                     ++pos;
                 }
 
-                std::vector<bytes_opt> values(3);
+                std::vector<bytes_opt> values(2);
+                std::optional<gc_clock::duration> ttl;
 
                 auto process_cells = [&](const row& r, column_kind ckind) {
                     r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
@@ -523,13 +530,13 @@ public:
                         if (cdef.is_atomic()) {
                             column_op op;
 
-                            values[1] = values[2] = std::nullopt;
+                            values[1] = std::nullopt;
                             auto view = cell.as_atomic_cell(cdef);
                             if (view.is_live()) {
                                 op = column_op::set;
                                 values[1] = view.value().linearize();
                                 if (view.is_live_and_has_ttl()) {
-                                    values[2] = long_type->decompose(data_value(view.ttl().count()));
+                                    ttl = view.ttl();
                                 }
                             } else {
                                 op = column_op::del;
@@ -541,7 +548,6 @@ public:
                             if (pirow && pirow->has(cdef.name_as_text())) {
                                 values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(column_op::set)));
                                 values[1] = pirow->get_blob(cdef.name_as_text());
-                                values[2] = std::nullopt;
 
                                 assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
                                 assert(pikey->explode() != log_ck.explode());
@@ -553,10 +559,17 @@ public:
                     });
                 };
 
+                const auto& marker = r.row().marker();
+                if (marker.is_live() && marker.is_expiring()) {
+                    ttl = marker.ttl();
+                }
                 process_cells(r.row().cells(), column_kind::regular_column);
                 process_cells(p.static_row().get(), column_kind::static_column);
 
                 set_operation(log_ck, ts, operation::update, res);
+                if (ttl) {
+                    set_ttl(log_ck, ts, *ttl, res);
+                }
                 ++batch_no;
             }
         }

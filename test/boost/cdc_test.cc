@@ -254,12 +254,14 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 33, 333, 3333, 33333)");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 44, 444, 4444, 44444)");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(2, 11, 111, 1111, 11111)");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(3, 11, 111, 1111, 11111) USING TTL 600");
         cquery_nofail(e, "DELETE val FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444");
         cquery_nofail(e, "UPDATE ks.tbl SET val = 555 WHERE pk = 2 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
+        cquery_nofail(e, "UPDATE ks.tbl USING TTL 3600 SET val = 444 WHERE pk = 3 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11");
-        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_pk2\", \"_ck\", \"_ck2\", operation FROM ks.{}", cdc::log_name("tbl"))).get0();
+        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_pk2\", \"_ck\", \"_ck2\", operation, ttl FROM ks.{}", cdc::log_name("tbl"))).get0();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
 
@@ -269,8 +271,8 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
 
         auto actual_i = results.begin();
         auto actual_end = results.end();
-        auto assert_row = [&] (int pk, int pk2, int ck = -1, int ck2 = -1) {
-            std::cerr << "check " << pk << " " << pk2 << " " << ck << " " << ck2 << std::endl;
+        auto assert_row = [&] (int pk, int pk2, int ck = -1, int ck2 = -1, std::optional<int64_t> ttl = {}) {
+            std::cerr << "check " << pk << " " << pk2 << " " << ck << " " << ck2 << " " << ttl << std::endl;
             BOOST_REQUIRE(actual_i != actual_end);
             auto& actual_row = *actual_i;
             BOOST_REQUIRE_EQUAL(int32_type->decompose(pk), actual_row[1]);
@@ -285,6 +287,11 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
             } else {
                 BOOST_REQUIRE(!actual_row[4]);
             }
+            if (ttl) {
+                BOOST_REQUIRE_EQUAL(long_type->decompose(*ttl), actual_row[6]);
+            } else {
+                BOOST_REQUIRE(!actual_row[6]);
+            }
             ++actual_i;
         };
         // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)
@@ -297,6 +304,8 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         assert_row(1, 44, 444, 4444);
         // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(2, 11, 111, 1111, 11111)
         assert_row(2, 11, 111, 1111);
+        // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(3, 11, 111, 1111, 11111) WITH TTL 600
+        assert_row(3, 11, 111, 1111, 600);
         // DELETE val FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
         assert_row(1, 11, 111, 1111);
         // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
@@ -307,6 +316,8 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         assert_row(1, 11, 444);
         // UPDATE ks.tbl SET val = 555 WHERE pk = 2 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
         assert_row(2, 11, 111, 1111);
+        // UPDATE ks.tbl USING TTL 3600 SET val = 444 WHERE pk = 3 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
+        assert_row(3, 11, 111, 1111, 3600);
         // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11
         assert_row(1, 11);
         BOOST_REQUIRE(actual_i == actual_end);
@@ -315,9 +326,9 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
 
 SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
-        auto test = [&e] (bool enabled) {
+        auto test = [&e] (bool enabled, bool with_ttl) {
             cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true', 'preimage':'"s + (enabled ? "true" : "false") + "'}");
-            cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)");
+            cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)"s + (with_ttl ? " USING TTL 654" : ""));
 
             auto rows = select_log(e, "tbl");
 
@@ -327,6 +338,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
 
             auto ck2_index = column_index(*rows, "_ck2");
             auto val_index = column_index(*rows, "_val");
+            auto ttl_index = column_index(*rows, "ttl");
 
             auto val_type = tuple_type_impl::get_instance({ data_type_for<std::underlying_type_t<cdc::column_op>>(), int32_type, long_type});
             auto val = *first[0][val_index];
@@ -335,9 +347,11 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
             BOOST_REQUIRE_EQUAL(data_value(11111), value_cast<tuple_type_impl::native_type>(val_type->deserialize(bytes_view(val))).at(1));
 
             auto last = 11111;
+            int64_t last_ttl = 654;
             for (auto i = 0u; i < 10; ++i) {
                 auto nv = last + 1;
-                cquery_nofail(e, "UPDATE ks.tbl SET val=" + std::to_string(nv) +" where pk=1 AND pk2=11 AND ck=111 AND ck2=1111");
+                const int64_t new_ttl = 100 * (i + 1);
+                cquery_nofail(e, "UPDATE ks.tbl" + (with_ttl ? format(" USING TTL {}", new_ttl) : "") + " SET val=" + std::to_string(nv) +" where pk=1 AND pk2=11 AND ck=111 AND ck2=1111");
 
                 rows = select_log(e, "tbl");
 
@@ -353,14 +367,25 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
                     val = *pre_image.back()[val_index];
                     BOOST_REQUIRE_EQUAL(int32_type->decompose(1111), pre_image[0][ck2_index]);
                     BOOST_REQUIRE_EQUAL(data_value(last), value_cast<tuple_type_impl::native_type>(val_type->deserialize(bytes_view(val))).at(1));
+                    BOOST_REQUIRE_EQUAL(bytes_opt(), pre_image.back()[ttl_index]);
+
+                    const auto& ttl_cell = second[second.size() - 2][ttl_index];
+                    if (with_ttl) {
+                        BOOST_REQUIRE_EQUAL(long_type->decompose(last_ttl), ttl_cell);
+                    } else {
+                        BOOST_REQUIRE(!ttl_cell);
+                    }
                 }
 
                 last = nv;
+                last_ttl = new_ttl;
             }
             e.execute_cql("DROP TABLE ks.tbl").get();
         };
-        test(true);
-        test(false);
+        test(true, true);
+        test(true, false);
+        test(false, true);
+        test(false, false);
     }, mk_cdc_test_config()).get();
 }
 
