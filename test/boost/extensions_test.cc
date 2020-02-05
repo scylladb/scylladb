@@ -34,6 +34,7 @@
 #include "serializer.hh"
 #include "serializer_impl.hh"
 #include "sstables/sstables.hh"
+#include "cdc/cdc_extension.hh"
 
 SEASTAR_TEST_CASE(simple_schema_extension) {
     class dummy_ext : public schema_extension {
@@ -111,3 +112,30 @@ SEASTAR_TEST_CASE(simple_sstable_extension) {
     }, ::make_shared<db::config>(ext));
 }
 
+SEASTAR_TEST_CASE(cdc_schema_extension) {
+    auto ext = std::make_shared<db::extensions>();
+    // Extensions have to be registered here - config needs to have them before construction of test env.
+    ext->add_schema_extension(cdc::cdc_extension::NAME, [] (db::extensions::schema_ext_config cfg) {
+        return std::visit([] (auto v) { return ::make_shared<cdc::cdc_extension>(v); }, cfg);
+    });
+    auto cfg = ::make_shared<db::config>(ext);
+    cfg->experimental_features({db::experimental_features_t::feature::CDC});
+
+    return do_with_cql_env([] (cql_test_env& e) {
+        auto assert_ext_correctness = [] (cql_test_env& e, cdc::cdc_extension expected_ext) {
+            auto& actual_ext = e.local_db().find_column_family("ks", "cf").schema()->extensions().at("cdc");
+            BOOST_REQUIRE(!actual_ext->is_placeholder());
+            BOOST_CHECK_EQUAL(actual_ext->serialize(), expected_ext.serialize());
+        };
+
+        return e.execute_cql("CREATE TABLE cf (id int PRIMARY KEY, value int) WITH cdc = {'enabled':'true','postimage':'true','preimage':'true','ttl':'6789'};")
+        .discard_result().then([&] {
+            assert_ext_correctness(e, cdc::cdc_extension{{{"enabled","true"},{"postimage","true"},{"preimage","true"},{"ttl","6789"}}});
+        }).then([&] {
+            return e.execute_cql("ALTER TABLE cf WITH cdc = {'enabled':'true','postimage':'false','preimage':'false','ttl':'1234'};")
+            .discard_result().then([&] {
+                assert_ext_correctness(e, cdc::cdc_extension{{{"enabled","true"},{"postimage","false"},{"preimage","false"},{"ttl","1234"}}});
+            });
+        });
+    }, cfg);
+}
