@@ -51,7 +51,6 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/storage_service.hh"
 #include "message/messaging_service.hh"
-#include "dht/i_partitioner.hh"
 #include "database.hh"
 #include "log.hh"
 #include "db/system_keyspace.hh"
@@ -60,7 +59,6 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
 #include <chrono>
-#include "dht/i_partitioner.hh"
 #include "db/config.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/adaptors.hpp>
@@ -90,7 +88,7 @@ void gossiper::set_cluster_name(sstring name) {
 }
 
 sstring gossiper::get_partitioner_name() {
-    return dht::global_partitioner().name();
+    return _cfg.partitioner();
 }
 
 std::set<inet_address> gossiper::get_seeds() {
