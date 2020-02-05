@@ -21,6 +21,7 @@
 
 #include <seastar/testing/thread_test_case.hh>
 #include <string>
+#include <boost/range/adaptor/map.hpp>
 
 #include "cdc/log.hh"
 #include "db/config.hh"
@@ -33,6 +34,8 @@
 #include "types.hh"
 #include "types/tuple.hh"
 #include "types/map.hh"
+#include "types/list.hh"
+#include "types/set.hh"
 #include "types/user.hh"
 
 using namespace std::string_literals;
@@ -608,5 +611,213 @@ SEASTAR_THREAD_TEST_CASE(test_ttls) {
         };
         test_ttl(0);
         test_ttl(10);
+    }, mk_cdc_test_config()).get();
+}
+
+// helper funcs + structs for collection testing
+using translate_func = std::function<data_value(data_value)>;
+struct col_test {
+    sstring update;
+    data_value prev;
+    data_value next;
+    cdc::column_op op = cdc::column_op::add;
+};
+
+// iterate a set of updates and verify pre and delta values. 
+static void test_collection(cql_test_env& e, data_type val_type, std::vector<col_test> tests, translate_func f = [](data_value v) { return v; }) {
+    using op_ut = std::underlying_type_t<cdc::column_op>;
+    auto col_type = tuple_type_impl::get_instance({ data_type_for<op_ut>(), val_type, long_type});
+
+    for (auto& t : tests) {
+        cquery_nofail(e, t.update);
+        
+        auto rows = select_log(e, "tbl");
+        auto pre_image = to_bytes_filtered(*rows, cdc::operation::pre_image);
+        auto updates = to_bytes_filtered(*rows, cdc::operation::update);
+
+        sort_by_time(*rows, updates);
+        sort_by_time(*rows, pre_image);
+
+        auto val_index = column_index(*rows, "_val");
+
+        if (t.prev.is_null()) {
+            BOOST_REQUIRE(pre_image.empty());
+        } else {
+            BOOST_REQUIRE_GT(pre_image.size(), 0);
+            auto val = *pre_image.back()[val_index];
+            BOOST_REQUIRE_EQUAL(t.prev, f(value_cast<tuple_type_impl::native_type>(col_type->deserialize(bytes_view(val))).at(1)));
+        }
+
+        auto val = *updates.back()[val_index];
+        auto tup = value_cast<tuple_type_impl::native_type>(col_type->deserialize(bytes_view(val)));
+
+        if (!t.next.is_null()) {
+            BOOST_REQUIRE_EQUAL(t.next, f(tup.at(1)));
+        }
+
+        BOOST_REQUIRE_EQUAL(data_value(op_ut(t.op)), tup.at(0));
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_map_logging) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, val map<text, text>, PRIMARY KEY((pk, pk2), ck)) WITH cdc = {'enabled':'true', 'preimage':'true' }"s);
+        auto cleanup = defer([&] {
+            e.execute_cql("DROP TABLE ks.tbl").get();
+        });
+
+
+        auto map_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+
+        test_collection(e, map_type, {
+            { 
+                "UPDATE ks.tbl set val = { 'apa':'ko' } where pk=1 and pk2=11 and ck=111",
+                data_value::make_null(map_type), // no prev value
+                ::make_map_value(map_type, { { "apa", "ko" } }), // delta
+                cdc::column_op::set
+            },
+            { 
+                "UPDATE ks.tbl set val = val + { 'ninja':'mission' } where pk=1 and pk2=11 and ck=111",
+                ::make_map_value(map_type, { { "apa", "ko" } }),
+                ::make_map_value(map_type, { { "ninja", "mission" } })
+            },
+            { 
+                "UPDATE ks.tbl set val['ninja'] = 'shuriken' where pk=1 and pk2=11 and ck=111",
+                ::make_map_value(map_type, { { "apa", "ko" }, { "ninja", "mission" } }), 
+                ::make_map_value(map_type, { { "ninja", "shuriken" } })
+            },
+            { 
+                "UPDATE ks.tbl set val['apa'] = null where pk=1 and pk2=11 and ck=111",
+                ::make_map_value(map_type, { { "apa", "ko" }, { "ninja", "shuriken" } }), 
+                ::make_map_value(map_type, { { "apa", data_value::make_null(utf8_type) } }),
+                cdc::column_op::del
+            }
+        });
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_set_logging) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, val set<text>, PRIMARY KEY((pk, pk2), ck)) WITH cdc = {'enabled':'true', 'preimage':'true' }"s);
+        auto cleanup = defer([&] {
+            e.execute_cql("DROP TABLE ks.tbl").get();
+        });
+
+        auto set_type = set_type_impl::get_instance(utf8_type, false);
+        
+        test_collection(e, set_type, {
+            {
+                "UPDATE ks.tbl set val = { 'apa', 'ko' } where pk=1 and pk2=11 and ck=111",
+                data_value::make_null(set_type), ::make_set_value(set_type, { "apa", "ko" }), 
+                cdc::column_op::set
+            },
+            {
+                "UPDATE ks.tbl set val = val + { 'ninja', 'mission' } where pk=1 and pk2=11 and ck=111",
+                ::make_set_value(set_type, { "apa", "ko" }),
+                ::make_set_value(set_type, { "mission", "ninja" }) // note the sorting of sets
+            },
+            {
+                "UPDATE ks.tbl set val = val - { 'apa' } where pk=1 and pk2=11 and ck=111",
+                ::make_set_value(set_type, { "apa", "ko", "mission", "ninja" }), 
+                ::make_set_value(set_type, { "apa" }),
+                cdc::column_op::del
+            }
+        });
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_list_logging) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, val list<text>, PRIMARY KEY((pk, pk2), ck)) WITH cdc = {'enabled':'true', 'preimage':'true' }"s);
+        auto cleanup = defer([&] {
+            e.execute_cql("DROP TABLE ks.tbl").get();
+        });
+
+        auto list_type = list_type_impl::get_instance(utf8_type, false);
+        auto val_type = map_type_impl::get_instance(list_type->name_comparator(), list_type->value_comparator(), false);
+        
+        test_collection(e, val_type, {
+            {
+                "UPDATE ks.tbl set val = [ 'apa', 'ko' ] where pk=1 and pk2=11 and ck=111",
+                data_value::make_null(list_type), ::make_list_value(list_type, { "apa", "ko" }), 
+                cdc::column_op::set
+            },
+            {
+                "UPDATE ks.tbl set val = val + [ 'ninja', 'mission' ] where pk=1 and pk2=11 and ck=111",
+                ::make_list_value(list_type, { "apa", "ko" }),
+                ::make_list_value(list_type, { "ninja", "mission" })
+            },
+            {
+                "UPDATE ks.tbl set val = [ 'bosse' ] + val where pk=1 and pk2=11 and ck=111",
+                ::make_list_value(list_type, { "apa", "ko", "ninja", "mission" }),
+                ::make_list_value(list_type, { "bosse" })
+            },
+            {
+                "DELETE val[0] from ks.tbl where pk=1 and pk2=11 and ck=111",
+                ::make_list_value(list_type, { "bosse", "apa", "ko", "ninja", "mission" }),
+                data_value::make_null(list_type), // the record is the timeuuid, should maybe check, but...
+                cdc::column_op::del
+            },
+            {
+                "UPDATE ks.tbl set val[0] = 'babar' where pk=1 and pk2=11 and ck=111",
+                ::make_list_value(list_type, { "apa", "ko", "ninja", "mission" }), 
+                ::make_list_value(list_type, { "babar" }),
+            }
+        }, [&](data_value v) {
+            auto map = value_cast<map_type_impl::native_type>(std::move(v));
+            auto cpy = boost::copy_range<std::vector<data_value>>(map | boost::adaptors::map_values);
+            return ::make_list_value(list_type, std::move(cpy));
+        });
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_udt_logging) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "CREATE TYPE ks.mytype (field0 int, field1 text)"s);
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, val mytype, PRIMARY KEY((pk, pk2), ck)) WITH cdc = {'enabled':'true', 'preimage':'true' }"s);
+        auto cleanup = defer([&] {
+            e.execute_cql("DROP TABLE ks.tbl").get();
+            e.execute_cql("DROP TYPE ks.mytype").get();
+        });
+
+        auto udt_type = user_type_impl::get_instance("ks", to_bytes("mytype"), 
+            { to_bytes("field0"), to_bytes("field1") },
+            { int32_type, utf8_type },
+            true
+        );
+        auto f0_type = tuple_type_impl::get_instance({ int32_type });
+        auto f1_type = tuple_type_impl::get_instance({ utf8_type });
+        auto cdc_tuple_type = tuple_type_impl::get_instance({ f0_type, f1_type });
+        
+        auto make_tuple = [&](std::optional<std::optional<int32_t>> i, std::optional<std::optional<sstring>> s) {
+            return ::make_tuple_value(cdc_tuple_type, {
+                i ? ::make_tuple_value(f0_type, { *i }) : data_value::make_null(f0_type),
+                s ? ::make_tuple_value(f1_type, { *s }) : data_value::make_null(f1_type),
+            });
+        };
+        
+        test_collection(e, cdc_tuple_type, {
+            {
+                "UPDATE ks.tbl set val = { field0: 12, field1: 'ko' } where pk=1 and pk2=11 and ck=111",
+                data_value::make_null(cdc_tuple_type), make_tuple(12, "ko"), 
+                cdc::column_op::set
+            },
+            {
+                "UPDATE ks.tbl set val.field0 = 13 where pk=1 and pk2=11 and ck=111",
+                make_tuple(12, "ko"),
+                make_tuple(13, std::nullopt)
+            },
+            {
+                "UPDATE ks.tbl set val.field1 = 'nils' where pk=1 and pk2=11 and ck=111",
+                make_tuple(13, "ko"),
+                make_tuple(std::nullopt, "nils")
+            },
+            {
+                "UPDATE ks.tbl set val.field1 = null where pk=1 and pk2=11 and ck=111",
+                make_tuple(13, "nils"),
+                make_tuple(std::nullopt, std::optional<std::optional<sstring>>{ std::in_place, std::nullopt }),
+                cdc::column_op::del
+            },
+        });
     }, mk_cdc_test_config()).get();
 }
