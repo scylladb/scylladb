@@ -61,7 +61,7 @@ private:
         });
     }
 
-    bool _stopped = false;
+    bool _running = false;
     uint64_t _partition_threshold_bytes;
     uint64_t _row_threshold_bytes;
     uint64_t _cell_threshold_bytes;
@@ -77,7 +77,8 @@ public:
     virtual ~large_data_handler() {}
 
     // Once large_data_handler is stopped no further updates will be accepted.
-    bool stopped() const { return _stopped; }
+    bool running() const { return _running; }
+    void start();
     future<> stop();
 
     void maybe_log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) {
@@ -88,7 +89,7 @@ public:
 
     future<> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) {
-        assert(!stopped());
+        assert(running());
         if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
             return with_sem([&sst, &partition_key, clustering_key, row_size, this] {
                 return record_large_rows(sst, partition_key, clustering_key, row_size);
@@ -101,7 +102,7 @@ public:
 
     future<> maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) {
-        assert(!stopped());
+        assert(running());
         if (__builtin_expect(cell_size > _cell_threshold_bytes, false)) {
             return with_sem([&sst, &partition_key, clustering_key, &cdef, cell_size, this] {
                 return record_large_cells(sst, partition_key, clustering_key, cdef, cell_size);
@@ -111,7 +112,7 @@ public:
     }
 
     future<> maybe_delete_large_data_entries(const schema& s, sstring filename, uint64_t data_size) {
-        assert(!stopped());
+        assert(running());
         future<> large_partitions = make_ready_future<>();
         if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
             large_partitions = with_sem([&s, filename, this] () mutable {

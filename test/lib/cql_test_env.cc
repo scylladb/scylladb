@@ -499,6 +499,7 @@ public:
             // minimal_setup and init_local_cache
             db::system_keyspace::minimal_setup(*db, qp);
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
+            start_large_data_handler(*db).get();
             auto stop_database_d = defer([db] {
                 stop_database(*db).get();
             });

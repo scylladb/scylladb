@@ -2455,8 +2455,8 @@ encoding_stats sstable::get_encoding_stats_for_compaction() const {
 }
 
 void sstable::assert_large_data_handler_is_running() {
-    if (get_large_data_handler().stopped()) {
-        on_internal_error(sstlog, "The large data handler was stopped too soon");
+    if (!get_large_data_handler().running()) {
+        on_internal_error(sstlog, "The large data handler is not running");
     }
 }
 
