@@ -160,9 +160,7 @@ protected:
 
 class nop_large_data_handler : public large_data_handler {
 public:
-    nop_large_data_handler()
-        : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(),
-              std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {}
+    nop_large_data_handler();
     virtual void log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) const override {
         return;
     }

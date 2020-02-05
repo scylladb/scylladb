@@ -27,6 +27,10 @@
 
 namespace db {
 
+nop_large_data_handler::nop_large_data_handler()
+    : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(),
+          std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {}
+
 future<> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) {
     assert(!stopped());
     if (partition_size > _partition_threshold_bytes) {
