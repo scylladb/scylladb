@@ -266,7 +266,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
             return value.has_value() && is_satisfied_by(operator_type::EQ, *cell_value->type(), *column.type, *cell_value, *value);
         });
     } else {
-        return std::any_of(in_values.begin(), in_values.end(), [] (const bytes_opt& value) { return value.has_value() == false; });
+        return std::any_of(in_values.begin(), in_values.end(), [] (const bytes_opt& value) { return !value.has_value() || value->empty(); });
     }
 }
 
