@@ -1567,6 +1567,7 @@ public:
     }
 };
 
+future<> start_large_data_handler(sharded<database>& db);
 future<> stop_database(sharded<database>& db);
 
 // Creates a streaming reader that reads from all shards.

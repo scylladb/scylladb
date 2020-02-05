@@ -5124,7 +5124,9 @@ struct large_row_handler : public db::large_data_handler {
     large_row_handler(uint64_t large_rows_threshold, uint64_t rows_count_threshold, callback_t callback)
         : large_data_handler(std::numeric_limits<uint64_t>::max(), large_rows_threshold, std::numeric_limits<uint64_t>::max(),
             rows_count_threshold)
-        , callback(std::move(callback)) {}
+        , callback(std::move(callback)) {
+        start();
+    }
 
     virtual void log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             uint64_t rows_count) const override {

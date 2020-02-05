@@ -27,8 +27,15 @@
 
 namespace db {
 
+nop_large_data_handler::nop_large_data_handler()
+    : large_data_handler(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(),
+          std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()) {
+    // Don't require start() to be called on nop large_data_handler.
+    start();
+}
+
 future<> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) {
-    assert(!stopped());
+    assert(running());
     if (partition_size > _partition_threshold_bytes) {
         ++_stats.partitions_bigger_than_threshold;
         return with_sem([&sst, &key, partition_size, this] {
@@ -36,6 +43,18 @@ future<> large_data_handler::maybe_record_large_partitions(const sstables::sstab
         });
     }
     return make_ready_future<>();
+}
+
+void large_data_handler::start() {
+    _running = true;
+}
+
+future<> large_data_handler::stop() {
+    if (!running()) {
+        return make_ready_future<>();
+    }
+    _running = false;
+    return _sem.wait(max_concurrency);
 }
 
 static logging::logger large_data_logger("large_data");

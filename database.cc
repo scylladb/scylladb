@@ -1678,6 +1678,12 @@ future<> database::close_tables(table_kind kind_to_close) {
     });
 }
 
+future<> start_large_data_handler(sharded<database>& db) {
+    return db.invoke_on_all([](database& db) {
+        db.get_large_data_handler()->start();
+    });
+}
+
 future<> stop_database(sharded<database>& sdb) {
     return sdb.invoke_on_all([](database& db) {
         return db.get_compaction_manager().stop();
@@ -1704,7 +1710,7 @@ future<> database::stop_large_data_handler() {
 
 future<>
 database::stop() {
-    assert(_large_data_handler->stopped());
+    assert(!_large_data_handler->running());
     assert(_compaction_manager->stopped());
 
     // try to ensure that CL has done disk flushing
