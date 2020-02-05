@@ -3450,7 +3450,7 @@ std::vector<gms::inet_address>
 storage_service::get_natural_endpoints(const sstring& keyspace,
         const sstring& cf, const sstring& key) const {
     sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
-    dht::token token = dht::global_partitioner().get_token(key_view);
+    dht::token token = _db.local().find_schema(keyspace, cf)->get_partitioner().get_token(key_view);
     return get_natural_endpoints(keyspace, token);
 }
 
