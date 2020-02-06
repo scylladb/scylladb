@@ -193,8 +193,9 @@ public:
             const query_options& options,
             bool needs_authorization);
 
+    /// Execute a client statement that was not prepared.
     future<::shared_ptr<cql_transport::messages::result_message>>
-    process(
+    execute_direct(
             const std::string_view& query_string,
             service::query_state& query_state,
             query_options& options);

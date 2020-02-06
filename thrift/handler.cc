@@ -974,7 +974,7 @@ public:
             }
             auto opts = std::make_unique<cql3::query_options>(_cql_config, cl_from_thrift(consistency), _timeout_config, std::nullopt, std::vector<cql3::raw_value_view>(),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
-            auto f = _query_processor.local().process(query, _query_state, *opts);
+            auto f = _query_processor.local().execute_direct(query, _query_state, *opts);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
                 cql3_result_visitor visitor;
                 ret->accept(visitor);

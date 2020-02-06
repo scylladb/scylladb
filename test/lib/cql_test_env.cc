@@ -160,7 +160,7 @@ public:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) override {
         auto qs = make_query_state();
-        return local_qp().process(text, *qs, cql3::query_options::DEFAULT).finally([qs] {});
+        return local_qp().execute_direct(text, *qs, cql3::query_options::DEFAULT).finally([qs] {});
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
@@ -169,7 +169,7 @@ public:
     {
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().process(text, *qs, lqo).finally([qs, qo = std::move(qo)] {});
+        return local_qp().execute_direct(text, *qs, lqo).finally([qs, qo = std::move(qo)] {});
     }
 
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) override {

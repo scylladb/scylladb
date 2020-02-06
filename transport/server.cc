@@ -817,7 +817,7 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
 
-    return qp.local().process(query, query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+    return qp.local().execute_direct(query, query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->move_to_shard()) {
             return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
         } else {
