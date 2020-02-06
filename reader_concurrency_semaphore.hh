@@ -132,9 +132,9 @@ private:
         _resources.memory -= memory;
     }
 
-    void signal(const resources& r);
+    void signal(const resources& r) noexcept;
 
-    void signal_memory(size_t memory) {
+    void signal_memory(size_t memory) noexcept {
         signal(resources(0, static_cast<ssize_t>(memory)));
     }
 public:

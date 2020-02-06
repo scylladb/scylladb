@@ -84,12 +84,16 @@ reader_permit no_reader_permit() {
     return reader_permit{};
 }
 
-void reader_concurrency_semaphore::signal(const resources& r) {
+void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     _resources += r;
     while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
         auto& x = _wait_list.front();
         _resources -= x.res;
-        x.pr.set_value(reader_permit(*this, x.res));
+        try {
+            x.pr.set_value(reader_permit(*this, x.res));
+        } catch (...) {
+            x.pr.set_exception(std::current_exception());
+        }
         _wait_list.pop_front();
     }
 }
