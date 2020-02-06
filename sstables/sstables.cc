@@ -67,7 +67,6 @@
 
 #include "checked-file-impl.hh"
 #include "integrity_checked_file_impl.hh"
-#include "service/storage_service.hh"
 #include "db/extensions.hh"
 #include "unimplemented.hh"
 #include "vint-serialization.hh"
@@ -2000,18 +1999,6 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
     options.io_priority_class = pc;
     options.write_behind = 10;
     return file_writer(std::move(sst._index_file), std::move(options));
-}
-
-// Get the currently loaded configuration, or the default configuration in
-// case none has been loaded (this happens, for example, in unit tests).
-const db::config& get_config() {
-    if (service::get_storage_service().local_is_initialized() &&
-            service::get_local_storage_service().db().local_is_initialized()) {
-        return service::get_local_storage_service().db().local().get_config();
-    } else {
-        static db::config default_config;
-        return default_config;
-    }
 }
 
 // Returns the cost for writing a byte to summary such that the ratio of summary
