@@ -127,7 +127,6 @@ future<> redis_service::init(distributed<service::storage_proxy>& proxy, distrib
     // 2. Initialize the redis query processor.
     // 3. Listen on the redis transport port.
     return redis::maybe_create_keyspace(cfg).then([this, &proxy, &db] {
-        auto& proxy = service::get_storage_proxy();
         return _query_processor.start(std::ref(proxy), std::ref(db));
     }).then([this] {
         return _query_processor.invoke_on_all([] (auto& processor) {

@@ -29,6 +29,7 @@
 #include "auth.hh"
 #include <cctype>
 #include "cql3/query_processor.hh"
+#include "service/storage_service.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -137,6 +138,29 @@ class health_handler : public handler_base {
     virtual future<std::unique_ptr<reply>> handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         rep->set_status(reply::status_type::ok);
         rep->write_body("txt", format("healthy: {}", req->get_header("Host")));
+        return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
+    }
+};
+
+class local_nodelist_handler : public handler_base {
+    virtual future<std::unique_ptr<reply>> handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        rjson::value results = rjson::empty_array();
+        // It's very easy to get a list of all live nodes on the cluster,
+        // using gms::get_local_gossiper().get_live_members(). But getting
+        // just the list of live nodes in this DC needs more elaborate code:
+        sstring local_dc = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(
+                utils::fb_utilities::get_broadcast_address());
+        std::unordered_set<gms::inet_address> local_dc_nodes =
+                service::get_local_storage_service().get_token_metadata().
+                get_topology().get_datacenter_endpoints().at(local_dc);
+        for (auto& ip : local_dc_nodes) {
+            if (gms::get_local_gossiper().is_alive(ip)) {
+                rjson::push_back(results, rjson::from_string(ip.to_sstring()));
+            }
+        }
+        rep->set_status(reply::status_type::ok);
+        rep->set_content_type("json");
+        rep->_content = rjson::print(results);
         return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
@@ -257,8 +281,20 @@ void server::set_routes(routes& r) {
         return handle_api_request(std::move(req));
     });
 
-    r.add(operation_type::POST, url("/"), req_handler);
-    r.add(operation_type::GET, url("/"), new health_handler);
+    r.put(operation_type::POST, "/", req_handler);
+    r.put(operation_type::GET, "/", new health_handler);
+    // The "/localnodes" request is a new Alternator feature, not supported by
+    // DynamoDB and not required for DynamoDB compatibility. It allows a
+    // client to enquire - using a trivial HTTP request without requiring
+    // authentication - the list of all live nodes in the same data center of
+    // the Alternator cluster. The client can use this list to balance its
+    // request load to all the nodes in the same geographical region.
+    // Note that this API exposes - openly without authentication - the
+    // information on the cluster's members inside one data center. We do not
+    // consider this to be a security risk, because an attacker can already
+    // scan an entire subnet for nodes responding to the health request,
+    // or even just scan for open ports.
+    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler);
 }
 
 //FIXME: A way to immediately invalidate the cache should be considered,

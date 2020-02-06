@@ -177,3 +177,11 @@ def filled_test_table(dynamodb):
 
     yield table, items
     table.delete()
+
+# The "scylla_only" fixture can be used by tests for Scylla-only features,
+# which do not exist on AWS DynamoDB. A test using this fixture will be
+# skipped if running with "--aws".
+@pytest.fixture(scope="session")
+def scylla_only(dynamodb):
+    if dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com'):
+        pytest.skip('Scylla-only feature not supported by AWS')

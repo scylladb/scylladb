@@ -196,6 +196,32 @@ def test_batch_write_invalid_operation(test_table_s):
     for p in [p1, p2]:
         assert not 'item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
 
+# In test_item.py we have a bunch of test_empty_* tests on different ways to
+# create an empty item (which in Scylla requires the special CQL row marker
+# to be supported correctly). BatchWriteItems provides yet another way of
+# creating items, so check the empty case here too:
+def test_empty_batch_write(test_table):
+    p = random_string()
+    c = random_string()
+    with test_table.batch_writer() as batch:
+        batch.put_item({'p': p, 'c': c})
+    assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c}
+
+# Test that BatchWriteItems allows writing to multiple tables in one operation
+def test_batch_write_multiple_tables(test_table_s, test_table):
+    p1 = random_string()
+    c1 = random_string()
+    p2 = random_string()
+    # We use the low-level batch_write_item API for lack of a more convenient
+    # API (the batch_writer() API can only write to one table). At least it
+    # spares us the need to encode the key's types...
+    reply = test_table.meta.client.batch_write_item(RequestItems = {
+        test_table.name: [{'PutRequest': {'Item': {'p': p1, 'c': c1, 'a': 'hi'}}}],
+        test_table_s.name: [{'PutRequest': {'Item': {'p': p2, 'b': 'hello'}}}]
+    })
+    assert test_table.get_item(Key={'p': p1, 'c': c1}, ConsistentRead=True)['Item'] == {'p': p1, 'c': c1, 'a': 'hi'}
+    assert test_table_s.get_item(Key={'p': p2}, ConsistentRead=True)['Item'] == {'p': p2, 'b': 'hello'}
+
 # Basic test for BatchGetItem, reading several entire items.
 # Schema has both hash and sort keys.
 def test_batch_get_item(test_table):
