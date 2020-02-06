@@ -584,7 +584,7 @@ public:
             local_qp().get_cql_stats());
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().process_batch(batch, *qs, lqo, {}).finally([qs, batch, qo = std::move(qo)] {});
+        return local_qp().execute_batch(batch, *qs, lqo, {}).finally([qs, batch, qo = std::move(qo)] {});
     }
 };
 

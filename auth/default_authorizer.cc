@@ -101,7 +101,7 @@ bool default_authorizer::legacy_metadata_exists() const {
 future<bool> default_authorizer::any_granted() const {
     static const sstring query = format("SELECT * FROM {}.{} LIMIT 1", meta::AUTH_KS, PERMISSIONS_CF);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             db::consistency_level::LOCAL_ONE,
             infinite_timeout_config,
@@ -115,7 +115,7 @@ future<> default_authorizer::migrate_legacy_metadata() const {
     alogger.info("Starting migration of legacy permissions metadata.");
     static const sstring query = format("SELECT * FROM {}.{}", meta::AUTH_KS, legacy_table_name);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             db::consistency_level::LOCAL_ONE,
             infinite_timeout_config).then([this](::shared_ptr<cql3::untyped_result_set> results) {
@@ -195,7 +195,7 @@ default_authorizer::authorize(const role_or_anonymous& maybe_role, const resourc
             ROLE_NAME,
             RESOURCE_NAME);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             db::consistency_level::LOCAL_ONE,
             infinite_timeout_config,
@@ -224,7 +224,7 @@ default_authorizer::modify(
                     ROLE_NAME,
                     RESOURCE_NAME),
             [this, &role_name, set, &resource](const auto& query) {
-        return _qp.process(
+        return _qp.execute_internal(
                 query,
                 db::consistency_level::ONE,
                 internal_distributed_timeout_config(),
@@ -249,7 +249,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
             meta::AUTH_KS,
             PERMISSIONS_CF);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             db::consistency_level::ONE,
             internal_distributed_timeout_config(),
@@ -276,7 +276,7 @@ future<> default_authorizer::revoke_all(std::string_view role_name) const {
             PERMISSIONS_CF,
             ROLE_NAME);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             db::consistency_level::ONE,
             internal_distributed_timeout_config(),
@@ -296,7 +296,7 @@ future<> default_authorizer::revoke_all(const resource& resource) const {
             PERMISSIONS_CF,
             RESOURCE_NAME);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             db::consistency_level::LOCAL_ONE,
             infinite_timeout_config,
@@ -313,7 +313,7 @@ future<> default_authorizer::revoke_all(const resource& resource) const {
                         ROLE_NAME,
                         RESOURCE_NAME);
 
-                return _qp.process(
+                return _qp.execute_internal(
                         query,
                         db::consistency_level::LOCAL_ONE,
                         infinite_timeout_config,

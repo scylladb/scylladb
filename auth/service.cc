@@ -217,7 +217,7 @@ future<bool> service::has_existing_legacy_users() const {
     // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default user, we
     // can potentially avoid doing a range query with a high consistency level.
 
-    return _qp.process(
+    return _qp.execute_internal(
             default_user_query,
             db::consistency_level::ONE,
             infinite_timeout_config,
@@ -227,7 +227,7 @@ future<bool> service::has_existing_legacy_users() const {
             return make_ready_future<bool>(true);
         }
 
-        return _qp.process(
+        return _qp.execute_internal(
                 default_user_query,
                 db::consistency_level::QUORUM,
                 infinite_timeout_config,
@@ -237,7 +237,7 @@ future<bool> service::has_existing_legacy_users() const {
                 return make_ready_future<bool>(true);
             }
 
-            return _qp.process(
+            return _qp.execute_internal(
                     all_users_query,
                     db::consistency_level::QUORUM,
                     infinite_timeout_config).then([](auto results) {

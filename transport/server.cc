@@ -1043,7 +1043,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     }
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
-    return qp.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries))
+    return qp.local().execute_batch(batch, query_state, options, std::move(pending_authorization_entries))
             .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
         if (msg->move_to_shard()) {
             return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());

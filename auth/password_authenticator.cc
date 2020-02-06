@@ -111,7 +111,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
     plogger.info("Starting migration of legacy authentication metadata.");
     static const sstring query = format("SELECT * FROM {}.{}", meta::AUTH_KS, legacy_table_name);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
             internal_distributed_timeout_config()).then([this](::shared_ptr<cql3::untyped_result_set> results) {
@@ -119,7 +119,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
             auto username = row.get_as<sstring>("username");
             auto salted_hash = row.get_as<sstring>(SALTED_HASH);
 
-            return _qp.process(
+            return _qp.execute_internal(
                     update_row_query,
                     consistency_for_user(username),
                     internal_distributed_timeout_config(),
@@ -136,7 +136,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
 future<> password_authenticator::create_default_if_missing() const {
     return default_role_row_satisfies(_qp, &has_salted_hash).then([this](bool exists) {
         if (!exists) {
-            return _qp.process(
+            return _qp.execute_internal(
                     update_row_query,
                     db::consistency_level::QUORUM,
                     internal_distributed_timeout_config(),
@@ -233,7 +233,7 @@ future<authenticated_user> password_authenticator::authenticate(
                 meta::roles_table::qualified_name(),
                 meta::roles_table::role_col_name);
 
-        return _qp.process(
+        return _qp.execute_internal(
                 query,
                 consistency_for_user(username),
                 internal_distributed_timeout_config(),
@@ -267,7 +267,7 @@ future<> password_authenticator::create(std::string_view role_name, const authen
         return make_ready_future<>();
     }
 
-    return _qp.process(
+    return _qp.execute_internal(
             update_row_query,
             consistency_for_user(role_name),
             internal_distributed_timeout_config(),
@@ -284,7 +284,7 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
             SALTED_HASH,
             meta::roles_table::role_col_name);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             consistency_for_user(role_name),
             internal_distributed_timeout_config(),
@@ -297,7 +297,7 @@ future<> password_authenticator::drop(std::string_view name) const {
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query, consistency_for_user(name),
             internal_distributed_timeout_config(),
             {sstring(name)}).discard_result();
