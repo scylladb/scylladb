@@ -1242,6 +1242,8 @@ void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>
     qctx = std::make_unique<query_context>(db, qp);
 }
 
+static future<> cache_truncation_record(distributed<database>& db);
+
 future<> setup(distributed<database>& db,
                distributed<cql3::query_processor>& qp,
                distributed<service::storage_service>& ss) {
@@ -1261,6 +1263,8 @@ future<> setup(distributed<database>& db,
     }).then([] {
         // #2514 - make sure "system" is written to system_schema.keyspaces.
         return db::schema_tables::save_system_schema(NAME);
+    }).then([&db] {
+        return cache_truncation_record(db);
     }).then([] {
         return netw::get_messaging_service().invoke_on_all([] (auto& ms){
             return ms.init_local_preferred_ip_cache();
@@ -1323,6 +1327,29 @@ static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
             r.positions.emplace_back(replay_position(shard, id, pos));
         }
         return make_ready_future<truncation_record>(std::move(r));
+    });
+}
+
+// Read system.truncate table and cache last truncation time in `table` object for each table on every shard
+static future<> cache_truncation_record(distributed<database>& db) {
+    sstring req = format("SELECT DISTINCT table_uuid, truncated_at from system.{}", TRUNCATED);
+    return qctx->qp().execute_internal(req).then([&db] (::shared_ptr<cql3::untyped_result_set> rs) {
+        return parallel_for_each(rs->begin(), rs->end(), [&db] (const cql3::untyped_result_set_row& row) {
+            auto table_uuid = row.get_as<utils::UUID>("table_uuid");
+            auto ts = row.get_as<db_clock::time_point>("truncated_at");
+
+            auto cpus = boost::irange(0u, smp::count);
+            return parallel_for_each(cpus.begin(), cpus.end(), [table_uuid, ts, &db] (unsigned int c) mutable {
+                return smp::submit_to(c, [table_uuid, ts, &db] () mutable {
+                    try {
+                        table& cf = db.local().find_column_family(table_uuid);
+                        cf.cache_truncation_record(ts);
+                    } catch (no_such_column_family&) {
+                        slogger.debug("Skip caching truncation time for {} since the table is no longer present", table_uuid);
+                    }
+                });
+            });
+        });
     });
 }
 

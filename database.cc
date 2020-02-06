@@ -1786,6 +1786,10 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                             assert(low_mark <= rp || rp == db::replay_position());
                             rp = std::max(low_mark, rp);
                             return truncate_views(cf, truncated_at, should_flush).then([&cf, truncated_at, rp] {
+                                // save_truncation_record() may actually fail after we cached the truncation time
+                                // but this is not be worse that if failing without caching: at least the correct time
+                                // will be available until next reboot and a client will have to retry truncation anyway.
+                                cf.cache_truncation_record(truncated_at);
                                 return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
                             });
                         });

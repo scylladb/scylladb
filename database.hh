@@ -534,6 +534,11 @@ private:
     utils::phased_barrier _pending_reads_phaser;
     // Corresponding phaser for in-progress streams
     utils::phased_barrier _pending_streams_phaser;
+
+    // This field cashes the last truncation time for the table.
+    // The master resides in system.truncated table
+    db_clock::time_point _truncated_at = db_clock::time_point::min();
+
 public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
@@ -546,6 +551,12 @@ public:
     sstables::shared_sstable make_sstable(sstring dir, int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
     sstables::shared_sstable make_sstable(sstring dir);
     sstables::shared_sstable make_sstable();
+    void cache_truncation_record(db_clock::time_point truncated_at) {
+        _truncated_at = truncated_at;
+    }
+    db_clock::time_point get_truncation_record() {
+        return _truncated_at;
+    }
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
