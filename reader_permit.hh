@@ -77,15 +77,13 @@ public:
 
         friend class reader_permit;
     private:
-        memory_units(reader_concurrency_semaphore* semaphore, ssize_t memory);
+        memory_units(reader_concurrency_semaphore* semaphore, ssize_t memory) noexcept;
     public:
         memory_units(const memory_units&) = delete;
-        memory_units(memory_units&&);
+        memory_units(memory_units&&) noexcept;
         ~memory_units();
         memory_units& operator=(const memory_units&) = delete;
-        memory_units& operator=(memory_units&&);
-        void increase(size_t memory);
-        void decrease(size_t memory);
+        memory_units& operator=(memory_units&&) noexcept;
         void reset(size_t memory = 0);
         operator size_t() const {
             return _memory;

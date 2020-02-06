@@ -25,7 +25,6 @@
 #include "reader_concurrency_semaphore.hh"
 #include "utils/exceptions.hh"
 
-static seastar::logger rcslog("reader_concurrency_semaphore");
 
 reader_permit::impl::impl(reader_concurrency_semaphore& semaphore, reader_resources base_cost) : semaphore(semaphore), base_cost(base_cost) {
 }
@@ -34,13 +33,14 @@ reader_permit::impl::~impl() {
     semaphore.signal(base_cost);
 }
 
-reader_permit::memory_units::memory_units(reader_concurrency_semaphore* semaphore, ssize_t memory) : _semaphore(semaphore), _memory(memory) {
+reader_permit::memory_units::memory_units(reader_concurrency_semaphore* semaphore, ssize_t memory) noexcept
+        : _semaphore(semaphore), _memory(memory) {
     if (_semaphore && _memory) {
         _semaphore->consume_memory(_memory);
     }
 }
 
-reader_permit::memory_units::memory_units(memory_units&& o)
+reader_permit::memory_units::memory_units(memory_units&& o) noexcept
     : _semaphore(std::exchange(o._semaphore, nullptr))
     , _memory(std::exchange(o._memory, 0)) {
 }
@@ -49,34 +49,20 @@ reader_permit::memory_units::~memory_units() {
     reset();
 }
 
-reader_permit::memory_units& reader_permit::memory_units::operator=(memory_units&& o) {
+reader_permit::memory_units& reader_permit::memory_units::operator=(memory_units&& o) noexcept {
+    if (&o == this) {
+        return *this;
+    }
     reset();
     _semaphore = std::exchange(o._semaphore, nullptr);
     _memory = std::exchange(o._memory, 0);
     return *this;
 }
 
-void reader_permit::memory_units::increase(size_t memory) {
-    if (_semaphore) {
-        _semaphore->consume_memory(memory);
-    }
-    _memory += memory;
-}
-
-void reader_permit::memory_units::decrease(size_t memory) {
-    if (memory > _memory) {
-        on_internal_error(rcslog, "reader_permit::memory_units::decrease(): memory underflow");
-    }
-    if (_semaphore) {
-        _semaphore->signal_memory(memory);
-    }
-    _memory -= memory;
-}
-
 void reader_permit::memory_units::reset(size_t memory) {
     if (_semaphore) {
-        _semaphore->signal_memory(_memory);
         _semaphore->consume_memory(memory);
+        _semaphore->signal_memory(_memory);
     }
     _memory = memory;
 }
