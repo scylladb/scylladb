@@ -496,16 +496,8 @@ query_processor::process(const sstring_view& query_string, service::query_state&
             metrics.regularStatementsExecuted.inc();
 #endif
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return process_statement_unprepared(std::move(cql_statement), query_state, options);
-}
-
-future<::shared_ptr<result_message>>
-query_processor::process_statement_unprepared(
-        ::shared_ptr<cql_statement> statement,
-        service::query_state& query_state,
-        const query_options& options) {
-    return statement->check_access(query_state.get_client_state()).then([this, statement, &query_state, &options] () mutable {
-        return process_authorized_statement(std::move(statement), query_state, options);
+    return cql_statement->check_access(query_state.get_client_state()).then([this, cql_statement, &query_state, &options] () mutable {
+        return process_authorized_statement(std::move(cql_statement), query_state, options);
     });
 }
 
