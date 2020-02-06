@@ -55,7 +55,7 @@ void create_function_statement::create(service::storage_proxy& proxy, functions:
 }
 
 std::unique_ptr<prepared_statement> create_function_statement::prepare(database& db, cql_stats& stats) {
-    return std::make_unique<prepared>(make_shared<create_function_statement>(*this));
+    return std::make_unique<prepared_statement>(make_shared<create_function_statement>(*this));
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> create_function_statement::announce_migration(

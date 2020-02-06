@@ -1342,7 +1342,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
 
     auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(schema);
 
-    return std::make_unique<prepared>(std::move(stmt), bound_names, std::move(partition_key_bind_indices));
+    return std::make_unique<prepared_statement>(std::move(stmt), bound_names, std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>

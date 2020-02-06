@@ -104,7 +104,7 @@ public:
 
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) const override;
 
-    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 
     virtual future<> grant_permissions_to_creator(const service::client_state&) const override;
 
@@ -139,7 +139,7 @@ private:
 public:
     raw_statement(::shared_ptr<cf_name> name, bool if_not_exists);
 
-    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 
     cf_properties& properties() {
         return _properties;

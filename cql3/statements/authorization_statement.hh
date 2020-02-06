@@ -60,7 +60,7 @@ public:
 
     uint32_t get_bound_terms() const override;
 
-    std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 
     bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 

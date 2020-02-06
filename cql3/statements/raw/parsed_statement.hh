@@ -63,7 +63,6 @@ protected:
     variable_specifications _variables;
 
 public:
-    using prepared = statements::prepared_statement;
     virtual ~parsed_statement();
 
     variable_specifications& get_bound_variables();

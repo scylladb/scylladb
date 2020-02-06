@@ -27,7 +27,7 @@
 namespace cql3 {
 namespace statements {
 class create_function_statement final : public create_function_statement_base {
-    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(
             service::storage_proxy& proxy, bool is_local_only) const override;
     virtual void create(service::storage_proxy& proxy, functions::function* old) const override;

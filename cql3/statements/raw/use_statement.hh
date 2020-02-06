@@ -58,7 +58,7 @@ private:
 public:
     use_statement(sstring keyspace);
 
-    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 };
 
 }
