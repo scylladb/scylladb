@@ -899,7 +899,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
         tracing::set_page_size(trace_state, options.get_page_size());
         tracing::set_consistency_level(trace_state, options.get_consistency());
         tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
-        tracing::add_query(trace_state, prepared->raw_cql_statement);
+        tracing::add_query(trace_state, prepared->statement->raw_cql_statement);
         tracing::add_prepared_statement(trace_state, prepared);
 
         tracing::begin(trace_state, seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
@@ -995,7 +995,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
                 needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
             }
             if (init_trace) {
-                tracing::add_query(trace_state, ps->raw_cql_statement);
+                tracing::add_query(trace_state, ps->statement->raw_cql_statement);
             }
             break;
         }

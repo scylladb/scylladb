@@ -65,6 +65,9 @@ shared_ptr<const metadata> make_empty_metadata();
 class cql_statement {
     timeout_config_selector _timeout_config_selector;
 public:
+    // CQL statement text
+    sstring raw_cql_statement;
+
     explicit cql_statement(timeout_config_selector timeout_selector) : _timeout_config_selector(timeout_selector) {}
 
     virtual ~cql_statement()
