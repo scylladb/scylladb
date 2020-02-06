@@ -1902,16 +1902,14 @@ future<> sstable::create_links(const sstring& dir, int64_t generation) const {
             }
             auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
             auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
-            return this->sstable_write_io_check(::link_file, std::move(src), std::move(dst));
+            return sstable_write_io_check(::link_file, std::move(src), std::move(dst));
         });
     }).then([this, dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([dir, this, generation] {
         auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
         auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TOC);
-        return sstable_write_io_check([&] {
-            return rename_file(src, dst);
-        });
+        return sstable_write_io_check(rename_file, src, dst);
     }).then([this, dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([this, dir, generation] {
