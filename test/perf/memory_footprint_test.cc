@@ -36,6 +36,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 
 class size_calculator {
     class nest {
@@ -167,11 +168,10 @@ struct sizes {
     size_t query_result;
 };
 
-static sizes calculate_sizes(const mutation& m) {
+static sizes calculate_sizes(cache_tracker& tracker, const mutation& m) {
     sizes result;
     auto s = m.schema();
     auto mt = make_lw_shared<memtable>(s);
-    cache_tracker tracker;
     row_cache cache(s, make_empty_snapshot_source(), tracker);
 
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
@@ -218,9 +218,7 @@ int main(int argc, char** argv) {
         if (smp::count != 1) {
             throw std::runtime_error("This test has to be run with -c1");
         }
-        return seastar::async([&] {
-            storage_service_for_tests ssft;
-
+        return do_with_cql_env_thread([&](cql_test_env& env) {
             mutation_settings settings;
             settings.column_count = app.configuration()["column-count"].as<size_t>();
             settings.column_name_size = app.configuration()["column-name-size"].as<size_t>();
@@ -230,7 +228,8 @@ int main(int argc, char** argv) {
             settings.data_size = app.configuration()["data-size"].as<size_t>();
 
             auto m = make_mutation(settings);
-            auto sizes = calculate_sizes(m);
+            auto& tracker = env.local_db().find_column_family("system", "local").get_row_cache().get_cache_tracker();
+            auto sizes = calculate_sizes(tracker, m);
 
             std::cout << "mutation footprint:" << "\n";
             std::cout << " - in cache:     " << sizes.cache << "\n";
