@@ -161,7 +161,7 @@ static mutation make_mutation(mutation_settings settings) {
 struct sizes {
     size_t memtable;
     size_t cache;
-    size_t sstable;
+    std::map<sstables::sstable::version_types, size_t> sstable;
     size_t frozen;
     size_t canonical;
     size_t query_result;
@@ -189,14 +189,16 @@ static sizes calculate_sizes(const mutation& m) {
 
     tmpdir sstable_dir;
     sstables::test_env env;
-    auto sst = env.make_sstable(s,
-        sstable_dir.path().string(),
-        1 /* generation */,
-        sstables::sstable::version_types::la,
-        sstables::sstable::format_types::big);
-    write_memtable_to_sstable_for_test(*mt, sst).get();
-    sst->load().get();
-    result.sstable = sst->data_size();
+    for (auto v  : sstables::all_sstable_versions) {
+        auto sst = env.make_sstable(s,
+            sstable_dir.path().string(),
+            1 /* generation */,
+            v,
+            sstables::sstable::format_types::big);
+        write_memtable_to_sstable_for_test(*mt, sst).get();
+        sst->load().get();
+        result.sstable[v] = sst->data_size();
+    }
 
     return result;
 }
@@ -233,7 +235,10 @@ int main(int argc, char** argv) {
             std::cout << "mutation footprint:" << "\n";
             std::cout << " - in cache:     " << sizes.cache << "\n";
             std::cout << " - in memtable:  " << sizes.memtable << "\n";
-            std::cout << " - in sstable:   " << sizes.sstable << "\n";
+            std::cout << " - in sstable:\n";
+            for (auto v : sizes.sstable) {
+                std::cout << "   " << sstables::to_string(v.first) << ":   " << v.second << "\n";
+            }
             std::cout << " - frozen:       " << sizes.frozen << "\n";
             std::cout << " - canonical:    " << sizes.canonical << "\n";
             std::cout << " - query result: " << sizes.query_result << "\n";
