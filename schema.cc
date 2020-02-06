@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <map>
 #include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
@@ -102,7 +103,21 @@ std::ostream& operator<<(std::ostream& os, ordinal_column_id id)
     return os << static_cast<column_count_type>(id);
 }
 
+thread_local std::map<std::tuple<sstring, unsigned, unsigned>, std::unique_ptr<dht::i_partitioner>> partitioners;
+
+static const dht::i_partitioner& get_partitioner(const sstring& name, unsigned shard_count, unsigned ignore_msb) {
+    auto it = partitioners.find({name, shard_count, ignore_msb});
+    if (it == partitioners.end()) {
+        auto p = dht::make_partitioner(name, shard_count, ignore_msb);
+        it = partitioners.insert({{name, shard_count, ignore_msb}, std::move(p)}).first;
+    }
+    return *it->second;
+}
+
 const dht::i_partitioner& schema::get_partitioner() const {
+    if (_raw._partitioner) {
+        return _raw._partitioner->get();
+    }
     return dht::global_partitioner();
 }
 
@@ -838,6 +853,11 @@ bool thrift_schema::has_compound_comparator() const {
 
 bool thrift_schema::is_dynamic() const {
     return _is_dynamic;
+}
+
+schema_builder& schema_builder::with_partitioner(sstring name, unsigned shard_count, unsigned sharding_ignore_msb_bits) {
+    _raw._partitioner = get_partitioner(name, shard_count, sharding_ignore_msb_bits);
+    return *this;
 }
 
 schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,

@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <boost/range/iterator_range.hpp>
@@ -634,6 +635,9 @@ private:
         // The flag is not stored in the schema mutation and does not affects schema digest.
         // It is set locally on a system tables that should be extra durable
         bool _wait_for_sync = false; // true if all writes using this schema have to be synced immediately by commitlog
+        // Partitioner is not stored in the schema mutation and does not affect
+        // schema digest. It is also not set locally on a schema tables.
+        std::optional<std::reference_wrapper<const dht::i_partitioner>> _partitioner;
     };
     raw_schema _raw;
     thrift_schema _thrift;
