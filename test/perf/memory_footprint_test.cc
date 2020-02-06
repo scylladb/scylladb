@@ -130,12 +130,13 @@ struct mutation_settings {
     size_t column_count;
     size_t column_name_size;
     size_t row_count;
+    size_t partition_count;
     size_t partition_key_size;
     size_t clustering_key_size;
     size_t data_size;
 };
 
-static mutation make_mutation(mutation_settings settings) {
+static schema_ptr make_schema(const mutation_settings& settings) {
     auto builder = schema_builder("ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("ck", bytes_type, column_kind::clustering_key);
@@ -144,8 +145,10 @@ static mutation make_mutation(mutation_settings settings) {
         builder.with_column(to_bytes(random_string(settings.column_name_size)), bytes_type);
     }
 
-    auto s = builder.build();
+    return builder.build();
+}
 
+static mutation make_mutation(schema_ptr s, mutation_settings settings) {
     mutation m(s, partition_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.partition_key_size)))));
 
     for (size_t i = 0; i < settings.row_count; ++i) {
@@ -168,9 +171,9 @@ struct sizes {
     size_t query_result;
 };
 
-static sizes calculate_sizes(cache_tracker& tracker, const mutation& m) {
+static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& settings) {
     sizes result;
-    auto s = m.schema();
+    auto s = make_schema(settings);
     auto mt = make_lw_shared<memtable>(s);
     row_cache cache(s, make_empty_snapshot_source(), tracker);
 
@@ -178,9 +181,14 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation& m) {
 
     assert(mt->occupancy().used_space() == 0);
 
-    mt->apply(m);
-    cache.populate(m);
+    std::vector<mutation> muts;
+    for (size_t i = 0; i < settings.partition_count; ++i) {
+        muts.emplace_back(make_mutation(s, settings));
+        mt->apply(muts.back());
+        cache.populate(muts.back());
+    }
 
+    mutation& m = muts[0];
     result.memtable = mt->occupancy().used_space();
     result.cache = tracker.region().occupancy().used_space() - cache_initial_occupancy;
     result.frozen = freeze(m).representation().size();
@@ -195,7 +203,9 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation& m) {
             1 /* generation */,
             v,
             sstables::sstable::format_types::big);
-        write_memtable_to_sstable_for_test(*mt, sst).get();
+        auto mt2 = make_lw_shared<memtable>(s);
+        mt2->apply(*mt).get();
+        write_memtable_to_sstable_for_test(*mt2, sst).get();
         sst->load().get();
         result.sstable[v] = sst->data_size();
     }
@@ -210,6 +220,7 @@ int main(int argc, char** argv) {
         ("column-count", bpo::value<size_t>()->default_value(5), "column count")
         ("column-name-size", bpo::value<size_t>()->default_value(2), "column name size")
         ("row-count", bpo::value<size_t>()->default_value(1), "row count")
+        ("partition-count", bpo::value<size_t>()->default_value(1), "partition count")
         ("partition-key-size", bpo::value<size_t>()->default_value(10), "partition key size")
         ("clustering-key-size", bpo::value<size_t>()->default_value(10), "clustering key size")
         ("data-size", bpo::value<size_t>()->default_value(32), "cell data size");
@@ -223,13 +234,13 @@ int main(int argc, char** argv) {
             settings.column_count = app.configuration()["column-count"].as<size_t>();
             settings.column_name_size = app.configuration()["column-name-size"].as<size_t>();
             settings.row_count = app.configuration()["row-count"].as<size_t>();
+            settings.partition_count = app.configuration()["partition-count"].as<size_t>();
             settings.partition_key_size = app.configuration()["partition-key-size"].as<size_t>();
             settings.clustering_key_size = app.configuration()["clustering-key-size"].as<size_t>();
             settings.data_size = app.configuration()["data-size"].as<size_t>();
 
-            auto m = make_mutation(settings);
             auto& tracker = env.local_db().find_column_family("system", "local").get_row_cache().get_cache_tracker();
-            auto sizes = calculate_sizes(tracker, m);
+            auto sizes = calculate_sizes(tracker, settings);
 
             std::cout << "mutation footprint:" << "\n";
             std::cout << " - in cache:     " << sizes.cache << "\n";
