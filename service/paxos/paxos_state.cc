@@ -153,35 +153,33 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
     utils::latency_counter lc;
     lc.start();
 
-    return db::system_keyspace::get_truncated_at(schema->id()).then([tr_state = std::move(tr_state), schema,
-                                                      timeout, decision = std::move(decision)] (db_clock::time_point t) mutable {
-        return do_with(std::move(decision), [tr_state = std::move(tr_state), schema = std::move(schema), timeout, t]
-                                             (proposal& decision) {
-            auto f = make_ready_future();
-            auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
-            // When saving a decision, also delete the last accepted proposal. This is just an
-            // optimization to save space.
-            // Even though there is no guarantee we will see decisions in the right order,
-            // because messages can get delayed, so this decision can be older than our current most
-            // recent accepted proposal/committed decision, saving it is always safe due to column timestamps.
-            // Since the mutation uses the decision ballot timestamp, if cell timestmap of any current cell
-            // is strictly greater than the decision one, saving the decision will not erase it.
-            //
-            // The table may have been truncated since the proposal was initiated. In that case, we
-            // don't want to perform the mutation and potentially resurrect truncated data.
-            if (utils::UUID_gen::unix_timestamp(decision.ballot) >= truncated_at) {
-                logger.debug("Committing decision {}", decision);
-                tracing::trace(tr_state, "Committing decision {}", decision);
-                f = get_local_storage_proxy().mutate_locally(schema, decision.update, db::commitlog::force_sync::yes, timeout);
-            } else {
-                logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
-                tracing::trace(tr_state, "Not committing decision {} as ballot timestamp predates last truncation time", decision);
-            }
-            return f.then([&decision, schema, timeout] {
-                // We don't need to lock the partition key if there is no gap between loading paxos
-                // state and saving it, and here we're just blindly updating.
-                return db::system_keyspace::save_paxos_decision(*schema, decision, timeout);
-            });
+    return do_with(std::move(decision), [tr_state = std::move(tr_state), schema, timeout] (proposal& decision) {
+        auto f = make_ready_future();
+        table& cf = get_local_storage_proxy().get_db().local().find_column_family(schema);
+        db_clock::time_point t = cf.get_truncation_record();
+        auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        // When saving a decision, also delete the last accepted proposal. This is just an
+        // optimization to save space.
+        // Even though there is no guarantee we will see decisions in the right order,
+        // because messages can get delayed, so this decision can be older than our current most
+        // recent accepted proposal/committed decision, saving it is always safe due to column timestamps.
+        // Since the mutation uses the decision ballot timestamp, if cell timestmap of any current cell
+        // is strictly greater than the decision one, saving the decision will not erase it.
+        //
+        // The table may have been truncated since the proposal was initiated. In that case, we
+        // don't want to perform the mutation and potentially resurrect truncated data.
+        if (utils::UUID_gen::unix_timestamp(decision.ballot) >= truncated_at) {
+            logger.debug("Committing decision {}", decision);
+            tracing::trace(tr_state, "Committing decision {}", decision);
+            f = get_local_storage_proxy().mutate_locally(schema, decision.update, db::commitlog::force_sync::yes, timeout);
+        } else {
+            logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
+            tracing::trace(tr_state, "Not committing decision {} as ballot timestamp predates last truncation time", decision);
+        }
+        return f.then([&decision, schema, timeout] {
+            // We don't need to lock the partition key if there is no gap between loading paxos
+            // state and saving it, and here we're just blindly updating.
+            return db::system_keyspace::save_paxos_decision(*schema, decision, timeout);
         });
     }).finally([schema, lc] () mutable {
         auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
