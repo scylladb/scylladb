@@ -516,7 +516,7 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
     }
 }
 
-std::map<sstring, sstring> get_tags_of_table(schema_ptr schema) {
+const std::map<sstring, sstring>& get_tags_of_table(schema_ptr schema) {
     auto it = schema->extensions().find(tags_extension::NAME);
     if (it == schema->extensions().end()) {
         throw api_error("ValidationException", format("Table {} does not have valid tagging information", schema->ks_name()));
@@ -553,7 +553,7 @@ static future<> update_tags(const rjson::value& tags, schema_ptr schema, std::ma
             if (tag_value.empty() || tag_value.size() > 256 || !validate_legal_tag_chars(tag_value)) {
                 throw api_error("ValidationException", "The Tag Value provided is invalid string");
             }
-            tags_map.emplace(tag_key, tag_value);
+            tags_map[sstring(tag_key)] = sstring(tag_value);
         }
     } else if (action == update_tags_action::delete_tags) {
         for (auto it = tags.Begin(); it != tags.End(); ++it) {
@@ -592,7 +592,7 @@ static future<> add_tags(service::storage_proxy& proxy, schema_ptr schema, rjson
         return make_exception_future<>(api_error("ValidationException", "The number of tags must be at least 1"));
     }
 
-    auto tags_map = get_tags_of_table(schema);
+    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
     return update_tags(rjson::copy(*tags), schema, std::move(tags_map), update_tags_action::add_tags);
 }
 
@@ -627,7 +627,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
 
         schema_ptr schema = get_table_from_arn(_proxy, std::string_view(arn->GetString(), arn->GetStringLength()));
 
-        auto tags_map = get_tags_of_table(schema);
+        std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
         update_tags(*tags, schema, std::move(tags_map), update_tags_action::delete_tags).get();
         return json_string("");
     });
@@ -1046,6 +1046,48 @@ static dht::partition_range_vector to_partition_ranges(const dht::decorated_key&
 // cas_request, as required by storage_proxy::cas()), but also has optional
 // modes not using LWT.
 class rmw_operation : public service::cas_request, public enable_shared_from_this<rmw_operation> {
+public:
+    // The following options choose which mechanism to use for isolating
+    // parallel write operations:
+    // * The FORBID_RMW option forbids RMW (read-modify-write) operations
+    //   such as conditional updates. For the remaining write-only
+    //   operations, ordinary quorum writes are isolated enough.
+    // * The LWT_ALWAYS option always uses LWT (lightweight transactions)
+    //   for any write operation - whether or not it also has a read.
+    // * The LWT_RMW_ONLY option uses LWT only for RMW operations, and uses
+    //   ordinary quorum writes for write-only operations.
+    //   This option is not safe if the user may send both RMW and write-only
+    //   operations on the same item.
+    // * The UNSAFE_RMW option does read-modify-write operations as separate
+    //   read and write. It is unsafe - concurrent RMW operations are not
+    //   isolated at all. This option will likely be removed in the future.
+    enum class write_isolation {
+        FORBID_RMW, LWT_ALWAYS, LWT_RMW_ONLY, UNSAFE_RMW
+    };
+    static constexpr auto WRITE_ISOLATION_TAG_KEY = "system:write_isolation";
+
+    static write_isolation get_write_isolation_for_schema(schema_ptr schema) {
+        const auto& tags = get_tags_of_table(schema);
+        auto it = tags.find(WRITE_ISOLATION_TAG_KEY);
+        if (it == tags.end() || it->second.empty()) {
+            // By default, fall back to always enforcing LWT
+            return write_isolation::LWT_ALWAYS;
+        }
+        switch (it->second[0]) {
+        case 'f':
+            return write_isolation::FORBID_RMW;
+        case 'a':
+            return write_isolation::LWT_ALWAYS;
+        case 'o':
+            return write_isolation::LWT_RMW_ONLY;
+        case 'u':
+            return write_isolation::UNSAFE_RMW;
+        default:
+            // In case of an incorrect tag, fall back to the safest option: LWT_ALWAYS
+            return write_isolation::LWT_ALWAYS;
+        }
+    }
+
 protected:
     // The full request JSON
     rjson::value _request;
@@ -1055,13 +1097,15 @@ protected:
     schema_ptr _schema;
     partition_key _pk = partition_key::make_empty();
     clustering_key _ck = clustering_key::make_empty();
+    write_isolation _write_isolation;
 public:
     // The constructor of a rmw_operation subclass should parse the request
     // and try to discover as many input errors as it can before really
     // attempting the read or write operations.
     rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
         : _request(std::move(request))
-        , _schema(get_table(proxy, _request)) {
+        , _schema(get_table(proxy, _request))
+        , _write_isolation(get_write_isolation_for_schema(_schema)) {
         // _pk and _ck will be assigned later, by the subclass's constructor
         // (each operation puts the key in a slightly different location in
         // the request).
@@ -1092,28 +1136,6 @@ public:
             bool needs_read_before_write,
             stats& stats);
     std::optional<shard_id> shard_for_execute(bool needs_read_before_write);
-
-    // The following options choose which mechanism to use for isolating
-    // parallel write operations:
-    // * The FORBID_RMW option forbids RMW (read-modify-write) operations
-    //   such as conditional updates. For the remaining write-only
-    //   operations, ordinary quorum writes are isolated enough.
-    // * The LWT_ALWAYS option always uses LWT (lightweight transactions)
-    //   for any write operation - whether or not it also has a read.
-    // * The LWT_RMW_ONLY option uses LWT only for RMW operations, and uses
-    //   ordinary quorum writes for write-only operations.
-    //   This option is not safe if the user may send both RMW and write-only
-    //   operations on the same item.
-    // * The UNSAFE_RMW option does read-modify-write operations as separate
-    //   read and write. It is unsafe - concurrent RMW operations are not
-    //   isolated at all. This option will likely be removed in the future.
-    enum class write_isolation {
-        FORBID_RMW, LWT_ALWAYS, LWT_RMW_ONLY, UNSAFE_RMW
-    };
-    // FIXME: Currently, the write isolation option is a constant chosen
-    // during compilation. It should be a per-table configurable option.
-    static constexpr write_isolation default_write_isolation = write_isolation::LWT_ALWAYS;
-    const write_isolation _write_isolation = default_write_isolation;
 };
 
 // shard_for_execute() checks whether execute() must be called on a specific
@@ -1456,10 +1478,15 @@ static future<> do_batch_write(service::storage_proxy& proxy,
     if (mutation_builders.empty()) {
         return make_ready_future<>();
     }
-    // FIXME: Currently, the write isolation option is a constant chosen
-    // during compilation. It should be a per-table configurable option.
-    const rmw_operation::write_isolation write_isolation = rmw_operation::default_write_isolation;
-    if (write_isolation != rmw_operation::write_isolation::LWT_ALWAYS) {
+    // NOTE: technically, do_batch_write could be reworked to use LWT only for part
+    // of the batched requests and not use it for others, but it's not considered
+    // likely that a batch will contain both tables which always demand LWT and ones
+    // that don't - it's fragile to split a batch into multiple storage proxy requests though.
+    // Hence, the decision is conservative - if any table enforces LWT,the whole batch will use it.
+    const bool needs_lwt = boost::algorithm::any_of(mutation_builders | boost::adaptors::map_keys, [] (const schema_ptr& schema) {
+        return rmw_operation::get_write_isolation_for_schema(schema) == rmw_operation::write_isolation::LWT_ALWAYS;
+    });
+    if (!needs_lwt) {
         // Do a normal write, without LWT:
         std::vector<mutation> mutations;
         mutations.reserve(mutation_builders.size());

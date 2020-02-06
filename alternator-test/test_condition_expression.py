@@ -35,6 +35,24 @@ from botocore.exceptions import ClientError
 from util import random_string
 from sys import version_info
 
+# A helper function for changing write isolation policies
+def set_write_isolation(table, isolation):
+    got = table.meta.client.describe_table(TableName=table.name)['Table']
+    arn =  got['TableArn']
+    tags = [
+        {
+            'Key': 'system:write_isolation',
+            'Value': isolation
+        }
+    ]
+    table.meta.client.tag_resource(ResourceArn=arn, Tags=tags)
+
+# A helper function to clear previous isolation tags
+def clear_write_isolation(table):
+    got = table.meta.client.describe_table(TableName=table.name)['Table']
+    arn =  got['TableArn']
+    table.meta.client.untag_resource(ResourceArn=arn, TagKeys=['system:write_isolation'])
+
 # Most of the tests in this file check that the ConditionExpression
 # parameter works for the UpdateItem operation. It should also work the
 # same for the PutItem and DeleteItem operations, and we'll make a small
@@ -1294,3 +1312,48 @@ def test_update_condition_unused_entries_succeeded(test_table_s):
             ConditionExpression='#name2 = :val2',
             ExpressionAttributeValues={':val2': 2},
             ExpressionAttributeNames={'#name2': 'b', '#name3': 'c'})
+
+# Test a bunch of cases with permissive write isolation levels,
+# i.e. LWT_ALWAYS, LWT_RMW_ONLY and UNSAFE_RMW.
+# These test cases make sense only for alternator, so they're skipped
+# when run on AWS
+def test_condition_expression_with_permissive_write_isolation(dynamodb, test_table_s):
+    url = dynamodb.meta.client._endpoint.host
+    if url.endswith('.amazonaws.com'):
+        pytest.skip('rmw isolation levels are applicable to alternator only')
+    def do_test_with_permissive_isolation_levels(test_case, table, *args):
+        try:
+            for isolation in ['a', 'o', 'u']:
+                set_write_isolation(table, isolation)
+                test_case(table, *args)
+        finally:
+            clear_write_isolation(table)
+    for test_case in [test_update_condition_eq_success, test_update_condition_attribute_exists,
+                      test_delete_item_condition, test_put_item_condition, test_update_condition_attribute_reference]:
+        do_test_with_permissive_isolation_levels(test_case, test_table_s)
+
+# Test that the forbid_rmw isolation level prevents read-modify-write requests
+# from working. These test cases make sense only for alternator, so they're skipped
+# when run on AWS
+def test_condition_expression_with_forbidden_rmw(dynamodb, test_table_s):
+    url = dynamodb.meta.client._endpoint.host
+    if url.endswith('.amazonaws.com'):
+        pytest.skip('rmw isolation levels are applicable to alternator only')
+    def do_test_with_forbidden_rmw(test_case, table, *args):
+        try:
+            set_write_isolation(table, 'f')
+            test_case(table, *args)
+            assert False, "Expected an exception when running {}".format(test_case.__name__)
+        except ClientError:
+            pass
+        finally:
+            clear_write_isolation(table)
+    for test_case in [test_update_condition_eq_success, test_update_condition_attribute_exists,
+                      test_put_item_condition, test_update_condition_attribute_reference]:
+        do_test_with_forbidden_rmw(test_case, test_table_s)
+    # Ensure that regular writes (without rmw) work just fine
+    s = random_string()
+    test_table_s.put_item(Item={'p': s, 'regular': 'write'})
+    assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'regular': 'write'}
+    test_table_s.update_item(Key={'p': s}, AttributeUpdates={'write': {'Value': 'regular', 'Action': 'PUT'}})
+    assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'regular': 'write', 'write': 'regular'}

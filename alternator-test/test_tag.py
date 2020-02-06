@@ -75,6 +75,31 @@ def test_tag_resource_basic(test_table):
     got = test_table.meta.client.list_tags_of_resource(ResourceArn=arn)
     assert len(got['Tags']) == 0
 
+def test_tag_resource_overwrite(test_table):
+    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+    arn =  got['TableArn']
+    tags = [
+        {
+            'Key': 'string',
+            'Value': 'string'
+        },
+    ]
+    delete_tags(test_table, arn)
+    test_table.meta.client.tag_resource(ResourceArn=arn, Tags=tags)
+    got = test_table.meta.client.list_tags_of_resource(ResourceArn=arn)
+    assert 'Tags' in got
+    assert multiset(got['Tags']) == multiset(tags)
+    tags = [
+        {
+            'Key': 'string',
+            'Value': 'different_string_value'
+        },
+    ]
+    test_table.meta.client.tag_resource(ResourceArn=arn, Tags=tags)
+    got = test_table.meta.client.list_tags_of_resource(ResourceArn=arn)
+    assert 'Tags' in got
+    assert multiset(got['Tags']) == multiset(tags)
+
 PREDEFINED_TAGS = [{'Key': 'str1', 'Value': 'str2'}, {'Key': 'kkk', 'Value': 'vv'}, {'Key': 'keykey', 'Value': 'valvalvalval'}]
 @pytest.fixture(scope="session")
 def test_table_tags(dynamodb):
