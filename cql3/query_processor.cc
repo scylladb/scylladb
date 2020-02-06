@@ -502,7 +502,7 @@ query_processor::execute_direct(const sstring_view& query_string, service::query
 }
 
 future<::shared_ptr<result_message>>
-query_processor::process_statement_prepared(
+query_processor::execute_prepared(
         statements::prepared_statement::checked_weak_ptr prepared,
         cql3::prepared_cache_key_type cache_key,
         service::query_state& query_state,

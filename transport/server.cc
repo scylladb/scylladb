@@ -923,7 +923,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     }
 
     tracing::trace(trace_state, "Processing a statement");
-    return qp.local().process_statement_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
+    return qp.local().execute_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version] (auto msg) {
         if (msg->move_to_shard()) {
             return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());

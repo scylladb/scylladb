@@ -197,7 +197,7 @@ public:
         options->prepare(prepared->bound_names);
 
         auto qs = make_query_state();
-        return local_qp().process_statement_prepared(std::move(prepared), std::move(id), *qs, *options, true)
+        return local_qp().execute_prepared(std::move(prepared), std::move(id), *qs, *options, true)
             .finally([options, qs] {});
     }
 

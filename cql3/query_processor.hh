@@ -186,7 +186,7 @@ public:
     }
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    process_statement_prepared(
+    execute_prepared(
             statements::prepared_statement::checked_weak_ptr statement,
             cql3::prepared_cache_key_type cache_key,
             service::query_state& query_state,
