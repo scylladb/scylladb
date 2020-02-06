@@ -217,6 +217,7 @@ int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
+        ("verbose", "Enable info-level logging")
         ("column-count", bpo::value<size_t>()->default_value(5), "column count")
         ("column-name-size", bpo::value<size_t>()->default_value(2), "column name size")
         ("row-count", bpo::value<size_t>()->default_value(1), "row count")
@@ -229,6 +230,11 @@ int main(int argc, char** argv) {
         if (smp::count != 1) {
             throw std::runtime_error("This test has to be run with -c1");
         }
+
+        if (!app.configuration().count("verbose")) {
+            logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
+        }
+
         return do_with_cql_env_thread([&](cql_test_env& env) {
             mutation_settings settings;
             settings.column_count = app.configuration()["column-count"].as<size_t>();
