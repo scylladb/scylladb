@@ -646,7 +646,7 @@ generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const
             start = end;
         }
 
-        clustering_key_ranges.emplace_back(clustering_index_range.transform([schema, &all_cks] (int i) {
+        clustering_key_ranges.emplace_back(clustering_index_range.transform([&all_cks] (int i) {
             return all_cks.at(i);
         }));
     } while (start < end);
