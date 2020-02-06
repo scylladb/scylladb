@@ -224,10 +224,6 @@ public:
         return _shard_count;
     }
 
-    sstring cpu_sharding_algorithm_name() const {
-        return "biased-token-round-robin";
-    }
-
     unsigned sharding_ignore_msb() const {
         return _sharding_ignore_msb_bits;
     }

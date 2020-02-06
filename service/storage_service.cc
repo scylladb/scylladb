@@ -1934,7 +1934,7 @@ future<> storage_service::gossip_snitch_info() {
 future<> storage_service::gossip_sharding_info() {
     return _gossiper.add_local_application_state({
         { gms::application_state::SHARD_COUNT, value_factory.shard_count(smp::count) },
-        { gms::application_state::IGNORE_MSB_BITS, value_factory.ignore_msb_bits(dht::global_partitioner().sharding_ignore_msb()) },
+        { gms::application_state::IGNORE_MSB_BITS, value_factory.ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()) },
     });
 }
 
@@ -2539,6 +2539,8 @@ future<> storage_service::start_native_transport() {
             cql_server_config.max_request_size = ss._service_memory_total;
             cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
             cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
+            cql_server_config.sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits();
+            cql_server_config.partitioner_name = cfg.partitioner();
             smp_service_group_config cql_server_smp_service_group_config;
             cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
             cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();

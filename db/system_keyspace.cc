@@ -54,7 +54,6 @@
 #include "cql3/untyped_result_set.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/hash.hh"
-#include "dht/i_partitioner.hh"
 #include "version.hh"
 #include "thrift/server.hh"
 #include "exceptions/exceptions.hh"
@@ -1154,7 +1153,7 @@ static future<> setup_version() {
                              to_sstring(cql_serialization_format::latest_version),
                              snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
                              snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
-                             sstring(dht::global_partitioner().name()),
+                             sstring(qctx->db().get_config().partitioner()),
                              a.addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
                              netw::get_local_messaging_service().listen_address().addr(),

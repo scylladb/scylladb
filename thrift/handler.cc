@@ -767,7 +767,7 @@ public:
     }
 
     void describe_partitioner(thrift_fn::function<void(std::string const& _return)> cob) {
-        cob(dht::global_partitioner().name());
+        cob(_db.local().get_config().partitioner());
     }
 
     void describe_snitch(thrift_fn::function<void(std::string const& _return)> cob) {

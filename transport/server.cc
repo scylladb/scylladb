@@ -28,6 +28,7 @@
 #include <boost/range/adaptor/sliced.hpp>
 
 #include "cql3/statements/batch_statement.hh"
+#include "dht/token-sharding.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "db/consistency_level_type.hh"
@@ -1187,12 +1188,11 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     opts.insert({"COMPRESSION", "lz4"});
     opts.insert({"COMPRESSION", "snappy"});
     if (_server._config.allow_shard_aware_drivers) {
-        auto const& part = dht::global_partitioner();
         opts.insert({"SCYLLA_SHARD", format("{:d}", engine().cpu_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
-        opts.insert({"SCYLLA_SHARDING_ALGORITHM", part.cpu_sharding_algorithm_name()});
-        opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", part.sharding_ignore_msb())});
-        opts.insert({"SCYLLA_PARTITIONER", part.name()});
+        opts.insert({"SCYLLA_SHARDING_ALGORITHM", dht::cpu_sharding_algorithm_name()});
+        opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _server._config.sharding_ignore_msb)});
+        opts.insert({"SCYLLA_PARTITIONER", _server._config.partitioner_name});
     }
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
     response->write_string_multimap(opts);

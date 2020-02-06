@@ -108,6 +108,8 @@ struct cql_server_config {
     ::timeout_config timeout_config;
     size_t max_request_size;
     std::function<semaphore& ()> get_service_memory_limiter_semaphore;
+    sstring partitioner_name;
+    unsigned sharding_ignore_msb;
     bool allow_shard_aware_drivers = true;
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
 };
