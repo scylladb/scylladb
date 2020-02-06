@@ -617,7 +617,9 @@ query_processor::get_statement(const sstring_view& query, const service::client_
         cf_stmt->prepare_keyspace(client_state);
     }
     ++_stats.prepare_invocations;
-    return statement->prepare(_db, _cql_stats);
+    auto p = statement->prepare(_db, _cql_stats);
+    p->raw_cql_statement = sstring(query);
+    return p;
 }
 
 ::shared_ptr<raw::parsed_statement>
@@ -677,6 +679,7 @@ statements::prepared_statement::checked_weak_ptr query_processor::prepare_intern
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
         auto np = parse_statement(query_string)->prepare(_db, _cql_stats);
+        np->raw_cql_statement = query_string;
         np->statement->validate(_proxy, *_internal_state);
         p = std::move(np); // inserts it into map
     }
@@ -818,6 +821,7 @@ query_processor::execute_internal(
         return execute_with_params(prepare_internal(query_string), cl, timeout_config, values);
     } else {
         auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
+        p->raw_cql_statement = query_string;
         p->statement->validate(_proxy, *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
         return execute_with_params(std::move(checked_weak_ptr), cl, timeout_config, values).finally([p = std::move(p)] {});
