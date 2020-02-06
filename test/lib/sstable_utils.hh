@@ -234,12 +234,6 @@ inline auto replacer_fn_no_op() {
     return [](sstables::compaction_completion_desc desc) -> void {};
 }
 
-inline std::array<sstables::sstable::version_types, 3> all_sstable_versions = {
-    sstables::sstable::version_types::ka,
-    sstables::sstable::version_types::la,
-    sstables::sstable::version_types::mc,
-};
-
 template<typename AsyncAction>
 GCC6_CONCEPT( requires requires (AsyncAction aa, sstables::sstable::version_types& c) { { aa(c) } -> future<>; } )
 inline

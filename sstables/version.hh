@@ -30,6 +30,12 @@ namespace sstables {
 enum class sstable_version_types { ka, la, mc };
 enum class sstable_format_types { big };
 
+inline std::array<sstable_version_types, 3> all_sstable_versions = {
+    sstable_version_types::ka,
+    sstable_version_types::la,
+    sstable_version_types::mc,
+};
+
 inline sstable_version_types from_string(const seastar::sstring& format) {
     if (format == "ka") {
         return sstable_version_types::ka;
