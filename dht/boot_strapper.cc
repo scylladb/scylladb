@@ -72,7 +72,7 @@ future<> boot_strapper::bootstrap() {
 
 }
 
-std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata metadata, database& db) {
+std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata& metadata, database& db) {
     auto initial_tokens = db.get_initial_tokens();
     // if user specified tokens, use those
     if (initial_tokens.size() > 0) {
@@ -103,7 +103,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata met
     return tokens;
 }
 
-std::unordered_set<token> boot_strapper::get_random_tokens(token_metadata metadata, size_t num_tokens) {
+std::unordered_set<token> boot_strapper::get_random_tokens(const token_metadata& metadata, size_t num_tokens) {
     std::unordered_set<token> tokens;
     while (tokens.size() < num_tokens) {
         auto token = dht::token::get_random_token();
