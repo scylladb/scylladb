@@ -100,17 +100,6 @@ def test_query_basic_restrictions(dynamodb, filled_test_table):
     print(got_items)
     assert multiset([item for item in items if item['p'] == 'long' and item['c'].startswith('11')]) == multiset(got_items)
 
-# Test that KeyConditionExpression parameter is supported
-@pytest.mark.xfail(reason="KeyConditionExpression not supported yet")
-def test_query_key_condition_expression(dynamodb, filled_test_table):
-    test_table, items = filled_test_table
-    paginator = dynamodb.meta.client.get_paginator('query')
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditionExpression=Key("p").eq("long") & Key("c").lt("12")):
-        got_items += page['Items']
-    print(got_items)
-    assert multiset([item for item in items if item['p'] == 'long' and item['c'] < '12']) == multiset(got_items)
-
 def test_begins_with(dynamodb, test_table):
     paginator = dynamodb.meta.client.get_paginator('query')
     items = [{'p': 'unorthodox_chars', 'c': sort_key, 'str': 'a'} for sort_key in [u'ÿÿÿ', u'cÿbÿ', u'cÿbÿÿabg'] ]
