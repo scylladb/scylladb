@@ -23,7 +23,6 @@
 #include <boost/range/adaptor/map.hpp>
 #include "utils/fb_utilities.hh"
 #include "utils/sequenced_set.hh"
-#include "dht/murmur3_partitioner.hh"
 #include "locator/network_topology_strategy.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/sstring.hh>
