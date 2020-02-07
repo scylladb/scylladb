@@ -1772,7 +1772,7 @@ static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_p
 // ranges: [a,b] and [c,d]
 // returns true if token ranges overlap.
 static bool key_range_overlaps(column_family_for_tests& cf, sstring a, sstring b, sstring c, sstring d) {
-    dht::i_partitioner& p = cf->schema()->get_partitioner();
+    const dht::i_partitioner& p = cf->schema()->get_partitioner();
     auto range1 = create_token_range_from_keys(p, a, b);
     auto range2 = create_token_range_from_keys(p, c, d);
     return range1.overlaps(range2, dht::token_comparator());

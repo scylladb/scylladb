@@ -142,7 +142,7 @@ public:
     }
 
     template <typename T>
-    int binary_search(dht::i_partitioner& p, const T& entries, const key& sk) {
+    int binary_search(const dht::i_partitioner& p, const T& entries, const key& sk) {
         return sstables::binary_search(p, entries, sk);
     }
 

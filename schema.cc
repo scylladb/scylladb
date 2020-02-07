@@ -102,7 +102,7 @@ std::ostream& operator<<(std::ostream& os, ordinal_column_id id)
     return os << static_cast<column_count_type>(id);
 }
 
-dht::i_partitioner& schema::get_partitioner() const {
+const dht::i_partitioner& schema::get_partitioner() const {
     return dht::global_partitioner();
 }
 

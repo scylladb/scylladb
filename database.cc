@@ -1994,7 +1994,7 @@ std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {
 template <typename T>
 using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
-flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, dht::i_partitioner& partitioner, schema_ptr schema,
+flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, const dht::i_partitioner& partitioner, schema_ptr schema,
         std::function<std::optional<dht::partition_range>()> range_generator) {
     class streaming_reader_lifecycle_policy
             : public reader_lifecycle_policy
