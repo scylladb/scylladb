@@ -30,7 +30,7 @@
 #include "data/cell.hh"
 
 #include "test/lib/random_utils.hh"
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 
 BOOST_AUTO_TEST_CASE(test_atomic_cell) {
     struct test_case {

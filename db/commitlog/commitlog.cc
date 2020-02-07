@@ -82,7 +82,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 
 #include "checked-file-impl.hh"
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 
 static logging::logger clogger("commitlog");
 

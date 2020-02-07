@@ -25,7 +25,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 #include "gc_clock.hh"
 #include "sstables/shareable_components.hh"
 #include "sstables/shared_sstable.hh"

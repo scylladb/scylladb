@@ -60,7 +60,7 @@
 #include "streaming/stream_state.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/distributed.hh>
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 #include "gms/feature.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>

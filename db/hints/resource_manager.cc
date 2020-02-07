@@ -24,7 +24,7 @@
 #include "log.hh"
 #include <boost/range/algorithm/for_each.hpp>
 #include <boost/range/adaptor/map.hpp>
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 #include "seastarx.hh"
 #include <seastar/core/sleep.hh>
 

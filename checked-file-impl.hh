@@ -22,7 +22,7 @@
 #pragma once
 
 #include "seastar/core/file.hh"
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 
 class checked_file_impl : public file_impl {
 public:

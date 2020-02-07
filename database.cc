@@ -80,7 +80,7 @@
 #include "tracing/trace_keyspace_helper.hh"
 
 #include "checked-file-impl.hh"
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"

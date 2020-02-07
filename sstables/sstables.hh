@@ -50,7 +50,7 @@
 #include "mutation_reader.hh"
 #include "query-request.hh"
 #include "compound_compat.hh"
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "flat_mutation_reader.hh"

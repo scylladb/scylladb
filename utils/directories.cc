@@ -23,7 +23,7 @@
 #include "supervisor.hh"
 #include "directories.hh"
 #include "distributed_loader.hh"
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 
 namespace utils {
 

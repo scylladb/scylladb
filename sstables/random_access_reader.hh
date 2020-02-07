@@ -27,7 +27,7 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>
 
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 
 namespace sstables {
 

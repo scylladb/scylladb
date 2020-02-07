@@ -90,7 +90,7 @@
 #include "mutation_query.hh"
 #include "cache_temperature.hh"
 #include <unordered_set>
-#include "disk-error-handler.hh"
+#include "utils/disk-error-handler.hh"
 #include "utils/updateable_value.hh"
 #include "user_types_metadata.hh"
 
