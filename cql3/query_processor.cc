@@ -518,6 +518,7 @@ query_processor::execute_prepared(
             });
         });
     }
+    log.trace("execute_prepared: \"{}\"", statement->raw_cql_statement);
 
     return fut.then([this, statement = std::move(statement), &query_state, &options] () mutable {
         return process_authorized_statement(std::move(statement), query_state, options);
@@ -817,6 +818,10 @@ query_processor::execute_internal(
         const timeout_config& timeout_config,
         const std::initializer_list<data_value>& values,
         bool cache) {
+
+    if (log.is_enabled(logging::log_level::trace)) {
+        log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, ::join(", ", values));
+    }
     if (cache) {
         return execute_with_params(prepare_internal(query_string), cl, timeout_config, values);
     } else {
@@ -857,6 +862,13 @@ query_processor::execute_batch(
             batch->validate();
             batch->validate(_proxy, query_state.get_client_state());
             _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
+            if (log.is_enabled(logging::log_level::trace)) {
+                std::ostringstream oss;
+                for (const auto& s: batch->get_statements()) {
+                    oss << std::endl <<  s.statement->raw_cql_statement;
+                }
+                log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
+            }
             return batch->execute(_proxy, query_state, options);
         });
     });
