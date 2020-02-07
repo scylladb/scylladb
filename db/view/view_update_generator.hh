@@ -34,7 +34,6 @@ namespace db::view {
 class view_update_generator {
     static constexpr size_t registration_queue_size = 5;
     database& _db;
-    service::storage_proxy& _proxy;
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
     seastar::condition_variable _pending_sstables;
@@ -47,7 +46,7 @@ class view_update_generator {
     std::deque<sstable_with_table> _sstables_with_tables;
     std::unordered_map<lw_shared_ptr<table>, std::vector<sstables::shared_sstable>> _sstables_to_move;
 public:
-    view_update_generator(database& db, service::storage_proxy& proxy) : _db(db), _proxy(proxy) { }
+    view_update_generator(database& db) : _db(db) { }
 
     future<> start();
     future<> stop();

@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include "service/storage_proxy.hh"
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
 #include "mutation_fragment.hh"
@@ -41,9 +40,9 @@ class view_updating_consumer {
     const seastar::abort_source& _as;
     std::optional<mutation> _m;
 public:
-    view_updating_consumer(schema_ptr schema, service::storage_proxy& proxy, sstables::shared_sstable excluded_sstable, const seastar::abort_source& as)
+    view_updating_consumer(schema_ptr schema, database& db, sstables::shared_sstable excluded_sstable, const seastar::abort_source& as)
             : _schema(std::move(schema))
-            , _table(proxy.get_db().local().find_column_family(_schema->id()).shared_from_this())
+            , _table(db.find_column_family(_schema->id()).shared_from_this())
             , _excluded_sstable(excluded_sstable)
             , _as(as)
             , _m()

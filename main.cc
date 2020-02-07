@@ -853,7 +853,7 @@ int main(int ac, char** av) {
             distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
             supervisor::notify("starting view update generator");
-            view_update_generator.start(std::ref(db), std::ref(proxy)).get();
+            view_update_generator.start(std::ref(db)).get();
             supervisor::notify("discovering staging sstables");
             db.invoke_on_all([] (database& db) {
                 for (auto& x : db.get_column_families()) {
