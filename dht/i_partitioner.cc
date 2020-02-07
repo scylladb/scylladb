@@ -22,7 +22,6 @@
 #include "i_partitioner.hh"
 #include "sharder.hh"
 #include <seastar/core/reactor.hh>
-#include "dht/murmur3_partitioner.hh"
 #include "dht/token-sharding.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"
@@ -80,14 +79,6 @@ std::ostream& operator<<(std::ostream& out, partition_ranges_view v) {
     return out;
 }
 
-// FIXME: make it per-keyspace
-std::unique_ptr<i_partitioner> default_partitioner;
-
-void set_global_partitioner(const sstring& class_name, unsigned ignore_msb)
-{
-    default_partitioner = make_partitioner(class_name, smp::count, ignore_msb);
-}
-
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name, unsigned shard_count, unsigned sharding_ignore_msb_bits) {
     try {
         return create_object<i_partitioner, const unsigned&, const unsigned&>(partitioner_name, shard_count, sharding_ignore_msb_bits);
@@ -97,14 +88,6 @@ std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name, u
         throw std::runtime_error(format("Partitioner {} is not supported, supported partitioners = {{ {} }} : {}",
                 partitioner_name, supported_partitioners, e.what()));
     }
-}
-
-i_partitioner&
-global_partitioner() {
-    if (!default_partitioner) {
-        default_partitioner = std::make_unique<murmur3_partitioner>(smp::count, 12);
-    }
-    return *default_partitioner;
 }
 
 bool

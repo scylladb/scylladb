@@ -104,6 +104,8 @@ std::ostream& operator<<(std::ostream& os, ordinal_column_id id)
 }
 
 thread_local std::map<std::tuple<sstring, unsigned, unsigned>, std::unique_ptr<dht::i_partitioner>> partitioners;
+sstring default_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
+unsigned default_partitioner_ignore_msb = 12;
 
 static const dht::i_partitioner& get_partitioner(const sstring& name, unsigned shard_count, unsigned ignore_msb) {
     auto it = partitioners.find({name, shard_count, ignore_msb});
@@ -114,11 +116,16 @@ static const dht::i_partitioner& get_partitioner(const sstring& name, unsigned s
     return *it->second;
 }
 
+void schema::set_default_partitioner(const sstring& class_name, unsigned ignore_msb) {
+    default_partitioner_name = class_name;
+    default_partitioner_ignore_msb = ignore_msb;
+}
+
 const dht::i_partitioner& schema::get_partitioner() const {
     if (_raw._partitioner) {
         return _raw._partitioner->get();
     }
-    return dht::global_partitioner();
+    return ::get_partitioner(default_partitioner_name, smp::count, default_partitioner_ignore_msb);
 }
 
 bool schema::has_custom_partitioner() const {

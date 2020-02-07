@@ -550,7 +550,7 @@ int main(int ac, char** av) {
                 feature_service.stop().get();
             });
 
-            dht::set_global_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
+            schema::set_default_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
             auto make_sched_group = [&] (sstring name, unsigned shares) {
                 if (cfg->cpu_scheduler()) {
                     return seastar::create_scheduling_group(name, shares).get0();

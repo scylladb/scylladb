@@ -816,6 +816,7 @@ public:
         return _raw._caching_options;
     }
 
+    static void set_default_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
     const dht::i_partitioner& get_partitioner() const;
     bool has_custom_partitioner() const;
 
