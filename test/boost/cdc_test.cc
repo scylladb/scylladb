@@ -513,3 +513,57 @@ SEASTAR_THREAD_TEST_CASE(test_negative_ttl_fail) {
                 exception_predicate::message_contains("ttl"));
     }, mk_cdc_test_config()).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_ttls) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        auto test_ttl = [&e] (int ttl_seconds) {
+            const auto base_tbl_name = "tbl" + std::to_string(ttl_seconds);
+            cquery_nofail(e, format("CREATE TABLE ks.{} (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {{'enabled':'true', 'ttl':{}}}", base_tbl_name, ttl_seconds));
+            BOOST_REQUIRE_EQUAL(e.local_db().find_schema("ks", base_tbl_name)->cdc_options().ttl(), ttl_seconds);
+            cquery_nofail(e, format("INSERT INTO ks.{} (pk, ck, val) VALUES(1, 11, 111)", base_tbl_name));
+
+            auto log_schema = e.local_db().find_schema("ks", cdc::log_name(base_tbl_name));
+
+            // Construct a query like "SELECT _pk, ttl(_pk), _ck, ttl(_ck), ...  FROM ks.tbl_log_tablename"
+            sstring query = "SELECT";
+            bool first_token = true;
+            std::vector<bytes> log_column_names; // {"_pk", "_ck", "_val", ...}
+            for (auto& reg_col : log_schema->regular_columns()) {
+                if (!first_token) {
+                    query += ",";
+                }
+                first_token = false;
+                query += format(" \"{0}\", ttl(\"{0}\")", reg_col.name_as_text());
+                log_column_names.push_back(reg_col.name_as_text().c_str());
+            }
+            query += format(" FROM ks.{}", cdc::log_name(base_tbl_name));
+
+            // Execute query and get the first (and only) row of results:
+            auto msg = e.execute_cql(query).get0();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(rows);
+            auto results = to_bytes(*rows);
+            BOOST_REQUIRE(!results.empty());
+            auto& row = results.front(); // serialized {_pk, ttl(_pk), _ck, ttl(_ck), ...}
+            BOOST_REQUIRE(!(row.size()%2));
+
+            // Traverse the result - serialized pairs of (_column, ttl(_column))
+            for (size_t i = 0u; i < row.size(); i += 2u) {
+                auto cell_type = log_schema->column_name_type(*log_schema->get_column_definition(log_column_names[i/2]));
+                if (!row[i].has_value() || cell_type->deserialize(*row[i]).is_null()) {
+                    continue; // NULL cell cannot have TTL
+                }
+                if (!row[i+1].has_value() && !ttl_seconds) {
+                    continue; // NULL TTL value is acceptable when records are kept forever (TTL==0)
+                }
+                data_value cell_ttl = int32_type->deserialize(*row[i+1]);
+                BOOST_REQUIRE(!cell_ttl.is_null());
+                auto cell_ttl_seconds = value_cast<int32_t>(cell_ttl);
+                // 30% tolerance in case of slow execution (a little flaky...)
+                BOOST_REQUIRE_CLOSE((float)cell_ttl_seconds, (float)ttl_seconds, 30.f);
+            }            
+        };
+        test_ttl(0);
+        test_ttl(10);
+    }, mk_cdc_test_config()).get();
+}
