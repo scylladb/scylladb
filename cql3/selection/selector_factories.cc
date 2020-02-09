@@ -42,6 +42,7 @@
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/selection/simple_selector.hh"
 #include "cql3/selection/selectable.hh"
+#include "cql3/query_options.hh"
 
 namespace cql3 {
 

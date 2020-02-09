@@ -23,6 +23,7 @@
 #include "exceptions/exceptions.hh"
 #include "cql3/selection/simple_selector.hh"
 #include "cql3/util.hh"
+#include "cql3/query_options.hh"
 
 #include <regex>
 
