@@ -45,6 +45,7 @@
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/cql_config.hh"
+#include "types/set.hh"
 
 namespace tracing {
 

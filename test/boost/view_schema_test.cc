@@ -34,6 +34,8 @@
 #include "test/lib/cql_assertions.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include "db/config.hh"
+#include "types/set.hh"
+#include "types/list.hh"
 
 using namespace std::literals::chrono_literals;
 

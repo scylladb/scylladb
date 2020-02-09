@@ -47,6 +47,7 @@
 #include "cql3/error_collector.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/util.hh"
+#include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
 #include "database.hh"
 #include "hashers.hh"
