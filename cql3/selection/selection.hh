@@ -47,7 +47,6 @@
 #include "cql3/column_specification.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/selection/raw_selector.hh"
-#include "cql3/selection/selector_factories.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
@@ -58,6 +57,8 @@ class result_set;
 class metadata;
 
 namespace selection {
+
+class selector_factories;
 
 class selectors {
 public:
