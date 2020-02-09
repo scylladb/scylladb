@@ -801,11 +801,11 @@ future<> merge_unlock() {
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(service::storage_service& ss, distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations)
+future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations)
 {
-    return merge_lock().then([&ss, &proxy, mutations = std::move(mutations)] () mutable {
-        return do_merge_schema(proxy, std::move(mutations), true).then([&ss, &proxy] {
-            return update_schema_version_and_announce(proxy, ss.cluster_schema_features());
+    return merge_lock().then([&proxy, &feat, mutations = std::move(mutations)] () mutable {
+        return do_merge_schema(proxy, std::move(mutations), true).then([&proxy, &feat] {
+            return update_schema_version_and_announce(proxy, feat.cluster_schema_features());
         });
     }).finally([] {
         return merge_unlock();
@@ -2877,7 +2877,7 @@ future<> maybe_update_legacy_secondary_index_mv_schema(service::migration_manage
     // format, where "token" is not marked as computed. Once we're sure that all indexes have their
     // columns marked as computed (because they were either created on a node that supports computed
     // columns or were fixed by this utility function), it's safe to remove this function altogether.
-    if (!service::get_local_storage_service().cluster_supports_computed_columns()) {
+    if (!db.features().cluster_supports_computed_columns()) {
         return make_ready_future<>();
     }
 

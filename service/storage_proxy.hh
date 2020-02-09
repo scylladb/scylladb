@@ -233,6 +233,8 @@ public:
         // How many participants are required for a quorum (i.e. is it SERIAL or LOCAL_SERIAL).
         size_t required_participants;
     };
+
+    const gms::feature_service& features() const { return _features; }
 private:
     distributed<database>& _db;
     smp_service_group _read_smp_service_group;
@@ -253,6 +255,7 @@ private:
     db::hints::manager _hints_for_views_manager;
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
+    gms::feature_service& _features;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
     std::default_random_engine _urandom;
@@ -401,7 +404,7 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key);
+            scheduling_group_key stats_key, gms::feature_service& feat);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;

@@ -115,7 +115,7 @@ public:
     int32_t get_gc_grace_seconds() const;
     std::optional<utils::UUID> get_id() const;
 
-    void apply_to_builder(schema_builder& builder, const db::extensions&);
+    void apply_to_builder(schema_builder& builder, const database&);
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
 };
 

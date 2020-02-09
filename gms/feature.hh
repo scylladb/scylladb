@@ -27,6 +27,8 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+using namespace seastar;
+
 namespace bs2 = boost::signals2;
 
 namespace gms {
@@ -107,5 +109,37 @@ public:
         return holder;
     }
 };
+
+namespace features {
+
+static const sstring RANGE_TOMBSTONES = "RANGE_TOMBSTONES";
+static const sstring LARGE_PARTITIONS = "LARGE_PARTITIONS";
+static const sstring MATERIALIZED_VIEWS = "MATERIALIZED_VIEWS";
+static const sstring COUNTERS = "COUNTERS";
+static const sstring INDEXES = "INDEXES";
+static const sstring DIGEST_MULTIPARTITION_READ = "DIGEST_MULTIPARTITION_READ";
+static const sstring CORRECT_COUNTER_ORDER = "CORRECT_COUNTER_ORDER";
+static const sstring SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
+static const sstring CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
+static const sstring WRITE_FAILURE_REPLY = "WRITE_FAILURE_REPLY";
+static const sstring XXHASH = "XXHASH";
+static const sstring UDF = "UDF";
+static const sstring ROLES = "ROLES";
+static const sstring LA_SSTABLE = "LA_SSTABLE_FORMAT";
+static const sstring STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
+static const sstring MC_SSTABLE = "MC_SSTABLE_FORMAT";
+static const sstring ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
+static const sstring TRUNCATION_TABLE = "TRUNCATION_TABLE";
+static const sstring CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
+static const sstring UNBOUNDED_RANGE_TOMBSTONES = "UNBOUNDED_RANGE_TOMBSTONES";
+static const sstring VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
+static const sstring DIGEST_INSENSITIVE_TO_EXPIRY = "DIGEST_INSENSITIVE_TO_EXPIRY";
+static const sstring COMPUTED_COLUMNS = "COMPUTED_COLUMNS";
+static const sstring CDC = "CDC";
+static const sstring NONFROZEN_UDTS = "NONFROZEN_UDTS";
+static const sstring HINTED_HANDOFF_SEPARATE_CONNECTION = "HINTED_HANDOFF_SEPARATE_CONNECTION";
+static const sstring LWT = "LWT";
+
+}
 
 } // namespace gms

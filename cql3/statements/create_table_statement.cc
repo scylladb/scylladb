@@ -148,7 +148,7 @@ void create_table_statement::apply_properties_to(schema_builder& builder, const 
         addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
 #endif
 
-    _properties->apply_to_builder(builder, db.extensions());
+    _properties->apply_to_builder(builder, db);
 }
 
 void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind) const
@@ -211,7 +211,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     for (auto&& entry : _definitions) {
         ::shared_ptr<column_identifier> id = entry.first;
         cql3_type pt = entry.second->prepare(db, keyspace());
-        if (pt.is_counter() && !service::get_local_storage_service().cluster_supports_counters()) {
+        if (pt.is_counter() && !db.features().cluster_supports_counters()) {
             throw exceptions::invalid_request_exception("Counter support is not enabled");
         }
         if (pt.get_type()->is_multi_cell()) {
@@ -226,7 +226,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                     }
                 }
 
-                if (!service::get_local_storage_service().cluster_supports_nonfrozen_udts()) {
+                if (!db.features().cluster_supports_nonfrozen_udts()) {
                     throw exceptions::invalid_request_exception("Non-frozen UDT support is not enabled");
                 }
             }

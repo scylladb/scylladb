@@ -70,8 +70,7 @@ SEASTAR_TEST_CASE(test_truncation_record_migration) {
         // legacy records.
 
         service::get_storage_service().invoke_on_all([] (service::storage_service& ss) {
-            ss.set_disabled_features();
-            ss.enable_all_features();
+            ss.features().cluster_supports_truncation_table().enable();
         }).get();
 
         db::system_keyspace::wait_for_truncation_record_migration_complete().get();

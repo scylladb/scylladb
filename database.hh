@@ -111,6 +111,10 @@ namespace netw {
 class messaging_service;
 }
 
+namespace gms {
+class feature_service;
+}
+
 namespace sstables {
 
 class sstable;
@@ -1351,11 +1355,13 @@ private:
     std::unique_ptr<db::data_listeners> _data_listeners;
 
     service::migration_notifier& _mnotifier;
+    gms::feature_service& _feat;
 
     bool _supports_infinite_bound_range_deletions = false;
 
     future<> init_commitlog();
 public:
+    const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
 private:
@@ -1388,7 +1394,7 @@ public:
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     future<> parse_system_tables(distributed<service::storage_proxy>&, distributed<service::migration_manager>&);
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn);
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat);
     database(database&&) = delete;
     ~database();
 

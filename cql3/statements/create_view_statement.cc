@@ -85,17 +85,16 @@ create_view_statement::create_view_statement(
     , _clustering_keys{clustering_keys}
     , _if_not_exists{if_not_exists}
 {
-    if (!service::get_local_storage_service().cluster_supports_materialized_views()) {
-        throw exceptions::invalid_request_exception("Can't create materialized views until the whole cluster has been upgraded");
-    }
 }
 
 future<> create_view_statement::check_access(const service::client_state& state) const {
     return state.has_column_family_access(keyspace(), _base_name->get_column_family(), auth::permission::ALTER);
 }
 
-void create_view_statement::validate(service::storage_proxy&, const service::client_state& state) const {
-    // validated in announceMigration()
+void create_view_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {
+    if (!proxy.features().cluster_supports_materialized_views()) {
+        throw exceptions::invalid_request_exception("Can't create materialized views until the whole cluster has been upgraded");
+    }
 }
 
 static const column_definition* get_column_definition(schema_ptr schema, column_identifier::raw& identifier) {
@@ -336,7 +335,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
             db::view::create_virtual_column(builder, def->name(), def->type);
         }
     }
-    _properties.properties()->apply_to_builder(builder, proxy.get_db().local().extensions());
+    _properties.properties()->apply_to_builder(builder, proxy.get_db().local());
 
     if (builder.default_time_to_live().count() > 0) {
         throw exceptions::invalid_request_exception(

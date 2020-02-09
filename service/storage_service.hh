@@ -62,6 +62,7 @@
 #include <seastar/core/distributed.hh>
 #include "utils/disk-error-handler.hh"
 #include "gms/feature.hh"
+#include "gms/feature_service.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
@@ -167,7 +168,6 @@ private:
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
-    std::set<sstring> _disabled_features;
     size_t _service_memory_total;
     semaphore _service_memory_limiter;
 
@@ -180,12 +180,9 @@ private:
      */
     bool _for_testing;
 public:
-    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,/* only for tests */ bool for_testing = false, /* only for tests */ std::set<sstring> disabled_features = {});
+    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,/* only for tests */ bool for_testing = false);
     void isolate_on_error();
     void isolate_on_commit_error();
-
-    // only for tests
-    void set_disabled_features(std::set<sstring> = {});
 
     // Needed by distributed<>
     future<> stop();
@@ -227,6 +224,9 @@ public:
     distributed<database>& db() {
         return _db;
     }
+
+    gms::feature_service& features() { return _feature_service; }
+    const gms::feature_service& features() const { return _feature_service; }
 
 private:
     bool is_auto_bootstrap() const;
@@ -346,34 +346,6 @@ private:
      *    in which case the value should become populated before we leave the join_token_ring procedure.
      */
     std::optional<db_clock::time_point> _cdc_streams_ts;
-
-    gms::feature _range_tombstones_feature;
-    gms::feature _large_partitions_feature;
-    gms::feature _materialized_views_feature;
-    gms::feature _counters_feature;
-    gms::feature _indexes_feature;
-    gms::feature _digest_multipartition_read_feature;
-    gms::feature _correct_counter_order_feature;
-    gms::feature _schema_tables_v3;
-    gms::feature _correct_non_compound_range_tombstones;
-    gms::feature _write_failure_reply_feature;
-    gms::feature _xxhash_feature;
-    gms::feature _udf_feature;
-    gms::feature _roles_feature;
-    gms::feature _la_sstable_feature;
-    gms::feature _stream_with_rpc_stream_feature;
-    gms::feature _mc_sstable_feature;
-    gms::feature _row_level_repair_feature;
-    gms::feature _truncation_table;
-    gms::feature _correct_static_compact_in_mc;
-    gms::feature _unbounded_range_tombstones_feature;
-    gms::feature _view_virtual_columns;
-    gms::feature _digest_insensitive_to_expiry;
-    gms::feature _computed_columns;
-    gms::feature _cdc_feature;
-    gms::feature _nonfrozen_udts;
-    gms::feature _hinted_handoff_separate_connection;
-    gms::feature _lwt_feature;
 
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
     seastar::named_semaphore _feature_listeners_sem = {1, named_semaphore_exception_factory{"feature listeners"}};
@@ -2333,120 +2305,9 @@ public:
 
     sstring get_config_supported_features();
     std::set<sstring> get_config_supported_features_set();
-    sstring get_known_features();
+private:
     std::set<sstring> get_known_features_set();
-
-    bool cluster_supports_range_tombstones() const {
-        return bool(_range_tombstones_feature);
-    }
-
-    bool cluster_supports_large_partitions() const {
-        return bool(_large_partitions_feature);
-    }
-
-    bool cluster_supports_materialized_views() const {
-        return bool(_materialized_views_feature);
-    }
-
-    bool cluster_supports_counters() const {
-        return bool(_counters_feature);
-    }
-
-    bool cluster_supports_indexes() const {
-        return bool(_indexes_feature);
-    }
-
-    bool cluster_supports_digest_multipartition_reads() const {
-        return bool(_digest_multipartition_read_feature);
-    }
-
-    bool cluster_supports_correct_counter_order() const {
-        return bool(_correct_counter_order_feature);
-    }
-
-    const gms::feature& cluster_supports_schema_tables_v3() const {
-        return _schema_tables_v3;
-    }
-
-    bool cluster_supports_reading_correctly_serialized_range_tombstones() const {
-        return bool(_correct_non_compound_range_tombstones);
-    }
-
-    bool cluster_supports_write_failure_reply() const {
-        return bool(_write_failure_reply_feature);
-    }
-
-    bool cluster_supports_xxhash_digest_algorithm() const {
-        return bool(_xxhash_feature);
-    }
-
-    bool cluster_supports_user_defined_functions() const {
-        return bool(_udf_feature);
-    }
-
-    bool cluster_supports_roles() const {
-        return bool(_roles_feature);
-    }
-
-    bool cluster_supports_la_sstable() const {
-        return bool(_la_sstable_feature);
-    }
-
-    bool cluster_supports_stream_with_rpc_stream() const {
-        return bool(_stream_with_rpc_stream_feature);
-    }
-
-    bool cluster_supports_mc_sstable() const {
-        return bool(_mc_sstable_feature);
-    }
-
-    const gms::feature& cluster_supports_cdc() const {
-        return _cdc_feature;
-    }
-
-    bool cluster_supports_row_level_repair() const {
-        return bool(_row_level_repair_feature);
-    }
-    const gms::feature& cluster_supports_truncation_table() const {
-        return _truncation_table;
-    }
-    const gms::feature& cluster_supports_correct_static_compact_in_mc() const {
-        return _correct_static_compact_in_mc;
-    }
-    bool cluster_supports_unbounded_range_tombstones() const {
-        return bool(_unbounded_range_tombstones_feature);
-    }
-
-    const gms::feature& cluster_supports_view_virtual_columns() const {
-        return _view_virtual_columns;
-    }
-    const gms::feature& cluster_supports_digest_insensitive_to_expiry() const {
-        return _digest_insensitive_to_expiry;
-    }
-
-    bool cluster_supports_computed_columns() const {
-        return bool(_computed_columns);
-    }
-
-    bool cluster_supports_nonfrozen_udts() const {
-        return bool(_nonfrozen_udts);
-    }
-
-    bool cluster_supports_hinted_handoff_separate_connection() {
-        return bool(_hinted_handoff_separate_connection);
-    }
-
-    // Returns schema features which all nodes in the cluster advertise as supported.
-    bool cluster_supports_lwt() {
-        return bool(_lwt_feature);
-    }
-
-    // Returns schema features which all nodes in the cluster advertise as supported.
-    db::schema_features cluster_schema_features() const;
-
-private:
     future<> set_cql_ready(bool ready);
-private:
     void notify_down(inet_address endpoint);
     void notify_left(inet_address endpoint);
     void notify_up(inet_address endpoint);

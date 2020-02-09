@@ -62,7 +62,7 @@ auto write_counter_cell(Writer&& writer, atomic_cell_view c)
           return counter_cell_view::with_linearized(c, [&] (counter_cell_view ccv) {
             auto shards = std::move(value).start_value_counter_cell_full()
                                           .start_shards();
-            if (service::get_local_storage_service().cluster_supports_correct_counter_order()) {
+            if (service::get_local_storage_service().features().cluster_supports_correct_counter_order()) {
                 for (auto csv : ccv.shards()) {
                     shards.add_shards(counter_shard(csv));
                 }

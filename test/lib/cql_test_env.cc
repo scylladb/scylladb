@@ -411,8 +411,16 @@ public:
             auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
+            gms::feature_config fcfg;
+            fcfg.enable_cdc = true;
+            fcfg.enable_lwt = true;
+            fcfg.enable_sstables_mc_format = true;
+            if (cfg->enable_user_defined_functions()) {
+                fcfg.enable_user_defined_functions = true;
+            }
+            fcfg.disabled_features = cfg_in.disabled_features;
             auto feature_service = make_shared<sharded<gms::feature_service>>();
-            feature_service->start().get();
+            feature_service->start(fcfg).get();
             auto stop_feature_service = defer([&] { feature_service->stop().get(); });
 
             // FIXME: split
@@ -430,12 +438,12 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, std::ref(*mm_notif), true, cfg_in.disabled_features).get();
+            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, std::ref(*mm_notif), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
             dbcfg.available_memory = memory::stats().total_memory();
-            db->start(std::ref(*cfg), dbcfg, std::ref(*mm_notif)).get();
+            db->start(std::ref(*cfg), dbcfg, std::ref(*mm_notif), std::ref(*feature_service)).get();
             auto stop_db = defer([db] {
                 db->stop().get();
             });
@@ -457,10 +465,10 @@ public:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            proxy.start(std::ref(*db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0()).get();
+            proxy.start(std::ref(*db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(*feature_service)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
-            mm.start(std::ref(*mm_notif)).get();
+            mm.start(std::ref(*mm_notif), std::ref(*feature_service)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             auto& qp = cql3::get_query_processor();
@@ -507,7 +515,7 @@ public:
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
-            db::system_keyspace::migrate_truncation_records().get();
+            db::system_keyspace::migrate_truncation_records(feature_service->local().cluster_supports_truncation_table()).get();
 
             service::get_local_storage_service().init_messaging_service_part().get();
             service::get_local_storage_service().init_server_without_the_messaging_service_part(service::bind_messaging_port(false)).get();

@@ -40,9 +40,11 @@
  */
 
 #include "cql3/statements/cf_prop_defs.hh"
+#include "database.hh"
 #include "db/extensions.hh"
 #include "cdc/log.hh"
-#include "service/storage_service.hh"
+#include "gms/feature.hh"
+#include "gms/feature_service.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -186,7 +188,9 @@ std::optional<std::map<sstring, sstring>> cf_prop_defs::get_cdc_options() const 
     return get_map(KW_CDC);
 }
 
-void cf_prop_defs::apply_to_builder(schema_builder& builder, const db::extensions& exts) {
+void cf_prop_defs::apply_to_builder(schema_builder& builder, const database& db) {
+    auto& exts = db.extensions();
+
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));
     }
@@ -262,7 +266,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, const db::extension
     auto cdc_options = get_cdc_options();
     if (cdc_options) {
         auto opts = cdc::options(*cdc_options);
-        if (opts.enabled() && !service::get_local_storage_service().cluster_supports_cdc()) {
+        if (opts.enabled() && !db.features().cluster_supports_cdc()) {
             throw exceptions::configuration_exception("CDC not supported by the cluster");
         }
         builder.set_cdc_options(std::move(opts));
