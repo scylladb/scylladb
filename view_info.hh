@@ -21,10 +21,13 @@
 
 #pragma once
 
-#include "cql3/statements/select_statement.hh"
 #include "dht/i_partitioner.hh"
 #include "query-request.hh"
 #include "schema.hh"
+
+namespace cql3::statements {
+class select_statement;
+}
 
 class view_info final {
     const schema& _schema;
