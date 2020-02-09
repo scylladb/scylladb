@@ -22,6 +22,7 @@
 
 #include "table_helper.hh"
 #include "cql3/statements/create_table_statement.hh"
+#include "cql3/statements/modification_statement.hh"
 #include "database.hh"
 
 future<> table_helper::setup_table() const {

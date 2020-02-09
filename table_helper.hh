@@ -24,10 +24,14 @@
 
 #include <seastar/util/gcc6-concepts.hh>
 #include <seastar/core/apply.hh>
-#include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_processor.hh"
 #include "service/migration_manager.hh"
+
+
+namespace cql3::statements {
+class modification_statement;
+}
 
 /**
  * \class table_helper
