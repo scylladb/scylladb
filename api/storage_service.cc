@@ -960,23 +960,26 @@ void set_snapshot(http_context& ctx, routes& r) {
             return do_with(output_stream<char>(std::move(s)), true, [] (output_stream<char>& s, bool& first){
                 return s.write("[").then([&s, &first] {
                     return service::get_local_storage_service().get_snapshot_details().then([&s, &first] (std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>&& result) {
-                        return do_for_each(result, [&s, &first](std::tuple<sstring, std::vector<service::storage_service::snapshot_details>>&& map){
-                            ss::snapshots all_snapshots;
-                            all_snapshots.key = std::get<0>(map);
-                            future<> f = first ? make_ready_future<>() : s.write(", ");
-                            first = false;
-                            std::vector<ss::snapshot> snapshot;
-                            for (auto& cf: std::get<1>(map)) {
-                                ss::snapshot snp;
-                                snp.ks = cf.ks;
-                                snp.cf = cf.cf;
-                                snp.live = cf.live;
-                                snp.total = cf.total;
-                                snapshot.push_back(std::move(snp));
-                            }
-                            all_snapshots.value = std::move(snapshot);
-                            return f.then([&s, all_snapshots = std::move(all_snapshots)] {
-                                return all_snapshots.write(s);
+                        return do_with(std::move(result), [&s, &first](const std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>& result) {
+                            return do_for_each(result, [&s, &result,&first](std::tuple<sstring, std::vector<service::storage_service::snapshot_details>>&& map){
+                                return do_with(ss::snapshots(), [&s, &first, &result, &map](ss::snapshots& all_snapshots) {
+                                    all_snapshots.key = std::get<0>(map);
+                                    future<> f = first ? make_ready_future<>() : s.write(", ");
+                                    first = false;
+                                    std::vector<ss::snapshot> snapshot;
+                                    for (auto& cf: std::get<1>(map)) {
+                                        ss::snapshot snp;
+                                        snp.ks = cf.ks;
+                                        snp.cf = cf.cf;
+                                        snp.live = cf.live;
+                                        snp.total = cf.total;
+                                        snapshot.push_back(std::move(snp));
+                                    }
+                                    all_snapshots.value = std::move(snapshot);
+                                    return f.then([&s, &all_snapshots] {
+                                        return all_snapshots.write(s);
+                                    });
+                                });
                             });
                         });
                     }).then([&s] {
