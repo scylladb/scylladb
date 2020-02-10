@@ -75,25 +75,22 @@ public:
     class client_state_for_another_shard {
     private:
         const client_state* _cs;
-        tracing::global_trace_state_ptr _trace_state;
         seastar::sharded<auth::service>* _auth_service;
-        client_state_for_another_shard(const client_state* cs, tracing::global_trace_state_ptr gt,
-                seastar::sharded<auth::service>* auth_service) : _cs(cs), _trace_state(gt), _auth_service(auth_service) {}
+        client_state_for_another_shard(const client_state* cs, seastar::sharded<auth::service>* auth_service) : _cs(cs), _auth_service(auth_service) {}
         friend client_state;
     public:
         client_state get() const {
-            return client_state(_cs, _trace_state, _auth_service);
+            return client_state(_cs, _auth_service);
         }
     };
 private:
-    client_state(const client_state* cs, tracing::global_trace_state_ptr gt, seastar::sharded<auth::service>* auth_service)
-            : _keyspace(cs->_keyspace),  _trace_state_ptr(gt), _user(cs->_user), _auth_state(cs->_auth_state),
+    client_state(const client_state* cs, seastar::sharded<auth::service>* auth_service)
+            : _keyspace(cs->_keyspace),  _user(cs->_user), _auth_state(cs->_auth_state),
               _is_internal(cs->_is_internal), _is_thrift(cs->_is_thrift), _remote_address(cs->_remote_address),
               _auth_service(auth_service ? &auth_service->local() : nullptr) {}
     friend client_state_for_another_shard;
 private:
     sstring _keyspace;
-    tracing::trace_state_ptr _trace_state_ptr;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ClientState.class);
     public static final SemanticVersion DEFAULT_CQL_VERSION = org.apache.cassandra.cql3.QueryProcessor.CQL_VERSION;
@@ -137,18 +134,6 @@ private:
 public:
     struct internal_tag {};
     struct external_tag {};
-
-    void create_tracing_session(tracing::trace_type type, tracing::trace_state_props_set props) {
-        _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, props);
-    }
-
-    tracing::trace_state_ptr& get_trace_state() {
-        return _trace_state_ptr;
-    }
-
-    const tracing::trace_state_ptr& get_trace_state() const {
-        return _trace_state_ptr;
-    }
 
     auth_state get_auth_state() const noexcept {
         return _auth_state;
@@ -344,7 +329,7 @@ public:
     }
 
     client_state_for_another_shard move_to_other_shard() {
-        return client_state_for_another_shard(this, _trace_state_ptr, _auth_service ? &_auth_service->container() : nullptr);
+        return client_state_for_another_shard(this, _auth_service ? &_auth_service->container() : nullptr);
     }
 
 #if 0
