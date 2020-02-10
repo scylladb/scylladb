@@ -19,6 +19,8 @@ ADD etc/supervisord.conf.d/scylla-housekeeping.conf /etc/supervisord.conf.d/scyl
 ADD etc/supervisord.conf.d/sshd-server.conf /etc/supervisord.conf.d/sshd-server.conf
 ADD etc/supervisord.conf.d/scylla-jmx.conf /etc/supervisord.conf.d/scylla-jmx.conf
 ADD etc/supervisord.conf.d/node-exporter.conf /etc/supervisord.conf.d/node-exporter.conf
+ADD etc/supervisord.conf.d/rsyslog.conf /etc/supervisord.conf.d/rsyslog.conf
+ADD etc/rsyslog.conf /etc/rsyslog.conf
 ADD scylla-service.sh /scylla-service.sh
 ADD node-exporter-service.sh /node-exporter-service.sh
 ADD scylla-housekeeping-service.sh /scylla-housekeeping-service.sh
@@ -35,7 +37,7 @@ RUN curl $SCYLLA_REPO_URL -o /etc/yum.repos.d/scylla.repo && \
     yum -y install epel-release && \
     yum -y clean expire-cache && \
     yum -y update && \
-    yum -y install scylla hostname supervisor openssh-server openssh-clients && \
+    yum -y install scylla hostname supervisor openssh-server openssh-clients rsyslog && \
     yum clean all && \
     cat /scylla_bashrc >> /etc/bashrc && \
     mkdir -p /etc/supervisor.conf.d && \
