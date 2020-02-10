@@ -43,6 +43,16 @@ def test_basic_string_put_and_get(test_table):
     assert item['attribute'] == val
     assert item['another'] == val2
 
+# Test a big JSON in put_item for stalls
+def test_humongous_put(test_table):
+    p = random_string()
+    c = random_string()
+    val = dict()
+    for i in range(1000000):
+        val[str(i)] = 'x'
+    test_table.put_item(Item={'p': p, 'c': c, 'attribute': val})
+
+
 # Similar to test_basic_string_put_and_get, just uses UpdateItem instead of
 # PutItem. Because the item does not yet exist, it should work the same.
 def test_basic_string_update_and_get(test_table):
