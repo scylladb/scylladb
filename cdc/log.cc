@@ -180,6 +180,9 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
             _postimage = p.second == "true";
         } else if (p.first == "ttl") {
             _ttl = std::stoi(p.second);
+            if (_ttl < 0) {
+                throw exceptions::configuration_exception("Invalid CDC option: ttl must be >= 0");
+            }
         } else {
             throw exceptions::configuration_exception("Invalid CDC option: " + p.first);
         }
