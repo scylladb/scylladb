@@ -19,6 +19,30 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/thread.hh>
+
+static inline void maybe_yield() {
+    if (seastar::thread::running_in_thread() && seastar::thread::should_yield()) {
+        seastar::thread::yield();
+    }
+}
+
+// NOTE(sarna): This snippet inserts a yield check into rjson
+// parsing code, which, assumed that parsing is done in seastar::thread,
+// allows to avoid reactor stalls for large documents.
+// It (ab)uses the fact, that RAPIDJSON_PARSE_ERROR_EARLY_RETURN macro
+// is called each time a single value is parsed.
+// TODO: push a patch to rapidjson which allows to avoid this trick,
+// e.g. by being able to inherit from GenericReader. Currently, too many
+// GenericReader functions are private instead of protected.
+#ifndef RAPIDJSON_PARSE_ERROR_EARLY_RETURN
+#define RAPIDJSON_PARSE_ERROR_EARLY_RETURN(value) \
+    RAPIDJSON_MULTILINEMACRO_BEGIN \
+    maybe_yield(); \
+    if (RAPIDJSON_UNLIKELY(HasParseError())) { return value; } \
+    RAPIDJSON_MULTILINEMACRO_END
+#endif
+
 #include "rjson.hh"
 #include "error.hh"
 #include <seastar/core/print.hh>
@@ -44,7 +68,7 @@ rjson::value parse(const std::string& str) {
 
 rjson::value parse_raw(const char* c_str, size_t size) {
     rjson::document d;
-    d.Parse(c_str, size);
+    d.Parse<rapidjson::kParseIterativeFlag>(c_str, size);
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
     }
