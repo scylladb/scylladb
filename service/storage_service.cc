@@ -2242,7 +2242,10 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
         return seastar::async([&ss, do_bind] {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
-                ss.set_gossip_tokens(ss.get_local_tokens().get0(), cdc::get_local_streams_timestamp().get0());
+                bool cdc_enabled = ss.db().local().get_config().check_experimental(db::experimental_features_t::CDC);
+                ss.set_gossip_tokens(
+                        ss.get_local_tokens().get0(),
+                        cdc_enabled ? std::make_optional(cdc::get_local_streams_timestamp().get0()) : std::nullopt);
                 ss._gossiper.force_newer_generation();
                 ss._gossiper.start_gossiping(get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
                     ss._initialized = true;
