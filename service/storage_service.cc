@@ -326,25 +326,16 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
                     _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
                 } else {
                     // More than one seed node in the seed list, do shadow round with other seed nodes
-                    bool ok;
                     try {
-                        slogger.info("Checking remote features with gossip");
+                        slogger.info("Checking remote features with gossip and system tables");
                         _gossiper.do_shadow_round().get();
-                        ok = true;
                     } catch (...) {
-                        slogger.info("Shadow round failed with {}", std::current_exception());
+                        slogger.info("Shadow round failed with {}, checking remote features with system tables only",
+                                std::current_exception());
                         _gossiper.finish_shadow_round();
-                        ok = false;
                     }
 
-                    if (ok) {
-                        _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
-                    } else {
-                        // Check features with system table
-                        slogger.info("Checking remote features with gossip failed, fallback to check with system table");
-                        _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
-                    }
-
+                    _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
                     _gossiper.reset_endpoint_state_map().get();
                     for (auto ep : loaded_endpoints) {
                         _gossiper.add_saved_endpoint(ep);
