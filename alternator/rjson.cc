@@ -51,9 +51,23 @@ namespace rjson {
 
 static allocator the_allocator;
 
+class yieldable_writer : public writer {
+public:
+    yieldable_writer(string_buffer& buf) : writer(buf) {}
+    bool Null()                 { maybe_yield(); return writer::Null(); }
+    bool Bool(bool b)           { maybe_yield(); return writer::Bool(b); }
+    bool Int(int i)             { maybe_yield(); return writer::Int(i); }
+    bool Uint(unsigned u)       { maybe_yield(); return writer::Uint(u); }
+    bool Int64(int64_t i64)     { maybe_yield(); return writer::Int64(i64); }
+    bool Uint64(uint64_t u64)   { maybe_yield(); return writer::Uint64(u64); }
+    bool Double(double d)       { maybe_yield(); return writer::Double(d); }
+    bool String(const Ch* str, size_t length, bool copy = false) { maybe_yield(); return writer::String(str, length, copy); }
+    bool Key(const Ch* str, size_t length, bool copy = false) { maybe_yield(); return writer::Key(str, length, copy); }
+};
+
 std::string print(const rjson::value& value) {
     string_buffer buffer;
-    writer writer(buffer);
+    yieldable_writer writer(buffer);
     value.Accept(writer);
     return std::string(buffer.GetString());
 }
