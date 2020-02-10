@@ -45,7 +45,7 @@ if [[ "$ID" = "debian" && "$VERSION_ID" = "8" ]] || [[ "$ID" = "ubuntu" && "$VER
     echo "scylla ALL=(ALL) NOPASSWD: /opt/scylladb/scripts/scylla_prepare,/opt/scylladb/scripts/scylla_stop,/opt/scylladb/scripts/scylla_io_setup,/opt/scylladb/scripts/scylla-ami/scylla_ami_setup" > /etc/sudoers.d/scylla
 else
     # AmbientCapabilities supported from v229 but it backported to v219-33 on RHEL7
-    if [ $SYSTEMD_VER -ge 229 ] || [ $SYSTEMD_VER -eq 219 ] && [ $SYSTEMD_REL -ge 33 ]; then
+    if [ $SYSTEMD_VER -ge 229 ] || [[ $SYSTEMD_VER -eq 219 && $SYSTEMD_REL -ge 33 ]]; then
         if [ $AMB_SUPPORT -eq 1 ]; then
             mkdir -p /etc/systemd/system/scylla-server.service.d/
             cat << EOS > /etc/systemd/system/scylla-server.service.d/capabilities.conf
