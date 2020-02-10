@@ -1297,30 +1297,32 @@ public:
 };
 
 future<executor::request_return_type> executor::put_item(client_state& client_state, std::string content) {
-    _stats.api_operations.put_item++;
-    auto start_time = std::chrono::steady_clock::now();
-    rjson::value request = rjson::parse(content);
-    elogger.trace("put_item {}", request);
+    return seastar::async([this, &client_state, content = std::move(content)] () mutable -> request_return_type {
+        _stats.api_operations.put_item++;
+        auto start_time = std::chrono::steady_clock::now();
+        rjson::value request = rjson::parse(content);
+        elogger.trace("put_item {}", request);
 
-    auto op = make_shared<put_item_operation>(_proxy, std::move(request));
-    tracing::add_table_name(client_state.get_trace_state(), op->schema()->ks_name(), op->schema()->cf_name());
-    const bool needs_read_before_write = op->request().HasMember("Expected") ||
-            check_needs_read_before_write(op->_condition_expression);
-    if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
-        _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
-        _stats.shard_bounce_for_lwt++;
-        // FIXME: create separate smp_service_group
-        return container().invoke_on(*shard, default_smp_service_group(),
-                [content = std::move(content), cs = client_state.move_to_other_shard()]
-                (executor& e) mutable {
-            return do_with(cs.get(), [&e, content = std::move(content)]
-                                     (service::client_state& client_state) {
-                return e.put_item(client_state, std::move(content));
-            });
-        });
-    }
-    return op->execute(_proxy, client_state, needs_read_before_write, _stats).finally([op, start_time, this] {
-        _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
+        auto op = make_shared<put_item_operation>(_proxy, std::move(request));
+        tracing::add_table_name(client_state.get_trace_state(), op->schema()->ks_name(), op->schema()->cf_name());
+        const bool needs_read_before_write = op->request().HasMember("Expected") ||
+                check_needs_read_before_write(op->_condition_expression);
+        if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
+            _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
+            _stats.shard_bounce_for_lwt++;
+            // FIXME: create separate smp_service_group
+            return container().invoke_on(*shard, default_smp_service_group(),
+                    [content = std::move(content), cs = client_state.move_to_other_shard()]
+                    (executor& e) mutable {
+                return do_with(cs.get(), [&e, content = std::move(content)]
+                                         (service::client_state& client_state) {
+                    return e.put_item(client_state, std::move(content));
+                });
+            }).get0();
+        }
+        return op->execute(_proxy, client_state, needs_read_before_write, _stats).finally([op, start_time, this] {
+            _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
+        }).get0();
     });
 }
 
