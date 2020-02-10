@@ -395,6 +395,8 @@ void compaction_manager::register_metrics() {
     _metrics.add_group("compaction_manager", {
         sm::make_gauge("compactions", [this] { return _stats.active_tasks; },
                        sm::description("Holds the number of currently active compactions.")),
+        sm::make_gauge("pending_compactions", [this] { return _stats.pending_tasks; },
+                       sm::description("Holds the number of compaction tasks waiting for an opportunity to run.")),
     });
 }
 
