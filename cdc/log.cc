@@ -85,15 +85,15 @@ public:
         if (schema.cdc_options().enabled()) {
             auto& db = _ctxt._proxy.get_db().local();
             auto logname = log_name(schema.cf_name());
-            if (!db.has_schema(schema.ks_name(), logname)) {
-                // in seastar thread
-                auto log_schema = create_log_schema(schema);
-                auto& keyspace = db.find_keyspace(schema.ks_name());
+            check_that_cdc_log_table_does_not_exist(db, schema, logname);
 
-                auto log_mut = db::schema_tables::make_create_table_mutations(keyspace.metadata(), log_schema, timestamp);
+            // in seastar thread
+            auto log_schema = create_log_schema(schema);
+            auto& keyspace = db.find_keyspace(schema.ks_name());
 
-                mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
-            }
+            auto log_mut = db::schema_tables::make_create_table_mutations(keyspace.metadata(), log_schema, timestamp);
+
+            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
         }
     }
 
@@ -105,8 +105,13 @@ public:
         // or if cdc is on now unconditionally, since then any actual base schema changes will affect the column 
         // etc.
         if (was_cdc || is_cdc) {
-            auto logname = log_name(old_schema.cf_name());
             auto& db = _ctxt._proxy.get_db().local();
+
+            if (!was_cdc) {
+                check_that_cdc_log_table_does_not_exist(db, new_schema, log_name(new_schema.cf_name()));
+            }
+
+            auto logname = log_name(old_schema.cf_name());
             auto& keyspace = db.find_keyspace(old_schema.ks_name());
             auto log_schema = was_cdc ? db.find_column_family(old_schema.ks_name(), logname).schema() : nullptr;
 
@@ -148,6 +153,15 @@ public:
 
     template<typename Iter>
     future<> append_mutations(Iter i, Iter e, schema_ptr s, lowres_clock::time_point, std::vector<mutation>&);
+
+private:
+    static void check_that_cdc_log_table_does_not_exist(database& db, const schema& schema, const sstring& logname) {
+        if (db.has_schema(schema.ks_name(), logname)) {
+            throw exceptions::invalid_request_exception(format("Cannot create CDC log table for table {}.{} because a table of name {}.{} already exists",
+                    schema.ks_name(), schema.cf_name(),
+                    schema.ks_name(), logname));
+        }
+    }
 };
 
 cdc::cdc_service::cdc_service(service::storage_proxy& proxy)
@@ -214,8 +228,22 @@ namespace cdc {
 using operation_native_type = std::underlying_type_t<operation>;
 using column_op_native_type = std::underlying_type_t<column_op>;
 
+static const sstring cdc_log_suffix = "_scylla_cdc_log";
+
+static bool is_log_name(const std::string_view& table_name) {
+    return boost::ends_with(table_name, cdc_log_suffix);
+}
+
+bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name) {
+    if (!is_log_name(table_name)) {
+        return false;
+    }
+    const auto base_name = sstring(table_name.data(), table_name.size() - cdc_log_suffix.size());
+    const auto base_schema = service::get_local_storage_proxy().get_db().local().find_schema(ks_name, base_name);
+    return bool(base_schema) && base_schema->cdc_options().enabled();
+}
+
 sstring log_name(const sstring& table_name) {
-    static constexpr auto cdc_log_suffix = "_scylla_cdc_log";
     return table_name + cdc_log_suffix;
 }
 

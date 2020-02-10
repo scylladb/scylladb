@@ -132,6 +132,7 @@ enum class column_op : int8_t {
     set = 0, del = 1, add = 2,
 };
 
+bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name);
 seastar::sstring log_name(const seastar::sstring& table_name);
 
 } // namespace cdc

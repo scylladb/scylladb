@@ -196,6 +196,80 @@ SEASTAR_THREAD_TEST_CASE(test_with_cdc_parameter) {
     }, mk_cdc_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_table) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        // Conflict on CREATE which enables cdc log
+        e.execute_cql("CREATE TABLE ks.tbl_scylla_cdc_log (a int PRIMARY KEY)").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY) WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
+        e.require_table_does_not_exist("ks", "tbl").get();
+
+        // Conflict on ALTER which enables cdc log
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY)").get();
+        e.require_table_exists("ks", "tbl").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE ks.tbl WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto assert_unauthorized = [&e] (const sstring& stmt) {
+            BOOST_TEST_MESSAGE(format("Must throw unauthorized_exception: {}", stmt));
+            BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
+        };
+
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY) WITH cdc = {'enabled': true}").get();
+        e.require_table_exists("ks", "tbl").get();
+
+        // Allow MODIFY, SELECT, ALTER
+        e.execute_cql("INSERT INTO ks.tbl_scylla_cdc_log (stream_id_1, stream_id_2, time, batch_seq_no) VALUES (0, 0, now(), 0)").get();
+        e.execute_cql("UPDATE ks.tbl_scylla_cdc_log SET ttl = 100 WHERE stream_id_1 = 0 AND stream_id_2 = 0 AND time = now() AND batch_seq_no = 0").get();
+        e.execute_cql("DELETE FROM ks.tbl_scylla_cdc_log WHERE stream_id_1 = 0 AND stream_id_2 = 0 AND time = now() AND batch_seq_no = 0").get();
+        e.execute_cql("SELECT * FROM ks.tbl_scylla_cdc_log").get();
+        e.execute_cql("ALTER TABLE ks.tbl_scylla_cdc_log ALTER ttl TYPE blob").get();
+
+        // Disallow DROP
+        assert_unauthorized("DROP TABLE ks.tbl_scylla_cdc_log");
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_disallow_cdc_on_materialized_view) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY)").get();
+        e.require_table_exists("ks", "tbl").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE MATERIALIZED VIEW ks.mv AS SELECT a FROM ks.tbl PRIMARY KEY (a) WITH cdc = {'enabled': true}").get(), exceptions::invalid_request_exception);
+        e.require_table_does_not_exist("ks", "mv").get();
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto test_table = [&e] (const sstring& table_name) {
+            auto assert_unauthorized = [&e] (const sstring& stmt) {
+                BOOST_TEST_MESSAGE(format("Must throw unauthorized_exception: {}", stmt));
+                BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
+            };
+
+            e.require_table_exists("system_distributed", table_name).get();
+
+            const sstring full_name = "system_distributed." + table_name;
+
+            // Allow MODIFY, SELECT
+            e.execute_cql(format("INSERT INTO {} (time) VALUES (toTimeStamp(now()))", full_name)).get();
+            e.execute_cql(format("UPDATE {} SET expired = toTimeStamp(now()) WHERE time = toTimeStamp(now())", full_name)).get();
+            e.execute_cql(format("DELETE FROM {} WHERE time = toTimeStamp(now())", full_name)).get();
+            e.execute_cql(format("SELECT * FROM {}", full_name)).get();
+
+            // Disallow ALTER, DROP
+            assert_unauthorized(format("ALTER TABLE {} ALTER time TYPE blob", full_name));
+            assert_unauthorized(format("DROP TABLE {}", full_name));
+        };
+
+        test_table("cdc_description");
+        test_table("cdc_topology_description");
+    }, mk_cdc_test_config()).get();
+}
+
 static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
     auto rs = rows.rs().result_set().rows();
     std::vector<std::vector<bytes_opt>> results;
