@@ -63,6 +63,7 @@ private:
     seastar::gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;
     gms::feature_service& _feat;
+    seastar::abort_source _as;
 public:
     migration_manager(migration_notifier&, gms::feature_service&);
 
