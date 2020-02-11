@@ -55,5 +55,5 @@ public:
 
 class invalid_db_index_exception : public redis_exception {
 public:
-    invalid_db_index_exception() : redis_exception("invalid DB index") {}
+    invalid_db_index_exception() : redis_exception("DB index is out of range") {}
 };

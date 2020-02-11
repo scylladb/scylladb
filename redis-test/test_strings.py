@@ -105,4 +105,4 @@ def test_select():
         r.execute_command('SELECT 16')
         raise Exception('Expect that `SELECT 16` does not work')
     except redis.exceptions.ResponseError as ex:
-        assert str(ex) == 'invalid DB index'
+        assert str(ex) == 'DB index is out of range'
