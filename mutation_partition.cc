@@ -39,6 +39,9 @@
 #include <seastar/core/execution_stage.hh>
 #include "types/map.hh"
 #include "compaction_garbage_collector.hh"
+#include "utils/exceptions.hh"
+
+logging::logger mplog("mutation_partition");
 
 template<bool reversed>
 struct reversal_traits;
@@ -1238,7 +1241,9 @@ row::apply_monotonically(const column_definition& column, atomic_cell_or_collect
 void
 row::append_cell(column_id id, atomic_cell_or_collection value) {
     if (_type == storage_type::vector && id < max_vector_size) {
-        assert(_storage.vector.v.size() <= id);
+        if (_storage.vector.v.size() > id) {
+            on_internal_error(mplog, format("Attempted to append cell#{} to row already having {} cells", id, _storage.vector.v.size()));
+        }
         _storage.vector.v.resize(id);
         _storage.vector.v.emplace_back(cell_and_hash{std::move(value), cell_hash_opt()});
         _storage.vector.present.set(id);
