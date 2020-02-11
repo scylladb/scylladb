@@ -63,6 +63,8 @@ private:
     seastar::gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;
     seastar::abort_source _as;
+    bool _cluster_upgraded = false;
+    seastar::condition_variable _wait_cluster_upgraded;
 public:
     explicit migration_manager(migration_notifier&);
 
