@@ -56,6 +56,7 @@
 #include "db/query_context.hh"
 #include "schema.hh"
 #include "alternator/tags_extension.hh"
+#include "alternator/rmw_operation.hh"
 
 #include <boost/range/adaptors.hpp>
 
@@ -1044,111 +1045,46 @@ static dht::partition_range_vector to_partition_ranges(const dht::decorated_key&
     return dht::partition_range_vector{dht::partition_range(pk)};
 }
 
+rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
+    : _request(std::move(request))
+    , _schema(get_table(proxy, _request))
+    , _write_isolation(get_write_isolation_for_schema(_schema)) {
+    // _pk and _ck will be assigned later, by the subclass's constructor
+    // (each operation puts the key in a slightly different location in
+    // the request).
+}
 
-// An rmw_operation encapsulates the common logic of all the item update
-// operations which may involve a read of the item before the write
-// (so-called Read-Modify-Write operations). These operations include PutItem,
-// UpdateItem and DeleteItem: All of these may be conditional operations (the
-// "Expected" parameter) which requir a read before the write, and UpdateItem
-// may also have an update expression which refers to the item's old value.
-//
-// The code below supports running the read and the write together as one
-// transaction using LWT (this is why rmw_operation is a subclass of
-// cas_request, as required by storage_proxy::cas()), but also has optional
-// modes not using LWT.
-class rmw_operation : public service::cas_request, public enable_shared_from_this<rmw_operation> {
-public:
-    // The following options choose which mechanism to use for isolating
-    // parallel write operations:
-    // * The FORBID_RMW option forbids RMW (read-modify-write) operations
-    //   such as conditional updates. For the remaining write-only
-    //   operations, ordinary quorum writes are isolated enough.
-    // * The LWT_ALWAYS option always uses LWT (lightweight transactions)
-    //   for any write operation - whether or not it also has a read.
-    // * The LWT_RMW_ONLY option uses LWT only for RMW operations, and uses
-    //   ordinary quorum writes for write-only operations.
-    //   This option is not safe if the user may send both RMW and write-only
-    //   operations on the same item.
-    // * The UNSAFE_RMW option does read-modify-write operations as separate
-    //   read and write. It is unsafe - concurrent RMW operations are not
-    //   isolated at all. This option will likely be removed in the future.
-    enum class write_isolation {
-        FORBID_RMW, LWT_ALWAYS, LWT_RMW_ONLY, UNSAFE_RMW
-    };
-    static constexpr auto WRITE_ISOLATION_TAG_KEY = "system:write_isolation";
+std::optional<mutation> rmw_operation::apply(query::result& qr, const query::partition_slice& slice, api::timestamp_type ts) {
+    if (qr.row_count()) {
+        auto selection = cql3::selection::selection::wildcard(_schema);
+        auto previous_item = describe_item(_schema, slice, *selection, qr, {});
+        return apply(std::make_unique<rjson::value>(std::move(previous_item)), ts);
+    } else {
+        return apply(std::unique_ptr<rjson::value>(), ts);
+    }
+}
 
-    static write_isolation get_write_isolation_for_schema(schema_ptr schema) {
-        const auto& tags = get_tags_of_table(schema);
-        auto it = tags.find(WRITE_ISOLATION_TAG_KEY);
-        if (it == tags.end() || it->second.empty()) {
-            // By default, fall back to always enforcing LWT
-            return write_isolation::LWT_ALWAYS;
-        }
-        switch (it->second[0]) {
-        case 'f':
-            return write_isolation::FORBID_RMW;
-        case 'a':
-            return write_isolation::LWT_ALWAYS;
-        case 'o':
-            return write_isolation::LWT_RMW_ONLY;
-        case 'u':
-            return write_isolation::UNSAFE_RMW;
-        default:
-            // In case of an incorrect tag, fall back to the safest option: LWT_ALWAYS
-            return write_isolation::LWT_ALWAYS;
-        }
+rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(schema_ptr schema) {
+    const auto& tags = get_tags_of_table(schema);
+    auto it = tags.find(WRITE_ISOLATION_TAG_KEY);
+    if (it == tags.end() || it->second.empty()) {
+        // By default, fall back to always enforcing LWT
+        return write_isolation::LWT_ALWAYS;
     }
-
-protected:
-    // The full request JSON
-    rjson::value _request;
-    // All RMW operations involve a single item with a specific partition
-    // and optional clustering key, in a single table, so the following
-    // information is common to all of them:
-    schema_ptr _schema;
-    partition_key _pk = partition_key::make_empty();
-    clustering_key _ck = clustering_key::make_empty();
-    write_isolation _write_isolation;
-public:
-    // The constructor of a rmw_operation subclass should parse the request
-    // and try to discover as many input errors as it can before really
-    // attempting the read or write operations.
-    rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
-        : _request(std::move(request))
-        , _schema(get_table(proxy, _request))
-        , _write_isolation(get_write_isolation_for_schema(_schema)) {
-        // _pk and _ck will be assigned later, by the subclass's constructor
-        // (each operation puts the key in a slightly different location in
-        // the request).
+    switch (it->second[0]) {
+    case 'f':
+        return write_isolation::FORBID_RMW;
+    case 'a':
+        return write_isolation::LWT_ALWAYS;
+    case 'o':
+        return write_isolation::LWT_RMW_ONLY;
+    case 'u':
+        return write_isolation::UNSAFE_RMW;
+    default:
+        // In case of an incorrect tag, fall back to the safest option: LWT_ALWAYS
+        return write_isolation::LWT_ALWAYS;
     }
-    // rmw_operation subclasses (update_item_operation, put_item_operation
-    // and delete_item_operation) shall implement an apply() function which
-    // takes the previous value of the item (if it was read) and creates the
-    // write mutation. If the previous value of item does not pass the needed
-    // conditional expression, apply() should return an empty optional.
-    // apply() may throw if it encounters input errors not discovered during
-    // the constructor.
-    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) = 0;
-    // Convert the above apply() into the signature needed by cas_request:
-    virtual std::optional<mutation> apply(query::result& qr, const query::partition_slice& slice, api::timestamp_type ts) override {
-        if (qr.row_count()) {
-            auto selection = cql3::selection::selection::wildcard(_schema);
-            auto previous_item = describe_item(_schema, slice, *selection, qr, {});
-            return apply(std::make_unique<rjson::value>(std::move(previous_item)), ts);
-        } else {
-            return apply(std::unique_ptr<rjson::value>(), ts);
-        }
-    }
-    virtual ~rmw_operation() = default;
-    schema_ptr schema() const { return _schema; }
-    const rjson::value& request() const { return _request; }
-    future<executor::request_return_type> execute(service::storage_proxy& proxy,
-            service::client_state& client_state,
-            tracing::trace_state_ptr trace_state,
-            bool needs_read_before_write,
-            stats& stats);
-    std::optional<shard_id> shard_for_execute(bool needs_read_before_write);
-};
+}
 
 // shard_for_execute() checks whether execute() must be called on a specific
 // other shard. Running execute() on a specific shard is necessary only if it
