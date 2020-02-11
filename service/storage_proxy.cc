@@ -1154,6 +1154,7 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
                         // accepted, either.
                         paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is partially rejected", _id);
                         tracing::trace(tr_state, "accept_proposal: proposal is partially rejected");
+                        _proxy->get_stats().cas_write_timeout_due_to_uncertainty++;
                         // TODO: we report write timeout exception to be compatible with Cassandra,
                         // which uses write_timeout_exception to signal any "unknown" state.
                         // To be changed in scope of work on https://issues.apache.org/jira/browse/CASSANDRA-15350
@@ -1528,6 +1529,10 @@ void storage_proxy_stats::stats::register_stats() {
 
         sm::make_total_operations("cas_write_condition_not_met", cas_write_condition_not_met,
                        sm::description("number of transaction preconditions that did not match current values"),
+                       {storage_proxy_stats::current_scheduling_group_label()}),
+
+        sm::make_total_operations("cas_write_timeout_due_to_uncertainty", cas_write_timeout_due_to_uncertainty,
+                       sm::description("how many times write timeout was reported because of uncertainty in the result"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
         sm::make_histogram("cas_read_contention", sm::description("how many contended reads were encountered"),
