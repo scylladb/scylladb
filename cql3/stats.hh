@@ -87,9 +87,8 @@ struct cql_stats {
 
     int64_t select_bypass_caches = 0;
     int64_t select_allow_filtering = 0;
-    int64_t select_full_scan = 0;
-    int64_t select_full_scan_no_bypass_cache = 0;
     int64_t select_partition_range_scan = 0;
+    int64_t select_partition_range_scan_no_bypass_cache = 0;
 
 private:
     uint64_t _unpaged_select_queries[(size_t)ks_selector::SIZE] = {0ul};
