@@ -40,6 +40,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "cql3/multi_column_relation.hh"
 #include "cql3/tuples.hh"
+#include "cql3/untyped_result_set.hh"
 #include "log.hh"
 #include "json.hh"
 

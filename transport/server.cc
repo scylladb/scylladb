@@ -28,6 +28,10 @@
 #include <boost/range/adaptor/sliced.hpp>
 
 #include "cql3/statements/batch_statement.hh"
+#include "types/collection.hh"
+#include "types/list.hh"
+#include "types/set.hh"
+#include "types/map.hh"
 #include "dht/token-sharding.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"

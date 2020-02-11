@@ -52,9 +52,6 @@
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/statements/raw/parsed_statement.hh"
-#include "cql3/statements/raw/cf_statement.hh"
-#include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "service/migration_listener.hh"
@@ -65,6 +62,12 @@ namespace cql3 {
 
 namespace statements {
 class batch_statement;
+
+namespace raw {
+
+class parsed_statement;
+
+}
 }
 
 class untyped_result_set;

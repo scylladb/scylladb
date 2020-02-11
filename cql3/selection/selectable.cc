@@ -24,6 +24,7 @@
 #include "field_selector.hh"
 #include "writetime_or_ttl.hh"
 #include "selector_factories.hh"
+#include "cql3/query_options.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/castas_fcts.hh"
 #include "cql3/functions/aggregate_fcts.hh"

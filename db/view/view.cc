@@ -71,6 +71,7 @@
 #include "view_info.hh"
 #include "view_update_checks.hh"
 #include "types/user.hh"
+#include "types/list.hh"
 
 using namespace std::chrono_literals;
 

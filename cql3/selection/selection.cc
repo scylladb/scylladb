@@ -46,7 +46,9 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/result_set.hh"
+#include "cql3/query_options.hh"
 #include "cql3/restrictions/multi_column_restriction.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
 
 namespace cql3 {
 
@@ -383,6 +385,25 @@ std::unique_ptr<result_set> result_set_builder::build() {
     }
     return std::move(_result_set);
 }
+
+result_set_builder::restrictions_filter::restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions,
+        const query_options& options,
+        uint32_t remaining,
+        schema_ptr schema,
+        uint32_t per_partition_limit,
+        std::optional<partition_key> last_pkey,
+        uint32_t rows_fetched_for_last_partition)
+    : _restrictions(restrictions)
+    , _options(options)
+    , _skip_pk_restrictions(!_restrictions->pk_restrictions_need_filtering())
+    , _skip_ck_restrictions(!_restrictions->ck_restrictions_need_filtering())
+    , _remaining(remaining)
+    , _schema(schema)
+    , _per_partition_limit(per_partition_limit)
+    , _per_partition_remaining(_per_partition_limit)
+    , _rows_fetched_for_last_partition(rows_fetched_for_last_partition)
+    , _last_pkey(std::move(last_pkey))
+{ }
 
 bool result_set_builder::restrictions_filter::do_filter(const selection& selection,
                                                          const std::vector<bytes>& partition_key,

@@ -63,6 +63,8 @@
 #include "cdc/log.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/util.hh"
+#include "types/list.hh"
+#include "types/set.hh"
 
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"

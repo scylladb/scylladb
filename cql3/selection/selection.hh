@@ -47,8 +47,6 @@
 #include "cql3/column_specification.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/selection/raw_selector.hh"
-#include "cql3/selection/selector_factories.hh"
-#include "cql3/restrictions/statement_restrictions.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
 
@@ -56,8 +54,15 @@ namespace cql3 {
 
 class result_set;
 class metadata;
+class query_options;
+
+namespace restrictions {
+class statement_restrictions;
+}
 
 namespace selection {
+
+class selector_factories;
 
 class selectors {
 public:
@@ -300,18 +305,7 @@ public:
                 schema_ptr schema,
                 uint32_t per_partition_limit,
                 std::optional<partition_key> last_pkey = {},
-                uint32_t rows_fetched_for_last_partition = 0)
-            : _restrictions(restrictions)
-            , _options(options)
-            , _skip_pk_restrictions(!_restrictions->pk_restrictions_need_filtering())
-            , _skip_ck_restrictions(!_restrictions->ck_restrictions_need_filtering())
-            , _remaining(remaining)
-            , _schema(schema)
-            , _per_partition_limit(per_partition_limit)
-            , _per_partition_remaining(_per_partition_limit)
-            , _rows_fetched_for_last_partition(rows_fetched_for_last_partition)
-            , _last_pkey(std::move(last_pkey))
-        { }
+                uint32_t rows_fetched_for_last_partition = 0);
         bool operator()(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view* row) const;
         void reset(const partition_key* key = nullptr);
         uint32_t get_rows_dropped() const {
