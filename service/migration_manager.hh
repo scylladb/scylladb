@@ -64,6 +64,8 @@ private:
     static const std::chrono::milliseconds migration_delay;
     gms::feature_service& _feat;
     seastar::abort_source _as;
+    bool _cluster_upgraded = false;
+    seastar::condition_variable _wait_cluster_upgraded;
 public:
     migration_manager(migration_notifier&, gms::feature_service&);
 
