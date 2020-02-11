@@ -60,7 +60,7 @@ alter_view_statement::alter_view_statement(::shared_ptr<cf_name> view_name, ::sh
 future<> alter_view_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
     try {
-        auto&& s = service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family());
+        auto&& s = proxy.get_db().local().find_schema(keyspace(), column_family());
         if (s->is_view())  {
             return state.has_column_family_access(keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
         }

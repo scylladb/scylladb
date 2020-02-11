@@ -173,7 +173,7 @@ uint32_t select_statement::get_bound_terms() const {
 
 future<> select_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     try {
-        auto&& s = service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family());
+        auto&& s = proxy.get_db().local().find_schema(keyspace(), column_family());
         auto& cf_name = s->is_view() ? s->view_info()->base_name() : column_family();
         return state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT);
     } catch (const no_such_column_family& e) {
