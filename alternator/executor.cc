@@ -538,6 +538,24 @@ static bool validate_legal_tag_chars(std::string_view tag) {
     return std::all_of(tag.begin(), tag.end(), &is_legal_tag_char);
 }
 
+static void validate_tags(const std::map<sstring, sstring>& tags) {
+    static const std::unordered_set<std::string_view> allowed_values = {
+        "f", "forbid", "forbid_rmw",
+        "a", "always", "always_use_lwt",
+        "o", "only_rmw_uses_lwt",
+        "u", "unsafe", "unsafe_rmw",
+    };
+    auto it = tags.find(rmw_operation::WRITE_ISOLATION_TAG_KEY);
+    if (it != tags.end()) {
+        std::string_view value = it->second;
+        elogger.warn("Allowed values count {} {}", value, allowed_values.count(value));
+        if (allowed_values.count(value) == 0) {
+            throw api_error("ValidationException",
+                    format("Incorrect write isolation tag {}. Allowed values: {}", value, allowed_values));
+        }
+    }
+}
+
 // FIXME: Updating tags currently relies on updating schema, which may be subject
 // to races during concurrent updates of the same table. Once Scylla schema updates
 // are fixed, this issue will automatically get fixed as well.
@@ -567,6 +585,7 @@ static future<> update_tags(const rjson::value& tags, schema_ptr schema, std::ma
     if (tags_map.size() > 50) {
         return make_exception_future<>(api_error("ValidationException", "Number of Tags exceed the current limit for the provided ResourceArn"));
     }
+    validate_tags(tags_map);
 
     std::stringstream serialized_tags;
     serialized_tags << '{';
