@@ -650,6 +650,8 @@ public:
         storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(_schema->ks_name(), _key.token(), _cl_for_paxos);
         _live_endpoints = std::move(pp.endpoints);
         _required_participants = pp.required_participants;
+        tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
+                _key.token(), _live_endpoints, _required_participants);
     }
 
     // Result of PREPARE step, i.e. begin_and_repair_paxos().

@@ -912,8 +912,10 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 bool only_digest = peer != _live_endpoints[0];
                 auto da = digest_algorithm(get_local_storage_proxy());
                 if (fbu::is_me(peer)) {
+                    tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
                     return paxos::paxos_state::prepare(tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
+                    tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, peer);
                     netw::messaging_service& ms = netw::get_local_messaging_service();
                     return ms.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
                             tracing::make_trace_info(tr_state));
@@ -947,9 +949,11 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                     }
                     return;
                 }
+
                 auto on_prepare_response = [&] (auto&& response) {
                     using T = std::decay_t<decltype(response)>;
                     if constexpr (std::is_same_v<T, utils::UUID>) {
+                        tracing::trace(tr_state, "prepare_ballot: got more up to date ballot {} from /{}", response, peer);
                         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got more up to date ballot {} from {}", _id, response, peer);
                         // We got an UUID that prevented our proposal from succeeding
                         summary.update_most_recent_promised_ballot(response);
@@ -960,6 +964,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                         utils::UUID mrc_ballot = utils::UUID_gen::min_time_UUID(0);
 
                         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got a response {} from {}", _id, response, peer);
+                        tracing::trace(tr_state, "prepare_ballot: got a response {} from /{}", response, peer);
 
                         // Find the newest learned value among all replicas that answered.
                         // It will be used to "repair" replicas that did not learn this value yet.
@@ -1013,6 +1018,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                         }
 
                         if (summary.committed_ballots_by_replica.size() == _required_participants) { // got all replies
+                            tracing::trace(tr_state, "prepare_ballot: got enough replies to proceed");
                             paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got enough replies to proceed", _id);
                             request_tracker.set_value(std::move(summary));
                         }
@@ -1066,8 +1072,10 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
         return parallel_for_each(_live_endpoints, [this, &request_tracker, timeout_if_partially_accepted, &proposal] (gms::inet_address peer) mutable {
             return futurize_apply([&] {
                 if (fbu::is_me(peer)) {
+                    tracing::trace(tr_state, "accept_proposal: accept {} locally", proposal);
                     return paxos::paxos_state::accept(tr_state, _schema, proposal.update.decorated_key(*_schema).token(), proposal, _timeout);
                 } else {
+                    tracing::trace(tr_state, "accept_proposal: send accept {} to {}", proposal, peer);
                     netw::messaging_service& ms = netw::get_local_messaging_service();
                     return ms.send_paxos_accept(peer, _timeout, proposal, tracing::make_trace_info(tr_state));
                 }
@@ -1092,6 +1100,7 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
                     }
                 } else {
                     bool accepted = accepted_f.get0();
+                    tracing::trace(tr_state, "accept_proposal: got \"{}\" from /{}", accepted ? "accepted" : "rejected", peer);
                     paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got \"{}\" from {}", _id,
                             accepted ? "accepted" : "rejected", peer);
 
@@ -1111,6 +1120,7 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
                  * can; see CASSANDRA-6013.
                  */
                 if (request_tracker.accepts == _required_participants) {
+                    tracing::trace(tr_state, "accept_proposal: got enough accepts to proceed");
                     paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got enough accepts to proceed", _id);
                     request_tracker.set_value(true);
                 } else if (is_timeout) {
@@ -1128,10 +1138,12 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
                 } else if (_required_participants + request_tracker.non_accept_replies()  > _live_endpoints.size() && !timeout_if_partially_accepted) {
                     // In case there is no need to reply with a timeout if at least one node is accepted
                     // we can fail the request as soon is we know a quorum is unreachable.
+                    tracing::trace(tr_state, "accept_proposal: got enough rejects to proceed");
                     paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got enough rejects to proceed", _id);
                     request_tracker.set_value(false);
                 } else if (request_tracker.all_replies() == _live_endpoints.size()) { // wait for all replies
                     if (request_tracker.accepts == 0 && request_tracker.errors == 0) {
+                        tracing::trace(tr_state, "accept_proposal: proposal is fully rejected");
                         paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is fully rejected", _id);
                         // Return false if fully refused. Consider errors as accepts here since it
                         // is not possible to know for sure.
@@ -1141,6 +1153,7 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
                         // sure that the proposal is fully rejected, and it is obviously not
                         // accepted, either.
                         paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is partially rejected", _id);
+                        tracing::trace(tr_state, "accept_proposal: proposal is partially rejected");
                         // TODO: we report write timeout exception to be compatible with Cassandra,
                         // which uses write_timeout_exception to signal any "unknown" state.
                         // To be changed in scope of work on https://issues.apache.org/jira/browse/CASSANDRA-15350
@@ -1159,7 +1172,8 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
 
 // This function implements learning stage of Paxos protocol
 future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool allow_hints) {
-    paxos::paxos_state::logger.trace("CAS[{}] learn_decision: commiting {} with cl={}", _id, decision, _cl_for_learn);
+    tracing::trace(tr_state, "learn_decision: committing {} with cl={}", decision, _cl_for_learn);
+    paxos::paxos_state::logger.trace("CAS[{}] learn_decision: committing {} with cl={}", _id, decision, _cl_for_learn);
     std::array<std::tuple<paxos::proposal, schema_ptr, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, _key.token())};
     // FIXME: allow_hints is ignored. Consider if we should follow it and remove if not.
     // Right now we do not store hints for when committing decisions.
@@ -4790,22 +4804,26 @@ void storage_proxy::init_messaging_service() {
                 query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
                 std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto src_ip = src_addr.addr;
         tracing::trace_state_ptr tr_state;
         if (trace_info) {
             tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
             tracing::begin(tr_state);
+            tracing::trace(tr_state, "paxos_prepare: message received from /{} ballot {}", src_ip, ballot);
         }
 
         return get_schema_for_read(cmd.schema_version, src_addr).then([this, cmd = std::move(cmd), key = std::move(key), ballot,
-                         only_digest, da, timeout, tr_state = std::move(tr_state)] (schema_ptr schema) mutable {
+                         only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
             dht::token token = dht::global_partitioner().get_token(*schema, key);
             unsigned shard = _db.local().shard_of(token);
             bool local = shard == engine().cpu_id();
             get_stats().replica_cross_shard_ops += !local;
             return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
                                      local, cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
-                                     ballot, only_digest, da, timeout] () {
-                return paxos::paxos_state::prepare(gt, gs, *cmd, key, ballot, only_digest, da, *timeout).then([] (paxos::prepare_response r) {
+                                     ballot, only_digest, da, timeout, src_ip] () {
+                tracing::trace_state_ptr tr_state = gt;
+                return paxos::paxos_state::prepare(tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout).then([src_ip, tr_state] (paxos::prepare_response r) {
+                    tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_ip);
                     return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
                 });
             });
@@ -4814,13 +4832,15 @@ void storage_proxy::init_messaging_service() {
     ms.register_paxos_accept([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout, paxos::proposal proposal,
             std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto src_ip = src_addr.addr;
         tracing::trace_state_ptr tr_state;
         if (trace_info) {
             tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
             tracing::begin(tr_state);
+            tracing::trace(tr_state, "paxos_accept: message received from /{} ballot {}", src_ip, proposal);
         }
 
-        return get_schema_for_read(proposal.update.schema_version(), src_addr).then([this, tr_state = std::move(tr_state),
+        auto f = get_schema_for_read(proposal.update.schema_version(), src_addr).then([this, tr_state = std::move(tr_state),
                                                               proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
             dht::token token = proposal.update.decorated_key(*schema).token();
             unsigned shard = _db.local().shard_of(token);
@@ -4831,6 +4851,14 @@ void storage_proxy::init_messaging_service() {
                 return paxos::paxos_state::accept(gt, gs, token, proposal, *timeout);
             });
         });
+
+        if (tr_state) {
+            f = f.finally([tr_state, src_ip] {
+                tracing::trace(tr_state, "paxos_accept: handling is done, sending a response to /{}", src_ip);
+            });
+        }
+
+        return f;
     });
 }
 
