@@ -870,6 +870,11 @@ schema_builder& schema_builder::with_partitioner(sstring name, unsigned shard_co
     _raw._partitioner = get_partitioner(name, shard_count, sharding_ignore_msb_bits);
     return *this;
 }
+// Use only for tests!!!
+schema_builder& schema_builder::with_partitioner_for_tests_only(const dht::i_partitioner& p) {
+    _raw._partitioner = p;
+    return *this;
+}
 
 schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
         std::optional<utils::UUID> id, data_type rct)

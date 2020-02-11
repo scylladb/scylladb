@@ -1994,7 +1994,7 @@ std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {
 template <typename T>
 using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
-flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, const dht::i_partitioner& partitioner, schema_ptr schema,
+flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, schema_ptr schema,
         std::function<std::optional<dht::partition_range>()> range_generator) {
     class streaming_reader_lifecycle_policy
             : public reader_lifecycle_policy
@@ -2039,7 +2039,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             return *_contexts[engine().cpu_id()].semaphore;
         }
     };
-    auto ms = mutation_source([&db, &partitioner] (schema_ptr s,
+    auto ms = mutation_source([&db] (schema_ptr s,
             reader_permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
@@ -2047,7 +2047,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding,
             mutation_reader::forwarding fwd_mr) {
-        return make_multishard_combining_reader(make_shared<streaming_reader_lifecycle_policy>(db), partitioner, std::move(s), pr, ps, pc,
+        return make_multishard_combining_reader(make_shared<streaming_reader_lifecycle_policy>(db), std::move(s), pr, ps, pc,
                 std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();

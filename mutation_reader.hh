@@ -485,7 +485,6 @@ public:
 /// The readers' life-cycles are managed through the supplied lifecycle policy.
 flat_mutation_reader make_multishard_combining_reader(
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
-        const dht::i_partitioner& partitioner,
         schema_ptr schema,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
