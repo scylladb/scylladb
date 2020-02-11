@@ -118,7 +118,7 @@ int get_generation_number() {
 }
 
 storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>& auth_service, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, bool for_testing)
+        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, bool for_testing)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -129,6 +129,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
+        , _token_metadata(tm)
         , _la_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::la)
         , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
@@ -2001,18 +2002,6 @@ void storage_service::set_mode(mode m, sstring msg, bool log) {
     }
 }
 
-future<std::unordered_set<dht::token>> storage_service::get_local_tokens() {
-    return db::system_keyspace::get_saved_tokens().then([] (auto&& tokens) {
-        // should not be called before initServer sets this
-        if (tokens.empty()) {
-            auto err = format("get_local_tokens: tokens is empty");
-            slogger.error("{}", err);
-            throw std::runtime_error(err);
-        }
-        return tokens;
-    });
-}
-
 sstring storage_service::get_release_version() {
     return version::release();
 }
@@ -2093,8 +2082,7 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
                 bool cdc_enabled = ss.db().local().get_config().check_experimental(db::experimental_features_t::CDC);
-                ss.set_gossip_tokens(
-                        ss.get_local_tokens().get0(),
+                ss.set_gossip_tokens(db::system_keyspace::get_local_tokens().get0(),
                         cdc_enabled ? std::make_optional(cdc::get_local_streams_timestamp().get0()) : std::nullopt);
                 ss._gossiper.force_newer_generation();
                 ss._gossiper.start_gossiping(get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
@@ -2967,7 +2955,8 @@ void storage_service::leave_ring() {
     update_pending_ranges().get();
 
     auto expire_time = _gossiper.compute_expire_time().time_since_epoch().count();
-    _gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.left(get_local_tokens().get0(), expire_time)).get();
+    _gossiper.add_local_application_state(gms::application_state::STATUS,
+            value_factory.left(db::system_keyspace::get_local_tokens().get0(), expire_time)).get();
     auto delay = std::max(get_ring_delay(), gms::gossiper::INTERVAL);
     slogger.info("Announcing that I have left the ring for {}ms", delay.count());
     sleep_abortable(delay, _abort_source).get();
@@ -3001,7 +2990,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
 }
 
 future<> storage_service::start_leaving() {
-    return _gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(get_local_tokens().get0())).then([this] {
+    return _gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(db::system_keyspace::get_local_tokens().get0())).then([this] {
         _token_metadata.add_leaving_endpoint(get_broadcast_address());
         return update_pending_ranges();
     });
@@ -3264,7 +3253,7 @@ future<> storage_service::do_update_pending_ranges() {
             auto& ks = this->_db.local().find_keyspace(keyspace_name);
             auto& strategy = ks.get_replication_strategy();
             slogger.debug("Calculating pending ranges for keyspace={} starts", keyspace_name);
-            return get_local_storage_service().get_token_metadata().calculate_pending_ranges(strategy, keyspace_name).finally([&keyspace_name] {
+            return get_token_metadata().calculate_pending_ranges(strategy, keyspace_name).finally([&keyspace_name] {
                 slogger.debug("Calculating pending ranges for keyspace={} ends", keyspace_name);
             });
         });
@@ -3486,8 +3475,8 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
 future<> init_storage_service(sharded<abort_source>& abort_source, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service,
         sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
-        storage_service_config config, sharded<service::migration_notifier>& mn) {
-    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn));
+        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm) {
+    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(tm));
 }
 
 future<> deinit_storage_service() {

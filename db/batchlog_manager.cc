@@ -48,7 +48,6 @@
 
 #include "batchlog_manager.hh"
 #include "canonical_mutation.hh"
-#include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
 #include "system_keyspace.hh"
 #include "utils/rate_limiter.hh"
@@ -58,12 +57,12 @@
 #include "database.hh"
 #include "unimplemented.hh"
 #include "gms/failure_detector.hh"
-#include "service/storage_service.hh"
 #include "schema_registry.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
+#include "db/schema_tables.hh"
 #include "idl/uuid.dist.impl.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "message/messaging_service.hh"
@@ -78,7 +77,8 @@ const uint32_t db::batchlog_manager::page_size;
 db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, batchlog_manager_config config)
         : _qp(qp)
         , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
-        , _replay_rate(config.replay_rate) {
+        , _replay_rate(config.replay_rate)
+        , _delay(config.delay) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("batchlog_manager", {
@@ -125,8 +125,8 @@ future<> db::batchlog_manager::start() {
                 _timer.arm(lowres_clock::now() + std::chrono::milliseconds(replay_interval));
             });
         });
-        auto ring_delay = service::get_local_storage_service().get_ring_delay();
-        _timer.arm(lowres_clock::now() + ring_delay);
+
+        _timer.arm(lowres_clock::now() + _delay);
     }
     return make_ready_future<>();
 }
@@ -182,7 +182,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
 
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
     // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
-    auto throttle = _replay_rate / service::get_storage_service().local().get_token_metadata().get_all_endpoints_count();
+    auto throttle = _replay_rate / _qp.proxy().get_token_metadata().get_all_endpoints_count();
     auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
 
     auto batch = [this, limiter](const cql3::untyped_result_set::row& row) {

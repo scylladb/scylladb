@@ -107,7 +107,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
 
     if (!data_centers.empty()) {
-        auto dc_endpoints_map = service::get_local_storage_service().get_token_metadata().get_topology().get_datacenter_endpoints();
+        auto dc_endpoints_map = db.get_token_metadata().get_topology().get_datacenter_endpoints();
         std::unordered_set<gms::inet_address> dc_endpoints;
         for (const sstring& dc : data_centers) {
             auto it = dc_endpoints_map.find(dc);

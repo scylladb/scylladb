@@ -469,6 +469,7 @@ int main(int ac, char** av) {
 
     print_starting_message(ac, av, parsed_opts);
 
+    sharded<locator::token_metadata> token_metadata;
     sharded<service::migration_notifier> mm_notifier;
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
@@ -477,7 +478,7 @@ int main(int ac, char** av) {
     auto& qp = cql3::get_query_processor();
     auto& proxy = service::get_storage_proxy();
     auto& mm = service::get_migration_manager();
-    api::http_context ctx(db, proxy, load_meter);
+    api::http_context ctx(db, proxy, load_meter, token_metadata);
     httpd::http_server_control prometheus_server;
     utils::directories dirs;
     sharded<gms::feature_service> feature_service;
@@ -508,7 +509,8 @@ int main(int ac, char** av) {
         tcp_syncookies_sanity();
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
-                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service] {
+                &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
+                &token_metadata] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
@@ -659,6 +661,12 @@ int main(int ac, char** av) {
             });
             set_abort_on_internal_error(cfg->abort_on_internal_error());
 
+            supervisor::notify("starting tokens manager");
+            token_metadata.start().get();
+            auto stop_token_metadata = defer_verbose_shutdown("token metadata", [ &token_metadata ] {
+                token_metadata.stop().get();
+            });
+
             supervisor::notify("starting migration manager notifier");
             mm_notifier.start().get();
             auto stop_mm_notifier = defer_verbose_shutdown("migration manager notifier", [ &mm_notifier ] {
@@ -698,13 +706,13 @@ int main(int ac, char** av) {
             (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
             auto stop_cql_config_updater = defer([&] { cql_config_updater.stop().get(); });
             auto& gossiper = gms::get_gossiper();
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(*cfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(*cfg)).get();
             // #293 - do not stop anything
             //engine().at_exit([]{ return gms::get_gossiper().stop(); });
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata).get();
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
@@ -716,7 +724,7 @@ int main(int ac, char** av) {
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
             dbcfg.available_memory = memory::stats().total_memory();
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service)).get();
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata)).get();
             start_large_data_handler(db).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
@@ -809,7 +817,7 @@ int main(int ac, char** av) {
                 reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
             };
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
-                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(), std::ref(feature_service)).get();
+                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(), std::ref(feature_service), std::ref(token_metadata)).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
@@ -826,6 +834,7 @@ int main(int ac, char** av) {
             db::batchlog_manager_config bm_cfg;
             bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
             bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
+            bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
 
             db::get_batchlog_manager().start(std::ref(qp), bm_cfg).get();
             // #293 - do not stop anything

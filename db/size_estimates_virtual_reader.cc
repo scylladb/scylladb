@@ -32,7 +32,7 @@
 #include "dht/i_partitioner.hh"
 #include "partition_range_compat.hh"
 #include "range.hh"
-#include "service/storage_service.hh"
+#include "service/storage_proxy.hh"
 #include "mutation_fragment.hh"
 #include "sstables/sstables.hh"
 #include "db/timeout_clock.hh"
@@ -186,10 +186,12 @@ static system_keyspace::range_estimates estimate(const column_family& cf, const 
     return {cf.schema(), r.start, r.end, count, count > 0 ? hist.mean() : 0};
 }
 
-future<std::vector<token_range>> get_local_ranges() {
-    auto& ss = service::get_local_storage_service();
-    return ss.get_local_tokens().then([&ss] (auto&& tokens) {
-        auto ranges = ss.get_token_metadata().get_primary_ranges_for(std::move(tokens));
+/**
+ * Returns the primary ranges for the local node.
+ */
+static future<std::vector<token_range>> get_local_ranges(database& db) {
+    return db::system_keyspace::get_local_tokens().then([&db] (auto&& tokens) {
+        auto ranges = db.get_token_metadata().get_primary_ranges_for(std::move(tokens));
         std::vector<token_range> local_ranges;
         auto to_bytes = [](const std::optional<dht::token_range::bound>& b) {
             assert(b);
@@ -219,6 +221,10 @@ future<std::vector<token_range>> get_local_ranges() {
     });
 }
 
+future<std::vector<token_range>> test_get_local_ranges(database& db) {
+    return get_local_ranges(db);
+}
+
 size_estimates_mutation_reader::size_estimates_mutation_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice, streamed_mutation::forwarding fwd)
             : impl(schema)
             , _schema(std::move(schema))
@@ -237,7 +243,7 @@ future<> size_estimates_mutation_reader::get_next_partition() {
         _end_of_stream = true;
         return make_ready_future<>();
     }
-    return get_local_ranges().then([&db, this] (auto&& ranges) {
+    return get_local_ranges(db).then([&db, this] (auto&& ranges) {
         auto estimates = this->estimates_for_current_keyspace(db, std::move(ranges));
         auto mutations = db::system_keyspace::make_size_estimates_mutation(*_current_partition, std::move(estimates));
         ++_current_partition;

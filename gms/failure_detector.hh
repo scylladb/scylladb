@@ -60,6 +60,9 @@ public:
 private:
     clk::time_point _tlast{clk::time_point::min()};
     utils::bounded_stats_deque _arrival_intervals;
+    std::chrono::milliseconds _initial;
+    std::chrono::milliseconds _max_interval;
+    std::chrono::milliseconds _min_interval;
 
     // this is useless except to provide backwards compatibility in phi_convict_threshold,
     // because everyone seems pretty accustomed to the default of 8, and users who have
@@ -68,15 +71,13 @@ private:
     static constexpr double PHI_FACTOR{M_LOG10El};
 
 public:
-    arrival_window(int size)
-        : _arrival_intervals(size) {
+    arrival_window(int size, std::chrono::milliseconds initial,
+            std::chrono::milliseconds max_interval, std::chrono::milliseconds min_interval)
+        : _arrival_intervals(size)
+        , _initial(initial)
+        , _max_interval(max_interval)
+        , _min_interval(min_interval) {
     }
-
-    // in the event of a long partition, never record an interval longer than the rpc timeout,
-    // since if a host is regularly experiencing connectivity problems lasting this long we'd
-    // rather mark it down quickly instead of adapting
-    // this value defaults to the same initial value the FD is seeded with
-    static clk::duration get_max_interval();
 
     void add(clk::time_point value, const gms::inet_address& ep);
 
@@ -109,6 +110,8 @@ private:
     std::map<inet_address, arrival_window> _arrival_samples;
     std::list<i_failure_detection_event_listener*> _fd_evnt_listeners;
     double _phi = 8;
+    std::chrono::milliseconds _initial;
+    std::chrono::milliseconds _max_interval;
 
     static constexpr std::chrono::milliseconds DEFAULT_MAX_PAUSE{5000};
 
@@ -130,9 +133,8 @@ private:
     arrival_window::clk::time_point _last_paused;
 
 public:
-    failure_detector() = default;
-
-    failure_detector(double phi) : _phi(phi) {
+    failure_detector(double phi, std::chrono::milliseconds initial, std::chrono::milliseconds max_interval)
+            : _phi(phi), _initial(initial), _max_interval(max_interval) {
     }
 
     std::map<inet_address, arrival_window> arrival_samples() const {
