@@ -21,9 +21,8 @@
 
 #pragma once
 
-#include <boost/regex/icu.hpp>
-
 #include "bytes.hh"
+#include <memory>
 
 /// Implements <code>text LIKE pattern</code>.
 ///
@@ -36,12 +35,15 @@
 /// The whole text must match the pattern; thus <code>'abc' LIKE 'a'</code> doesn't match, but
 /// <code>'abc' LIKE 'a%'</code> matches.
 class like_matcher {
-    boost::u32regex _re; // Performs pattern matching.
+    class impl;
+    std::unique_ptr<impl> _impl;
 public:
     /// Compiles \c pattern and stores the result.
     ///
     /// \param pattern UTF-8 encoded pattern with wildcards '_' and '%'.
     explicit like_matcher(bytes_view pattern);
+
+    ~like_matcher();
 
     /// Runs the compiled pattern on \c text.
     ///
