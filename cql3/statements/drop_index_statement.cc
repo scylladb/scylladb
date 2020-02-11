@@ -74,7 +74,7 @@ const sstring& drop_index_statement::column_family() const
     return cf_statement::column_family();
 }
 
-future<> drop_index_statement::check_access(const service::client_state& state) const
+future<> drop_index_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
     auto cfm = lookup_indexed_table();
     if (!cfm) {

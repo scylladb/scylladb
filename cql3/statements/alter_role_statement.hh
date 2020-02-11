@@ -64,7 +64,7 @@ public:
 
     void validate(service::storage_proxy&, const service::client_state&) const override;
 
-    virtual future<> check_access(const service::client_state&) const override;
+    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state&) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(service::storage_proxy&, service::query_state&, const query_options&) const override;

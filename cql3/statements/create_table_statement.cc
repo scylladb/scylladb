@@ -75,7 +75,7 @@ create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
 {
 }
 
-future<> create_table_statement::check_access(const service::client_state& state) const {
+future<> create_table_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
 }
 

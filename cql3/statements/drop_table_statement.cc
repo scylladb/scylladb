@@ -54,7 +54,7 @@ drop_table_statement::drop_table_statement(::shared_ptr<cf_name> cf_name, bool i
 {
 }
 
-future<> drop_table_statement::check_access(const service::client_state& state) const
+future<> drop_table_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
     // invalid_request_exception is only thrown synchronously.
     try {

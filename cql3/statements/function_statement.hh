@@ -29,7 +29,7 @@ namespace statements {
 
 class function_statement : public schema_altering_statement {
 protected:
-    virtual future<> check_access(const service::client_state& state) const override;
+    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
     virtual void prepare_keyspace(const service::client_state& state) override;
     functions::function_name _name;
     std::vector<shared_ptr<cql3_type::raw>> _raw_arg_types;

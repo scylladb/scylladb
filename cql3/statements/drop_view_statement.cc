@@ -55,7 +55,7 @@ drop_view_statement::drop_view_statement(::shared_ptr<cf_name> view_name, bool i
 {
 }
 
-future<> drop_view_statement::check_access(const service::client_state& state) const
+future<> drop_view_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
     try {
         auto&& s = service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family());

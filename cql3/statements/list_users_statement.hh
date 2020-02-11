@@ -50,7 +50,7 @@ namespace statements {
 class list_users_statement : public authentication_statement {
 public:
     void validate(service::storage_proxy&, const service::client_state&) const override;
-    future<> check_access(const service::client_state&) const override;
+    future<> check_access(service::storage_proxy& proxy, const service::client_state&) const override;
     future<::shared_ptr<cql_transport::messages::result_message>> execute(service::storage_proxy&
                     , service::query_state&
                     , const query_options&) const override;

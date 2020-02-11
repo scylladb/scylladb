@@ -75,7 +75,7 @@ void cql3::statements::permission_altering_statement::validate(service::storage_
     }
 }
 
-future<> cql3::statements::permission_altering_statement::check_access(const service::client_state& state) const {
+future<> cql3::statements::permission_altering_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     state.ensure_not_anonymous();
     maybe_correct_resource(_resource, state);
 

@@ -28,7 +28,7 @@
 namespace cql3 {
 namespace statements {
 
-future<> function_statement::check_access(const service::client_state& state) const { return make_ready_future<>(); }
+future<> function_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const { return make_ready_future<>(); }
 
 function_statement::function_statement(
         functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types)
