@@ -300,7 +300,8 @@ ring_position_range_vector_sharder::next(const schema& s) {
 }
 
 future<utils::chunked_vector<partition_range>>
-split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const partition_range& pr, shard_id shard) {
+split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
+    const i_partitioner& partitioner = s.get_partitioner();
     auto next_shard = shard + 1 == partitioner.shard_count() ? 0 : shard + 1;
     auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = partitioner.shard_of(start_token);
@@ -329,12 +330,6 @@ split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, c
         return make_ready_future<std::optional<utils::chunked_vector<partition_range>>>(std::move(ret));
     });
 }
-
-future<utils::chunked_vector<partition_range>>
-split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
-    return split_range_to_single_shard(s.get_partitioner(), s, pr, shard);
-}
-
 
 int ring_position::tri_compare(const schema& s, const ring_position& o) const {
     return ring_position_comparator(s)(*this, o);

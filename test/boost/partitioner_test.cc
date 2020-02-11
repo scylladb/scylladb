@@ -469,8 +469,10 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
             dht::partition_range(make_bound(dht::ring_position::ending_at(t1)), make_bound(dht::ring_position::starting_at(t4))),
     };
     for (auto&& part : some_murmur3_partitioners) {
+        auto schema = schema_builder(s)
+            .with_partitioner(part.name(), part.shard_count(), part.sharding_ignore_msb()).build();
         for (auto&& range : some_murmur3_ranges) {
-            func_to_test(part, *s, range);
+            func_to_test(part, *schema, range);
         }
     }
 }
@@ -483,7 +485,7 @@ static
 void
 do_test_split_range_to_single_shard(const dht::i_partitioner& part, const schema& s, const dht::partition_range& pr) {
     for (auto shard : boost::irange(0u, part.shard_count())) {
-        auto ranges = dht::split_range_to_single_shard(part, s, pr, shard).get0();
+        auto ranges = dht::split_range_to_single_shard(s, pr, shard).get0();
         auto sharder = dht::ring_position_range_sharder(part, pr);
         auto x = sharder.next(s);
         auto cmp = dht::ring_position_comparator(s);
