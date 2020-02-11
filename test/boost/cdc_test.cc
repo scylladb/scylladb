@@ -27,6 +27,7 @@
 #include "schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/exception_utils.hh"
 #include "transport/messages/result_message.hh"
 
 #include "types.hh"
@@ -502,5 +503,13 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_across_shards) {
         auto rows = select_log(e, "tbl");
 
         BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::update).empty());
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_negative_ttl_fail) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("CREATE TABLE ks.fail (a int PRIMARY KEY, b int) WITH cdc = {'enabled':true,'ttl':'-1'}").get0(),
+                exceptions::configuration_exception,
+                exception_predicate::message_contains("ttl"));
     }, mk_cdc_test_config()).get();
 }
