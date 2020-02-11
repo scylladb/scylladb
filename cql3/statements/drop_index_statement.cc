@@ -76,7 +76,7 @@ const sstring& drop_index_statement::column_family() const
 
 future<> drop_index_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
-    auto cfm = lookup_indexed_table();
+    auto cfm = lookup_indexed_table(proxy);
     if (!cfm) {
         return make_ready_future<>();
     }
@@ -93,7 +93,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::an
     if (!proxy.features().cluster_supports_indexes()) {
         throw exceptions::invalid_request_exception("Index support is not enabled");
     }
-    auto cfm = lookup_indexed_table();
+    auto cfm = lookup_indexed_table(proxy);
     if (!cfm) {
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(nullptr);
     }
@@ -118,9 +118,9 @@ drop_index_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_index_statement>(*this));
 }
 
-schema_ptr drop_index_statement::lookup_indexed_table() const
+schema_ptr drop_index_statement::lookup_indexed_table(service::storage_proxy& proxy) const
 {
-    auto& db = service::get_local_storage_proxy().get_db().local();
+    auto& db = proxy.get_db().local();
     if (!db.has_keyspace(keyspace())) {
         throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace()));
     }

@@ -70,7 +70,7 @@ public:
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 private:
-    schema_ptr lookup_indexed_table() const;
+    schema_ptr lookup_indexed_table(service::storage_proxy& proxy) const;
 };
 
 }
