@@ -56,6 +56,7 @@
 #include <cstddef>
 #include "schema.hh"
 #include "db/schema_features.hh"
+#include "gms/feature.hh"
 #include "timestamp.hh"
 #include "tombstone.hh"
 #include "atomic_cell.hh"
@@ -1356,6 +1357,7 @@ private:
     locator::token_metadata& _token_metadata;
 
     bool _supports_infinite_bound_range_deletions = false;
+    gms::feature::listener_registration _infinite_bound_range_deletions_reg;
 
     future<> init_commitlog();
 public:
@@ -1581,10 +1583,6 @@ public:
 
     db::data_listeners& data_listeners() const {
         return *_data_listeners;
-    }
-
-    void enable_infinite_bound_range_deletions() {
-        _supports_infinite_bound_range_deletions = true;
     }
 
     bool supports_infinite_bound_range_deletions() {
