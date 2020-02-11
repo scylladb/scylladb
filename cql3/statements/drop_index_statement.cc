@@ -57,21 +57,11 @@ drop_index_statement::drop_index_statement(::shared_ptr<index_name> index_name, 
 {
 }
 
-// A "drop index" statement does not specify the base table's name, just an
-// index name. Nevertheless, the virtual column_family() method is supposed
-// to return a reasonable table name. If the index doesn't exist, we return
-// an empty name (this commonly happens with "if exists").
 const sstring& drop_index_statement::column_family() const
 {
-    auto& db = service::get_local_storage_proxy().get_db().local();
-    if (db.has_keyspace(keyspace())) {
-        auto schema = db.find_indexed_table(keyspace(), _index_name);
-        if (schema) {
-            return schema->cf_name();
-        }
-    }
-    // Return the empty name stored by the superclass
-    return cf_statement::column_family();
+    return _cf_name ? *_cf_name :
+            // otherwise -- the empty name stored by the superclass
+            cf_statement::column_family();
 }
 
 future<> drop_index_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
@@ -83,9 +73,17 @@ future<> drop_index_statement::check_access(service::storage_proxy& proxy, const
     return state.has_column_family_access(cfm->ks_name(), cfm->cf_name(), auth::permission::ALTER);
 }
 
-void drop_index_statement::validate(service::storage_proxy&, const service::client_state& state) const
+void drop_index_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
 {
     // validated in lookup_indexed_table()
+
+    auto& db = proxy.get_db().local();
+    if (db.has_keyspace(keyspace())) {
+        auto schema = db.find_indexed_table(keyspace(), _index_name);
+        if (schema) {
+            _cf_name = schema->cf_name();
+        }
+    }
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const

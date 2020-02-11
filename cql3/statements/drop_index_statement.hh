@@ -46,7 +46,7 @@
 
 #include <seastar/core/distributed.hh>
 #include <seastar/core/shared_ptr.hh>
-
+#include <optional>
 #include <memory>
 
 namespace cql3 {
@@ -55,6 +55,12 @@ namespace statements {
 
 class drop_index_statement : public schema_altering_statement {
     sstring _index_name;
+
+    // A "drop index" statement does not specify the base table's name, just an
+    // index name. Nevertheless, the virtual column_family() method is supposed
+    // to return a reasonable table name. If the index doesn't exist, we return
+    // an empty name (this commonly happens with "if exists").
+    mutable std::optional<sstring> _cf_name;
     bool _if_exists;
     cql_stats* _cql_stats = nullptr;
 public:
