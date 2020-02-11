@@ -62,6 +62,7 @@ private:
     std::vector<gms::feature::listener_registration> _feature_listeners;
     seastar::gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;
+    seastar::abort_source _as;
 public:
     explicit migration_manager(migration_notifier&);
 
