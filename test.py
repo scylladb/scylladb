@@ -319,36 +319,38 @@ class CqlTest(Test):
             print_unidiff(self.result, self.reject)
 
 
-def print_start_blurb():
-    print("="*80)
-    print("{:7s} {:50s} {:^8s} {:8s}".format("[N/TOTAL]", "TEST", "MODE", "RESULT"))
-    print("-"*78)
+class TabularConsoleOutput:
+    """Print test progress to the console"""
 
+    def __init__(self, verbose, test_count):
+        self.verbose = verbose
+        self.test_count = test_count
+        self.last_test_no = 0
+        self.last_line_len = 1
 
-def print_end_blurb(verbose):
-    if not verbose:
-        sys.stdout.write('\n')
-    print("-"*78)
+    def print_start_blurb(self):
+        print("="*80)
+        print("{:7s} {:50s} {:^8s} {:8s}".format("[N/TOTAL]", "TEST", "MODE", "RESULT"))
+        print("-"*78)
 
+    def print_end_blurb(self):
+        if not self.verbose:
+            sys.stdout.write('\n')
+        print("-"*78)
 
-def print_progress(test, cookie, verbose):
-    if isinstance(cookie, int):
-        cookie = (0, 1, cookie)
-
-    last_len, n, n_total = cookie
-    msg = "{:9s} {:50s} {:^8s} {:8s}".format(
-        "[{}/{}]".format(n, n_total),
-        test.name, test.mode[:8],
-        palette.ok("[ PASS ]") if test.success else palette.fail("[ FAIL ]")
-    )
-    if verbose is False:
-        print('\r' + ' ' * last_len, end='')
-        last_len = len(msg)
-        print('\r' + msg, end='')
-    else:
-        print(msg)
-
-    return (last_len, n + 1, n_total)
+    def print_progress(self, test):
+        self.last_test_no += 1
+        msg = "{:9s} {:50s} {:^8s} {:8s}".format(
+            "[{}/{}]".format(self.last_test_no, self.test_count),
+            test.name, test.mode[:8],
+            palette.ok("[ PASS ]") if test.success else palette.fail("[ FAIL ]")
+        )
+        if self.verbose is False:
+            print('\r' + ' ' * self.last_line_len, end='')
+            self.last_line_len = len(msg)
+            print('\r' + msg, end='')
+        else:
+            print(msg)
 
 
 async def run_test(test, options):
@@ -494,7 +496,7 @@ def find_tests(options):
 
 
 async def run_all_tests(signaled, options):
-    cookie = TestSuite.test_count()
+    console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
     signaled_task = asyncio.create_task(signaled.wait())
     pending = set([signaled_task])
 
@@ -506,15 +508,15 @@ async def run_all_tests(signaled, options):
         raise asyncio.CancelledError
 
     async def reap(done, pending, signaled):
-        nonlocal cookie
+        nonlocal console
         if signaled.is_set():
             await cancel(pending)
         for coro in done:
             result = coro.result()
             if isinstance(result, bool):
                 continue    # skip signaled task result
-            cookie = print_progress(result, cookie, options.verbose)
-    print_start_blurb()
+            console.print_progress(result)
+    console.print_start_blurb()
     try:
         for test in TestSuite.tests():
             # +1 for 'signaled' event
@@ -532,7 +534,7 @@ async def run_all_tests(signaled, options):
     except asyncio.CancelledError:
         return
 
-    print_end_blurb(options.verbose)
+    console.print_end_blurb()
 
 
 def read_log(log_filename):
