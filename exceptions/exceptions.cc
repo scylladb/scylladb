@@ -45,5 +45,5 @@
 #include "log.hh"
 
 exceptions::truncate_exception::truncate_exception(std::exception_ptr ep)
-    : request_execution_exception(exceptions::exception_code::PROTOCOL_ERROR, format("Error during truncate: {}", ep))
+    : request_execution_exception(exceptions::exception_code::TRUNCATE_ERROR, format("Error during truncate: {}", ep))
 {}
