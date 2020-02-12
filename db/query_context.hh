@@ -59,7 +59,7 @@ struct query_context {
                 db::timeout_clock::duration::zero();
 
         return do_with(timeout_config{d, d, d, d, d, d, d}, [this, req = std::move(req), &args...] (auto& tcfg) {
-            return _qp.local().process(req,
+            return _qp.local().execute_internal(req,
                 cql3::query_options::DEFAULT.get_consistency(),
                 tcfg,
                 { data_value(std::forward<Args>(args))... },

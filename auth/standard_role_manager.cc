@@ -87,7 +87,7 @@ static future<std::optional<record>> find_record(cql3::query_processor& qp, std:
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
 
-    return qp.process(
+    return qp.execute_internal(
             query,
             consistency_for_role(role_name),
             internal_distributed_timeout_config(),
@@ -171,7 +171,7 @@ future<> standard_role_manager::create_default_role_if_missing() const {
                     meta::roles_table::qualified_name(),
                     meta::roles_table::role_col_name);
 
-            return _qp.process(
+            return _qp.execute_internal(
                     query,
                     db::consistency_level::QUORUM,
                     internal_distributed_timeout_config(),
@@ -198,7 +198,7 @@ future<> standard_role_manager::migrate_legacy_metadata() const {
     log.info("Starting migration of legacy user metadata.");
     static const sstring query = format("SELECT * FROM {}.{}", meta::AUTH_KS, legacy_table_name);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
             internal_distributed_timeout_config()).then([this](::shared_ptr<cql3::untyped_result_set> results) {
@@ -259,7 +259,7 @@ future<> standard_role_manager::create_or_replace(std::string_view role_name, co
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             consistency_for_role(role_name),
             internal_distributed_timeout_config(),
@@ -299,7 +299,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
             return make_ready_future<>();
         }
 
-        return _qp.process(
+        return _qp.execute_internal(
                 format("UPDATE {} SET {} WHERE {} = ?",
                         meta::roles_table::qualified_name(),
                         build_column_assignments(u),
@@ -321,7 +321,7 @@ future<> standard_role_manager::drop(std::string_view role_name) const {
             static const sstring query = format("SELECT member FROM {} WHERE role = ?",
                     meta::role_members_table::qualified_name());
 
-            return _qp.process(
+            return _qp.execute_internal(
                     query,
                     consistency_for_role(role_name),
                     internal_distributed_timeout_config(),
@@ -360,7 +360,7 @@ future<> standard_role_manager::drop(std::string_view role_name) const {
                     meta::roles_table::qualified_name(),
                     meta::roles_table::role_col_name);
 
-            return _qp.process(
+            return _qp.execute_internal(
                     query,
                     consistency_for_role(role_name),
                     internal_distributed_timeout_config(),
@@ -387,7 +387,7 @@ standard_role_manager::modify_membership(
                 (ch == membership_change::add ? '+' : '-'),
                 meta::roles_table::role_col_name);
 
-        return _qp.process(
+        return _qp.execute_internal(
                 query,
                 consistency_for_role(grantee_name),
                 internal_distributed_timeout_config(),
@@ -397,7 +397,7 @@ standard_role_manager::modify_membership(
     const auto modify_role_members = [this, role_name, grantee_name, ch] {
         switch (ch) {
             case membership_change::add:
-                return _qp.process(
+                return _qp.execute_internal(
                         format("INSERT INTO {} (role, member) VALUES (?, ?)",
                                 meta::role_members_table::qualified_name()),
                         consistency_for_role(role_name),
@@ -405,7 +405,7 @@ standard_role_manager::modify_membership(
                         {sstring(role_name), sstring(grantee_name)}).discard_result();
 
             case membership_change::remove:
-                return _qp.process(
+                return _qp.execute_internal(
                         format("DELETE FROM {} WHERE role = ? AND member = ?",
                                 meta::role_members_table::qualified_name()),
                         consistency_for_role(role_name),
@@ -509,7 +509,7 @@ future<role_set> standard_role_manager::query_all() const {
     // To avoid many copies of a view.
     static const auto role_col_name_string = sstring(meta::roles_table::role_col_name);
 
-    return _qp.process(
+    return _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
             internal_distributed_timeout_config()).then([](::shared_ptr<cql3::untyped_result_set> results) {

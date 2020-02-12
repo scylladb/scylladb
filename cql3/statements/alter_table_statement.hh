@@ -81,7 +81,7 @@ public:
     virtual future<> check_access(const service::client_state& state) const override;
     virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const override;
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) const override;
-    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 private:
     void add_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static) const;
     void alter_column(schema_ptr schema, const table& cf, schema_builder& cfm, std::vector<view_ptr>& view_updates, const shared_ptr<column_identifier> column_name, const cql3_type validator, const column_definition* def, bool is_static) const;

@@ -477,8 +477,8 @@ future<> query_processor::stop() {
 }
 
 future<::shared_ptr<result_message>>
-query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options) {
-    log.trace("process: \"{}\"", query_string);
+query_processor::execute_direct(const sstring_view& query_string, service::query_state& query_state, query_options& options) {
+    log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state());
     auto cql_statement = p->statement;
@@ -496,21 +496,13 @@ query_processor::process(const sstring_view& query_string, service::query_state&
             metrics.regularStatementsExecuted.inc();
 #endif
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return process_statement_unprepared(std::move(cql_statement), query_state, options);
-}
-
-future<::shared_ptr<result_message>>
-query_processor::process_statement_unprepared(
-        ::shared_ptr<cql_statement> statement,
-        service::query_state& query_state,
-        const query_options& options) {
-    return statement->check_access(query_state.get_client_state()).then([this, statement, &query_state, &options] () mutable {
-        return process_authorized_statement(std::move(statement), query_state, options);
+    return cql_statement->check_access(query_state.get_client_state()).then([this, cql_statement, &query_state, &options] () mutable {
+        return process_authorized_statement(std::move(cql_statement), query_state, options);
     });
 }
 
 future<::shared_ptr<result_message>>
-query_processor::process_statement_prepared(
+query_processor::execute_prepared(
         statements::prepared_statement::checked_weak_ptr prepared,
         cql3::prepared_cache_key_type cache_key,
         service::query_state& query_state,
@@ -691,14 +683,6 @@ statements::prepared_statement::checked_weak_ptr query_processor::prepare_intern
     return p->checked_weak_from_this();
 }
 
-future<::shared_ptr<untyped_result_set>>
-query_processor::execute_internal(const sstring& query_string, const std::initializer_list<data_value>& values) {
-    if (log.is_enabled(logging::log_level::trace)) {
-        log.trace("execute_internal: \"{}\" ({})", query_string, ::join(", ", values));
-    }
-    return execute_internal(prepare_internal(query_string), values);
-}
-
 struct internal_query_state {
     sstring query_string;
     std::unique_ptr<query_options> opts;
@@ -825,38 +809,23 @@ query_processor::execute_paged_internal(::shared_ptr<internal_query_state> state
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
-        statements::prepared_statement::checked_weak_ptr p,
-        const std::initializer_list<data_value>& values) {
-    query_options opts = make_internal_options(p, values, db::consistency_level::ONE, infinite_timeout_config);
-    return do_with(std::move(opts), [this, p = std::move(p)](auto& opts) {
-        return p->statement->execute(
-                _proxy,
-                *_internal_state,
-                opts).then([&opts, stmt = p->statement](auto msg) {
-            return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
-        });
-    });
-}
-
-future<::shared_ptr<untyped_result_set>>
-query_processor::process(
         const sstring& query_string,
         db::consistency_level cl,
         const timeout_config& timeout_config,
         const std::initializer_list<data_value>& values,
         bool cache) {
     if (cache) {
-        return process(prepare_internal(query_string), cl, timeout_config, values);
+        return execute_with_params(prepare_internal(query_string), cl, timeout_config, values);
     } else {
         auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
         p->statement->validate(_proxy, *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
-        return process(std::move(checked_weak_ptr), cl, timeout_config, values).finally([p = std::move(p)] {});
+        return execute_with_params(std::move(checked_weak_ptr), cl, timeout_config, values).finally([p = std::move(p)] {});
     }
 }
 
 future<::shared_ptr<untyped_result_set>>
-query_processor::process(
+query_processor::execute_with_params(
         statements::prepared_statement::checked_weak_ptr p,
         db::consistency_level cl,
         const timeout_config& timeout_config,
@@ -870,7 +839,7 @@ query_processor::process(
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-query_processor::process_batch(
+query_processor::execute_batch(
         ::shared_ptr<statements::batch_statement> batch,
         service::query_state& query_state,
         query_options& options,

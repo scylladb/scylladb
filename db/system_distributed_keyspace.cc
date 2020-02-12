@@ -158,7 +158,7 @@ static const timeout_config internal_distributed_timeout_config = [] {
 }();
 
 future<std::unordered_map<utils::UUID, sstring>> system_distributed_keyspace::view_status(sstring ks_name, sstring view_name) const {
-    return _qp.process(
+    return _qp.execute_internal(
             format("SELECT host_id, status FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
             internal_distributed_timeout_config,
@@ -175,7 +175,7 @@ future<std::unordered_map<utils::UUID, sstring>> system_distributed_keyspace::vi
 
 future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring view_name) const {
     return db::system_keyspace::get_local_host_id().then([this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (utils::UUID host_id) {
-        return _qp.process(
+        return _qp.execute_internal(
                 format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
                 internal_distributed_timeout_config,
@@ -186,7 +186,7 @@ future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring 
 
 future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring view_name) const {
     return db::system_keyspace::get_local_host_id().then([this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (utils::UUID host_id) {
-        return _qp.process(
+        return _qp.execute_internal(
                 format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
                 internal_distributed_timeout_config,
@@ -196,7 +196,7 @@ future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring
 }
 
 future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_name) const {
-    return _qp.process(
+    return _qp.execute_internal(
             format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
             internal_distributed_timeout_config,
@@ -282,7 +282,7 @@ system_distributed_keyspace::insert_cdc_topology_description(
         db_clock::time_point time,
         const cdc::topology_description& description,
         context ctx) {
-    return _qp.process(
+    return _qp.execute_internal(
             format("INSERT INTO {}.{} (time, description) VALUES (?,?)", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_timeout_config,
@@ -294,7 +294,7 @@ future<std::optional<cdc::topology_description>>
 system_distributed_keyspace::read_cdc_topology_description(
         db_clock::time_point time,
         context ctx) {
-    return _qp.process(
+    return _qp.execute_internal(
             format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_timeout_config,
@@ -322,7 +322,7 @@ system_distributed_keyspace::expire_cdc_topology_description(
         db_clock::time_point streams_ts,
         db_clock::time_point expiration_time,
         context ctx) {
-    return _qp.process(
+    return _qp.execute_internal(
             format("UPDATE {}.{} SET expired = ? WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_timeout_config,
@@ -343,7 +343,7 @@ system_distributed_keyspace::create_cdc_desc(
         db_clock::time_point time,
         const std::vector<cdc::stream_id>& streams,
         context ctx) {
-    return _qp.process(
+    return _qp.execute_internal(
             format("INSERT INTO {}.{} (time, streams) VALUES (?,?)", NAME, CDC_DESC),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_timeout_config,
@@ -356,7 +356,7 @@ system_distributed_keyspace::expire_cdc_desc(
         db_clock::time_point streams_ts,
         db_clock::time_point expiration_time,
         context ctx) {
-    return _qp.process(
+    return _qp.execute_internal(
             format("UPDATE {}.{} SET expired = ? WHERE time = ?", NAME, CDC_DESC),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_timeout_config,
@@ -368,7 +368,7 @@ future<bool>
 system_distributed_keyspace::cdc_desc_exists(
         db_clock::time_point streams_ts,
         context ctx) {
-    return _qp.process(
+    return _qp.execute_internal(
             format("SELECT time FROM {}.{} WHERE time = ?", NAME, CDC_DESC),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_timeout_config,

@@ -817,7 +817,7 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
 
-    return qp.local().process(query, query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
+    return qp.local().execute_direct(query, query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
         if (msg->move_to_shard()) {
             return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
         } else {
@@ -923,7 +923,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     }
 
     tracing::trace(trace_state, "Processing a statement");
-    return qp.local().process_statement_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
+    return qp.local().execute_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version] (auto msg) {
         if (msg->move_to_shard()) {
             return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
@@ -1043,7 +1043,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     }
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
-    return qp.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries))
+    return qp.local().execute_batch(batch, query_state, options, std::move(pending_authorization_entries))
             .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
         if (msg->move_to_shard()) {
             return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());

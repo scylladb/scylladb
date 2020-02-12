@@ -114,10 +114,10 @@ public:
             ::shared_ptr<term::raw> per_partition_limit,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns);
 
-    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override {
+    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override {
         return prepare(db, stats, false);
     }
-    std::unique_ptr<prepared> prepare(database& db, cql_stats& stats, bool for_view);
+    std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats, bool for_view);
 private:
     void maybe_jsonize_select_clause(database& db, schema_ptr schema);
     ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(

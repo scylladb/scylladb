@@ -81,7 +81,7 @@ public:
     void validate(service::storage_proxy&, const service::client_state& state) const override;
     future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy&, bool is_local_only) const override;
 
-    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 private:
     void validate_for_local_index(schema_ptr schema) const;
     void validate_for_frozen_collection(::shared_ptr<index_target> target) const;
