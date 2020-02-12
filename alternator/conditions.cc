@@ -32,6 +32,7 @@
 #include <stdexcept>
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include "utils/overloaded_functor.hh"
 
 #include "expressions_eval.hh"
 
@@ -575,9 +576,6 @@ bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value
     return require_all;
 }
 
-template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
-template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
-
 bool calculate_primitive_condition(const parsed::primitive_condition& cond,
         std::unordered_set<std::string>& used_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
@@ -657,7 +655,7 @@ bool verify_condition_expression(
     if (condition_expression.empty()) {
         return true;
     }
-    bool ret = std::visit(overloaded {
+    bool ret = std::visit(overloaded_functor {
         [&] (const parsed::primitive_condition& cond) -> bool {
             return calculate_primitive_condition(cond, used_attribute_values,
                     used_attribute_names, req, schema, previous_item);

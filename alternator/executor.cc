@@ -49,6 +49,7 @@
 #include "cql3/constants.hh"
 #include <optional>
 #include "utils/big_decimal.hh"
+#include "utils/overloaded_functor.hh"
 #include "seastar/json/json_elements.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "collection_mutation.hh"
@@ -1749,9 +1750,6 @@ static rjson::value number_subtract(const rjson::value& v1, const rjson::value& 
     return ret;
 }
 
-template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
-template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
-
 // calculate_size() is ConditionExpression's size() function, i.e., it takes
 // a JSON-encoded value and returns its "size" as defined differently for the
 // different types - also as a JSON-encoded number.
@@ -1818,7 +1816,7 @@ rjson::value calculate_value(const parsed::value& v,
         const rjson::value& update_info,
         schema_ptr schema,
         const std::unique_ptr<rjson::value>& previous_item) {
-    return std::visit(overloaded {
+    return std::visit(overloaded_functor {
         [&] (const std::string& valref) -> rjson::value {
             if (!expression_attribute_values) {
                 throw api_error("ValidationException",
@@ -2176,7 +2174,7 @@ static rjson::value describe_item(schema_ptr schema,
 }
 
 static bool check_needs_read_before_write(const parsed::value& v) {
-    return std::visit(overloaded {
+    return std::visit(overloaded_functor {
         [&] (const std::string& valref) -> bool {
             return false;
         },
@@ -2193,7 +2191,7 @@ static bool check_needs_read_before_write(const parsed::value& v) {
 
 static bool check_needs_read_before_write(const parsed::update_expression& update_expression) {
     return boost::algorithm::any_of(update_expression.actions(), [](const parsed::update_expression::action& action) {
-        return std::visit(overloaded {
+        return std::visit(overloaded_functor {
             [&] (const parsed::update_expression::action::set& a) -> bool {
                 return check_needs_read_before_write(a._rhs._v1) || (a._rhs._op != 'v' && check_needs_read_before_write(a._rhs._v2));
             },
@@ -2352,7 +2350,7 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item,
                         format("Invalid UpdateExpression: two document paths overlap with each other: {} and {}.",
                                 column_name, column_name));
             }
-            std::visit(overloaded {
+            std::visit(overloaded_functor {
                 [&] (const parsed::update_expression::action::set& a) {
                     auto value = calculate_value(a._rhs, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
                     do_update(to_bytes(column_name), value);

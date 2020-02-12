@@ -30,6 +30,7 @@
 #include <cctype>
 #include "cql3/query_processor.hh"
 #include "service/storage_service.hh"
+#include "utils/overloaded_functor.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -57,9 +58,6 @@ inline std::vector<std::string_view> split(std::string_view text, char separator
     }
     return tokens;
 }
-
-template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
-template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 // DynamoDB HTTP error responses are structured as follows
 // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html
@@ -94,7 +92,7 @@ public:
                  return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
              }
              auto res = resf.get0();
-             std::visit(overloaded {
+             std::visit(overloaded_functor {
                  [&] (const json::json_return_type& json_return_value) {
                      slogger.trace("api_handler success case");
                      if (json_return_value._body_writer) {

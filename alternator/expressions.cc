@@ -22,6 +22,7 @@
 #include "expressions.hh"
 #include "alternator/expressionsLexer.hpp"
 #include "alternator/expressionsParser.hpp"
+#include "utils/overloaded_functor.hh"
 
 #include <seastarx.hh>
 
@@ -74,13 +75,10 @@ parse_condition_expression(std::string query) {
     }
 }
 
-template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
-template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
-
 namespace parsed {
 
 void update_expression::add(update_expression::action a) {
-    std::visit(overloaded {
+    std::visit(overloaded_functor {
         [&] (action::set&)    { seen_set = true; },
         [&] (action::remove&) { seen_remove = true; },
         [&] (action::add&)    { seen_add = true; },
@@ -104,7 +102,7 @@ void update_expression::append(update_expression other) {
 }
 
 void condition_expression::append(condition_expression&& a, char op) {
-    std::visit(overloaded {
+    std::visit(overloaded_functor {
         [&] (condition_list& x) {
             // If 'a' has a single condition, we could, instead of inserting
             // it insert its single condition (possibly negated if a._negated)
