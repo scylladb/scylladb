@@ -4263,3 +4263,45 @@ SEASTAR_TEST_CASE(test_rf_expand) {
         });
     });
 }
+
+// Test that tombstones with future timestamps work correctly
+// when a write with lower timestamp arrives - in such case,
+// if the base row is covered by such a tombstone, a view update
+// needs to take it into account. Refs #5793
+SEASTAR_TEST_CASE(test_views_with_future_tombstones) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE t (a int, b int, c int, d int, e int, PRIMARY KEY (a,b,c));");
+        cquery_nofail(e, "CREATE MATERIALIZED VIEW tv AS SELECT * FROM t"
+                " WHERE a IS NOT NULL AND b IS NOT NULL AND c IS NOT NULL PRIMARY KEY (b,a,c);");
+
+        // Partition tombstone
+        cquery_nofail(e, "delete from t using timestamp 10 where a=1;");
+        auto msg = cquery_nofail(e, "select * from t;");
+        assert_that(msg).is_rows().with_size(0);
+        cquery_nofail(e, "insert into t (a,b,c,d,e) values (1,2,3,4,5) using timestamp 8;");
+        msg = cquery_nofail(e, "select * from t;");
+        assert_that(msg).is_rows().with_size(0);
+        msg = cquery_nofail(e, "select * from tv;");
+        assert_that(msg).is_rows().with_size(0);
+
+        // Range tombstone
+        cquery_nofail(e, "delete from t using timestamp 16 where a=2 and b > 1 and b < 4;");
+        msg = cquery_nofail(e, "select * from t;");
+        assert_that(msg).is_rows().with_size(0);
+        cquery_nofail(e, "insert into t (a,b,c,d,e) values (2,3,4,5,6) using timestamp 12;");
+        msg = cquery_nofail(e, "select * from t;");
+        assert_that(msg).is_rows().with_size(0);
+        msg = cquery_nofail(e, "select * from tv;");
+        assert_that(msg).is_rows().with_size(0);
+
+        // Row tombstone
+        cquery_nofail(e, "delete from t using timestamp 24 where a=3 and b=4 and c=5;");
+        msg = cquery_nofail(e, "select * from t;");
+        assert_that(msg).is_rows().with_size(0);
+        cquery_nofail(e, "insert into t (a,b,c,d,e) values (3,4,5,6,7) using timestamp 18;");
+        msg = cquery_nofail(e, "select * from t;");
+        assert_that(msg).is_rows().with_size(0);
+        msg = cquery_nofail(e, "select * from tv;");
+        assert_that(msg).is_rows().with_size(0);
+    });
+}

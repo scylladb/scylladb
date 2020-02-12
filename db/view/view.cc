@@ -879,7 +879,11 @@ future<stop_iteration> view_update_builder::on_results() {
     if (_update && !_update->is_end_of_partition()) {
         if (_update->is_clustering_row()) {
             apply_tracked_tombstones(_update_tombstone_tracker, _update->as_mutable_clustering_row());
-            generate_update(std::move(*_update).as_clustering_row(), { });
+            auto existing_tombstone = _existing_tombstone_tracker.current_tombstone();
+            auto existing = existing_tombstone
+                          ? std::optional<clustering_row>(std::in_place, _update->as_clustering_row().key(), row_tombstone(std::move(existing_tombstone)), row_marker(), ::row())
+                          : std::nullopt;
+            generate_update(std::move(*_update).as_clustering_row(), std::move(existing));
         }
         return advance_updates();
     }
