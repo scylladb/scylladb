@@ -40,7 +40,6 @@
 
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include <seastar/core/distributed.hh>
-#include "cql3/query_processor.hh"
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
 #include "streaming/stream_session_state.hh"

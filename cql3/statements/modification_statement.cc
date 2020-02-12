@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "types/map.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
@@ -52,6 +53,7 @@
 #include "db/config.hh"
 #include "dht/murmur3_partitioner.hh"
 #include "service/storage_service.hh"
+#include "transport/messages/result_message.hh"
 #include "database.hh"
 #include <seastar/core/execution_stage.hh>
 #include "utils/UUID_gen.hh"

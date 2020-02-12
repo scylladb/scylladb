@@ -50,6 +50,7 @@
 #include "db/schema_tables.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "storage_service.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "database.hh"
 #include "cdc/log.hh"
 

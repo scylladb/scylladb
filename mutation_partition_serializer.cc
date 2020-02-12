@@ -35,6 +35,7 @@
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "service/storage_service.hh"
+#include "frozen_mutation.hh"
 
 using namespace db;
 

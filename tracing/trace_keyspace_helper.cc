@@ -44,6 +44,7 @@
 #include "tracing/tracing_backend_registry.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/query_processor.hh"
 #include "cql3/cql_config.hh"
 #include "types/set.hh"
 

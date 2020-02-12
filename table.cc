@@ -24,6 +24,7 @@
 #include "sstables/sstables_manager.hh"
 #include "service/priority_manager.hh"
 #include "db/view/view_updating_consumer.hh"
+#include "db/schema_tables.hh"
 #include "cell_locking.hh"
 #include "mutation_fragment.hh"
 #include "mutation_partition.hh"

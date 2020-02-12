@@ -22,7 +22,6 @@
 #pragma once
 
 #include "bytes.hh"
-#include "cql3/query_processor.hh"
 #include "schema.hh"
 #include "service/migration_manager.hh"
 #include "utils/UUID.hh"
@@ -31,6 +30,10 @@
 #include <seastar/core/sstring.hh>
 
 #include <unordered_map>
+
+namespace cql3 {
+class query_processor;
+}
 
 namespace cdc {
     class stream_id;

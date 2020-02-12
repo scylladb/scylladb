@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "types/map.hh"
 #include "sstables/writer.hh"
 #include "sstables/sstables.hh"
 #include "sstables/binary_search.hh"

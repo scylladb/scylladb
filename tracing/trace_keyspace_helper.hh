@@ -45,7 +45,6 @@
 #include <seastar/core/apply.hh>
 #include <seastar/core/metrics_registration.hh>
 #include "tracing/tracing.hh"
-#include "cql3/query_processor.hh"
 #include "table_helper.hh"
 
 namespace tracing {

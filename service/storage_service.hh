@@ -50,7 +50,6 @@
 #include "dht/token_range_endpoints.hh"
 #include <seastar/core/sleep.hh>
 #include "gms/application_state.hh"
-#include "db/system_distributed_keyspace.hh"
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/gate.hh>
 #include "utils/fb_utilities.hh"
@@ -58,15 +57,26 @@
 #include "database_fwd.hh"
 #include "db/schema_features.hh"
 #include "streaming/stream_state.hh"
-#include "streaming/stream_plan.hh"
 #include <seastar/core/distributed.hh>
 #include "utils/disk-error-handler.hh"
 #include "gms/feature.hh"
+#include "service/migration_listener.hh"
 #include "gms/feature_service.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
 #include "cdc/metadata.hh"
+
+namespace db {
+class system_distributed_keyspace;
+namespace view {
+class view_update_generator;
+}
+}
+
+namespace cql3 {
+class cql_config;
+}
 
 namespace cql_transport {
     class cql_server;
