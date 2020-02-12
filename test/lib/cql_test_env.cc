@@ -193,7 +193,14 @@ public:
         auto stmt = prepared->statement;
         assert(stmt->get_bound_terms() == values.size());
 
-        auto options = ::make_shared<cql3::query_options>(cl, infinite_timeout_config, std::move(values));
+        const auto& so = cql3::query_options::specific_options::DEFAULT;
+        auto options = ::make_shared<cql3::query_options>(cl, infinite_timeout_config,
+                std::move(values), cql3::query_options::specific_options{
+                            so.page_size,
+                            so.state,
+                            db::consistency_level::SERIAL,
+                            so.timestamp,
+                        });
         options->prepare(prepared->bound_names);
 
         auto qs = make_query_state();
