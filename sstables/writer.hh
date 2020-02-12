@@ -30,6 +30,7 @@
 #include <seastar/core/byteorder.hh>
 #include "version.hh"
 #include "data/value_view.hh"
+#include "counters.hh"
 #include "service/storage_service.hh"
 
 namespace sstables {

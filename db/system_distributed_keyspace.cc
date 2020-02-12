@@ -31,6 +31,7 @@
 #include "types/tuple.hh"
 #include "types/set.hh"
 #include "cdc/generation.hh"
+#include "cql3/query_processor.hh"
 
 #include <seastar/core/reactor.hh>
 #include <seastar/core/shared_ptr.hh>

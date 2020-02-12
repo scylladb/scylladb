@@ -7,6 +7,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/distributed.hh>
+#include "types/map.hh"
 #include "sstables/sstables.hh"
 #include <seastar/testing/test_case.hh>
 #include "schema.hh"
