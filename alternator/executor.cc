@@ -805,8 +805,18 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     if (rjson::find(table_info, "SSESpecification")) {
         return make_ready_future<request_return_type>(api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported."));
     }
-    if (rjson::find(table_info, "StreamSpecification")) {
-        return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported."));
+    // We don't yet support streams (CDC), but a StreamSpecification asking
+    // *not* to use streams should be accepted:
+    rjson::value* stream_specification = rjson::find(table_info, "StreamSpecification");
+    if (stream_specification && stream_specification->IsObject()) {
+        rjson::value* stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
+        if (!stream_enabled || !stream_enabled->IsBool()) {
+            return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification needs boolean StreamEnabled"));
+        }
+        if (stream_enabled->GetBool()) {
+            // TODO: support streams
+            return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported."));
+        }
     }
 
     builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
