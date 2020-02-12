@@ -363,17 +363,18 @@ class TabularConsoleOutput:
 
 async def run_test(test, options):
     """Run test program, return True if success else False"""
-    file = io.StringIO()
 
-    def report_error(out):
-        print('=== stdout START ===', file=file)
-        print(out, file=file)
-        print('=== stdout END ===', file=file)
-    process = None
-    stdout = None
-    logging.info("Starting test #%d: %s %s", test.id, test.path, " ".join(test.args))
-    try:
-        with open(test.log_filename, "wb") as log:
+    with open(test.log_filename, "wb") as log:
+        file = io.StringIO()
+
+        def report_error(out):
+            print('=== stdout START ===', file=file)
+            print(out, file=file)
+            print('=== stdout END ===', file=file)
+        process = None
+        stdout = None
+        logging.info("Starting test #%d: %s %s", test.id, test.path, " ".join(test.args))
+        try:
             process = await asyncio.create_subprocess_exec(
                 test.path,
                 *test.args,
@@ -385,23 +386,23 @@ async def run_test(test, options):
                          ),
                 preexec_fn=os.setsid,
             )
-        stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
-        if process.returncode != 0:
-            print('  with error code {code}\n'.format(code=process.returncode), file=file)
-            report_error(stdout.decode(encoding='UTF-8'))
-        return process.returncode == 0
-    except (asyncio.TimeoutError, asyncio.CancelledError) as e:
-        if process is not None:
-            process.kill()
-            stdout, _ = await process.communicate()
-        if isinstance(e, asyncio.TimeoutError):
-            print('  timed out', file=file)
-            report_error(stdout.decode(encoding='UTF-8') if stdout else "No output")
-        elif isinstance(e, asyncio.CancelledError):
-            print(test.name, end=" ")
-    except Exception as e:
-        print('  with error {e}\n'.format(e=e), file=file)
-        report_error(e)
+            stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
+            if process.returncode != 0:
+                print('  with error code {code}\n'.format(code=process.returncode), file=file)
+                report_error(stdout.decode(encoding='UTF-8'))
+            return process.returncode == 0
+        except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+            if process is not None:
+                process.kill()
+                stdout, _ = await process.communicate()
+            if isinstance(e, asyncio.TimeoutError):
+                print('  timed out', file=file)
+                report_error(stdout.decode(encoding='UTF-8') if stdout else "No output")
+            elif isinstance(e, asyncio.CancelledError):
+                print(test.name, end=" ")
+        except Exception as e:
+            print('  with error {e}\n'.format(e=e), file=file)
+            report_error(e)
     return False
 
 
