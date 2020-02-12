@@ -480,7 +480,8 @@ def parse_cmd_line():
     prepare_dir(args.tmpdir, "*.log")
 
     for mode in args.modes:
-        prepare_dir(os.path.join(args.tmpdir, mode), "*.{log,reject}")
+        prepare_dir(os.path.join(args.tmpdir, mode), "*.log")
+        prepare_dir(os.path.join(args.tmpdir, mode), "*.reject")
         prepare_dir(os.path.join(args.tmpdir, mode, "xml"), "*.xml")
 
     return args
