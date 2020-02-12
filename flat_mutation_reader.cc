@@ -924,6 +924,72 @@ void flat_mutation_reader::do_upgrade_schema(const schema_ptr& s) {
 invalid_mutation_fragment_stream::invalid_mutation_fragment_stream(std::runtime_error e) : std::runtime_error(std::move(e)) {
 }
 
+
+mutation_fragment_stream_validator::mutation_fragment_stream_validator(const schema& s)
+    : _schema(s)
+    , _prev_kind(mutation_fragment::kind::partition_end)
+    , _prev_pos(position_in_partition::end_of_partition_tag_t{})
+    , _prev_partition_key(dht::minimum_token(), partition_key::make_empty()) {
+}
+
+bool mutation_fragment_stream_validator::operator()(const dht::decorated_key& dk) {
+    if (_prev_partition_key.less_compare(_schema, dk)) {
+        _prev_partition_key = dk;
+        return true;
+    }
+    return false;
+}
+
+bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mf) {
+    if (_prev_kind == mutation_fragment::kind::partition_end) {
+        const bool valid = mf.is_partition_start();
+        if (valid) {
+            _prev_kind = mutation_fragment::kind::partition_start;
+            _prev_pos = mf.position();
+        }
+        return valid;
+    }
+    auto cmp = position_in_partition::tri_compare(_schema);
+    auto res = cmp(_prev_pos, mf.position());
+    bool valid = true;
+    if (_prev_kind == mutation_fragment::kind::range_tombstone) {
+        valid = res <= 0;
+    } else {
+        valid = res < 0;
+    }
+    if (valid) {
+        _prev_kind = mf.mutation_fragment_kind();
+        _prev_pos = mf.position();
+    }
+    return valid;
+}
+
+bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind) {
+    bool valid = true;
+    switch (_prev_kind) {
+        case mutation_fragment::kind::partition_start:
+            valid = kind != mutation_fragment::kind::partition_start;
+            break;
+        case mutation_fragment::kind::static_row: // fall-through
+        case mutation_fragment::kind::clustering_row: // fall-through
+        case mutation_fragment::kind::range_tombstone:
+            valid = kind != mutation_fragment::kind::partition_start &&
+                    kind != mutation_fragment::kind::static_row;
+            break;
+        case mutation_fragment::kind::partition_end:
+            valid = kind == mutation_fragment::kind::partition_start;
+            break;
+    }
+    if (valid) {
+        _prev_kind = kind;
+    }
+    return valid;
+}
+
+bool mutation_fragment_stream_validator::on_end_of_stream() {
+    return _prev_kind == mutation_fragment::kind::partition_end;
+}
+
 namespace {
 
 [[noreturn]] void on_validation_error(seastar::logger& l, const seastar::sstring& reason) {
@@ -936,75 +1002,55 @@ namespace {
 
 }
 
-bool mutation_fragment_stream_validator::operator()(const dht::decorated_key& dk) {
+bool mutation_fragment_stream_validating_filter::operator()(const dht::decorated_key& dk) {
     if (_compare_keys) {
-        if (_prev_partition_key.less_compare(_schema, dk)) {
-            _prev_partition_key = dk;
-        } else {
+        if (!_validator(dk)) {
             on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected partition key: previous {}, current {}",
-                    static_cast<void*>(this), _name, _prev_partition_key, dk));
+                    static_cast<void*>(this), _name, _validator.previous_partition_key(), dk));
         }
     }
     return true;
 }
 
-mutation_fragment_stream_validator::mutation_fragment_stream_validator(sstring_view name, const schema& s, bool compare_keys)
-    : _name(format("{} ({}.{} {})", name, s.ks_name(), s.cf_name(), s.id()))
-    , _schema(s)
-    , _prev_kind(mutation_fragment::kind::partition_end)
-    , _prev_pos(position_in_partition::end_of_partition_tag_t{})
-    , _prev_region(partition_region::partition_end)
+mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_filter(sstring_view name, const schema& s, bool compare_keys)
+    : _validator(s)
+    , _name(format("{} ({}.{} {})", name, s.ks_name(), s.cf_name(), s.id()))
     , _compare_keys(compare_keys)
-    , _prev_partition_key(dht::minimum_token(), partition_key::make_empty())
 {
     fmr_logger.debug("[validator {} for {}] Will validate {} monotonicity.", static_cast<void*>(this), _name,
             compare_keys ? "keys" : "only partition regions");
 }
 
-bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mv) {
+bool mutation_fragment_stream_validating_filter::operator()(const mutation_fragment& mv) {
     auto kind = mv.mutation_fragment_kind();
     auto pos = mv.position();
-    auto region = pos.region();
     bool valid = false;
 
     fmr_logger.debug("[validator {}] {}:{}", static_cast<void*>(this), kind, pos);
 
-    if (mv.is_partition_start()) {
-        valid = (_prev_kind == mutation_fragment::kind::partition_end);
-    } else if (_compare_keys) {
-        auto less = position_in_partition::less_compare(_schema);
-        if (_prev_kind != mutation_fragment::kind::range_tombstone) {
-            valid = less(_prev_pos, pos);
-        } else {
-            valid = !less(pos, _prev_pos);
-        }
-    } else if (region != partition_region::clustered) {
-        valid = (_prev_region < region);
+    if (_compare_keys) {
+        valid = _validator(mv);
     } else {
-        valid = (_prev_region <= region);
+        valid = _validator(kind);
     }
 
     if (__builtin_expect(!valid, false)) {
-        auto fmt = "[validator {} for {}] Unexpected mutation fragment: previous {}:{}, current {}:{}";
-        sstring msg = _compare_keys ?
-                format(fmt, static_cast<void*>(this), _name, _prev_kind, _prev_pos, kind, pos) :
-                format(fmt, static_cast<void*>(this), _name, _prev_kind, _prev_region, kind, pos);
-        on_validation_error(fmr_logger, msg);
+        if (_compare_keys) {
+            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: previous {}:{}, current {}:{}",
+                    static_cast<void*>(this), _name, _validator.previous_mutation_fragment_kind(), _validator.previous_position(), kind, pos));
+        } else {
+            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: previous {}, current {}",
+                    static_cast<void*>(this), _name, _validator.previous_mutation_fragment_kind(), kind));
+        }
     }
 
-    _prev_kind = mv.mutation_fragment_kind();
-    if (_compare_keys) {
-        _prev_pos = pos;
-    } else {
-        _prev_region = region;
-    }
     return true;
 }
 
-void mutation_fragment_stream_validator::on_end_of_stream() const {
+void mutation_fragment_stream_validating_filter::on_end_of_stream() {
     fmr_logger.debug("[validator {}] EOS", static_cast<const void*>(this));
-    if (_prev_kind != mutation_fragment::kind::partition_end) {
+    if (!_validator.on_end_of_stream()) {
         on_validation_error(fmr_logger, format("[validator {} for {}] Stream ended with unclosed partition: {}", static_cast<const void*>(this), _name,
-                _prev_kind));
+                _validator.previous_mutation_fragment_kind()));
     }
 }

@@ -2473,7 +2473,8 @@ future<> sstable::write_components(
     }
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
-        auto validator = mutation_fragment_stream_validator(format("sstable writer {}", get_filename()), *schema, get_config().enable_sstable_key_validation());
+        auto validator = mutation_fragment_stream_validating_filter(format("sstable writer {}", get_filename()), *schema,
+                get_config().enable_sstable_key_validation());
         mr.consume_in_thread(std::move(wr), std::move(validator), db::no_timeout);
     }).finally([this] {
         assert_large_data_handler_is_running();
