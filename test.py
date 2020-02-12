@@ -325,6 +325,7 @@ class TabularConsoleOutput:
     def __init__(self, verbose, test_count):
         self.verbose = verbose
         self.test_count = test_count
+        self.print_newline = False
         self.last_test_no = 0
         self.last_line_len = 1
 
@@ -334,8 +335,8 @@ class TabularConsoleOutput:
         print("-"*78)
 
     def print_end_blurb(self):
-        if not self.verbose:
-            sys.stdout.write('\n')
+        if self.print_newline:
+            print("")
         print("-"*78)
 
     def print_progress(self, test):
@@ -346,9 +347,16 @@ class TabularConsoleOutput:
             palette.ok("[ PASS ]") if test.success else palette.fail("[ FAIL ]")
         )
         if self.verbose is False:
-            print('\r' + ' ' * self.last_line_len, end='')
-            self.last_line_len = len(msg)
-            print('\r' + msg, end='')
+            if test.success:
+                print("\r" + " " * self.last_line_len, end="")
+                self.last_line_len = len(msg)
+                print("\r" + msg, end="")
+                self.print_newline = True
+            else:
+                if self.print_newline:
+                    print("")
+                print(msg)
+                self.print_newline = False
         else:
             print(msg)
 
