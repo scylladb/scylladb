@@ -643,6 +643,9 @@ class systemd_unit:
     def unmask(self):
         return run('systemctl {} unmask {}'.format(self.ctlparam, self._unit))
 
+    @classmethod
+    def reload(cls):
+        run('systemctl daemon-reload')
 
 class sysconfig_parser:
     def __load(self):
