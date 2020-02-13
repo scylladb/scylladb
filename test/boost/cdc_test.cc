@@ -492,6 +492,10 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
 // and still get the logs proper. 
 SEASTAR_THREAD_TEST_CASE(test_cdc_across_shards) {
     do_with_cql_env_thread([](cql_test_env& e) {
+        if (smp::count < 2) {
+            tlog.warn("This test case requires at least 2 shards");
+            return;
+        }
         smp::submit_to(1, [&e] {
             // this is actually ok. there is no members of cql_test_env actually used in call
             return seastar::async([&] {
