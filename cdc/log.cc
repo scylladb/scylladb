@@ -254,7 +254,6 @@ sstring log_name(const sstring& table_name) {
 
 static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> uuid) {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
-    b.set_default_time_to_live(gc_clock::duration{s.cdc_options().ttl()});
     b.set_comment(sprint("CDC log for %s.%s", s.ks_name(), s.cf_name()));
     b.with_column("stream_id_1", long_type, column_kind::partition_key);
     b.with_column("stream_id_2", long_type, column_kind::partition_key);
@@ -424,6 +423,7 @@ private:
     schema_ptr _log_schema;
     const column_definition& _op_col;
     const column_definition& _ttl_col;
+    ttl_opt _cdc_ttl_opt;
 
     clustering_key set_pk_columns(const partition_key& pk, api::timestamp_type ts, bytes decomposed_tuuid, int batch_no, mutation& m) const {
         const auto log_ck = clustering_key::from_exploded(
@@ -435,7 +435,8 @@ private:
             auto cdef = m.schema()->get_column_definition(to_bytes("_" + column.name()));
             auto value = atomic_cell::make_live(*column.type,
                                                 ts,
-                                                bytes_view(pk_value[pos]));
+                                                bytes_view(pk_value[pos]),
+                                                _cdc_ttl_opt);
             m.set_cell(log_ck, *cdef, std::move(value));
             ++pos;
         }
@@ -443,11 +444,11 @@ private:
     }
 
     void set_operation(const clustering_key& ck, api::timestamp_type ts, operation op, mutation& m) const {
-        m.set_cell(ck, _op_col, atomic_cell::make_live(*_op_col.type, ts, _op_col.type->decompose(operation_native_type(op))));
+        m.set_cell(ck, _op_col, atomic_cell::make_live(*_op_col.type, ts, _op_col.type->decompose(operation_native_type(op)), _cdc_ttl_opt));
     }
 
     void set_ttl(const clustering_key& ck, api::timestamp_type ts, gc_clock::duration ttl, mutation& m) const {
-        m.set_cell(ck, _ttl_col, atomic_cell::make_live(*_ttl_col.type, ts, _ttl_col.type->decompose(ttl.count())));
+        m.set_cell(ck, _ttl_col, atomic_cell::make_live(*_ttl_col.type, ts, _ttl_col.type->decompose(ttl.count()), _cdc_ttl_opt));
     }
 
 public:
@@ -457,7 +458,11 @@ public:
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _op_col(*_log_schema->get_column_definition(to_bytes("operation")))
         , _ttl_col(*_log_schema->get_column_definition(to_bytes("ttl")))
-    {}
+    {
+        if (_schema->cdc_options().ttl()) {
+            _cdc_ttl_opt = std::chrono::seconds(_schema->cdc_options().ttl());
+        }
+    }
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
     // more details like tombstones/ttl? Probably not but keep in mind.
@@ -486,7 +491,8 @@ public:
                         auto cdef = _log_schema->get_column_definition(to_bytes("_" + column.name()));
                         auto value = atomic_cell::make_live(*column.type,
                                                             ts,
-                                                            bytes_view(exploded[pos]));
+                                                            bytes_view(exploded[pos]),
+                                                            _cdc_ttl_opt);
                         res.set_cell(log_ck, *cdef, std::move(value));
                         ++pos;
                     }
@@ -542,11 +548,11 @@ public:
                 for (const auto& column : _schema->clustering_key_columns()) {
                     assert (pos < ck_value.size());
                     auto cdef = _log_schema->get_column_definition(to_bytes("_" + column.name()));
-                    res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos])));
+                    res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
 
                     if (pirow) {
                         assert(pirow->has(column.name_as_text()));
-                        res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos])));
+                        res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
                     }
 
                     ++pos;
@@ -576,7 +582,7 @@ public:
                             }
 
                             values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(op)));
-                            res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, ts, tuple_type_impl::build_value(values)));
+                            res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, ts, tuple_type_impl::build_value(values), _cdc_ttl_opt));
 
                             if (pirow && pirow->has(cdef.name_as_text())) {
                                 values[0] = data_type_for<column_op_native_type>()->decompose(data_value(static_cast<column_op_native_type>(column_op::set)));
@@ -584,7 +590,7 @@ public:
 
                                 assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
                                 assert(pikey->explode() != log_ck.explode());
-                                res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, tuple_type_impl::build_value(values)));
+                                res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, tuple_type_impl::build_value(values), _cdc_ttl_opt));
                             }
                         } else {
                             cdc_log.warn("Non-atomic cell ignored {}.{}:{}", _schema->ks_name(), _schema->cf_name(), cdef.name_as_text());
