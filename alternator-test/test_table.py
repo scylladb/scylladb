@@ -74,6 +74,11 @@ def create_and_delete_table(dynamodb, name, **kwargs):
 def test_create_and_delete_table(dynamodb):
     create_and_delete_table(dynamodb, 'alternator_test')
 
+# Test that recreating a table right after deleting it works without issues
+def test_recreate_table(dynamodb):
+    create_and_delete_table(dynamodb, 'alternator_recr_test')
+    create_and_delete_table(dynamodb, 'alternator_recr_test')
+
 # DynamoDB documentation specifies that table names must be 3-255 characters,
 # and match the regex [a-zA-Z0-9._-]+. Names not matching these rules should
 # be rejected, and no table be created.

@@ -170,7 +170,6 @@ static std::string get_table_name(const rjson::value& request) {
     return table_name;
 }
 
-
 /** Extract table schema from a request.
  *  Many requests expect the table's name to be listed in a "TableName" field
  *  and need to look it up as an existing table. This convenience function
@@ -181,7 +180,7 @@ static std::string get_table_name(const rjson::value& request) {
 static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request) {
     std::string table_name = get_table_name(request);
     try {
-        return proxy.get_db().local().find_schema(executor::KEYSPACE_NAME, table_name);
+        return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(table_name), table_name);
     } catch(no_such_column_family&) {
         throw api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name));
@@ -194,6 +193,7 @@ static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& r
 // which allow IndexName should use this function.
 static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     std::string table_name = get_table_name(request);
+    std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     const rjson::value* index_name = rjson::find(request, "IndexName");
     std::string orig_table_name;
     if (index_name) {
@@ -207,18 +207,18 @@ static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::
     }
 
     // If no tables for global indexes were found, the index may be local
-    if (!proxy.get_db().local().has_schema(executor::KEYSPACE_NAME, table_name)) {
+    if (!proxy.get_db().local().has_schema(keyspace_name, table_name)) {
         table_name = lsi_name(orig_table_name, index_name->GetString());
     }
 
     try {
-        return proxy.get_db().local().find_schema(executor::KEYSPACE_NAME, table_name);
+        return proxy.get_db().local().find_schema(keyspace_name, table_name);
     } catch(no_such_column_family&) {
         if (index_name) {
             // DynamoDB returns a different error depending on whether the
             // base table doesn't exist (ResourceNotFoundException) or it
             // does exist but the index does not (ValidationException).
-            if (proxy.get_db().local().has_schema(executor::KEYSPACE_NAME, orig_table_name)) {
+            if (proxy.get_db().local().has_schema(keyspace_name, orig_table_name)) {
                 throw api_error("ValidationException",
                     format("Requested resource not found: Index '{}' for table '{}'", index_name->GetString(), orig_table_name));
             } else {
@@ -395,13 +395,16 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     elogger.trace("Deleting table {}", request);
 
     std::string table_name = get_table_name(request);
-    tracing::add_table_name(trace_state, KEYSPACE_NAME, table_name);
+    std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
+    tracing::add_table_name(trace_state, keyspace_name, table_name);
 
-    if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
+    if (!_proxy.get_db().local().has_schema(keyspace_name, table_name)) {
         return make_ready_future<request_return_type>(api_error("ResourceNotFoundException",
                 format("Requested resource not found: Table: {} not found", table_name)));
     }
-    return _mm.announce_column_family_drop(KEYSPACE_NAME, table_name, false, service::migration_manager::drop_views::yes).then([table_name = std::move(table_name)] {
+    return _mm.announce_column_family_drop(keyspace_name, table_name, false, service::migration_manager::drop_views::yes).then([this, keyspace_name] {
+        return _mm.announce_keyspace_drop(keyspace_name, false);
+    }).then([table_name = std::move(table_name)] {
         // FIXME: need more attributes?
         rjson::value table_description = rjson::empty_object();
         rjson::set(table_description, "TableName", rjson::from_string(table_name));
@@ -683,11 +686,12 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     rjson::value table_info = rjson::parse(content);
     elogger.trace("Creating table {}", table_info);
     std::string table_name = get_table_name(table_info);
+    std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     const rjson::value& attribute_definitions = table_info["AttributeDefinitions"];
 
-    tracing::add_table_name(trace_state, KEYSPACE_NAME, table_name);
+    tracing::add_table_name(trace_state, keyspace_name, table_name);
 
-    schema_builder builder(KEYSPACE_NAME, table_name);
+    schema_builder builder(keyspace_name, table_name);
     auto [hash_key, range_key] = parse_key_schema(table_info);
     add_column(builder, hash_key, attribute_definitions, column_kind::partition_key);
     if (!range_key.empty()) {
@@ -734,7 +738,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
             elogger.trace("Adding GSI {}", index_name->GetString());
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
-            schema_builder view_builder(KEYSPACE_NAME, vname);
+            schema_builder view_builder(keyspace_name, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(g);
             if (partial_schema->get_column_definition(to_bytes(view_hash_key)) == nullptr) {
                 // A column that exists in a global secondary index is upgraded from being a map entry
@@ -787,7 +791,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
             elogger.trace("Adding LSI {}", index_name->GetString());
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
-            schema_builder view_builder(KEYSPACE_NAME, vname);
+            schema_builder view_builder(keyspace_name, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(l);
             if (view_hash_key != hash_key) {
                 return make_ready_future<request_return_type>(api_error("ValidationException",
@@ -860,25 +864,31 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         ++where_clause_it;
     }
 
-    return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([this, table_info = std::move(table_info), schema, view_builders = std::move(view_builders)] () mutable {
-        return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
-            return service::get_local_migration_manager().announce_new_view(view_ptr(builder.build()));
-        }).then([this, table_info = std::move(table_info), schema] () mutable {
-            future<> f = make_ready_future<>();
-            if (rjson::find(table_info, "Tags")) {
-                f = add_tags(_proxy, schema, table_info);
-            }
-            return f.then([table_info = std::move(table_info), schema] () mutable {
-                rjson::value status = rjson::empty_object();
-                supplement_table_info(table_info, *schema);
-                rjson::set(status, "TableDescription", std::move(table_info));
-                return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
+    return create_keyspace(keyspace_name).then([this, table_name, table_info = std::move(table_info), schema, view_builders = std::move(view_builders)] () mutable {
+        return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([this, table_info = std::move(table_info), schema, view_builders = std::move(view_builders)] () mutable {
+            return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
+                return service::get_local_migration_manager().announce_new_view(view_ptr(builder.build()));
+            }).then([this, table_info = std::move(table_info), schema] () mutable {
+                future<> f = make_ready_future<>();
+                if (rjson::find(table_info, "Tags")) {
+                    f = add_tags(_proxy, schema, table_info);
+                }
+                return f.then([table_info = std::move(table_info), schema] () mutable {
+                    rjson::value status = rjson::empty_object();
+                    supplement_table_info(table_info, *schema);
+                    rjson::set(status, "TableDescription", std::move(table_info));
+                    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
+                });
             });
+        }).handle_exception_type([table_name = std::move(table_name)] (exceptions::already_exists_exception&) {
+            return make_exception_future<executor::request_return_type>(
+                    api_error("ResourceInUseException",
+                            format("Table {} already exists", table_name)));
         });
     }).handle_exception_type([table_name = std::move(table_name)] (exceptions::already_exists_exception&) {
         return make_exception_future<executor::request_return_type>(
                 api_error("ResourceInUseException",
-                        format("Table {} already exists", table_name)));
+                        format("Keyspace for table {} already exists", table_name)));
     });
 }
 
@@ -1359,10 +1369,10 @@ future<executor::request_return_type> executor::delete_item(client_state& client
 }
 
 static schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const rjson::value::ConstMemberIterator& batch_request) {
-    std::string table_name = batch_request->name.GetString(); // JSON keys are always strings
+    sstring table_name = batch_request->name.GetString(); // JSON keys are always strings
     validate_table_name(table_name);
     try {
-        return proxy.get_db().local().find_schema(executor::KEYSPACE_NAME, table_name);
+        return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + table_name, table_name);
     } catch(no_such_column_family&) {
         throw api_error("ResourceNotFoundException", format("Requested resource not found: Table: {} not found", table_name));
     }
@@ -2528,7 +2538,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         table_requests rs;
         rs.schema = get_table_from_batch_request(_proxy, it);
-        tracing::add_table_name(trace_state, KEYSPACE_NAME, rs.schema->cf_name());
+        tracing::add_table_name(trace_state, sstring(executor::KEYSPACE_NAME_PREFIX) + rs.schema->cf_name(), rs.schema->cf_name());
         rs.cl = get_read_consistency(it->value);
         rs.attrs_to_get = calculate_attrs_to_get(it->value);
         auto& keys = (it->value)["Keys"];
@@ -2980,7 +2990,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     auto table_names = _proxy.get_db().local().get_column_families()
             | boost::adaptors::map_values
             | boost::adaptors::filtered([] (const lw_shared_ptr<table>& t) {
-                        return t->schema()->ks_name() == KEYSPACE_NAME && !t->schema()->is_view();
+                        return t->schema()->ks_name().find(KEYSPACE_NAME_PREFIX) == 0 && !t->schema()->is_view();
                     })
             | boost::adaptors::transformed([] (const lw_shared_ptr<table>& t) {
                         return t->schema()->cf_name();
@@ -3036,33 +3046,33 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
 
-// Create the keyspace in which we put all Alternator tables, if it doesn't
+static std::map<sstring, sstring> get_network_topology_options(int rf) {
+    std::map<sstring, sstring> options;
+    sstring rf_str = std::to_string(rf);
+    for (const gms::inet_address& addr : gms::get_local_gossiper().get_live_members()) {
+        options.emplace(locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(addr), rf_str);
+    };
+    return options;
+}
+
+// Create the keyspace in which we put the alternator table, if it doesn't
 // already exist.
 // Currently, we automatically configure the keyspace based on the number
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-future<> executor::maybe_create_keyspace() {
-    if (_proxy.get_db().local().has_keyspace(KEYSPACE_NAME)) {
-        return make_ready_future<>();
-    }
-    return gms::get_up_endpoint_count().then([this] (int up_endpoint_count) {
+future<> executor::create_keyspace(std::string_view keyspace_name) {
+    sstring keyspace_name_str(keyspace_name);
+    return gms::get_up_endpoint_count().then([this, keyspace_name_str = std::move(keyspace_name_str)] (int up_endpoint_count) {
         int rf = 3;
         if (up_endpoint_count < rf) {
             rf = 1;
             elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} live nodes.",
-                    KEYSPACE_NAME, rf, up_endpoint_count);
-        } else {
-            elogger.info("Creating keyspace '{}' for Alternator with RF={}.", KEYSPACE_NAME, rf);
+                    keyspace_name_str, rf, up_endpoint_count);
         }
-        auto ksm = keyspace_metadata::new_keyspace(KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", {{"replication_factor", std::to_string(rf)}}, true);
-        try {
-            return _mm.announce_new_keyspace(ksm, api::min_timestamp, false);
-        } catch (exceptions::already_exists_exception& ignored) {
-            return make_ready_future<>();
-        } catch (...) {
-            return make_exception_future(std::current_exception());
-        }
+        auto opts = get_network_topology_options(rf);
+        auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
+        return _mm.announce_new_keyspace(ksm, api::new_timestamp(), false);
     });
 }
 
@@ -3084,7 +3094,7 @@ tracing::trace_state_ptr executor::maybe_trace_query(client_state& client_state,
 
 future<> executor::start() {
     // Currently, nothing to do on initialization. We delay the keyspace
-    // creation (maybe_create_keyspace()) until a table is actually created.
+    // creation (create_keyspace()) until a table is actually created.
     return make_ready_future<>();
 }
 
