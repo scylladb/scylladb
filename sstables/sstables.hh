@@ -123,6 +123,10 @@ struct sstable_writer_config {
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
     bool correctly_serialize_static_compact_in_mc = supports_correct_static_compact_in_mc();
     utils::UUID run_identifier = utils::make_random_uuid();
+
+private:
+    explicit sstable_writer_config() {}
+    friend class sstables_manager;
 };
 
 class sstable_tracker;

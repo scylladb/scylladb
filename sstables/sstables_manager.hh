@@ -27,6 +27,7 @@
 
 #include "utils/disk-error-handler.hh"
 #include "gc_clock.hh"
+#include "sstables/sstables.hh"
 #include "sstables/shareable_components.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/version.hh"
@@ -62,6 +63,8 @@ public:
             gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
+
+    sstable_writer_config configure_writer() const;
 
 private:
     db::large_data_handler& get_large_data_handler() const {

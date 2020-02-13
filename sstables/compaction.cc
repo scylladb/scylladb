@@ -54,6 +54,7 @@
 
 #include "sstables.hh"
 #include "sstables/progress_monitor.hh"
+#include "sstables/sstables_manager.hh"
 #include "compaction.hh"
 #include "compaction_manager.hh"
 #include "database.hh"
@@ -660,7 +661,7 @@ void garbage_collected_sstable_writer::maybe_create_new_sstable_writer() {
 
         auto&& priority = service::get_local_compaction_priority();
         _active_write_monitors.emplace_back(_sst, _c->_cf, _c->maximum_timestamp(), _c->_sstable_level);
-        sstable_writer_config cfg;
+        sstable_writer_config cfg = _c->_cf.get_sstables_manager().configure_writer();
         cfg.run_identifier = _run_identifier;
         cfg.monitor = &_active_write_monitors.back();
         _writer.emplace(_sst->get_writer(*_c->schema(), _c->partitions_per_sstable(), cfg, _c->get_encoding_stats(), priority));
@@ -765,7 +766,7 @@ public:
 
             _active_write_monitors.emplace_back(_sst, _cf, maximum_timestamp(), _sstable_level);
             auto&& priority = service::get_local_compaction_priority();
-            sstable_writer_config cfg;
+            sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
             cfg.max_sstable_size = _max_sstable_size;
             cfg.monitor = &_active_write_monitors.back();
             cfg.run_identifier = _run_identifier;
@@ -1236,7 +1237,7 @@ public:
             sst = _sstable_creator(_shard);
             setup_new_sstable(sst);
 
-            sstable_writer_config cfg;
+            sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
             cfg.max_sstable_size = _max_sstable_size;
             // sstables generated for a given shard will share the same run identifier.
             cfg.run_identifier = _run_identifiers.at(_shard);

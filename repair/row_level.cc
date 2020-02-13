@@ -22,6 +22,7 @@
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "mutation_fragment.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
@@ -509,7 +510,8 @@ public:
                     schema_ptr s = reader.schema();
                     auto& pc = service::get_local_streaming_write_priority();
                     return sst->write_components(std::move(reader), std::max(1ul, adjusted_estimated_partitions), s,
-                                                 sstables::sstable_writer_config{}, encoding_stats{}, pc).then([sst] {
+                                                 t->get_sstables_manager().configure_writer(),
+                                                 encoding_stats{}, pc).then([sst] {
                         return sst->open_data();
                     }).then([t, sst] {
                         return t->add_sstable_and_update_cache(sst);

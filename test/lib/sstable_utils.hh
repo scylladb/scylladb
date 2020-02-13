@@ -26,6 +26,7 @@
 #include "dht/i_partitioner.hh"
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include "test/lib/test_services.hh"
 
 struct local_shard_only_tag { };
 using local_shard_only = bool_class<local_shard_only_tag>;
@@ -33,7 +34,7 @@ using local_shard_only = bool_class<local_shard_only_tag>;
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts);
 
 inline future<> write_memtable_to_sstable_for_test(memtable& mt, sstables::shared_sstable sst) {
-    return write_memtable_to_sstable(mt, sst, sstables::sstable_writer_config{});
+    return write_memtable_to_sstable(mt, sst, test_sstables_manager.configure_writer());
 }
 
 //

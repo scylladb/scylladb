@@ -3684,7 +3684,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         }
 
         tmpdir dir;
-        sstable_writer_config cfg;
+        sstable_writer_config cfg = test_sstables_manager.configure_writer();
         cfg.promoted_index_block_size = 100;
         auto mut = mutation(table.schema(), table.make_pkey("key"));
         for (auto&& mf : fragments) {
@@ -3738,7 +3738,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         std::sort(partitions.begin(), partitions.end(), mutation_decorated_key_less_comparator());
 
         tmpdir dir;
-        sstable_writer_config cfg;
+        sstable_writer_config cfg = test_sstables_manager.configure_writer();
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
         auto sst = make_sstable_easy(env, dir.path(), flat_mutation_reader_from_mutations(partitions), cfg, version);
 
@@ -4674,7 +4674,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
 
                 auto local_keys = make_local_keys(3, schema);
 
-                auto config = sstable_writer_config{};
+                auto config = test_sstables_manager.configure_writer();
                 auto writer = sst->get_writer(*schema, local_keys.size(), config, encoding_stats{});
 
                 auto make_static_row = [&, schema, ts] {
@@ -4996,7 +4996,7 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
         mut.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 0);
 
         auto tmp = tmpdir();
-        sstable_writer_config cfg;
+        sstable_writer_config cfg = test_sstables_manager.configure_writer();
         cfg.run_identifier = utils::make_random_uuid();
         auto sst = make_sstable_easy(env, tmp.path(),  flat_mutation_reader_from_mutations({ std::move(mut) }), cfg, la);
 
@@ -5352,7 +5352,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         mutation mut(s, partition_key::from_exploded(*s, {to_bytes("alpha")}));
         mut.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 0);
 
-        sstable_writer_config sst_cfg;
+        sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
         sst_cfg.run_identifier = partial_sstable_run_identifier;
         auto partial_sstable_run_sst = make_sstable_easy(env, tmp.path(), flat_mutation_reader_from_mutations({ std::move(mut) }),
                                                          sst_cfg, la, 1);
@@ -5407,7 +5407,8 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
         public:
             explicit compacting_sstable_writer_test(const schema_ptr& s, shared_sstable& sst)
                 : _sst(sst),
-                  _writer(sst->get_writer(*s, 1, sstable_writer_config{}, encoding_stats{}, service::get_local_compaction_priority())) {}
+                  _writer(sst->get_writer(*s, 1, test_sstables_manager.configure_writer(),
+                        encoding_stats{}, service::get_local_compaction_priority())) {}
 
             void consume_new_partition(const dht::decorated_key& dk) { _writer.consume_new_partition(dk); }
             void consume(tombstone t) { _writer.consume(t); }

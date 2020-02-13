@@ -60,6 +60,7 @@
 #include "schema_registry.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "db/system_keyspace.hh"
 #include "db/view/view_update_checks.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
@@ -230,7 +231,8 @@ void stream_session::init_messaging_service_handler() {
                                     auto& pc = service::get_local_streaming_write_priority();
 
                                     return sst->write_components(std::move(reader), std::max(1ul, adjusted_estimated_partitions), s,
-                                                                 sstables::sstable_writer_config{}, encoding_stats{}, pc).then([sst] {
+                                                                 cf->get_sstables_manager().configure_writer(),
+                                                                 encoding_stats{}, pc).then([sst] {
                                         return sst->open_data();
                                     }).then([cf, sst] {
                                         return cf->add_sstable_and_update_cache(sst);

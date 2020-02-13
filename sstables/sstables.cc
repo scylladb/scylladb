@@ -74,6 +74,7 @@
 #include "db/large_data_handler.hh"
 #include "db/config.hh"
 #include "sstables/random_access_reader.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/UUID_gen.hh"
 #include "database.hh"
 #include <boost/algorithm/string/predicate.hpp>

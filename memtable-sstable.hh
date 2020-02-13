@@ -33,6 +33,8 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/shared_ptr.hh>
 
+namespace sstables { class sstables_manager; }
+
 future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
