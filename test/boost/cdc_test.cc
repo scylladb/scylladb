@@ -48,85 +48,7 @@ static cql_test_config mk_cdc_test_config() {
 };
 
 namespace cdc {
-api::timestamp_type find_timestamp(const schema&, const mutation&);
 utils::UUID generate_timeuuid(api::timestamp_type);
-}
-
-SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
-    do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TYPE ut (a int, b int)");
-        cquery_nofail(e, "CREATE TABLE ks.t (pk int, ck int, vstatic int static, vint int, "
-                "vmap map<int, int>, vfmap frozen<map<int, int>>, vut ut, vfut frozen<ut>, primary key (pk, ck))");
-
-        auto schema = schema_builder("ks", "t")
-            .with_column("pk", int32_type, column_kind::partition_key)
-            .with_column("vstatic", int32_type, column_kind::static_column)
-            .with_column("ck", int32_type, column_kind::clustering_key)
-            .with_column("vint", int32_type)
-            .with_column("vmap", map_type_impl::get_instance(int32_type, int32_type, true))
-            .with_column("vfmap", map_type_impl::get_instance(int32_type, int32_type, false))
-            .with_column("vut", user_type_impl::get_instance("ks", "ut", {to_bytes("a"), to_bytes("b")}, {int32_type, int32_type}, true))
-            .with_column("vfut", user_type_impl::get_instance("ks", "ut", {to_bytes("a"), to_bytes("b")}, {int32_type, int32_type}, false))
-            .build();
-
-        auto check_stmt = [&] (const sstring& query) {
-            auto muts = e.get_modification_mutations(query).get0();
-            BOOST_REQUIRE(!muts.empty());
-
-            for (auto& m: muts) {
-                /* We want to check if `find_timestamp` truly returns this mutation's timestamp.
-                 * The mutation was created very recently (in the `get_modification_mutations` call),
-                 * so we can do it by comparing the returned timestamp with the current time
-                 * -- the difference should be small.
-                 */
-                auto ts = cdc::find_timestamp(*schema, m);
-                BOOST_REQUIRE(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        api::timestamp_clock::duration(api::new_timestamp() - ts))
-                    < std::chrono::milliseconds(5000));
-            }
-        };
-
-        check_stmt("INSERT INTO ks.t (pk, ck) VALUES (0, 0)");
-        check_stmt("INSERT INTO ks.t (pk, ck, vint) VALUES (0,0,0)");
-        check_stmt("INSERT INTO ks.t (pk, ck, vmap) VALUES (0,0,{0:0})");
-        check_stmt("INSERT INTO ks.t (pk, ck, vfmap) VALUES (0,0,{0:0})");
-        check_stmt("INSERT INTO ks.t (pk, ck, vut) VALUES (0,0,{b:0})");
-        check_stmt("INSERT INTO ks.t (pk, ck, vfut) VALUES (0,0,{b:0})");
-        check_stmt("INSERT INTO ks.t (pk, ck, vint) VALUES (0,0,null)");
-        check_stmt("INSERT INTO ks.t (pk, ck, vmap) VALUES (0,0,null)");
-        check_stmt("INSERT INTO ks.t (pk, ck, vfmap) VALUES (0,0,null)");
-        check_stmt("INSERT INTO ks.t (pk, ck, vut) VALUES (0,0,null)");
-        check_stmt("INSERT INTO ks.t (pk, ck, vfut) VALUES (0,0,null)");
-        check_stmt("INSERT INTO ks.t (pk, vstatic) VALUES (0, 0)");
-        check_stmt("UPDATE ks.t SET vint = 0 WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vmap = {0:0} WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vmap[0] = 0 WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vfmap = {0:0} WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vut = {b:0} WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vut.b = 0 WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vfut = {b:0} WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vint = null WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vmap = null WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vmap[0] = null WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vfmap = null WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vut = null WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vut.b = null WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vfut = null WHERE pk = 0 AND ck = 0");
-        check_stmt("UPDATE ks.t SET vstatic = 0 WHERE pk = 0");
-        check_stmt("DELETE FROM ks.t WHERE pk = 0 and ck = 0");
-        check_stmt("DELETE FROM ks.t WHERE pk = 0 and ck > 0");
-        check_stmt("DELETE FROM ks.t WHERE pk = 0 and ck > 0 and ck <= 1");
-        check_stmt("DELETE FROM ks.t WHERE pk = 0");
-        check_stmt("DELETE vint FROM t WHERE pk = 0 AND ck = 0");
-        check_stmt("DELETE vmap FROM t WHERE pk = 0 AND ck = 0");
-        check_stmt("DELETE vmap[0] FROM t WHERE pk = 0 AND ck = 0");
-        check_stmt("DELETE vfmap FROM t WHERE pk = 0 AND ck = 0");
-        check_stmt("DELETE vut FROM t WHERE pk = 0 AND ck = 0");
-        check_stmt("DELETE vut.b FROM t WHERE pk = 0 AND ck = 0");
-        check_stmt("DELETE vfut FROM t WHERE pk = 0 AND ck = 0");
-        check_stmt("DELETE vstatic FROM t WHERE pk = 0");
-    }, mk_cdc_test_config()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_generate_timeuuid) {
@@ -409,7 +331,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
 
             BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
 
-            auto first = to_bytes_filtered(*rows, cdc::operation::update);
+            auto first = to_bytes_filtered(*rows, cdc::operation::insert);
 
             auto ck2_index = column_index(*rows, "_ck2");
             auto val_index = column_index(*rows, "_val");
@@ -444,7 +366,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
                     BOOST_REQUIRE_EQUAL(data_value(last), value_cast<tuple_type_impl::native_type>(val_type->deserialize(bytes_view(val))).at(1));
                     BOOST_REQUIRE_EQUAL(bytes_opt(), pre_image.back()[ttl_index]);
 
-                    const auto& ttl_cell = second[second.size() - 2][ttl_index];
+                    const auto& ttl_cell = i == 0 ? first[0][ttl_index] : second[second.size() - 2][ttl_index];
                     if (with_ttl) {
                         BOOST_REQUIRE_EQUAL(long_type->decompose(last_ttl), ttl_cell);
                     } else {
@@ -471,18 +393,18 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
 
         auto rows = select_log(e, "tbl");
 
-        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::update).empty());
+        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::insert).empty());
 
         cquery_nofail(e, "ALTER TABLE ks.tbl ADD kokos text");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val, kokos) VALUES(1, 11, 111, 1111, 11111, 'kaka')");
 
         rows = select_log(e, "tbl");
-        auto updates = to_bytes_filtered(*rows, cdc::operation::update);
-        sort_by_time(*rows, updates);
+        auto inserts = to_bytes_filtered(*rows, cdc::operation::insert);
+        sort_by_time(*rows, inserts);
 
         auto kokos_index = column_index(*rows, "_kokos");
         auto kokos_type = tuple_type_impl::get_instance({ data_type_for<std::underlying_type_t<cdc::column_op>>(), utf8_type, long_type});
-        auto kokos = *updates.back()[kokos_index];
+        auto kokos = *inserts.back()[kokos_index];
 
         BOOST_REQUIRE_EQUAL(data_value("kaka"), value_cast<tuple_type_impl::native_type>(kokos_type->deserialize(bytes_view(kokos))).at(1));
     }, mk_cdc_test_config()).get();
@@ -502,7 +424,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_across_shards) {
 
         auto rows = select_log(e, "tbl");
 
-        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::update).empty());
+        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::insert).empty());
     }, mk_cdc_test_config()).get();
 }
 
