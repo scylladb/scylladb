@@ -23,6 +23,7 @@
 #include "compaction_strategy.hh"
 #include "compaction_backlog_manager.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "database.hh"
 #include "service/storage_service.hh"
 #include <seastar/core/metrics.hh>
@@ -680,8 +681,6 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
     });
 }
 
-sstables::sstable::version_types get_highest_supported_format();
-
 // Submit a column family to be upgraded and wait for its termination.
 future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exclude_current_version) {
     using shared_sstables = std::vector<sstables::shared_sstable>;
@@ -691,7 +690,7 @@ future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exc
         // in the re-write, we need to barrier out any previously running
         // compaction.
         return cf->run_with_compaction_disabled([this, cf, &tables, exclude_current_version] {
-            auto last_version = get_highest_supported_format();
+            auto last_version = cf->get_sstables_manager().get_highest_supported_format();
 
             for (auto& sst : cf->candidates_for_compaction()) {
                 // if we are a "normal" upgrade, we only care about

@@ -72,6 +72,8 @@ public:
     sstable_writer_config configure_writer() const;
     const db::config& config() const { return _db_config; }
 
+    sstables::sstable::version_types get_highest_supported_format() const;
+
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;

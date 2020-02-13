@@ -97,10 +97,6 @@ using namespace db;
 
 logging::logger dblog("database");
 
-sstables::sstable::version_types get_highest_supported_format() {
-    return service::get_local_storage_service().sstables_format();
-}
-
 // Used for tests where the CF exists without a database object. We need to pass a valid
 // dirty_memory manager in that case.
 thread_local dirty_memory_manager default_dirty_memory_manager;

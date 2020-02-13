@@ -25,6 +25,7 @@
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include "service/storage_service.hh" // To be removed soon
 
 namespace sstables {
 
@@ -54,6 +55,10 @@ sstable_writer_config sstables_manager::configure_writer() const {
             bool(_features.cluster_supports_correct_static_compact_in_mc());
 
     return cfg;
+}
+
+sstables::sstable::version_types sstables_manager::get_highest_supported_format() const {
+    return service::get_local_storage_service().sstables_format();
 }
 
 }   // namespace sstables

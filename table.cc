@@ -51,8 +51,6 @@ static seastar::metrics::label keyspace_label("ks");
 
 using namespace std::chrono_literals;
 
-sstables::sstable::version_types get_highest_supported_format();
-
 // Stores ranges for all components of the same clustering key, index 0 referring to component
 // range 0, and so on.
 using ck_filter_clustering_key_components = std::vector<nonwrapping_range<bytes_view>>;
@@ -616,7 +614,7 @@ sstables::shared_sstable table::make_sstable(sstring dir, int64_t generation,
 
 sstables::shared_sstable table::make_sstable(sstring dir) {
     return make_sstable(dir, calculate_generation_for_new_table(),
-                        get_highest_supported_format(), sstables::sstable::format_types::big);
+                        get_sstables_manager().get_highest_supported_format(), sstables::sstable::format_types::big);
 }
 
 sstables::shared_sstable table::make_sstable() {

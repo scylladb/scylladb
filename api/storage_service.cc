@@ -42,8 +42,6 @@
 #include "database.hh"
 #include "db/extensions.hh"
 
-sstables::sstable::version_types get_highest_supported_format();
-
 namespace api {
 
 namespace ss = httpd::storage_service_json;
