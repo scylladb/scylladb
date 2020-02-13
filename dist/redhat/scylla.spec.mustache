@@ -75,11 +75,6 @@ getent group scylla || /usr/sbin/groupadd scylla 2> /dev/null || :
 getent passwd scylla || /usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sharedstatedir}/scylla scylla 2> /dev/null || :
 
 %post server
-# Upgrade coredump settings
-if [ -f /etc/systemd/coredump.conf ];then
-    /opt/scylladb/scripts/scylla_coredump_setup
-fi
-
 /opt/scylladb/scripts/scylla_post_install.sh
 
 %systemd_post scylla-server.service
@@ -141,6 +136,7 @@ rm -rf $RPM_BUILD_ROOT
 %ghost /etc/systemd/system/scylla-server.service.d/capabilities.conf
 %ghost /etc/systemd/system/scylla-server.service.d/mounts.conf
 %ghost /etc/systemd/system/scylla-server.service.d/dependencies.conf
+%ghost /etc/systemd/system/var-lib-systemd-coredump.mount
 
 %package conf
 Group:          Applications/Databases

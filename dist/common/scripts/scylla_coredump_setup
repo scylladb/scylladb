@@ -24,6 +24,9 @@ import os
 import sys
 import argparse
 import subprocess
+import time
+import tempfile
+import subprocess
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -54,13 +57,48 @@ ExternalSizeMax=1024G
         with open('/etc/systemd/coredump.conf', 'w') as f:
             conf = f.write(conf_data)
         if args.dump_to_raiddir:
-            rmtree('/var/lib/systemd/coredump')
+            dot_mount = '''
+[Unit]
+Description=Save coredump to scylla data directory
+Conflicts=umount.target
+Before=scylla-server.service
+After=local-fs.target
+
+[Mount]
+What=/var/lib/scylla/coredump
+Where=/var/lib/systemd/coredump
+Type=none
+Options=bind
+
+[Install]
+WantedBy=multi-user.target
+'''[1:-1]
+            with open('/etc/systemd/system/var-lib-systemd-coredump.mount', 'w') as f:
+                f.write(dot_mount)
             makedirs('/var/lib/scylla/coredump')
-            os.symlink('/var/lib/scylla/coredump', '/var/lib/systemd/coredump')
-        run('systemctl daemon-reload')
+            systemd_unit.reload()
+            systemd_unit('var-lib-systemd-coredump.mount').enable()
         if os.path.exists('/usr/lib/sysctl.d/50-coredump.conf'):
             run('sysctl -p /usr/lib/sysctl.d/50-coredump.conf')
         else:
             with open('/etc/sysctl.d/99-scylla-coredump.conf', 'w') as f:
                 f.write('kernel.core_pattern=|/usr/lib/systemd/systemd-coredump %p %u %g %s %t %e"')
             run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')
+
+        fp = tempfile.NamedTemporaryFile()
+        fp.write(b'kill -SEGV $$')
+        fp.flush()
+        p = subprocess.Popen(['/bin/bash', fp.name], stdout=subprocess.PIPE)
+        pid = p.pid
+        p.wait()
+        fp.close()
+
+        print('Generating coredump to test systemd-coredump...\n')
+        # need to wait for systemd-coredump to complete collecting coredump
+        time.sleep(3)
+        try:
+            run('coredumpctl --no-pager --no-legend info {}'.format(pid))
+            print('\nsystemd-coredump is working finely.')
+        except subprocess.CalledProcessError as e:
+            print('Does not able to detect coredump, failed to configure systemd-coredump.')
+            sys.exit(1)
