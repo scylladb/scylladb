@@ -155,11 +155,11 @@ implemented, with the following limitations:
 ### Write isolation policies
  * By default, alternator will use LWT for all writes. It can, however, be configured
    per table by tagging it with a 'system:write_isolation' key and one of the following values:
-    * 'a' - always use LWT
-    * 'o' - use LWT only for requests that require read-before-write
-    * 'f' - forbid statements that need read-before-write. Using such statements
+    * 'a', 'always', 'always_use_lwt' - always use LWT
+    * 'o', 'only_rmw_uses_lwt' - use LWT only for requests that require read-before-write
+    * 'f', 'forbid', 'forbid_rmw' - forbid statements that need read-before-write. Using such statements
       (e.g. UpdateItem with ConditionExpression) will result in an error
-    * 'u' - (unsafe) perform read-modify-write without any consistency guarantees
+    * 'u', 'unsafe', 'unsafe_rmw' - (unsafe) perform read-modify-write without any consistency guarantees
 ### Accounting and capping
 * Not yet supported. Mainly for multi-tenant cloud use, we need to track
   resource use of individual requests (the API should also optionally
