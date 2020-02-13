@@ -104,7 +104,9 @@ static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
 db::nop_large_data_handler nop_lp_handler;
-thread_local sstables::sstables_manager test_sstables_manager(nop_lp_handler);
+db::config test_db_config;
+gms::feature_service test_feature_service;
+thread_local sstables::sstables_manager test_sstables_manager(nop_lp_handler, test_db_config, test_feature_service);
 
 column_family::config column_family_test_config() {
     column_family::config cfg;

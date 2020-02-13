@@ -25,7 +25,6 @@
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
-#include "service/storage_service.hh"
 
 namespace sstables {
 
@@ -42,18 +41,15 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
     return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
-extern const db::config& get_config(); /* to be removed soon */
-
 sstable_writer_config sstables_manager::configure_writer() const {
     sstable_writer_config cfg;
 
-    cfg.promoted_index_block_size = get_config().column_index_size_in_kb() * 1024;
+    cfg.promoted_index_block_size = _db_config.column_index_size_in_kb() * 1024;
 
-    auto& f = service::get_local_storage_service().features();
     cfg.correctly_serialize_non_compound_range_tombstones =
-            f.cluster_supports_reading_correctly_serialized_range_tombstones();
+            _features.cluster_supports_reading_correctly_serialized_range_tombstones();
     cfg.correctly_serialize_static_compact_in_mc =
-            bool(f.cluster_supports_correct_static_compact_in_mc());
+            bool(_features.cluster_supports_correct_static_compact_in_mc());
 
     return cfg;
 }

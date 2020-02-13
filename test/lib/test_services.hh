@@ -44,6 +44,8 @@ public:
 };
 
 extern db::nop_large_data_handler nop_lp_handler;
+extern db::config test_db_config;
+extern gms::feature_service test_feature_service;
 extern thread_local sstables::sstables_manager test_sstables_manager;
 
 column_family::config column_family_test_config();

@@ -36,8 +36,11 @@
 namespace db {
 
 class large_data_handler;
+class config;
 
 }   // namespace db
+
+namespace gms { class feature_service; }
 
 namespace sstables {
 
@@ -48,10 +51,12 @@ static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
 class sstables_manager {
     db::large_data_handler& _large_data_handler;
+    const db::config& _db_config;
+    gms::feature_service& _features;
 
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler)
-        : _large_data_handler(large_data_handler)
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat)
+        : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat)
     { }
 
     // Constructs a shared sstable
@@ -65,6 +70,7 @@ public:
             size_t buffer_size = default_sstable_buffer_size);
 
     sstable_writer_config configure_writer() const;
+    const db::config& config() const { return _db_config; }
 
 private:
     db::large_data_handler& get_large_data_handler() const {
