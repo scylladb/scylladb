@@ -1727,9 +1727,9 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
         g.init_messaging_service_handler(do_bind);
     }).then([this, generation_nbr, preload_local_states] {
         build_seeds_list();
-        /* initialize the heartbeat state for this localEndpoint */
-        maybe_initialize_local_state(generation_nbr);
         endpoint_state& local_state = endpoint_state_map[get_broadcast_address()];
+        local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
+        local_state.mark_alive();
         for (auto& entry : preload_local_states) {
             local_state.add_application_state(entry.first, entry.second);
         }
