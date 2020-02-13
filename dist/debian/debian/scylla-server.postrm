@@ -12,6 +12,7 @@ case "$1" in
         if [ "$1" = "purge" ]; then
             rm -rf /etc/systemd/system/scylla-server.service.d/
         fi
+        rm -f /etc/systemd/system/var-lib-systemd-coredump.mount
         ;;
 esac
 
