@@ -110,9 +110,6 @@ class data_consume_context;
 
 class index_reader;
 
-bool supports_correct_non_compound_range_tombstones();
-bool supports_correct_static_compact_in_mc();
-
 struct sstable_writer_config {
     size_t promoted_index_block_size;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
@@ -120,8 +117,8 @@ struct sstable_writer_config {
     bool leave_unsealed = false;
     std::optional<db::replay_position> replay_position;
     write_monitor* monitor = &default_write_monitor();
-    bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
-    bool correctly_serialize_static_compact_in_mc = supports_correct_static_compact_in_mc();
+    bool correctly_serialize_non_compound_range_tombstones;
+    bool correctly_serialize_static_compact_in_mc;
     utils::UUID run_identifier = utils::make_random_uuid();
 
 private:

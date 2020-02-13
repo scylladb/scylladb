@@ -23,6 +23,9 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
+#include "gms/feature.hh"
+#include "gms/feature_service.hh"
+#include "service/storage_service.hh"
 
 namespace sstables {
 
@@ -45,6 +48,12 @@ sstable_writer_config sstables_manager::configure_writer() const {
     sstable_writer_config cfg;
 
     cfg.promoted_index_block_size = get_config().column_index_size_in_kb() * 1024;
+
+    auto& f = service::get_local_storage_service().features();
+    cfg.correctly_serialize_non_compound_range_tombstones =
+            f.cluster_supports_reading_correctly_serialized_range_tombstones();
+    cfg.correctly_serialize_static_compact_in_mc =
+            bool(f.cluster_supports_correct_static_compact_in_mc());
 
     return cfg;
 }
