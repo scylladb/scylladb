@@ -118,8 +118,9 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-static future<file> open_sstable_component_file_non_checked(const sstring& name, open_flags flags, file_open_options options) {
-    if (flags != open_flags::ro && get_config().enable_sstable_data_integrity_check()) {
+static future<file> open_sstable_component_file_non_checked(const sstring& name, open_flags flags, file_open_options options,
+        bool check_integrity) {
+    if (flags != open_flags::ro && check_integrity) {
         return open_integrity_checked_file_dma(name, flags, options);
     }
     return open_file_dma(name, flags, options);
@@ -139,10 +140,11 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
     auto readonly = (flags & create_flags) != create_flags;
     auto name = !readonly && _temp_dir ? temp_filename(type) : filename(type);
 
-    auto f = open_sstable_component_file_non_checked(name, flags, options);
+    auto f = open_sstable_component_file_non_checked(name, flags, options,
+                    _manager.config().enable_sstable_data_integrity_check());
 
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto * ext : get_config().extensions().sstable_file_io_extensions()) {
+        for (auto * ext : _manager.config().extensions().sstable_file_io_extensions()) {
             f = f.then([ext, this, type, flags](file f) {
                return ext->wrap_file(*this, type, f, flags).then([f](file nf) mutable {
                    return nf ? nf : std::move(f);
