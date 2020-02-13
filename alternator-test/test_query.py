@@ -503,3 +503,11 @@ def test_query_reverse_paging(test_table_sn):
         got_items = full_query(test_table_sn, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ScanIndexForward=False, Limit=limit)
         got_sort_keys = [x['c'] for x in got_items]
         assert got_sort_keys == reversed_numbers
+
+# A query without a KeyConditions or KeyConditionExpress is, or an empty
+# one, is obviously not allowed:
+def test_query_missing_key(test_table):
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_query(test_table, KeyConditions={})
+    with pytest.raises(ClientError, match='ValidationException'):
+        full_query(test_table)

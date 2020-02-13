@@ -2864,9 +2864,9 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
     }
 }
 
-// Calculates primary key bounds from the list of conditions
+// Calculates primary key bounds from KeyConditions
 static std::pair<dht::partition_range_vector, std::vector<query::clustering_range>>
-calculate_bounds(schema_ptr schema, const rjson::value& conditions) {
+calculate_bounds_conditions(schema_ptr schema, const rjson::value& conditions) {
     dht::partition_range_vector partition_ranges;
     std::vector<query::clustering_range> ck_bounds;
 
@@ -2919,6 +2919,306 @@ calculate_bounds(schema_ptr schema, const rjson::value& conditions) {
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
+// Extract the top-level column name specified in a KeyConditionExpression.
+// If a nested attribute path is given, a ValidationException is generated.
+// If the column name is a #reference to ExpressionAttributeNames, the
+// reference is resolved.
+// Note this function returns a string_view, which may refer to data in the
+// given parsed::value or expression_attribute_names.
+static std::string_view get_toplevel(const parsed::value& v,
+        const rjson::value* expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names)
+{
+    const parsed::path& path = std::get<parsed::path>(v._value);
+    if (path.has_operators()) {
+        throw api_error("ValidationException", "KeyConditionExpression does not support nested attributes");
+    }
+    std::string_view column_name = path.root();
+    if (column_name.size() > 0 && column_name[0] == '#') {
+        used_attribute_names.emplace(column_name);
+        if (!expression_attribute_names) {
+            throw api_error("ValidationException",
+                    format("ExpressionAttributeNames missing, entry '{}' required by KeyConditionExpression",
+                            column_name));
+        }
+        const rjson::value* value = rjson::find(*expression_attribute_names,
+                rjson::string_ref_type(column_name.data(), column_name.size()));
+        if (!value || !value->IsString()) {
+            throw api_error("ValidationException",
+                    format("ExpressionAttributeNames missing entry '{}' required by KeyConditionExpression",
+                            column_name));
+        }
+        column_name = rjson::to_string_view(*value);
+    }
+    return column_name;
+}
+
+// Extract a constant value specified in a KeyConditionExpression.
+// This constant is always in the form of a reference (:name) to a member of
+// ExpressionAttributeValues.
+// This function decodes the value (using its given expected type) into bytes
+// which Scylla uses as the actual key value. If the value has the wrong type,
+// or the input had other problems, a ValidationException is thrown.
+static bytes get_valref_value(const parsed::value& v,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_values,
+        const column_definition& column)
+{
+    const std::string& valref = std::get<std::string>(v._value);
+    if (!expression_attribute_values) {
+        throw api_error("ValidationException",
+                format("ExpressionAttributeValues missing, entry '{}' required by KeyConditionExpression", valref));
+    }
+    const rjson::value* value = rjson::find(*expression_attribute_values,
+            rjson::string_ref_type(valref.c_str()));
+    if (!value) {
+        throw api_error("ValidationException",
+                format("ExpressionAttributeValues missing entry '{}' required by KeyConditionExpression", valref));
+    }
+    used_attribute_values.emplace(std::move(valref));
+    return get_key_from_typed_value(*value, column);
+}
+
+// condition_expression_and_list extracts a list of ANDed primitive conditions
+// from a condition_expression. This is useful for KeyConditionExpression,
+// which may not use OR or NOT. If the given condition_expression does use
+// OR or NOT, this function throws a ValidationException.
+static void condition_expression_and_list(
+        const parsed::condition_expression& condition_expression,
+        std::vector<const parsed::primitive_condition*>& conditions)
+{
+    if (condition_expression._negated) {
+        throw api_error("ValidationException", "KeyConditionExpression cannot use NOT");
+    }
+    std::visit(overloaded_functor {
+        [&] (const parsed::primitive_condition& cond) {
+            conditions.push_back(&cond);
+        },
+        [&] (const parsed::condition_expression::condition_list& list) {
+            if (list.op == '|' && list.conditions.size() > 1) {
+                throw api_error("ValidationException", "KeyConditionExpression cannot use OR");
+            }
+            for (const parsed::condition_expression& cond : list.conditions) {
+                condition_expression_and_list(cond, conditions);
+            }
+        }
+    }, condition_expression._expression);
+}
+
+// Calculates primary key bounds from KeyConditionExpression
+static std::pair<dht::partition_range_vector, std::vector<query::clustering_range>>
+calculate_bounds_condition_expression(schema_ptr schema,
+        const rjson::value& expression,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_values,
+        const rjson::value* expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names)
+{
+    if (!expression.IsString()) {
+        throw api_error("ValidationException", "KeyConditionExpression must be a string");
+    }
+    if (expression.GetStringLength() == 0) {
+        throw api_error("ValidationException", "KeyConditionExpression must not be empty");
+    }
+    // We parse the KeyConditionExpression with the same parser we use for
+    // ConditionExpression. But KeyConditionExpression only supports a subset
+    // of the ConditionExpression features, so we have many additional
+    // verifications below that the key condition is legal. Briefly, a valid
+    // key condition must contain a single partition key and a single
+    // sort-key range.
+    parsed::condition_expression p;
+    try {
+        p = parse_condition_expression(std::string(rjson::to_string_view(expression)));
+    } catch(expressions_syntax_error& e) {
+        throw api_error("ValidationException", e.what());
+    }
+    std::vector<const parsed::primitive_condition*> conditions;
+    condition_expression_and_list(p, conditions);
+
+    if (conditions.size() < 1 || conditions.size() > 2) {
+        throw api_error("ValidationException",
+                "KeyConditionExpression syntax error: must have 1 or 2 conditions");
+    }
+    // Scylla allows us to have an (equality) constraint on the partition key
+    // pk_cdef, and a range constraint on the *first* clustering key ck_cdef.
+    // Note that this is also good enough for our GSI implementation - the
+    // GSI's user-specified sort key will be the first clustering key.
+    // FIXME: In the case described in issue #5320 (base and GSI both have
+    // just hash key - but different ones), this may allow the user to Query
+    // using the base key which isn't officially part of the GSI.
+    const column_definition& pk_cdef = schema->partition_key_columns().front();
+    const column_definition* ck_cdef = schema->clustering_key_size() > 0 ?
+            &schema->clustering_key_columns().front() : nullptr;
+
+    dht::partition_range_vector partition_ranges;
+    std::vector<query::clustering_range> ck_bounds;
+    for (const parsed::primitive_condition* condp : conditions) {
+        const parsed::primitive_condition& cond = *condp;
+        // In all comparison operators, one operand must be a column name,
+        // the other is a constant (value reference). We remember which is
+        // which in toplevel_ind, and also the column name in key (not just
+        // for comparison operators).
+        std::string_view key;
+        int toplevel_ind;
+        switch (cond._values.size()) {
+        case 1: {
+            // The only legal single-value condition is a begin_with() function,
+            // and it must have two parameters - a top-level attribute and a
+            // value reference..
+            const parsed::value::function_call *f = std::get_if<parsed::value::function_call>(&cond._values[0]._value);
+            if (!f) {
+                throw api_error("ValidationException", "KeyConditionExpression cannot be just a value");
+            }
+            if (f->_function_name != "begins_with") {
+                throw api_error("ValidationException",
+                        format("KeyConditionExpression function '{}' not supported",f->_function_name));
+            }
+            if (f->_parameters.size() != 2 || !f->_parameters[0].is_path() ||
+                    !f->_parameters[1].is_valref()) {
+                throw api_error("ValidationException",
+                        "KeyConditionExpression begins_with() takes attribute and value");
+            }
+            key = get_toplevel(f->_parameters[0], expression_attribute_names, used_attribute_names);
+            toplevel_ind = -1;
+            break;
+        }
+        case 2:
+            if (cond._values[0].is_path() && cond._values[1].is_valref()) {
+                toplevel_ind = 0;
+            } else if (cond._values[1].is_path() && cond._values[0].is_valref()) {
+                toplevel_ind = 1;
+            } else {
+                throw api_error("ValidationException", "KeyConditionExpression must compare attribute with constant");
+            }
+            key = get_toplevel(cond._values[toplevel_ind],  expression_attribute_names, used_attribute_names);
+            break;
+        case 3:
+            // Only BETWEEN has three operands. First must be a column name,
+            // two other must be value references (constants):
+            if (cond._op != parsed::primitive_condition::type::BETWEEN) {
+                // Shouldn't happen unless we have a bug in the parser
+                throw std::logic_error(format("Wrong number of values {} in primitive_condition", cond._values.size()));
+            }
+            if (cond._values[0].is_path() && cond._values[1].is_valref() && cond._values[2].is_valref()) {
+                toplevel_ind = 0;
+                key = get_toplevel(cond._values[0], expression_attribute_names, used_attribute_names);
+            } else {
+                throw api_error("ValidationException", "KeyConditionExpression must compare attribute with constants");
+            }
+            break;
+        default:
+            // Shouldn't happen unless we have a bug in the parser
+            throw std::logic_error(format("Wrong number of values {} in primitive_condition", cond._values.size()));
+        }
+        if (cond._op == parsed::primitive_condition::type::IN) {
+            throw api_error("ValidationException", "KeyConditionExpression does not support IN operator");
+        } else if (cond._op == parsed::primitive_condition::type::NE) {
+            throw api_error("ValidationException", "KeyConditionExpression does not support NE operator");
+        } else if (cond._op == parsed::primitive_condition::type::EQ) {
+            // the EQ operator (=) is the only one which can be used for both
+            // the partition key and sort key:
+            if (sstring(key) == pk_cdef.name_as_text()) {
+                if (!partition_ranges.empty()) {
+                    throw api_error("ValidationException",
+                            "KeyConditionExpression allows only one condition for each key");
+                }
+                bytes raw_value = get_valref_value(cond._values[!toplevel_ind],
+                        expression_attribute_values, used_attribute_values, pk_cdef);
+                partition_key pk = partition_key::from_singular(*schema, pk_cdef.type->deserialize(raw_value));
+                auto decorated_key = dht::global_partitioner().decorate_key(*schema, pk);
+                partition_ranges.push_back(dht::partition_range(decorated_key));
+            } else if (ck_cdef && sstring(key) == ck_cdef->name_as_text()) {
+                if (!ck_bounds.empty()) {
+                    throw api_error("ValidationException",
+                            "KeyConditionExpression allows only one condition for each key");
+                }
+                bytes raw_value = get_valref_value(cond._values[!toplevel_ind],
+                        expression_attribute_values, used_attribute_values, *ck_cdef);
+                clustering_key ck = clustering_key::from_single_value(*schema, raw_value);
+                ck_bounds.push_back(query::clustering_range(ck));
+            } else {
+                throw api_error("ValidationException",
+                        format("KeyConditionExpression condition on non-key attribute {}", key));
+            }
+            continue;
+        }
+        // If we're still here, it's any other operator besides EQ, and these
+        // are allowed *only* on the clustering key:
+        if (sstring(key) == pk_cdef.name_as_text()) {
+            throw api_error("ValidationException",
+                    format("KeyConditionExpression only '=' condition is supported on partition key {}", key));
+        } else if (!ck_cdef || sstring(key) != ck_cdef->name_as_text()) {
+            throw api_error("ValidationException",
+                    format("KeyConditionExpression condition on non-key attribute {}", key));
+        }
+        if (!ck_bounds.empty()) {
+            throw api_error("ValidationException",
+                    "KeyConditionExpression allows only one condition for each key");
+        }
+        if (cond._op == parsed::primitive_condition::type::BETWEEN) {
+            clustering_key ck1 = clustering_key::from_single_value(*schema,
+                    get_valref_value(cond._values[1], expression_attribute_values,
+                                     used_attribute_values, *ck_cdef));
+            clustering_key ck2 = clustering_key::from_single_value(*schema,
+                    get_valref_value(cond._values[2], expression_attribute_values,
+                                     used_attribute_values, *ck_cdef));
+            ck_bounds.push_back(query::clustering_range::make(
+                    query::clustering_range::bound(ck1), query::clustering_range::bound(ck2)));
+            continue;
+        } else if (cond._values.size() == 1) {
+            // We already verified above, that this case this can only be a
+            // function call to begins_with(), with the first parameter the
+            // key, the second the value reference.
+            bytes raw_value = get_valref_value(
+                    std::get<parsed::value::function_call>(cond._values[0]._value)._parameters[1],
+                    expression_attribute_values, used_attribute_values, *ck_cdef);
+            if (!ck_cdef->type->is_compatible_with(*utf8_type)) {
+                // begins_with() supported on bytes and strings (both stored
+                // in the database as strings) but not on numbers.
+                throw api_error("ValidationException",
+                        format("KeyConditionExpression begins_with() not supported on type {}",
+                                type_to_string(ck_cdef->type)));
+            } else if (raw_value.empty()) {
+                ck_bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+            } else {
+                clustering_key ck = clustering_key::from_single_value(*schema, raw_value);
+                ck_bounds.push_back(get_clustering_range_for_begins_with(std::move(raw_value), ck, schema, ck_cdef->type));
+            }
+            continue;
+        }
+
+        // All remaining operator have one value reference parameter in index
+        // !toplevel_ind. Note how toplevel_ind==1 reverses the direction of
+        // an inequality.
+        bytes raw_value = get_valref_value(cond._values[!toplevel_ind],
+                expression_attribute_values, used_attribute_values, *ck_cdef);
+        clustering_key ck = clustering_key::from_single_value(*schema, raw_value);
+        if ((cond._op == parsed::primitive_condition::type::LT && toplevel_ind == 0) ||
+            (cond._op == parsed::primitive_condition::type::GT && toplevel_ind == 1)) {
+            ck_bounds.push_back(query::clustering_range::make_ending_with(query::clustering_range::bound(ck, false)));
+        } else if ((cond._op == parsed::primitive_condition::type::GT && toplevel_ind == 0) ||
+                   (cond._op == parsed::primitive_condition::type::LT && toplevel_ind == 1)) {
+            ck_bounds.push_back(query::clustering_range::make_starting_with(query::clustering_range::bound(ck, false)));
+        } else if ((cond._op == parsed::primitive_condition::type::LE && toplevel_ind == 0) ||
+                   (cond._op == parsed::primitive_condition::type::GE && toplevel_ind == 1)) {
+            ck_bounds.push_back(query::clustering_range::make_ending_with(query::clustering_range::bound(ck)));
+        } else if ((cond._op == parsed::primitive_condition::type::GE && toplevel_ind == 0) ||
+                   (cond._op == parsed::primitive_condition::type::LE && toplevel_ind == 1)) {
+            ck_bounds.push_back(query::clustering_range::make_starting_with(query::clustering_range::bound(ck)));
+        }
+    }
+
+    if (partition_ranges.empty()) {
+        throw api_error("ValidationException",
+                format("KeyConditionExpression requires a condition on partition key {}", pk_cdef.name_as_text()));
+    }
+    if (ck_bounds.empty()) {
+        ck_bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+    }
+    return {std::move(partition_ranges), std::move(ck_bounds)};
+}
+
+
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.query++;
     rjson::value request_info = rjson::parse(content);
@@ -2936,9 +3236,6 @@ future<executor::request_return_type> executor::query(client_state& client_state
         return make_ready_future<request_return_type>(api_error("ValidationException", "Limit must be greater than 0"));
     }
 
-    if (rjson::find(request_info, "KeyConditionExpression")) {
-        return make_ready_future<request_return_type>(api_error("ValidationException", "KeyConditionExpression is not yet implemented in alternator"));
-    }
     if (rjson::find(request_info, "FilterExpression")) {
         return make_ready_future<request_return_type>(api_error("ValidationException", "FilterExpression is not yet implemented in alternator"));
     }
@@ -2948,12 +3245,28 @@ future<executor::request_return_type> executor::query(client_state& client_state
         return make_ready_future<request_return_type>(api_error("ValidationException", "ScanIndexForward=false is not yet implemented in alternator"));
     }
 
-    //FIXME(sarna): KeyConditions are deprecated in favor of KeyConditionExpression
-    rjson::value& conditions = rjson::get(request_info, "KeyConditions");
+    rjson::value* key_conditions = rjson::find(request_info, "KeyConditions");
+    rjson::value* key_condition_expression = rjson::find(request_info, "KeyConditionExpression");
+    std::unordered_set<std::string> used_attribute_values;
+    std::unordered_set<std::string> used_attribute_names;
+    if (key_conditions && key_condition_expression) {
+        throw api_error("ValidationException", "Query does not allow both "
+                "KeyConditions and KeyConditionExpression to be given together");
+    } else if (!key_conditions && !key_condition_expression) {
+        throw api_error("ValidationException", "Query must have one of "
+                "KeyConditions or KeyConditionExpression");
+    }
+    // exactly one of key_conditions or key_condition_expression
+    auto [partition_ranges, ck_bounds] = key_conditions
+                ? calculate_bounds_conditions(schema, *key_conditions)
+                : calculate_bounds_condition_expression(schema, *key_condition_expression,
+                        rjson::find(request_info, "ExpressionAttributeValues"),
+                        used_attribute_values,
+                        rjson::find(request_info, "ExpressionAttributeNames"),
+                        used_attribute_names);
+
     //FIXME(sarna): QueryFilter is deprecated in favor of FilterExpression
     rjson::value* query_filter = rjson::find(request_info, "QueryFilter");
-
-    auto [partition_ranges, ck_bounds] = calculate_bounds(schema, conditions);
 
     auto attrs_to_get = calculate_attrs_to_get(request_info);
 
@@ -2971,6 +3284,8 @@ future<executor::request_return_type> executor::query(client_state& client_state
                     format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", ck_defs.front()->name_as_text())));
         }
     }
+    verify_all_are_used(request_info, "ExpressionAttributeValues", used_attribute_values, "KeyConditionExpression");
+    verify_all_are_used(request_info, "ExpressionAttributeNames", used_attribute_names, "KeyConditionExpression");
     return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats, std::move(trace_state));
 }
 

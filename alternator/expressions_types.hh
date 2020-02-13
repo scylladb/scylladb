@@ -88,6 +88,15 @@ struct value {
     void add_func_parameter(value v) {
         std::get<function_call>(_value)._parameters.emplace_back(std::move(v));
     }
+    bool is_valref() const {
+        return std::holds_alternative<std::string>(_value);
+    }
+    bool is_path() const {
+        return std::holds_alternative<path>(_value);
+    }
+    bool is_func() const {
+        return std::holds_alternative<function_call>(_value);
+    }
 };
 
 // The right-hand-side of a SET in an update expression can be either a
