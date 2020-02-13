@@ -351,7 +351,7 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     return it_candidate->second;
 }
 
-shared_ptr<function> castas_functions::get(data_type to_type, const std::vector<shared_ptr<cql3::selection::selector>>& provided_args, schema_ptr s) {
+shared_ptr<function> castas_functions::get(data_type to_type, const std::vector<shared_ptr<cql3::selection::selector>>& provided_args) {
     if (provided_args.size() != 1) {
         throw exceptions::invalid_request_exception("Invalid CAST expression");
     }

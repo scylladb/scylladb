@@ -180,7 +180,7 @@ shared_ptr<selector::factory>
 selectable::with_cast::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     std::vector<shared_ptr<selectable>> args{_arg};
     auto&& factories = selector_factories::create_factories_and_collect_column_definitions(args, db, s, defs);
-    auto&& fun = functions::castas_functions::get(_type.get_type(), factories->new_instances(), s);
+    auto&& fun = functions::castas_functions::get(_type.get_type(), factories->new_instances());
 
     return abstract_function_selector::new_factory(std::move(fun), std::move(factories));
 }
