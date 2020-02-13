@@ -52,14 +52,14 @@
 namespace cql3 {
 
 shared_ptr<column_specification>
-maps::key_spec_of(column_specification& column) {
+maps::key_spec_of(const column_specification& column) {
     return ::make_shared<column_specification>(column.ks_name, column.cf_name,
                 ::make_shared<column_identifier>(format("key({})", *column.name), true),
                  dynamic_pointer_cast<const map_type_impl>(column.type)->get_keys_type());
 }
 
 shared_ptr<column_specification>
-maps::value_spec_of(column_specification& column) {
+maps::value_spec_of(const column_specification& column) {
     return ::make_shared<column_specification>(column.ks_name, column.cf_name,
                 ::make_shared<column_identifier>(format("value({})", *column.name), true),
                  dynamic_pointer_cast<const map_type_impl>(column.type)->get_values_type());

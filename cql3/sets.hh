@@ -56,7 +56,7 @@ namespace cql3 {
 class sets {
     sets() = delete;
 public:
-    static shared_ptr<column_specification> value_spec_of(shared_ptr<column_specification> column);
+    static shared_ptr<column_specification> value_spec_of(const column_specification& column);
 
     class literal : public term::raw {
         std::vector<shared_ptr<term::raw>> _elements;
