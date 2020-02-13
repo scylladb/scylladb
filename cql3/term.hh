@@ -72,7 +72,7 @@ public:
      * @param boundNames the variables specification where to collect the
      * bind variables of this term in.
      */
-    virtual void collect_marker_specification(variable_specifications& bound_names) = 0;
+    virtual void collect_marker_specification(variable_specifications& bound_names) const = 0;
 
     /**
      * Bind the values in this term to the values contained in {@code values}.
@@ -167,7 +167,7 @@ public:
  */
 class terminal : public term {
 public:
-    virtual void collect_marker_specification(variable_specifications& bound_names) {
+    virtual void collect_marker_specification(variable_specifications& bound_names) const {
     }
 
     virtual ::shared_ptr<terminal> bind(const query_options& options) override {
@@ -198,7 +198,7 @@ public:
 
 class multi_item_terminal : public terminal {
 public:
-    virtual const std::vector<bytes_opt>& get_elements() = 0;
+    virtual const std::vector<bytes_opt>& get_elements() const = 0;
 };
 
 class collection_terminal {

@@ -81,7 +81,7 @@ public:
         static value from_serialized(const fragmented_temporary_buffer::view&, const user_type_impl&);
 
         virtual cql3::raw_value get(const query_options&) override;
-        virtual const std::vector<bytes_opt>& get_elements() override;
+        virtual const std::vector<bytes_opt>& get_elements() const override;
         virtual sstring to_string() const override;
     };
 
@@ -93,7 +93,7 @@ public:
         delayed_value(user_type type, std::vector<shared_ptr<term>> values);
         virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
         virtual bool contains_bind_marker() const override;
-        virtual void collect_marker_specification(variable_specifications& bound_names);
+        virtual void collect_marker_specification(variable_specifications& bound_names) const;
     private:
         std::vector<bytes_opt> bind_internal(const query_options& options);
     public:

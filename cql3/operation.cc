@@ -87,7 +87,7 @@ operation::set_element::prepare(database& db, const sstring& keyspace, const col
 }
 
 bool
-operation::set_element::is_compatible_with(shared_ptr<raw_update> other) {
+operation::set_element::is_compatible_with(shared_ptr<raw_update> other) const {
     // TODO: we could check that the other operation is not setting the same element
     // too (but since the index/key set may be a bind variables we can't always do it at this point)
     return !dynamic_pointer_cast<set_value>(std::move(other));
@@ -120,7 +120,7 @@ operation::set_field::prepare(database& db, const sstring& keyspace, const colum
 }
 
 bool
-operation::set_field::is_compatible_with(shared_ptr<raw_update> other) {
+operation::set_field::is_compatible_with(shared_ptr<raw_update> other) const {
     auto x = dynamic_pointer_cast<set_field>(other);
     if (x) {
         return _field != x->_field;
@@ -185,7 +185,7 @@ operation::addition::prepare(database& db, const sstring& keyspace, const column
 }
 
 bool
-operation::addition::is_compatible_with(shared_ptr<raw_update> other) {
+operation::addition::is_compatible_with(shared_ptr<raw_update> other) const {
     return !dynamic_pointer_cast<set_value>(other);
 }
 
@@ -227,7 +227,7 @@ operation::subtraction::prepare(database& db, const sstring& keyspace, const col
 }
 
 bool
-operation::subtraction::is_compatible_with(shared_ptr<raw_update> other) {
+operation::subtraction::is_compatible_with(shared_ptr<raw_update> other) const {
     return !dynamic_pointer_cast<set_value>(other);
 }
 
@@ -250,7 +250,7 @@ operation::prepend::prepare(database& db, const sstring& keyspace, const column_
 }
 
 bool
-operation::prepend::is_compatible_with(shared_ptr<raw_update> other) {
+operation::prepend::is_compatible_with(shared_ptr<raw_update> other) const {
     return !dynamic_pointer_cast<set_value>(other);
 }
 
@@ -356,7 +356,7 @@ operation::set_counter_value_from_tuple_list::prepare(database& db, const sstrin
 };
 
 bool
-operation::set_value::is_compatible_with(::shared_ptr <raw_update> other) {
+operation::set_value::is_compatible_with(::shared_ptr <raw_update> other) const {
     // We don't allow setting multiple time the same column, because 1)
     // it's stupid and 2) the result would seem random to the user.
     return false;

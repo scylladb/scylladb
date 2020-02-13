@@ -202,7 +202,7 @@ protected:
 
     virtual shared_ptr<term> to_term(const std::vector<shared_ptr<column_specification>>& receivers,
                                      ::shared_ptr<term::raw> raw, database& db, const sstring& keyspace,
-                                     variable_specifications& bound_names) override {
+                                     variable_specifications& bound_names) const override {
         auto as_multi_column_raw = dynamic_pointer_cast<term::multi_column_raw>(raw);
         auto t = as_multi_column_raw->prepare(db, keyspace, receivers);
         t->collect_marker_specification(bound_names);

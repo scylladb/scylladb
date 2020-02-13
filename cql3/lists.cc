@@ -175,7 +175,7 @@ lists::value::equals(shared_ptr<list_type_impl> lt, const value& v) {
 }
 
 const std::vector<bytes_opt>&
-lists::value::get_elements() {
+lists::value::get_elements() const {
     return _elements;
 }
 
@@ -202,7 +202,7 @@ lists::delayed_value::contains_bind_marker() const {
 }
 
 void
-lists::delayed_value::collect_marker_specification(variable_specifications& bound_names) {
+lists::delayed_value::collect_marker_specification(variable_specifications& bound_names) const {
 }
 
 shared_ptr<terminal>
@@ -285,7 +285,7 @@ lists::setter_by_index::requires_read() const {
 }
 
 void
-lists::setter_by_index::collect_marker_specification(variable_specifications& bound_names) {
+lists::setter_by_index::collect_marker_specification(variable_specifications& bound_names) const {
     operation::collect_marker_specification(bound_names);
     _idx->collect_marker_specification(bound_names);
 }

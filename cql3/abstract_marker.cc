@@ -55,7 +55,7 @@ abstract_marker::abstract_marker(int32_t bind_index, ::shared_ptr<column_specifi
     , _receiver{std::move(receiver)}
 { }
 
-void abstract_marker::collect_marker_specification(variable_specifications& bound_names) {
+void abstract_marker::collect_marker_specification(variable_specifications& bound_names) const {
     bound_names.add(_bind_index, _receiver);
 }
 

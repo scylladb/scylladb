@@ -82,7 +82,7 @@ private:
      * @return the receivers for the specified relation.
      * @throws InvalidRequestException if the relation is invalid
      */
-    std::vector<::shared_ptr<column_specification>> to_receivers(schema_ptr schema, const std::vector<const column_definition*>& column_defs);
+    std::vector<::shared_ptr<column_specification>> to_receivers(schema_ptr schema, const std::vector<const column_definition*>& column_defs) const;
 
 public:
     token_relation(std::vector<::shared_ptr<column_identifier::raw>> entities,
@@ -126,7 +126,7 @@ protected:
                                        ::shared_ptr<term::raw> raw,
                                        database& db,
                                        const sstring& keyspace,
-                                       variable_specifications& bound_names) override;
+                                       variable_specifications& bound_names) const override;
 };
 
 }
