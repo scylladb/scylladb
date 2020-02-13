@@ -51,14 +51,14 @@
 
 namespace cql3 {
 
-shared_ptr<column_specification> user_types::field_spec_of(shared_ptr<column_specification> column, size_t field) {
-    auto&& ut = static_pointer_cast<const user_type_impl>(column->type);
+shared_ptr<column_specification> user_types::field_spec_of(const column_specification& column, size_t field) {
+    auto&& ut = static_pointer_cast<const user_type_impl>(column.type);
     auto&& name = ut->field_name(field);
     auto&& sname = sstring(reinterpret_cast<const char*>(name.data()), name.size());
     return make_shared<column_specification>(
-                                   column->ks_name,
-                                   column->cf_name,
-                                   make_shared<column_identifier>(column->name->to_string() + "." + sname, true),
+                                   column.ks_name,
+                                   column.cf_name,
+                                   make_shared<column_identifier>(column.name->to_string() + "." + sname, true),
                                    ut->field_type(field));
 }
 
@@ -67,7 +67,7 @@ user_types::literal::literal(elements_map_type entries)
 }
 
 shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
-    validate_assignable_to(db, keyspace, receiver);
+    validate_assignable_to(db, keyspace, *receiver);
     auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
     bool all_terminal = true;
     std::vector<shared_ptr<term>> values;
@@ -83,7 +83,7 @@ shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keysp
             raw = iraw->second;
             ++found_values;
         }
-        auto&& value = raw->prepare(db, keyspace, field_spec_of(receiver, i));
+        auto&& value = raw->prepare(db, keyspace, field_spec_of(*receiver, i));
 
         if (dynamic_cast<non_terminal*>(value.get())) {
             all_terminal = false;
@@ -109,12 +109,12 @@ shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keysp
     }
 }
 
-void user_types::literal::validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
-    if (!receiver->type->is_user_type()) {
-        throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", receiver->name, receiver->type->as_cql3_type()));
+void user_types::literal::validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!receiver.type->is_user_type()) {
+        throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
     }
 
-    auto ut = static_pointer_cast<const user_type_impl>(receiver->type);
+    auto ut = static_pointer_cast<const user_type_impl>(receiver.type);
     for (size_t i = 0; i < ut->size(); i++) {
         column_identifier field(to_bytes(ut->field_name(i)), utf8_type);
         if (_entries.count(field) == 0) {
@@ -123,14 +123,14 @@ void user_types::literal::validate_assignable_to(database& db, const sstring& ke
         const shared_ptr<term::raw>& value = _entries.at(field);
         auto&& field_spec = field_spec_of(receiver, i);
         if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, field_spec))) {
-            throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver->name, field, field_spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver.name, field, field_spec->type->as_cql3_type()));
         }
     }
 }
 
 assignment_testable::test_result user_types::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
     try {
-        validate_assignable_to(db, keyspace, receiver);
+        validate_assignable_to(db, keyspace, *receiver);
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     } catch (exceptions::invalid_request_exception& e) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;

@@ -36,7 +36,7 @@ sets::value_spec_of(const column_specification& column) {
 
 shared_ptr<term>
 sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
-    validate_assignable_to(db, keyspace, receiver);
+    validate_assignable_to(db, keyspace, *receiver);
 
     if (_elements.empty()) {
 
@@ -85,21 +85,21 @@ sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_
 }
 
 void
-sets::literal::validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
-    if (!dynamic_pointer_cast<const set_type_impl>(receiver->type)) {
+sets::literal::validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!dynamic_pointer_cast<const set_type_impl>(receiver.type)) {
         // We've parsed empty maps as a set literal to break the ambiguity so
         // handle that case now
-        if (dynamic_pointer_cast<const map_type_impl>(receiver->type) && _elements.empty()) {
+        if (dynamic_pointer_cast<const map_type_impl>(receiver.type) && _elements.empty()) {
             return;
         }
 
-        throw exceptions::invalid_request_exception(format("Invalid set literal for {} of type {}", receiver->name, receiver->type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Invalid set literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
     }
 
-    auto&& value_spec = value_spec_of(*receiver);
+    auto&& value_spec = value_spec_of(receiver);
     for (shared_ptr<term::raw> rt : _elements) {
         if (!is_assignable(rt->test_assignment(db, keyspace, value_spec))) {
-            throw exceptions::invalid_request_exception(format("Invalid set literal for {}: value {} is not of type {}", *receiver->name, *rt, value_spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid set literal for {}: value {} is not of type {}", *receiver.name, *rt, value_spec->type->as_cql3_type()));
         }
     }
 }

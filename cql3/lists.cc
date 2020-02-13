@@ -52,7 +52,7 @@ lists::uuid_index_spec_of(const column_specification& column) {
 
 shared_ptr<term>
 lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
-    validate_assignable_to(db, keyspace, receiver);
+    validate_assignable_to(db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
     // other words a non-frozen collection only exists if it has elements. Return nullptr right
@@ -86,16 +86,16 @@ lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column
 }
 
 void
-lists::literal::validate_assignable_to(database& db, const sstring keyspace, shared_ptr<column_specification> receiver) const {
-    if (!dynamic_pointer_cast<const list_type_impl>(receiver->type)) {
+lists::literal::validate_assignable_to(database& db, const sstring keyspace, const column_specification& receiver) const {
+    if (!dynamic_pointer_cast<const list_type_impl>(receiver.type)) {
         throw exceptions::invalid_request_exception(format("Invalid list literal for {} of type {}",
-                *receiver->name, receiver->type->as_cql3_type()));
+                *receiver.name, receiver.type->as_cql3_type()));
     }
-    auto&& value_spec = value_spec_of(*receiver);
+    auto&& value_spec = value_spec_of(receiver);
     for (auto rt : _elements) {
         if (!is_assignable(rt->test_assignment(db, keyspace, value_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid list literal for {}: value {} is not of type {}",
-                    *receiver->name, *rt, value_spec->type->as_cql3_type()));
+                    *receiver.name, *rt, value_spec->type->as_cql3_type()));
         }
     }
 }
