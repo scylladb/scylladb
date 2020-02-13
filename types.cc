@@ -1345,17 +1345,26 @@ struct validate_visitor {
     void operator()(const reversed_type_impl& t) { return t.underlying_type()->validate(v, sf); }
     void operator()(const abstract_type&) {}
     template <typename T> void operator()(const integer_type_impl<T>& t) {
-        if (v.size() != 0 && v.size() != sizeof(T)) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != sizeof(T)) {
             throw marshal_exception(format("Validation failed for type {}: got {:d} bytes", t.name(), v.size()));
         }
     }
     void operator()(const byte_type_impl& t) {
-        if (v.size() != 0 && v.size() != 1) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != 1) {
             throw marshal_exception(format("Expected 1 byte for a tinyint ({:d})", v.size()));
         }
     }
     void operator()(const short_type_impl& t) {
-        if (v.size() != 0 && v.size() != 2) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != 2) {
             throw marshal_exception(format("Expected 2 bytes for a smallint ({:d})", v.size()));
         }
     }
@@ -1371,12 +1380,18 @@ struct validate_visitor {
     }
     void operator()(const bytes_type_impl& t) {}
     void operator()(const boolean_type_impl& t) {
-        if (v.size() != 0 && v.size() != 1) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != 1) {
             throw marshal_exception(format("Validation failed for boolean, got {:d} bytes", v.size()));
         }
     }
     void operator()(const timeuuid_type_impl& t) {
-        if (v.size() != 0 && v.size() != 16) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != 16) {
             throw marshal_exception(format("Validation failed for timeuuid - got {:d} bytes", v.size()));
         }
         auto msb = read_simple<uint64_t>(v);
@@ -1387,7 +1402,10 @@ struct validate_visitor {
         }
     }
     void operator()(const timestamp_date_base_class& t) {
-        if (v.size() != 0 && v.size() != sizeof(uint64_t)) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != sizeof(uint64_t)) {
             throw marshal_exception(format("Validation failed for timestamp - got {:d} bytes", v.size()));
         }
     }
@@ -1421,27 +1439,42 @@ struct validate_visitor {
         }
     }
     template <typename T> void operator()(const floating_type_impl<T>& t) {
-        if (v.size() != 0 && v.size() != sizeof(T)) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != sizeof(T)) {
             throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size()));
         }
     }
     void operator()(const simple_date_type_impl& t) {
-        if (v.size() != 0 && v.size() != 4) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != 4) {
             throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size()));
         }
     }
     void operator()(const time_type_impl& t) {
-        if (v.size() != 0 && v.size() != 8) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != 8) {
             throw marshal_exception(format("Expected 8 byte long for time ({:d})", v.size()));
         }
     }
     void operator()(const uuid_type_impl& t) {
-        if (v.size() != 0 && v.size() != 16) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != 16) {
             throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size()));
         }
     }
     void operator()(const inet_addr_type_impl& t) {
-        if (v.size() != 0 && v.size() != sizeof(uint32_t) && v.size() != 16) {
+        if (v.empty()) {
+            return;
+        }
+        if (v.size() != sizeof(uint32_t) && v.size() != 16) {
             throw marshal_exception(format("Validation failed for inet_addr - got {:d} bytes", v.size()));
         }
     }
@@ -1575,6 +1608,10 @@ struct serialize_visitor {
     }
     void operator()(const empty_type_impl& t, const void*) {}
     void operator()(const uuid_type_impl& t, const uuid_type_impl::native_type* value) {
+        if (value->empty()) {
+            return;
+        }
+
         value->get().serialize(out);
     }
     void operator()(const inet_addr_type_impl& t, const inet_addr_type_impl::native_type* ipv) {
@@ -1597,6 +1634,10 @@ struct serialize_visitor {
     }
     template <typename T>
     void operator()(const floating_type_impl<T>& t, const typename floating_type_impl<T>::native_type* value) {
+        if (value->empty()) {
+            return;
+        }
+
         T d = *value;
         if (std::isnan(d)) {
             // Java's Double.doubleToLongBits() documentation specifies that

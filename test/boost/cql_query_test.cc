@@ -5038,3 +5038,29 @@ SEASTAR_TEST_CASE(test_views_with_future_tombstones) {
         assert_that(msg).is_rows().with_size(0);
     });
 }
+
+SEASTAR_TEST_CASE(test_null_value_tuple_floating_types_and_uuids) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto test_for_single_type = [&e] (const shared_ptr<const abstract_type>& type, auto update_value) {
+            cquery_nofail(e, format("CREATE TABLE IF NOT EXISTS t (k int PRIMARY KEY, test {})", type->cql3_type_name()));
+            cquery_nofail(e, "INSERT INTO t (k, test) VALUES (0, null)");
+
+            auto stmt = e.prepare(format("UPDATE t SET test={} WHERE k=0 IF test IN ?", update_value)).get0();
+            auto list_type = list_type_impl::get_instance(type, true);
+            // decomposed (null) value
+            auto arg_value = list_type->decompose(
+                make_list_value(list_type, {data_value::make_null(type)}));
+
+            require_rows(e, stmt,
+                {cql3::raw_value::make_value(std::move(arg_value))},
+                {{boolean_type->decompose(true), std::nullopt}});
+
+            cquery_nofail(e, "DROP TABLE t");
+        };
+
+        test_for_single_type(double_type, 1.0);
+        test_for_single_type(float_type, 1.0f);
+        test_for_single_type(uuid_type, utils::make_random_uuid());
+        test_for_single_type(timeuuid_type, utils::UUID("00000000-0000-1000-0000-000000000000"));
+    });
+}
