@@ -57,7 +57,7 @@ single_column_relation::to_term(const std::vector<::shared_ptr<column_specificat
                                 ::shared_ptr<term::raw> raw,
                                 database& db,
                                 const sstring& keyspace,
-                                variable_specifications& bound_names) {
+                                variable_specifications& bound_names) const {
     // TODO: optimize vector away, accept single column_specification
     assert(receivers.size() == 1);
     auto term = raw->prepare(db, keyspace, receivers[0]);
@@ -108,7 +108,7 @@ single_column_relation::new_LIKE_restriction(
 }
 
 std::vector<::shared_ptr<column_specification>>
-single_column_relation::to_receivers(schema_ptr schema, const column_definition& column_def)
+single_column_relation::to_receivers(schema_ptr schema, const column_definition& column_def) const
 {
     using namespace statements::request_validations;
     auto receiver = column_def.column_specification;

@@ -253,7 +253,7 @@ protected:
                                        ::shared_ptr<term::raw> raw,
                                        database& db,
                                        const sstring& keyspace,
-                                       variable_specifications& boundNames) = 0;
+                                       variable_specifications& boundNames) const = 0;
 
     /**
      * Converts the specified <code>Raw</code> terms into a <code>Term</code>s.
@@ -269,7 +269,7 @@ protected:
                                              const std::vector<::shared_ptr<term::raw>>& raws,
                                              database& db,
                                              const sstring& keyspace,
-                                             variable_specifications& boundNames) {
+                                             variable_specifications& boundNames) const {
         std::vector<::shared_ptr<term>> terms;
         for (auto&& r : raws) {
             terms.emplace_back(to_term(receivers, r, db, keyspace, boundNames));

@@ -124,7 +124,7 @@ public:
             return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
         }
 
-        virtual const std::vector<bytes_opt>& get_elements() override {
+        virtual const std::vector<bytes_opt>& get_elements() const override {
             return _elements;
         }
         virtual sstring to_string() const override {
@@ -147,7 +147,7 @@ public:
             return std::all_of(_elements.begin(), _elements.end(), std::mem_fn(&term::contains_bind_marker));
         }
 
-        virtual void collect_marker_specification(variable_specifications& bound_names) override {
+        virtual void collect_marker_specification(variable_specifications& bound_names) const override {
             for (auto&& term : _elements) {
                 term->collect_marker_specification(bound_names);
             }

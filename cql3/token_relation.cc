@@ -55,7 +55,7 @@ std::vector<const column_definition*> cql3::token_relation::get_column_definitio
 
 std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_receivers(
         schema_ptr schema,
-        const std::vector<const column_definition*>& column_defs) {
+        const std::vector<const column_definition*>& column_defs) const {
     auto pk = schema->partition_key_columns();
     if (!std::equal(column_defs.begin(), column_defs.end(), pk.begin(),
             pk.end(), [](auto* c1, auto& c2) {
@@ -128,7 +128,7 @@ sstring cql3::token_relation::to_string() const {
 ::shared_ptr<cql3::term> cql3::token_relation::to_term(
         const std::vector<::shared_ptr<column_specification>>& receivers,
         ::shared_ptr<term::raw> raw, database& db, const sstring& keyspace,
-        variable_specifications& bound_names) {
+        variable_specifications& bound_names) const {
     auto term = raw->prepare(db, keyspace, receivers.front());
     term->collect_marker_specification(bound_names);
     return term;

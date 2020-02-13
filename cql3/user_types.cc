@@ -170,7 +170,7 @@ cql3::raw_value user_types::value::get(const query_options&) {
     return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
 }
 
-const std::vector<bytes_opt>& user_types::value::get_elements() {
+const std::vector<bytes_opt>& user_types::value::get_elements() const {
     return _elements;
 }
 
@@ -189,7 +189,7 @@ bool user_types::delayed_value::contains_bind_marker() const {
     return boost::algorithm::any_of(_values, std::mem_fn(&term::contains_bind_marker));
 }
 
-void user_types::delayed_value::collect_marker_specification(variable_specifications& bound_names) {
+void user_types::delayed_value::collect_marker_specification(variable_specifications& bound_names) const {
     for (auto&& v : _values) {
         v->collect_marker_specification(bound_names);
     }

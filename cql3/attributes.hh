@@ -69,7 +69,7 @@ public:
 
     int32_t get_time_to_live(const query_options& options);
 
-    void collect_marker_specification(variable_specifications& bound_names);
+    void collect_marker_specification(variable_specifications& bound_names) const;
 
     class raw {
     public:

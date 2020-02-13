@@ -57,7 +57,7 @@ protected:
 public:
     abstract_marker(int32_t bind_index, ::shared_ptr<column_specification>&& receiver);
 
-    virtual void collect_marker_specification(variable_specifications& bound_names) override;
+    virtual void collect_marker_specification(variable_specifications& bound_names) const override;
 
     virtual bool contains_bind_marker() const override;
 
