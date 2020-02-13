@@ -2033,7 +2033,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _range_tombstones(s)
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::k_l_format);
-    _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
+    _sst._pi_write.desired_block_size = cfg.promoted_index_block_size;
     _sst._correctly_serialize_non_compound_range_tombstones = cfg.correctly_serialize_non_compound_range_tombstones;
     _index_sampling_state.summary_byte_cost = summary_byte_cost();
 

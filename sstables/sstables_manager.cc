@@ -22,6 +22,7 @@
 #include "log.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstables.hh"
+#include "db/config.hh"
 
 namespace sstables {
 
@@ -38,8 +39,12 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
     return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
+extern const db::config& get_config(); /* to be removed soon */
+
 sstable_writer_config sstables_manager::configure_writer() const {
     sstable_writer_config cfg;
+
+    cfg.promoted_index_block_size = get_config().column_index_size_in_kb() * 1024;
 
     return cfg;
 }

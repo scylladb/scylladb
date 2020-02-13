@@ -114,7 +114,7 @@ bool supports_correct_non_compound_range_tombstones();
 bool supports_correct_static_compact_in_mc();
 
 struct sstable_writer_config {
-    std::optional<size_t> promoted_index_block_size;
+    size_t promoted_index_block_size;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
     bool backup = false;
     bool leave_unsealed = false;
