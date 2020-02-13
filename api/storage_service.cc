@@ -1013,7 +1013,7 @@ void set_snapshot(http_context& ctx, routes& r) {
         auto tag = req->get_query_param("tag");
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
-        return service::get_local_storage_service().clear_snapshot(tag, keynames).then([] {
+        return service::get_local_storage_service().clear_snapshot(tag, keynames, "").then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
