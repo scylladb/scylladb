@@ -35,7 +35,7 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         gc_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
-    return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), now, std::move(error_handler_gen), buffer_size);
+    return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
 }   // namespace sstables

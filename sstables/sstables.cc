@@ -3459,6 +3459,7 @@ sstable::sstable(schema_ptr schema,
         version_types v,
         format_types f,
         db::large_data_handler& large_data_handler,
+        sstables_manager& manager,
         gc_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size)
@@ -3472,6 +3473,7 @@ sstable::sstable(schema_ptr schema,
     , _read_error_handler(error_handler_gen(sstable_read_error))
     , _write_error_handler(error_handler_gen(sstable_write_error))
     , _large_data_handler(large_data_handler)
+    , _manager(manager)
 {
     tracker.add(*this);
 }

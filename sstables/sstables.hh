@@ -84,6 +84,7 @@ class sstable_writer;
 class sstable_writer_k_l;
 struct foreign_sstable_open_info;
 struct sstable_open_info;
+class sstables_manager;
 
 GCC6_CONCEPT(
 template<typename T>
@@ -140,6 +141,7 @@ public:
             version_types v,
             format_types f,
             db::large_data_handler& large_data_handler,
+            sstables_manager& manager,
             gc_clock::time_point now,
             io_error_handler_gen error_handler_gen,
             size_t buffer_size);
@@ -544,6 +546,7 @@ private:
     io_error_handler _write_error_handler;
 
     db::large_data_handler& _large_data_handler;
+    sstables_manager& _manager;
 
     sstables_stats _stats;
     tracker_link_type _tracker_link;
