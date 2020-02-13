@@ -246,7 +246,7 @@ public:
 
         std::unique_ptr<cql3::query_options> options;
         if (flags) {
-            ::shared_ptr<service::pager::paging_state> paging_state;
+            lw_shared_ptr<service::pager::paging_state> paging_state;
             int32_t page_size = flags.contains<options_flag::PAGE_SIZE>() ? read_int() : -1;
             if (flags.contains<options_flag::PAGING_STATE>()) {
                 paging_state = service::pager::paging_state::deserialize(read_bytes());

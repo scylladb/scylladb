@@ -156,7 +156,7 @@ public:
         return _query_read_repair_decision;
     }
 
-    static ::shared_ptr<paging_state> deserialize(bytes_opt bytes);
+    static lw_shared_ptr<paging_state> deserialize(bytes_opt bytes);
     bytes_opt serialize() const;
 };
 
