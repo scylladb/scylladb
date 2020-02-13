@@ -385,7 +385,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
             auto& c = _column_aliases.at(i);
 
             if (!(*id == *c)) {
-                if (_properties.find_ordering_info(c)) {
+                if (_properties.find_ordering_info(*c)) {
                     throw exceptions::invalid_request_exception(format("The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key ({} must appear before {})", c, id));
                 } else {
                     throw exceptions::invalid_request_exception(format("Missing CLUSTERING ORDER for column {}", c));
@@ -414,7 +414,7 @@ data_type create_table_statement::raw_statement::get_type_and_remove(column_map_
     }
     columns.erase(t);
 
-    return _properties.get_reversable_type(t, type);
+    return _properties.get_reversable_type(*t, type);
 }
 
 void create_table_statement::raw_statement::add_definition(::shared_ptr<column_identifier> def, ::shared_ptr<cql3_type::raw> type, bool is_static) {

@@ -137,7 +137,7 @@ private:
         ::shared_ptr<selection::selection> selection,
         ::shared_ptr<restrictions::statement_restrictions> restrictions);
 
-    void handle_unrecognized_ordering_column(::shared_ptr<column_identifier> column);
+    void handle_unrecognized_ordering_column(const column_identifier& column);
 
     select_statement::ordering_comparator_type get_ordering_comparator(schema_ptr schema,
         ::shared_ptr<selection::selection> selection,
@@ -155,7 +155,7 @@ private:
     /// Returns indices of GROUP BY cells in fetched rows.
     std::vector<size_t> prepare_group_by(schema_ptr schema, selection::selection& selection) const;
 
-    bool contains_alias(::shared_ptr<column_identifier> name);
+    bool contains_alias(const column_identifier& name);
 
     ::shared_ptr<column_specification> limit_receiver(bool per_partition = false);
 

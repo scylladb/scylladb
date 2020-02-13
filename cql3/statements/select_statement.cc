@@ -1357,7 +1357,7 @@ select_statement::prepare_restrictions(database& db,
         return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, std::move(_where_clause), bound_names,
             selection->contains_only_static_columns(), selection->contains_a_collection(), for_view, allow_filtering);
     } catch (const exceptions::unrecognized_entity_exception& e) {
-        if (contains_alias(e.entity)) {
+        if (contains_alias(*e.entity)) {
             throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the where clause ('{}')", e.relation->to_string()));
         }
         throw;
@@ -1415,12 +1415,12 @@ void select_statement::validate_distinct_selection(schema_ptr schema,
     }
 }
 
-void select_statement::handle_unrecognized_ordering_column(::shared_ptr<column_identifier> column)
+void select_statement::handle_unrecognized_ordering_column(const column_identifier& column)
 {
     if (contains_alias(column)) {
-        throw exceptions::invalid_request_exception(format("Aliases are not allowed in order by clause ('{}')", *column));
+        throw exceptions::invalid_request_exception(format("Aliases are not allowed in order by clause ('{}')", column));
     }
-    throw exceptions::invalid_request_exception(format("Order by on unknown column {}", *column));
+    throw exceptions::invalid_request_exception(format("Order by on unknown column {}", column));
 }
 
 select_statement::ordering_comparator_type
@@ -1443,7 +1443,7 @@ select_statement::get_ordering_comparator(schema_ptr schema,
         ::shared_ptr<column_identifier> column = raw->prepare_column_identifier(schema);
         const column_definition* def = schema->get_column_definition(column->name());
         if (!def) {
-            handle_unrecognized_ordering_column(column);
+            handle_unrecognized_ordering_column(*column);
         }
         auto index = selection->index_of(*def);
         if (index < 0) {
@@ -1485,7 +1485,7 @@ bool select_statement::is_reversed(schema_ptr schema) {
 
         auto def = schema->get_column_definition(column->name());
         if (!def) {
-            handle_unrecognized_ordering_column(column);
+            handle_unrecognized_ordering_column(*column);
         }
 
         if (!def->is_clustering_key()) {
@@ -1550,9 +1550,9 @@ void select_statement::ensure_filtering_columns_retrieval(database& db,
     }
 }
 
-bool select_statement::contains_alias(::shared_ptr<column_identifier> name) {
-    return std::any_of(_select_clause.begin(), _select_clause.end(), [name] (auto raw) {
-        return raw->alias && *name == *raw->alias;
+bool select_statement::contains_alias(const column_identifier& name) {
+    return std::any_of(_select_clause.begin(), _select_clause.end(), [&name] (auto raw) {
+        return raw->alias && name == *raw->alias;
     });
 }
 

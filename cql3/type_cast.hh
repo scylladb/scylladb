@@ -53,7 +53,7 @@ public:
     }
 
     virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override {
-        if (!is_assignable(_term->test_assignment(db, keyspace, casted_spec_of(db, keyspace, receiver)))) {
+        if (!is_assignable(_term->test_assignment(db, keyspace, casted_spec_of(db, keyspace, *receiver)))) {
             throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", _term, _type));
         }
         if (!is_assignable(test_assignment(db, keyspace, receiver))) {
@@ -62,8 +62,8 @@ public:
         return _term->prepare(db, keyspace, receiver);
     }
 private:
-    shared_ptr<column_specification> casted_spec_of(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
-        return make_shared<column_specification>(receiver->ks_name, receiver->cf_name,
+    shared_ptr<column_specification> casted_spec_of(database& db, const sstring& keyspace, const column_specification& receiver) const {
+        return make_shared<column_specification>(receiver.ks_name, receiver.cf_name,
                 make_shared<column_identifier>(to_string(), true), _type->prepare(db, keyspace).get_type());
     }
 public:
