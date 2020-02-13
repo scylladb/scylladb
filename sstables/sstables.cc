@@ -2014,8 +2014,7 @@ const db::config& get_config() {
 
 // Returns the cost for writing a byte to summary such that the ratio of summary
 // to data will be 1 to cost by the time sstable is sealed.
-size_t summary_byte_cost() {
-    auto summary_ratio = get_config().sstable_summary_ratio();
+size_t summary_byte_cost(double summary_ratio) {
     return summary_ratio ? (1 / summary_ratio) : components_writer::default_summary_byte_cost;
 }
 
@@ -2035,7 +2034,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::k_l_format);
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size;
     _sst._correctly_serialize_non_compound_range_tombstones = cfg.correctly_serialize_non_compound_range_tombstones;
-    _index_sampling_state.summary_byte_cost = summary_byte_cost();
+    _index_sampling_state.summary_byte_cost = cfg.summary_byte_cost;
 
     prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
 
@@ -2476,7 +2475,7 @@ future<> sstable::write_components(
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
         auto validator = mutation_fragment_stream_validating_filter(format("sstable writer {}", get_filename()), *schema,
-                get_config().enable_sstable_key_validation());
+                cfg.validate_keys);
         mr.consume_in_thread(std::move(wr), std::move(validator), db::no_timeout);
     }).finally([this] {
         assert_large_data_handler_is_running();
@@ -2496,8 +2495,8 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     public:
         std::optional<key> first_key, last_key;
 
-        summary_generator(const dht::i_partitioner& p, summary& s) : _partitioner(p), _summary(s) {
-            _state.summary_byte_cost = summary_byte_cost();
+        summary_generator(const dht::i_partitioner& p, summary& s, double summary_ratio) : _partitioner(p), _summary(s) {
+            _state.summary_byte_cost = summary_byte_cost(summary_ratio);
         }
         bool should_continue() {
             return true;
@@ -2526,7 +2525,8 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 file_input_stream_options options;
                 options.buffer_size = sstable_buffer_size;
                 options.io_priority_class = pc;
-                return do_with(summary_generator(_schema->get_partitioner(), _components->summary),
+                return do_with(summary_generator(_schema->get_partitioner(), _components->summary,
+                                _manager.config().sstable_summary_ratio()),
                         [this, &pc, options = std::move(options), index_file, index_size] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                             no_reader_permit(), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,

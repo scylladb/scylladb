@@ -110,16 +110,20 @@ class data_consume_context;
 
 class index_reader;
 
+extern size_t summary_byte_cost(double summary_ratio);
+
 struct sstable_writer_config {
     size_t promoted_index_block_size;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
     bool backup = false;
     bool leave_unsealed = false;
+    bool validate_keys;
     std::optional<db::replay_position> replay_position;
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones;
     bool correctly_serialize_static_compact_in_mc;
     utils::UUID run_identifier = utils::make_random_uuid();
+    size_t summary_byte_cost;
 
 private:
     explicit sstable_writer_config() {}

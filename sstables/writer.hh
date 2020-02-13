@@ -595,10 +595,6 @@ void maybe_add_summary_entry(summary&, const dht::token&, bytes_view key, uint64
 // case none has been loaded (this happens, for example, in unit tests).
 const db::config& get_config();
 
-// Returns the cost for writing a byte to summary such that the ratio of summary
-// to data will be 1 to cost by the time sstable is sealed.
-size_t summary_byte_cost();
-
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval);
 
 void seal_summary(summary& s,

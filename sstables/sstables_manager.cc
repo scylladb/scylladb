@@ -45,6 +45,8 @@ sstable_writer_config sstables_manager::configure_writer() const {
     sstable_writer_config cfg;
 
     cfg.promoted_index_block_size = _db_config.column_index_size_in_kb() * 1024;
+    cfg.validate_keys = _db_config.enable_sstable_key_validation();
+    cfg.summary_byte_cost = summary_byte_cost(_db_config.sstable_summary_ratio());
 
     cfg.correctly_serialize_non_compound_range_tombstones =
             _features.cluster_supports_reading_correctly_serialized_range_tombstones();
