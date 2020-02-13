@@ -123,7 +123,7 @@ struct db_context final {
 enum class operation : int8_t {
     // note: these values will eventually be read by a third party, probably not privvy to this
     // enum decl, so don't change the constant values (or the datatype).
-    pre_image = 0, update = 1, row_delete = 2, range_delete_start = 3, range_delete_end = 4, partition_delete = 5
+    pre_image = 0, insert = 1, update = 2, row_delete = 3, range_delete_start = 4, range_delete_end = 5, partition_delete = 6
 };
 
 // cdc log data column operation
