@@ -983,7 +983,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         } else if (!cdef->is_primary_key()) {
             // Fixed-type regular column can be used for GSI key
             _cells->push_back({std::move(column_name),
-                    get_key_from_typed_value(it->value, *cdef, type_to_string(cdef->type))});
+                    get_key_from_typed_value(it->value, *cdef)});
         }
     }
 }
@@ -2295,7 +2295,7 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item,
     auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
         const column_definition* cdef = _schema->get_column_definition(column_name);
         if (cdef) {
-            bytes column_value = get_key_from_typed_value(json_value, *cdef, type_to_string(cdef->type));
+            bytes column_value = get_key_from_typed_value(json_value, *cdef);
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
         } else {
             attrs_collector.put(std::move(column_name), serialize_item(json_value), ts);

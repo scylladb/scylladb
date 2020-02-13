@@ -54,7 +54,7 @@ rjson::value deserialize_item(bytes_view bv);
 std::string type_to_string(data_type type);
 
 bytes get_key_column_value(const rjson::value& item, const column_definition& column);
-bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column, const std::string& expected_type);
+bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column);
 rjson::value json_key_column_value(bytes_view cell, const column_definition& column);
 
 partition_key pk_from_json(const rjson::value& item, schema_ptr schema);

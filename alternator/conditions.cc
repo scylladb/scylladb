@@ -76,7 +76,7 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::contains> mak
 }
 
 static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_eq_restriction(const column_definition& cdef, const rjson::value& value) {
-    bytes raw_value = get_key_from_typed_value(value, cdef, type_to_string(cdef.type));
+    bytes raw_value = get_key_from_typed_value(value, cdef);
     auto restriction_value = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(std::move(raw_value)));
     return make_shared<cql3::restrictions::single_column_restriction::EQ>(cdef, std::move(restriction_value));
 }

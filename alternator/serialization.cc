@@ -160,27 +160,31 @@ std::string type_to_string(data_type type) {
 
 bytes get_key_column_value(const rjson::value& item, const column_definition& column) {
     std::string column_name = column.name_as_text();
-    std::string expected_type = type_to_string(column.type);
-
     const rjson::value& key_typed_value = rjson::get(item, rjson::value::StringRefType(column_name.c_str()));
-    if (!key_typed_value.IsObject() || key_typed_value.MemberCount() != 1) {
-        throw api_error("ValidationException",
-                format("Missing or invalid value object for key column {}: {}", column_name, item));
-    }
-    return get_key_from_typed_value(key_typed_value, column, expected_type);
+    return get_key_from_typed_value(key_typed_value, column);
 }
 
-bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column, const std::string& expected_type) {
+// Parses the JSON encoding for a key value, which is a map with a single
+// entry, whose key is the type (expected to match the key column's type)
+// and the value is the encoded value.
+bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column) {
+    if (!key_typed_value.IsObject() || key_typed_value.MemberCount() != 1 ||
+            !key_typed_value.MemberBegin()->value.IsString()) {
+        throw api_error("ValidationException",
+                format("Malformed value object for key column {}: {}",
+                        column.name_as_text(), key_typed_value));
+    }
+
     auto it = key_typed_value.MemberBegin();
-    if (it->name.GetString() != expected_type) {
+    if (it->name != type_to_string(column.type)) {
         throw api_error("ValidationException",
                 format("Type mismatch: expected type {} for key column {}, got type {}",
-                        expected_type, column.name_as_text(), it->name.GetString()));
+                        type_to_string(column.type), column.name_as_text(), it->name.GetString()));
     }
     if (column.type == bytes_type) {
         return base64_decode(it->value);
     } else {
-        return column.type->from_string(it->value.GetString());
+        return column.type->from_string(rjson::to_string_view(it->value));
     }
 
 }
