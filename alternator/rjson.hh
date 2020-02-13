@@ -104,6 +104,13 @@ inline rjson::value empty_string() {
 // The representation is dense - without any redundant indentation.
 std::string print(const rjson::value& value);
 
+// Returns a string_view to the string held in a JSON value (which is
+// assumed to hold a string, i.e., v.IsString() == true). This is a view
+// to the existing data - no copying is done.
+inline std::string_view to_string_view(const rjson::value& v) {
+    return std::string_view(v.GetString(), v.GetStringLength());
+}
+
 // Copies given JSON value - involves allocation
 rjson::value copy(const rjson::value& value);
 
