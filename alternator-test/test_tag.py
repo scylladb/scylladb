@@ -138,6 +138,15 @@ def test_tag_resource_incorrect(test_table):
         with pytest.raises(ClientError, match='ValidationException'):
             test_table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key':incorrect_tag[0],'Value':incorrect_tag[1]}])
 
+# Test that only specific values are allowed for write isolation (system:write_isolation tag)
+def test_tag_resource_write_isolation_values(scylla_only, test_table):
+    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+    arn =  got['TableArn']
+    for i in ['f', 'forbid', 'forbid_rmw', 'a', 'always', 'always_use_lwt', 'o', 'only_rmw_uses_lwt', 'u', 'unsafe', 'unsafe_rmw']:
+        test_table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key':'system:write_isolation', 'Value':i}])
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key':'system:write_isolation', 'Value':'bah'}])
+
 # Test checking that unicode tags are allowed
 @pytest.mark.xfail(reason="unicode tags not yet supported")
 def test_tag_resource_unicode(test_table):

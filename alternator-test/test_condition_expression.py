@@ -1317,10 +1317,7 @@ def test_update_condition_unused_entries_succeeded(test_table_s):
 # i.e. LWT_ALWAYS, LWT_RMW_ONLY and UNSAFE_RMW.
 # These test cases make sense only for alternator, so they're skipped
 # when run on AWS
-def test_condition_expression_with_permissive_write_isolation(dynamodb, test_table_s):
-    url = dynamodb.meta.client._endpoint.host
-    if url.endswith('.amazonaws.com'):
-        pytest.skip('rmw isolation levels are applicable to alternator only')
+def test_condition_expression_with_permissive_write_isolation(scylla_only, dynamodb, test_table_s):
     def do_test_with_permissive_isolation_levels(test_case, table, *args):
         try:
             for isolation in ['a', 'o', 'u']:
@@ -1335,10 +1332,7 @@ def test_condition_expression_with_permissive_write_isolation(dynamodb, test_tab
 # Test that the forbid_rmw isolation level prevents read-modify-write requests
 # from working. These test cases make sense only for alternator, so they're skipped
 # when run on AWS
-def test_condition_expression_with_forbidden_rmw(dynamodb, test_table_s):
-    url = dynamodb.meta.client._endpoint.host
-    if url.endswith('.amazonaws.com'):
-        pytest.skip('rmw isolation levels are applicable to alternator only')
+def test_condition_expression_with_forbidden_rmw(scylla_only, dynamodb, test_table_s):
     def do_test_with_forbidden_rmw(test_case, table, *args):
         try:
             set_write_isolation(table, 'f')
