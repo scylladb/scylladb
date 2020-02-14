@@ -46,12 +46,12 @@ static void remove_by_value(C& container, V value) {
     }
 }
 
-token_metadata::token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
+token_metadata_impl::token_metadata_impl(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
     _token_to_endpoint_map(token_to_endpoint_map), _endpoint_to_host_id_map(endpoints_map), _topology(topology) {
     _sorted_tokens = sort_tokens();
 }
 
-std::vector<token> token_metadata::sort_tokens() {
+std::vector<token> token_metadata_impl::sort_tokens() {
     std::vector<token> sorted;
     sorted.reserve(_token_to_endpoint_map.size());
 
@@ -64,11 +64,11 @@ std::vector<token> token_metadata::sort_tokens() {
     return sorted;
 }
 
-const std::vector<token>& token_metadata::sorted_tokens() const {
+const std::vector<token>& token_metadata_impl::sorted_tokens() const {
     return _sorted_tokens;
 }
 
-std::vector<token> token_metadata::get_tokens(const inet_address& addr) const {
+std::vector<token> token_metadata_impl::get_tokens(const inet_address& addr) const {
     std::vector<token> res;
     for (auto&& i : _token_to_endpoint_map) {
         if (i.second == addr) {
@@ -81,12 +81,12 @@ std::vector<token> token_metadata::get_tokens(const inet_address& addr) const {
 /**
  * Update token map with a single token/endpoint pair in normal state.
  */
-void token_metadata::update_normal_token(token t, inet_address endpoint)
+void token_metadata_impl::update_normal_token(token t, inet_address endpoint)
 {
     update_normal_tokens(std::unordered_set<token>({t}), endpoint);
 }
 
-void token_metadata::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+void token_metadata_impl::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
     if (tokens.empty()) {
         return;
     }
@@ -102,7 +102,7 @@ void token_metadata::update_normal_tokens(std::unordered_set<token> tokens, inet
  *
  * @param endpointTokens
  */
-void token_metadata::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
+void token_metadata_impl::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
     if (endpoint_tokens.empty()) {
         return;
     }
@@ -146,7 +146,7 @@ void token_metadata::update_normal_tokens(const std::unordered_map<inet_address,
     }
 }
 
-size_t token_metadata::first_token_index(const token& start) const {
+size_t token_metadata_impl::first_token_index(const token& start) const {
     if (_sorted_tokens.empty()) {
         auto msg = format("sorted_tokens is empty in first_token_index!");
         tlogger.error("{}", msg);
@@ -160,11 +160,11 @@ size_t token_metadata::first_token_index(const token& start) const {
     }
 }
 
-const token& token_metadata::first_token(const token& start) const {
+const token& token_metadata_impl::first_token(const token& start) const {
     return _sorted_tokens[first_token_index(start)];
 }
 
-std::optional<inet_address> token_metadata::get_endpoint(const token& token) const {
+std::optional<inet_address> token_metadata_impl::get_endpoint(const token& token) const {
     auto it = _token_to_endpoint_map.find(token);
     if (it == _token_to_endpoint_map.end()) {
         return std::nullopt;
@@ -173,7 +173,7 @@ std::optional<inet_address> token_metadata::get_endpoint(const token& token) con
     }
 }
 
-void token_metadata::debug_show() {
+void token_metadata_impl::debug_show() {
     auto reporter = std::make_shared<timer<lowres_clock>>();
     reporter->set_callback ([reporter, this] {
         fmt::print("Endpoint -> Token\n");
@@ -192,7 +192,7 @@ void token_metadata::debug_show() {
     reporter->arm_periodic(std::chrono::seconds(1));
 }
 
-void token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) {
+void token_metadata_impl::update_host_id(const UUID& host_id, inet_address endpoint) {
 #if 0
     assert host_id != null;
     assert endpoint != null;
@@ -214,14 +214,14 @@ void token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) 
     _endpoint_to_host_id_map[endpoint] = host_id;
 }
 
-utils::UUID token_metadata::get_host_id(inet_address endpoint) const {
+utils::UUID token_metadata_impl::get_host_id(inet_address endpoint) const {
     if (!_endpoint_to_host_id_map.count(endpoint)) {
         throw std::runtime_error(format("host_id for endpoint {} is not found", endpoint));
     }
     return _endpoint_to_host_id_map.at(endpoint);
 }
 
-std::optional<utils::UUID> token_metadata::get_host_id_if_known(inet_address endpoint) const {
+std::optional<utils::UUID> token_metadata_impl::get_host_id_if_known(inet_address endpoint) const {
     auto it = _endpoint_to_host_id_map.find(endpoint);
     if (it == _endpoint_to_host_id_map.end()) {
         return { };
@@ -229,7 +229,7 @@ std::optional<utils::UUID> token_metadata::get_host_id_if_known(inet_address end
     return it->second;
 }
 
-std::optional<inet_address> token_metadata::get_endpoint_for_host_id(UUID host_id) const {
+std::optional<inet_address> token_metadata_impl::get_endpoint_for_host_id(UUID host_id) const {
     auto beg = _endpoint_to_host_id_map.cbegin();
     auto end = _endpoint_to_host_id_map.cend();
     auto it = std::find_if(beg, end, [host_id] (auto x) {
@@ -242,21 +242,21 @@ std::optional<inet_address> token_metadata::get_endpoint_for_host_id(UUID host_i
     }
 }
 
-const std::unordered_map<inet_address, utils::UUID>& token_metadata::get_endpoint_to_host_id_map_for_reading() const{
+const std::unordered_map<inet_address, utils::UUID>& token_metadata_impl::get_endpoint_to_host_id_map_for_reading() const{
     return _endpoint_to_host_id_map;
 }
 
-bool token_metadata::is_member(inet_address endpoint) {
+bool token_metadata_impl::is_member(inet_address endpoint) {
     return _topology.has_endpoint(endpoint);
 }
 
-void token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
+void token_metadata_impl::add_bootstrap_token(token t, inet_address endpoint) {
     std::unordered_set<token> tokens{t};
     add_bootstrap_tokens(tokens, endpoint);
 }
 
-boost::iterator_range<token_metadata::tokens_iterator>
-token_metadata::ring_range(
+boost::iterator_range<token_metadata_impl::tokens_iterator>
+token_metadata_impl::ring_range(
     const std::optional<dht::partition_range::bound>& start,
     bool include_min) const
 {
@@ -276,7 +276,7 @@ token_metadata::ring_range(
     return r;
 }
 
-void token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+void token_metadata_impl::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
     for (auto t : tokens) {
         auto old_endpoint = _bootstrap_tokens.find(t);
         if (old_endpoint != _bootstrap_tokens.end() && (*old_endpoint).second != endpoint) {
@@ -305,7 +305,7 @@ void token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet
     }
 }
 
-void token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
+void token_metadata_impl::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
     if (tokens.empty()) {
         auto msg = format("tokens is empty in remove_bootstrap_tokens!");
         tlogger.error("{}", msg);
@@ -316,11 +316,11 @@ void token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
     }
 }
 
-bool token_metadata::is_leaving(inet_address endpoint) {
+bool token_metadata_impl::is_leaving(inet_address endpoint) {
     return _leaving_endpoints.count(endpoint);
 }
 
-void token_metadata::remove_endpoint(inet_address endpoint) {
+void token_metadata_impl::remove_endpoint(inet_address endpoint) {
     remove_by_value(_bootstrap_tokens, endpoint);
     remove_by_value(_token_to_endpoint_map, endpoint);
     _topology.remove_endpoint(endpoint);
@@ -330,7 +330,7 @@ void token_metadata::remove_endpoint(inet_address endpoint) {
     invalidate_cached_rings();
 }
 
-token token_metadata::get_predecessor(token t) {
+token token_metadata_impl::get_predecessor(token t) {
     auto& tokens = sorted_tokens();
     auto it = std::lower_bound(tokens.begin(), tokens.end(), t);
     if (it == tokens.end() || *it != t) {
@@ -346,7 +346,7 @@ token token_metadata::get_predecessor(token t) {
     }
 }
 
-dht::token_range_vector token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
+dht::token_range_vector token_metadata_impl::get_primary_ranges_for(std::unordered_set<token> tokens) {
     dht::token_range_vector ranges;
     ranges.reserve(tokens.size() + 1); // one of the ranges will wrap
     for (auto right : tokens) {
@@ -359,12 +359,12 @@ dht::token_range_vector token_metadata::get_primary_ranges_for(std::unordered_se
     return ranges;
 }
 
-dht::token_range_vector token_metadata::get_primary_ranges_for(token right) {
+dht::token_range_vector token_metadata_impl::get_primary_ranges_for(token right) {
     return get_primary_ranges_for(std::unordered_set<token>{right});
 }
 
 boost::icl::interval<token>::interval_type
-token_metadata::range_to_interval(range<dht::token> r) {
+token_metadata_impl::range_to_interval(range<dht::token> r) {
     bool start_inclusive = false;
     bool end_inclusive = false;
     token start = dht::minimum_token();
@@ -392,7 +392,7 @@ token_metadata::range_to_interval(range<dht::token> r) {
 }
 
 range<dht::token>
-token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) {
+token_metadata_impl::interval_to_range(boost::icl::interval<token>::interval_type i) {
     bool start_inclusive;
     bool end_inclusive;
     auto bounds = i.bounds().bits();
@@ -414,7 +414,7 @@ token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) 
     return range<dht::token>({{i.lower(), start_inclusive}}, {{i.upper(), end_inclusive}});
 }
 
-void token_metadata::set_pending_ranges(const sstring& keyspace_name,
+void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
         std::unordered_multimap<range<token>, inet_address> new_pending_ranges) {
     if (new_pending_ranges.empty()) {
         _pending_ranges.erase(keyspace_name);
@@ -438,17 +438,17 @@ void token_metadata::set_pending_ranges(const sstring& keyspace_name,
 }
 
 std::unordered_multimap<range<token>, inet_address>&
-token_metadata::get_pending_ranges_mm(sstring keyspace_name) {
+token_metadata_impl::get_pending_ranges_mm(sstring keyspace_name) {
     return _pending_ranges[keyspace_name];
 }
 
 const std::unordered_map<range<token>, std::unordered_set<inet_address>>&
-token_metadata::get_pending_ranges(sstring keyspace_name) {
+token_metadata_impl::get_pending_ranges(sstring keyspace_name) {
     return _pending_ranges_map[keyspace_name];
 }
 
 std::vector<range<token>>
-token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint) {
+token_metadata_impl::get_pending_ranges(sstring keyspace_name, inet_address endpoint) {
     std::vector<range<token>> ret;
     for (auto x : get_pending_ranges_mm(keyspace_name)) {
         auto& range_token = x.first;
@@ -460,11 +460,12 @@ token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint)
     return ret;
 }
 
-future<> token_metadata::calculate_pending_ranges_for_leaving(
+future<> token_metadata_impl::calculate_pending_ranges_for_leaving(
+        token_metadata& unpimplified_this,
         abstract_replication_strategy& strategy,
         lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
         lw_shared_ptr<token_metadata> all_left_metadata) {
-    std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(*this);
+    std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(unpimplified_this);
     // get all ranges that will be affected by leaving nodes
     std::unordered_set<range<token>> affected_ranges;
     for (auto endpoint : _leaving_endpoints) {
@@ -475,7 +476,7 @@ future<> token_metadata::calculate_pending_ranges_for_leaving(
     }
     // for each of those ranges, find what new nodes will be responsible for the range when
     // all leaving nodes are gone.
-    auto metadata = clone_only_token_map(); // don't do this in the loop! #7758
+    auto metadata = token_metadata(std::make_unique<token_metadata_impl>(clone_only_token_map())); // don't do this in the loop! #7758
     auto affected_ranges_size = affected_ranges.size();
     tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} stars", affected_ranges_size);
     return do_with(std::move(metadata), std::move(affected_ranges), [&strategy, new_pending_ranges, all_left_metadata, affected_ranges_size] (auto& metadata, auto& affected_ranges) {
@@ -497,7 +498,7 @@ future<> token_metadata::calculate_pending_ranges_for_leaving(
     });
 }
 
-void token_metadata::calculate_pending_ranges_for_bootstrap(
+void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
         abstract_replication_strategy& strategy,
         lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
         lw_shared_ptr<token_metadata> all_left_metadata) {
@@ -528,7 +529,9 @@ void token_metadata::calculate_pending_ranges_for_bootstrap(
     }
 }
 
-future<> token_metadata::calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name) {
+future<> token_metadata_impl::calculate_pending_ranges(
+        token_metadata& unpimplified_this,
+        abstract_replication_strategy& strategy, const sstring& keyspace_name) {
     auto new_pending_ranges = make_lw_shared<std::unordered_multimap<range<token>, inet_address>>();
 
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty()) {
@@ -538,9 +541,9 @@ future<> token_metadata::calculate_pending_ranges(abstract_replication_strategy&
     }
 
     // Copy of metadata reflecting the situation after all leave operations are finished.
-    auto all_left_metadata = make_lw_shared<token_metadata>(clone_after_all_left());
+    auto all_left_metadata = make_lw_shared<token_metadata>(std::make_unique<token_metadata_impl>(clone_after_all_left()));
 
-    return calculate_pending_ranges_for_leaving(strategy, new_pending_ranges, all_left_metadata).then([this, keyspace_name, &strategy, new_pending_ranges, all_left_metadata] {
+    return calculate_pending_ranges_for_leaving(unpimplified_this, strategy, new_pending_ranges, all_left_metadata).then([this, keyspace_name, &strategy, new_pending_ranges, all_left_metadata] {
         // At this stage newPendingRanges has been updated according to leave operations. We can
         // now continue the calculation by checking bootstrapping nodes.
         calculate_pending_ranges_for_bootstrap(strategy, new_pending_ranges, all_left_metadata);
@@ -556,7 +559,7 @@ future<> token_metadata::calculate_pending_ranges(abstract_replication_strategy&
 
 }
 
-size_t token_metadata::count_normal_token_owners() const {
+size_t token_metadata_impl::count_normal_token_owners() const {
     std::set<inet_address> eps;
     for (auto [t, ep]: _token_to_endpoint_map) {
         eps.insert(ep);
@@ -564,7 +567,7 @@ size_t token_metadata::count_normal_token_owners() const {
     return eps.size();
 }
 
-sstring token_metadata::print_pending_ranges() {
+sstring token_metadata_impl::print_pending_ranges() {
     std::stringstream ss;
 
     for (auto& x : _pending_ranges) {
@@ -579,12 +582,12 @@ sstring token_metadata::print_pending_ranges() {
     return sstring(ss.str());
 }
 
-void token_metadata::add_leaving_endpoint(inet_address endpoint) {
+void token_metadata_impl::add_leaving_endpoint(inet_address endpoint) {
      _leaving_endpoints.emplace(endpoint);
 }
 
-token_metadata token_metadata::clone_after_all_settled() {
-    token_metadata metadata = clone_only_token_map();
+token_metadata_impl token_metadata_impl::clone_after_all_settled() {
+    token_metadata_impl metadata = clone_only_token_map();
 
     for (auto endpoint : _leaving_endpoints) {
         metadata.remove_endpoint(endpoint);
@@ -593,7 +596,7 @@ token_metadata token_metadata::clone_after_all_settled() {
     return metadata;
 }
 
-std::vector<gms::inet_address> token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) {
+std::vector<gms::inet_address> token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) {
     // Fast path 0: no pending ranges at all
     if (_pending_ranges_interval_map.empty()) {
         return {};
@@ -615,13 +618,13 @@ std::vector<gms::inet_address> token_metadata::pending_endpoints_for(const token
     return endpoints;
 }
 
-std::map<token, inet_address> token_metadata::get_normal_and_bootstrapping_token_to_endpoint_map() {
+std::map<token, inet_address> token_metadata_impl::get_normal_and_bootstrapping_token_to_endpoint_map() {
     std::map<token, inet_address> ret(_token_to_endpoint_map.begin(), _token_to_endpoint_map.end());
     ret.insert(_bootstrap_tokens.begin(), _bootstrap_tokens.end());
     return ret;
 }
 
-std::multimap<inet_address, token> token_metadata::get_endpoint_to_token_map_for_reading() {
+std::multimap<inet_address, token> token_metadata_impl::get_endpoint_to_token_map_for_reading() {
     std::multimap<inet_address, token> cloned;
     for (const auto& x : _token_to_endpoint_map) {
         cloned.emplace(x.second, x.first);
@@ -629,6 +632,301 @@ std::multimap<inet_address, token> token_metadata::get_endpoint_to_token_map_for
     return cloned;
 }
 
+token_metadata::token_metadata(std::unique_ptr<token_metadata_impl> impl)
+    : _impl(std::move(impl)) {
+}
+
+token_metadata::token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology)
+        : _impl(std::make_unique<token_metadata_impl>(std::move(token_to_endpoint_map), std::move(endpoints_map), std::move(topology))) {
+}
+
+token_metadata::token_metadata()
+        : _impl(std::make_unique<token_metadata_impl>()) {
+}
+
+token_metadata::~token_metadata() = default;
+
+
+token_metadata::token_metadata(const token_metadata& tm)
+    : _impl(std::make_unique<token_metadata_impl>(*tm._impl)) {
+}
+
+token_metadata::token_metadata(token_metadata&&) noexcept = default;
+
+token_metadata&
+token_metadata::operator=(const token_metadata& that) {
+    *this = token_metadata(that);
+    return *this;
+}
+
+token_metadata& token_metadata::token_metadata::operator=(token_metadata&&) noexcept = default;
+
+const std::vector<token>&
+token_metadata::sorted_tokens() const {
+    return _impl->sorted_tokens();
+}
+
+void
+token_metadata::update_normal_token(token token, inet_address endpoint) {
+    _impl->update_normal_token(token, endpoint);
+}
+
+void
+token_metadata::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+    _impl->update_normal_tokens(std::move(tokens), endpoint);
+}
+
+void
+token_metadata::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
+    _impl->update_normal_tokens(endpoint_tokens);
+}
+
+const token&
+token_metadata::first_token(const token& start) const {
+    return _impl->first_token(start);
+}
+
+size_t
+token_metadata::first_token_index(const token& start) const {
+    return _impl->first_token_index(start);
+}
+
+std::optional<inet_address>
+token_metadata::get_endpoint(const token& token) const {
+    return _impl->get_endpoint(token);
+}
+
+std::vector<token>
+token_metadata::get_tokens(const inet_address& addr) const {
+    return _impl->get_tokens(addr);
+}
+
+const std::unordered_map<token, inet_address>&
+token_metadata::get_token_to_endpoint() const {
+    return _impl->get_token_to_endpoint();
+}
+
+const std::unordered_set<inet_address>&
+token_metadata::get_leaving_endpoints() const {
+    return _impl->get_leaving_endpoints();
+}
+
+const std::unordered_map<token, inet_address>&
+token_metadata::get_bootstrap_tokens() const {
+    return _impl->get_bootstrap_tokens();
+}
+
+void
+token_metadata::update_topology(inet_address ep) {
+    _impl->update_topology(ep);
+}
+
+token_metadata::tokens_iterator
+token_metadata::tokens_end() const {
+    return _impl->tokens_end();
+}
+
+boost::iterator_range<token_metadata::tokens_iterator>
+token_metadata::ring_range(const token& start, bool include_min) const {
+    return _impl->ring_range(start, include_min);
+}
+
+boost::iterator_range<token_metadata::tokens_iterator>
+token_metadata::ring_range(
+        const std::optional<dht::partition_range::bound>& start, bool include_min) const {
+    return _impl->ring_range(start, include_min);
+}
+
+topology&
+token_metadata::get_topology() {
+    return _impl->get_topology();
+}
+
+const topology&
+token_metadata::get_topology() const {
+    return _impl->get_topology();
+}
+
+void
+token_metadata::debug_show() {
+    _impl->debug_show();
+}
+
+void
+token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) {
+    _impl->update_host_id(host_id, endpoint);
+}
+
+token_metadata::UUID
+token_metadata::get_host_id(inet_address endpoint) const {
+    return _impl->get_host_id(endpoint);
+}
+
+std::optional<token_metadata::UUID>
+token_metadata::get_host_id_if_known(inet_address endpoint) const {
+    return _impl->get_host_id_if_known(endpoint);
+}
+
+std::optional<token_metadata::inet_address>
+token_metadata::get_endpoint_for_host_id(UUID host_id) const {
+    return _impl->get_endpoint_for_host_id(host_id);
+}
+
+const std::unordered_map<inet_address, utils::UUID>&
+token_metadata::get_endpoint_to_host_id_map_for_reading() const {
+    return _impl->get_endpoint_to_host_id_map_for_reading();
+}
+
+void
+token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
+    _impl->add_bootstrap_token(t, endpoint);
+}
+
+void
+token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+    _impl->add_bootstrap_tokens(std::move(tokens), endpoint);
+}
+
+void
+token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
+    _impl->remove_bootstrap_tokens(std::move(tokens));
+}
+
+void
+token_metadata::add_leaving_endpoint(inet_address endpoint) {
+    _impl->add_leaving_endpoint(endpoint);
+}
+
+void
+token_metadata::remove_endpoint(inet_address endpoint) {
+    _impl->remove_endpoint(endpoint);
+}
+
+bool
+token_metadata::is_member(inet_address endpoint) {
+    return _impl->is_member(endpoint);
+}
+
+bool
+token_metadata::is_leaving(inet_address endpoint) {
+    return _impl->is_leaving(endpoint);
+}
+
+token_metadata
+token_metadata::clone_only_token_map() {
+    return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_only_token_map()));
+}
+
+token_metadata
+token_metadata::clone_after_all_left() {
+    return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_after_all_left()));
+}
+
+token_metadata
+token_metadata::clone_after_all_settled() {
+    return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_after_all_settled()));
+}
+
+dht::token_range_vector
+token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
+    return _impl->get_primary_ranges_for(std::move(tokens));
+}
+
+dht::token_range_vector
+token_metadata::get_primary_ranges_for(token right) {
+    return _impl->get_primary_ranges_for(right);
+}
+
+boost::icl::interval<token>::interval_type
+token_metadata::range_to_interval(range<dht::token> r) {
+    return token_metadata_impl::range_to_interval(std::move(r));
+}
+
+range<dht::token>
+token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) {
+    return token_metadata_impl::interval_to_range(std::move(i));
+}
+
+const std::unordered_map<range<token>, std::unordered_set<inet_address>>&
+token_metadata::get_pending_ranges(sstring keyspace_name) {
+    return _impl->get_pending_ranges(std::move(keyspace_name));
+}
+
+std::vector<range<token>>
+token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint) {
+    return _impl->get_pending_ranges(std::move(keyspace_name), endpoint);
+}
+
+future<>
+token_metadata::calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name) {
+    return _impl->calculate_pending_ranges(*this, strategy, keyspace_name);
+}
+
+future<>
+token_metadata::calculate_pending_ranges_for_leaving(
+        abstract_replication_strategy& strategy,
+        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
+        lw_shared_ptr<token_metadata> all_left_metadata) {
+    return _impl->calculate_pending_ranges_for_leaving(*this, strategy, std::move(new_pending_ranges), std::move(all_left_metadata));
+}
+
+void
+token_metadata::calculate_pending_ranges_for_bootstrap(
+        abstract_replication_strategy& strategy,
+        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
+        lw_shared_ptr<token_metadata> all_left_metadata) {
+    _impl->calculate_pending_ranges_for_bootstrap(strategy, std::move(new_pending_ranges), std::move(all_left_metadata));
+}
+
+token
+token_metadata::get_predecessor(token t) {
+    return _impl->get_predecessor(t);
+}
+
+std::vector<inet_address>
+token_metadata::get_all_endpoints() const {
+    return _impl->get_all_endpoints();
+}
+
+size_t
+token_metadata::get_all_endpoints_count() const {
+    return _impl->get_all_endpoints_count();
+}
+
+size_t
+token_metadata::count_normal_token_owners() const {
+    return _impl->count_normal_token_owners();
+}
+
+sstring
+token_metadata::print_pending_ranges() {
+    return _impl->print_pending_ranges();
+}
+
+std::vector<gms::inet_address>
+token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) {
+    return _impl->pending_endpoints_for(token, keyspace_name);
+}
+
+std::multimap<inet_address, token>
+token_metadata::get_endpoint_to_token_map_for_reading() {
+    return _impl->get_endpoint_to_token_map_for_reading();
+}
+
+std::map<token, inet_address>
+token_metadata::get_normal_and_bootstrapping_token_to_endpoint_map() {
+    return _impl->get_normal_and_bootstrapping_token_to_endpoint_map();
+}
+
+long
+token_metadata::get_ring_version() const {
+    return _impl->get_ring_version();
+}
+
+void
+token_metadata::invalidate_cached_rings() {
+    _impl->invalidate_cached_rings();
+}
 
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {

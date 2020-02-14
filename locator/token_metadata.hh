@@ -45,6 +45,7 @@
 #include "dht/i_partitioner.hh"
 #include "utils/UUID.hh"
 #include <optional>
+#include <memory>
 #include <boost/range/iterator_range.hpp>
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
@@ -131,7 +132,9 @@ private:
     std::unordered_map<inet_address, endpoint_dc_rack> _current_locations;
 };
 
-class token_metadata final {
+class token_metadata;
+
+class token_metadata_impl final {
 public:
     using UUID = utils::UUID;
     using inet_address = gms::inet_address;
@@ -169,7 +172,7 @@ private:
         : _cur_it(it), _ring_pos(pos), _insert_min(false) {}
 
     public:
-        tokens_iterator(const token& start, const token_metadata* token_metadata, bool include_min = false)
+        tokens_iterator(const token& start, const token_metadata_impl* token_metadata, bool include_min = false)
         : _token_metadata(token_metadata) {
             _cur_it = _token_metadata->sorted_tokens().begin() + _token_metadata->first_token_index(start);
             _insert_min = include_min && *_token_metadata->sorted_tokens().begin() != dht::minimum_token();
@@ -223,14 +226,14 @@ private:
         bool _insert_min;
         bool _min = false;
         const token _min_token = dht::minimum_token();
-        const token_metadata* _token_metadata = nullptr;
+        const token_metadata_impl* _token_metadata = nullptr;
 
-        friend class token_metadata;
+        friend class token_metadata_impl;
     };
 
-    token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
 public:
-    token_metadata() {};
+    token_metadata_impl(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
+    token_metadata_impl() {};
     const std::vector<token>& sorted_tokens() const;
     void update_normal_token(token token, inet_address endpoint);
     void update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
@@ -523,8 +526,8 @@ public:
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
      * bootstrap tokens and leaving endpoints are not included in the copy.
      */
-    token_metadata clone_only_token_map() {
-        return token_metadata(this->_token_to_endpoint_map, this->_endpoint_to_host_id_map, this->_topology);
+    token_metadata_impl clone_only_token_map() {
+        return token_metadata_impl(this->_token_to_endpoint_map, this->_endpoint_to_host_id_map, this->_topology);
     }
 #if 0
 
@@ -559,7 +562,7 @@ public:
      *
      * @return new token metadata
      */
-    token_metadata clone_after_all_left() {
+    token_metadata_impl clone_after_all_left() {
         auto all_left_metadata = clone_only_token_map();
 
         for (auto endpoint : _leaving_endpoints) {
@@ -576,7 +579,7 @@ public:
      *
      * @return new token metadata
      */
-    token_metadata clone_after_all_settled();
+    token_metadata_impl clone_after_all_settled();
 #if 0
     public InetAddress getEndpoint(Token token)
     {
@@ -630,8 +633,11 @@ public:
      * NOTE: This is heavy and ineffective operation. This will be done only once when a node
      * changes state in the cluster, so it should be manageable.
      */
-    future<> calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name);
+    future<> calculate_pending_ranges(
+            token_metadata& unpimplified_this,
+            abstract_replication_strategy& strategy, const sstring& keyspace_name);
     future<> calculate_pending_ranges_for_leaving(
+        token_metadata& unpimplified_this,
         abstract_replication_strategy& strategy,
         lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
         lw_shared_ptr<token_metadata> all_left_metadata);
@@ -1015,6 +1021,177 @@ public:
         ++_ring_version;
         //cachedTokenMap.set(null);
     }
+
+    friend class token_metadata;
+};
+
+class token_metadata final {
+    std::unique_ptr<token_metadata_impl> _impl;
+public:
+    using UUID = utils::UUID;
+    using inet_address = gms::inet_address;
+private:
+    using tokens_iterator = token_metadata_impl::tokens_iterator;
+    token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
+public:
+    token_metadata();
+    explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
+    token_metadata(const token_metadata&);
+    token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
+    token_metadata& operator=(const token_metadata&);
+    token_metadata& operator=(token_metadata&&) noexcept;
+    ~token_metadata();
+    const std::vector<token>& sorted_tokens() const;
+    void update_normal_token(token token, inet_address endpoint);
+    void update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    void update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
+    const token& first_token(const token& start) const;
+    size_t first_token_index(const token& start) const;
+    std::optional<inet_address> get_endpoint(const token& token) const;
+    std::vector<token> get_tokens(const inet_address& addr) const;
+    const std::unordered_map<token, inet_address>& get_token_to_endpoint() const;
+    const std::unordered_set<inet_address>& get_leaving_endpoints() const;
+    const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
+    void update_topology(inet_address ep);
+    tokens_iterator tokens_end() const;
+    /**
+     * Creates an iterable range of the sorted tokens starting at the token next
+     * after the given one.
+     *
+     * @param start A token that will define the beginning of the range
+     *
+     * @return The requested range (see the description above)
+     */
+    boost::iterator_range<tokens_iterator> ring_range(const token& start, bool include_min = false) const;
+    boost::iterator_range<tokens_iterator> ring_range(
+        const std::optional<dht::partition_range::bound>& start, bool include_min = false) const;
+
+    topology& get_topology();
+    const topology& get_topology() const;
+    void debug_show();
+
+    /**
+     * Store an end-point to host ID mapping.  Each ID must be unique, and
+     * cannot be changed after the fact.
+     *
+     * @param hostId
+     * @param endpoint
+     */
+    void update_host_id(const UUID& host_id, inet_address endpoint);
+
+    /** Return the unique host ID for an end-point. */
+    UUID get_host_id(inet_address endpoint) const;
+
+    /// Return the unique host ID for an end-point or nullopt if not found.
+    std::optional<UUID> get_host_id_if_known(inet_address endpoint) const;
+
+    /** Return the end-point for a unique host ID */
+    std::optional<inet_address> get_endpoint_for_host_id(UUID host_id) const;
+
+    /** @return a copy of the endpoint-to-id map for read-only operations */
+    const std::unordered_map<inet_address, utils::UUID>& get_endpoint_to_host_id_map_for_reading() const;
+
+    void add_bootstrap_token(token t, inet_address endpoint);
+
+    void add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+
+    void remove_bootstrap_tokens(std::unordered_set<token> tokens);
+
+    void add_leaving_endpoint(inet_address endpoint);
+
+    void remove_endpoint(inet_address endpoint);
+
+    bool is_member(inet_address endpoint);
+
+    bool is_leaving(inet_address endpoint);
+
+    /**
+     * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
+     * bootstrap tokens and leaving endpoints are not included in the copy.
+     */
+    token_metadata clone_only_token_map();
+    /**
+     * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
+     * current leave operations have finished.
+     *
+     * @return new token metadata
+     */
+    token_metadata clone_after_all_left();
+    /**
+     * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
+     * current leave, and move operations have finished.
+     *
+     * @return new token metadata
+     */
+    token_metadata clone_after_all_settled();
+    dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens);
+
+    dht::token_range_vector get_primary_ranges_for(token right);
+    static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
+    static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
+
+    /** a mutable map may be returned but caller should not modify it */
+    const std::unordered_map<range<token>, std::unordered_set<inet_address>>& get_pending_ranges(sstring keyspace_name);
+
+    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint);
+     /**
+     * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
+     *
+     * (1) When in doubt, it is better to write too much to a node than too little. That is, if
+     * there are multiple nodes moving, calculate the biggest ranges a node could have. Cleaning
+     * up unneeded data afterwards is better than missing writes during movement.
+     * (2) When a node leaves, ranges for other nodes can only grow (a node might get additional
+     * ranges, but it will not lose any of its current ranges as a result of a leave). Therefore
+     * we will first remove _all_ leaving tokens for the sake of calculation and then check what
+     * ranges would go where if all nodes are to leave. This way we get the biggest possible
+     * ranges with regard current leave operations, covering all subsets of possible final range
+     * values.
+     * (3) When a node bootstraps, ranges of other nodes can only get smaller. Without doing
+     * complex calculations to see if multiple bootstraps overlap, we simply base calculations
+     * on the same token ring used before (reflecting situation after all leave operations have
+     * completed). Bootstrapping nodes will be added and removed one by one to that metadata and
+     * checked what their ranges would be. This will give us the biggest possible ranges the
+     * node could have. It might be that other bootstraps make our actual final ranges smaller,
+     * but it does not matter as we can clean up the data afterwards.
+     *
+     * NOTE: This is heavy and ineffective operation. This will be done only once when a node
+     * changes state in the cluster, so it should be manageable.
+     */
+    future<> calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name);
+    future<> calculate_pending_ranges_for_leaving(
+        abstract_replication_strategy& strategy,
+        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
+        lw_shared_ptr<token_metadata> all_left_metadata);
+    void calculate_pending_ranges_for_bootstrap(
+        abstract_replication_strategy& strategy,
+        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
+        lw_shared_ptr<token_metadata> all_left_metadata);
+
+    token get_predecessor(token t);
+
+    std::vector<inet_address> get_all_endpoints() const;
+    size_t get_all_endpoints_count() const;
+
+    /* Returns the number of different endpoints that own tokens in the ring.
+     * Bootstrapping tokens are not taken into account. */
+    size_t count_normal_token_owners() const;
+
+
+    sstring print_pending_ranges();
+    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name);
+
+    /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
+    std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading();
+    /**
+     * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
+     *         in the cluster.
+     */
+    std::map<token, inet_address> get_normal_and_bootstrapping_token_to_endpoint_map();
+
+    long get_ring_version() const;
+    void invalidate_cached_rings();
+
+    friend class token_metadata_impl;
 };
 
 }
