@@ -36,6 +36,7 @@
 #include "database.hh"
 #include "utils/UUID_gen.hh"
 #include "mutation_reader.hh"
+#include "clustering_interval_set.hh"
 #include "schema_builder.hh"
 #include "query-result-set.hh"
 #include "query-result-reader.hh"

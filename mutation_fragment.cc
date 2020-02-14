@@ -25,6 +25,7 @@
 
 #include "mutation.hh"
 #include "mutation_fragment.hh"
+#include "clustering_interval_set.hh"
 
 std::ostream&
 operator<<(std::ostream& os, const clustering_row::printer& p) {

@@ -30,6 +30,7 @@
 #include "partition_version.hh"
 #include "partition_snapshot_row_cursor.hh"
 #include "partition_snapshot_reader.hh"
+#include "clustering_interval_set.hh"
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/mutation_assertions.hh"
