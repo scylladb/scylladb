@@ -2669,14 +2669,10 @@ class scylla_fiber(gdb.Command):
 def find_in_live(mem_start, mem_size, value, size_selector='g'):
     for line in gdb.execute("find/%s 0x%x, +0x%x, 0x%x" % (size_selector, mem_start, mem_size, value), to_string=True).split('\n'):
         if line.startswith('0x'):
-            ptr_info = gdb.execute("scylla ptr %s" % line, to_string=True)
-            if 'live' in ptr_info:
-                m = re.search('live \((0x[0-9a-f]+)', ptr_info)
-                if m:
-                    obj_start = int(m.group(1), 0)
-                    addr = int(line, 0)
-                    offset = addr - obj_start
-                    yield obj_start, offset
+            ptr_meta = scylla_ptr.analyze(int(line, base=16))
+            if ptr_meta.is_live:
+                yield ptr_meta
+
 
 class scylla_find(gdb.Command):
     """ Finds live objects on seastar heap of current shard which contain given value.
@@ -2732,10 +2728,9 @@ class scylla_find(gdb.Command):
 
         size_char = size_arg_to_size_char[args.size]
 
-        for obj, off in scylla_find.find(int(gdb.parse_and_eval(args.value)), size_char):
-            ptr_meta = scylla_ptr.analyze(obj + off)
+        for ptr_meta in scylla_find.find(int(gdb.parse_and_eval(args.value)), size_char):
             if args.resolve:
-                maybe_vptr = int(gdb.Value(obj).reinterpret_cast(scylla_find._vptr_type).dereference())
+                maybe_vptr = int(gdb.Value(ptr_meta.ptr).reinterpret_cast(scylla_find._vptr_type).dereference())
                 symbol = resolve(maybe_vptr, cache=False)
                 if symbol is None:
                     gdb.write('{}\n'.format(ptr_meta))
@@ -3022,18 +3017,18 @@ class scylla_generate_object_graph(gdb.Command):
         while not stop:
             depth += 1
             for current_obj in current_objects:
-                for next_obj, next_off in scylla_find.find(current_obj):
+                for ptr_meta in scylla_find.find(current_obj):
                     if timeout_seconds > 0:
                         current_time = time.time()
                         if current_time - start_time > timeout_seconds:
                             stop = True
                             break
 
+                    next_obj, next_off = ptr_meta.ptr, ptr_meta.offset_in_object
                     edges[(next_obj, current_obj)].add(next_off)
                     if next_obj in vertices:
                         continue
 
-                    ptr_meta = scylla_ptr.analyze(next_obj)
                     symbol_name = resolve(gdb.Value(next_obj).reinterpret_cast(vptr_type).dereference(), cache=False)
                     vertices[next_obj] = (ptr_meta, symbol_name)
 
