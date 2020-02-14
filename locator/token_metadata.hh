@@ -267,7 +267,7 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    auto ring_range(const token& start, bool include_min = false) const {
+    boost::iterator_range<tokens_iterator> ring_range(const token& start, bool include_min = false) const {
         auto begin = tokens_iterator(start, this, include_min);
         auto end = tokens_end();
         return boost::make_iterator_range(begin, end);
