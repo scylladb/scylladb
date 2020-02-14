@@ -48,7 +48,6 @@
 #include <memory>
 #include <boost/range/iterator_range.hpp>
 #include <boost/icl/interval.hpp>
-#include "query-request.hh"
 #include "range.hh"
 
 // forward declaration since database.hh includes this file
