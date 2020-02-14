@@ -1043,7 +1043,21 @@ public:
     using UUID = utils::UUID;
     using inet_address = gms::inet_address;
 private:
-    using tokens_iterator = tokens_iterator_impl;
+    class tokens_iterator : public std::iterator<std::input_iterator_tag, token> {
+        using impl_type = tokens_iterator_impl;
+        std::unique_ptr<impl_type> _impl;
+    public:
+        explicit tokens_iterator(tokens_iterator_impl);
+        tokens_iterator(const tokens_iterator&);
+        tokens_iterator(tokens_iterator&&) = default;
+        tokens_iterator& operator=(const tokens_iterator&);
+        tokens_iterator& operator=(tokens_iterator&&) = default;
+        ~tokens_iterator();
+        bool operator==(const tokens_iterator& it) const;
+        bool operator!=(const tokens_iterator& it) const;
+        const token& operator*();
+        tokens_iterator& operator++();
+    };
     token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
 public:
     token_metadata();

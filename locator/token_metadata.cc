@@ -632,6 +632,43 @@ std::multimap<inet_address, token> token_metadata_impl::get_endpoint_to_token_ma
     return cloned;
 }
 
+token_metadata::tokens_iterator::tokens_iterator(token_metadata_impl::tokens_iterator i)
+        : _impl(std::make_unique<impl_type>(std::move(i))) {
+}
+
+token_metadata::tokens_iterator::tokens_iterator(const tokens_iterator& x)
+        : _impl(std::make_unique<impl_type>(*x._impl)) {
+}
+
+token_metadata::tokens_iterator&
+token_metadata::tokens_iterator::operator=(const tokens_iterator& that) {
+    *this = tokens_iterator(that);
+    return *this;
+}
+
+token_metadata::tokens_iterator::~tokens_iterator() = default;
+
+bool
+token_metadata::tokens_iterator::operator==(const tokens_iterator& it) const {
+    return *_impl == *it._impl;
+}
+
+bool
+token_metadata::tokens_iterator::operator!=(const tokens_iterator& it) const {
+    return *_impl != *it._impl;
+}
+
+const token&
+token_metadata::tokens_iterator::operator*() {
+    return **_impl;
+}
+
+token_metadata::tokens_iterator&
+token_metadata::tokens_iterator::operator++() {
+    ++*_impl;
+    return *this;
+}
+
 token_metadata::token_metadata(std::unique_ptr<token_metadata_impl> impl)
     : _impl(std::move(impl)) {
 }
@@ -723,18 +760,24 @@ token_metadata::update_topology(inet_address ep) {
 
 token_metadata::tokens_iterator
 token_metadata::tokens_end() const {
-    return _impl->tokens_end();
+    return tokens_iterator(_impl->tokens_end());
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata::ring_range(const token& start, bool include_min) const {
-    return _impl->ring_range(start, include_min);
+    auto impl_range = _impl->ring_range(start, include_min);
+    return boost::make_iterator_range(
+            tokens_iterator(std::move(impl_range.begin())),
+            tokens_iterator(std::move(impl_range.end())));
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata::ring_range(
         const std::optional<dht::partition_range::bound>& start, bool include_min) const {
-    return _impl->ring_range(start, include_min);
+    auto impl_range = _impl->ring_range(start, include_min);
+    return boost::make_iterator_range(
+            tokens_iterator(std::move(impl_range.begin())),
+            tokens_iterator(std::move(impl_range.end())));
 }
 
 topology&
