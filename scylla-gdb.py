@@ -3037,11 +3037,13 @@ class scylla_generate_object_graph(gdb.Command):
         gdb.Command.__init__(self, 'scylla generate-object-graph', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     @staticmethod
-    def _traverse_object_graph_breadth_first(address, max_depth, max_vertices, timeout_seconds):
+    def _traverse_object_graph_breadth_first(address, max_depth, max_vertices, timeout_seconds, value_range_override):
         vertices = dict() # addr -> obj info (ptr metadata, vtable symbol)
         edges = defaultdict(set) # (referrer, referee) -> {offset1, offset2...}
 
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
+
+        vertices[address] = (scylla_ptr.analyze(address), resolve(gdb.Value(address).reinterpret_cast(vptr_type).dereference(), cache=False))
 
         current_objects = [address]
         next_objects = []
@@ -3052,7 +3054,11 @@ class scylla_generate_object_graph(gdb.Command):
         while not stop:
             depth += 1
             for current_obj in current_objects:
-                for ptr_meta, _ in scylla_find.find(current_obj):
+                if value_range_override == -1:
+                    value_range = vertices[current_obj][0].size
+                else:
+                    value_range = value_range_override
+                for ptr_meta, _ in scylla_find.find(current_obj, value_range=value_range, find_all=True):
                     if timeout_seconds > 0:
                         current_time = time.time()
                         if current_time - start_time > timeout_seconds:
@@ -3083,9 +3089,9 @@ class scylla_generate_object_graph(gdb.Command):
         return edges, vertices
 
     @staticmethod
-    def _do_generate_object_graph(address, output_file, max_depth, max_vertices, timeout_seconds):
+    def _do_generate_object_graph(address, output_file, max_depth, max_vertices, timeout_seconds, value_range_override):
         edges, vertices = scylla_generate_object_graph._traverse_object_graph_breadth_first(address, max_depth,
-                max_vertices, timeout_seconds)
+                max_vertices, timeout_seconds, value_range_override)
 
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
         prefix_len = len('vtable for ')
@@ -3109,10 +3115,10 @@ class scylla_generate_object_graph(gdb.Command):
             output_file.write('{} -> {} [label="{}"];\n'.format(a, b, offsets))
 
     @staticmethod
-    def generate_object_graph(address, output_file, max_depth, max_vertices, timeout_seconds):
+    def generate_object_graph(address, output_file, max_depth, max_vertices, timeout_seconds, value_range_override):
         with open(output_file, 'w') as f:
             f.write('digraph G {\n')
-            scylla_generate_object_graph._do_generate_object_graph(address, f, max_depth, max_vertices, timeout_seconds)
+            scylla_generate_object_graph._do_generate_object_graph(address, f, max_depth, max_vertices, timeout_seconds, value_range_override)
             f.write('}')
 
     def invoke(self, arg, from_tty):
@@ -3129,6 +3135,10 @@ class scylla_generate_object_graph(gdb.Command):
                 help="Maximum amount of vertices (objects) to add to the object graph. Set to -1 to unlimited. Default is -1 (unlimited).")
         parser.add_argument("-t", "--timeout", action="store", type=int, default=-1,
                 help="Maximum amount of seconds to spend building the graph. Set to -1 for no timeout. Default is -1 (unlimited).")
+        parser.add_argument("-r", "--value-range-override", action="store", type=int, default=-1,
+                help="The portion of the object to find references to. Same as --value-range for `scylla find`."
+                " This can greatly speed up the graph generation when the graph has large objects but references are likely to point to their first X bytes."
+                " Default value is -1, meaning the entire object is scanned (--value-range=sizeof(object)).")
         parser.add_argument("object", action="store", help="The object that is the starting point of the graph.")
 
         try:
@@ -3153,7 +3163,7 @@ class scylla_generate_object_graph(gdb.Command):
             raise ValueError("The search has to be limited by at least one of: MAX_DEPTH, MAX_VERTICES or TIMEOUT")
 
         scylla_generate_object_graph.generate_object_graph(int(gdb.parse_and_eval(args.object)), dot_file,
-                args.max_depth, args.max_vertices, args.timeout)
+                args.max_depth, args.max_vertices, args.timeout, args.value_range_override)
 
         if extension != 'dot':
             subprocess.check_call(['dot', '-T' + extension, dot_file, '-o', args.output_file])
