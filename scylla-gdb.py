@@ -2687,15 +2687,40 @@ class scylla_find(gdb.Command):
       thread 1, small (size <= 56), live (0x6000008a1230 +32)
     """
     _vptr_type = gdb.lookup_type('uintptr_t').pointer()
+    _size_char_to_size = {
+        'b': 8,
+        'h': 16,
+        'w': 32,
+        'g': 64,
+    }
 
     def __init__(self):
         gdb.Command.__init__(self, 'scylla find', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     @staticmethod
-    def find(value, size_selector='g'):
+    def find(value, size_selector='g', value_range=0, find_all=False):
+        step = int(scylla_find._size_char_to_size[size_selector] / 8)
+        offset = 0
         mem_start, mem_size = get_seastar_memory_start_and_size()
-        for obj, off in find_in_live(mem_start, mem_size, value, size_selector):
-            yield (obj, off)
+        it = iter(find_in_live(mem_start, mem_size, value, size_selector))
+
+        # Find the first value in the range for which the search has results.
+        while offset < value_range:
+            try:
+                yield next(it), offset
+                if not find_all:
+                    break
+            except StopIteration:
+                offset += step
+                it = iter(find_in_live(mem_start, mem_size, value + offset, size_selector))
+
+        # List the rest of the results for value.
+        try:
+            while True:
+                yield next(it), offset
+        except StopIteration:
+            pass
+
 
     def invoke(self, arg, for_tty):
         parser = argparse.ArgumentParser(description="scylla find")
@@ -2708,6 +2733,12 @@ class scylla_find(gdb.Command):
         parser.add_argument("-r", "--resolve", action="store_true",
                 help="Attempt to resolve the first pointer in the found objects as vtable pointer. "
                 " If the resolve is successful the vtable pointer as well as the vtable symbol name will be printed in the listing.")
+        parser.add_argument("--value-range", action="store", type=int, default=0,
+                help="Find a range of values of the specified size."
+                " Will start from VALUE, then use SIZE increments until VALUE + VALUE_RANGE is reached, or at least one usage is found."
+                " By default only VALUE is searched.")
+        parser.add_argument("-a", "--find-all", action="store_true",
+                help="Find all references, don't stop at the first offset which has usages. See --value-range.")
         parser.add_argument("value", action="store", help="The value to be searched.")
 
         try:
@@ -2728,16 +2759,20 @@ class scylla_find(gdb.Command):
 
         size_char = size_arg_to_size_char[args.size]
 
-        for ptr_meta in scylla_find.find(int(gdb.parse_and_eval(args.value)), size_char):
+        for ptr_meta, offset in scylla_find.find(int(gdb.parse_and_eval(args.value)), size_char, args.value_range, find_all=args.find_all):
+            if args.value_range and offset:
+                formatted_offset = "+{}; ".format(offset)
+            else:
+                formatted_offset = ""
             if args.resolve:
                 maybe_vptr = int(gdb.Value(ptr_meta.ptr).reinterpret_cast(scylla_find._vptr_type).dereference())
                 symbol = resolve(maybe_vptr, cache=False)
                 if symbol is None:
-                    gdb.write('{}\n'.format(ptr_meta))
+                    gdb.write('{}{}\n'.format(formatted_offset, ptr_meta))
                 else:
-                    gdb.write('{} 0x{:016x} {}\n'.format(ptr_meta, maybe_vptr, symbol))
+                    gdb.write('{}{} 0x{:016x} {}\n'.format(formatted_offset, ptr_meta, maybe_vptr, symbol))
             else:
-                gdb.write('{}\n'.format(ptr_meta))
+                gdb.write('{}{}\n'.format(formatted_offset, ptr_meta))
 
 
 class std_unique_ptr:
@@ -3017,7 +3052,7 @@ class scylla_generate_object_graph(gdb.Command):
         while not stop:
             depth += 1
             for current_obj in current_objects:
-                for ptr_meta in scylla_find.find(current_obj):
+                for ptr_meta, _ in scylla_find.find(current_obj):
                     if timeout_seconds > 0:
                         current_time = time.time()
                         if current_time - start_time > timeout_seconds:
