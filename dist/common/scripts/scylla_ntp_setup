@@ -50,16 +50,11 @@ if __name__ == '__main__':
             with open('/etc/ntp.conf', 'w') as f:
                 f.writelines(conf2)
                 f.write('server ntp.ubuntu.com iburst')
-        if is_systemd():
-            ntp = systemd_unit('ntp.service')
-            ntp.stop()
-            # ignore error, ntpd may able to adjust clock later
-            run('ntpdate ntp.ubuntu.com', exception=False)
-            ntp.start()
-        else:
-            run('service ntp stop')
-            run('ntpdate ntp.ubuntu.com')
-            run('service ntp start')
+        ntp = systemd_unit('ntp.service')
+        ntp.stop()
+        # ignore error, ntpd may able to adjust clock later
+        run('ntpdate ntp.ubuntu.com', exception=False)
+        ntp.start()
 
     if is_gentoo_variant():
         run('emerge -uq net-misc/ntp')

@@ -49,9 +49,6 @@ if __name__ == '__main__':
     if ret == 0:
         print('This is a supported kernel version.')
     else:
-        if dist_name() == 'Ubuntu' and dist_ver() == '14.04':
-            print('Please upgrade to a newer kernel version by executing \'apt-get install linux-image-generic-lts-vivid && reboot\'.')
-        else:
-            print('Please upgrade to a newer kernel version.')
-            print(' see https://docs.scylladb.com/troubleshooting/error_messages/kb_fs_not_qualified_aio/ for details')
+        print('Please upgrade to a newer kernel version.')
+        print(' see https://docs.scylladb.com/troubleshooting/error_messages/kb_fs_not_qualified_aio/ for details')
     sys.exit(ret)

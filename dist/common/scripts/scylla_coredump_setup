@@ -37,16 +37,8 @@ if __name__ == '__main__':
                         help='enable compress on systemd-coredump')
     args = parser.parse_args()
 
-# Ubuntu 14.04 not used systemd, so use scylla_save_coredump
-    if dist_name() == 'Ubuntu' and dist_ver() == '14.04':
-        run('apt-get remove -y apport-noui')
-        run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')
-# Debian 8 uses systemd but it's too old to use systemd-coredump, so
-# use scylla_save_coredump too
-    elif dist_name() == 'debian' and re.match(r'^8\.', dist_ver()):
-        run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')
 # Gentoo may uses OpenRC
-    elif is_gentoo_variant():
+    if is_gentoo_variant():
         run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')
 # Other distributions can use systemd-coredump, so setup it
     else:
