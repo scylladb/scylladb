@@ -123,7 +123,6 @@ public:
 
     void register_stats();
     void register_split_metrics_local();
-    void register_split_metrics_for(gms::inet_address ep);
 protected:
     seastar::metrics::metric_groups _metrics;
 };
@@ -197,7 +196,6 @@ public:
     stats();
     void register_stats();
     void register_split_metrics_local();
-    void register_split_metrics_for(gms::inet_address ep);
 };
 
  /*** This struct represents stats that has meaning (only or also)

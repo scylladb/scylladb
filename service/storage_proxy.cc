@@ -1394,13 +1394,6 @@ void storage_proxy_stats::write_stats::register_stats() {
         });
 }
 
-void storage_proxy_stats::write_stats::register_split_metrics_for(gms::inet_address ep) {
-    writes_attempts.register_metrics_for(ep);
-    writes_errors.register_metrics_for(ep);
-    background_replica_writes_failed.register_metrics_for(ep);
-    read_repair_write_attempts.register_metrics_for(ep);
-}
-
 storage_proxy_stats::stats::stats()
         : write_stats()
         , data_read_attempts(COORDINATOR_STATS_CATEGORY, "reads", "number of data read requests", "data")
@@ -1424,18 +1417,6 @@ void storage_proxy_stats::stats::register_split_metrics_local() {
     mutation_data_read_attempts.register_metrics_local();
     mutation_data_read_completed.register_metrics_local();
     mutation_data_read_errors.register_metrics_local();
-}
-
-void storage_proxy_stats::stats::register_split_metrics_for(gms::inet_address ep) {
-    write_stats::register_split_metrics_for(ep);
-    data_read_attempts.register_metrics_for(ep);
-    data_read_completed.register_metrics_for(ep);
-    data_read_errors.register_metrics_for(ep);
-    digest_read_attempts.register_metrics_for(ep);
-    digest_read_completed.register_metrics_for(ep);
-    mutation_data_read_attempts.register_metrics_for(ep);
-    mutation_data_read_completed.register_metrics_for(ep);
-    mutation_data_read_errors.register_metrics_for(ep);
 }
 
 void storage_proxy_stats::stats::register_stats() {
