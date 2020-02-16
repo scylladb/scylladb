@@ -299,14 +299,14 @@ static void describe_key_schema(rjson::value& parent, const schema& schema, std:
 
 }
 
-future<json::json_return_type> executor::describe_table(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.describe_table++;
     rjson::value request = rjson::parse(content);
     elogger.trace("Describing table {}", request);
 
     schema_ptr schema = get_table(_proxy, request);
 
-    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     rjson::value table_description = rjson::empty_object();
     rjson::set(table_description, "TableName", rjson::from_string(schema->cf_name()));
@@ -378,13 +378,13 @@ future<json::json_return_type> executor::describe_table(client_state& client_sta
     return make_ready_future<json::json_return_type>(make_jsonable(std::move(response)));
 }
 
-future<json::json_return_type> executor::delete_table(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.delete_table++;
     rjson::value request = rjson::parse(content);
     elogger.trace("Deleting table {}", request);
 
     std::string table_name = get_table_name(request);
-    tracing::add_table_name(client_state.get_trace_state(), KEYSPACE_NAME, table_name);
+    tracing::add_table_name(trace_state, KEYSPACE_NAME, table_name);
 
     if (!_proxy.get_db().local().has_schema(KEYSPACE_NAME, table_name)) {
         throw api_error("ResourceNotFoundException",
@@ -481,14 +481,14 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
 }
 
 
-future<json::json_return_type> executor::create_table(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.create_table++;
     rjson::value table_info = rjson::parse(content);
     elogger.trace("Creating table {}", table_info);
     std::string table_name = get_table_name(table_info);
     const rjson::value& attribute_definitions = table_info["AttributeDefinitions"];
 
-    tracing::add_table_name(client_state.get_trace_state(), KEYSPACE_NAME, table_name);
+    tracing::add_table_name(trace_state, KEYSPACE_NAME, table_name);
 
     schema_builder builder(KEYSPACE_NAME, table_name);
     auto [hash_key, range_key] = parse_key_schema(table_info);
@@ -749,14 +749,14 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
         bool need_read_before_write,
         alternator::stats& stats);
 
-future<json::json_return_type> executor::put_item(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::put_item(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.put_item++;
     auto start_time = std::chrono::steady_clock::now();
     rjson::value update_info = rjson::parse(content);
     elogger.trace("Updating value {}", update_info);
 
     schema_ptr schema = get_table(_proxy, update_info);
-    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     if (rjson::find(update_info, "ConditionExpression")) {
         throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
@@ -766,6 +766,7 @@ future<json::json_return_type> executor::put_item(client_state& client_state, st
         // FIXME: Need to support also the ALL_OLD option. See issue #5053.
         throw api_error("ValidationException", format("Unsupported ReturnValues={} for PutItem operation", return_values));
     }
+
     const bool has_expected = update_info.HasMember("Expected");
 
     const rjson::value& item = update_info["Item"];
@@ -774,11 +775,11 @@ future<json::json_return_type> executor::put_item(client_state& client_state, st
 
     return maybe_get_previous_item(_proxy, client_state, schema, item, has_expected, _stats).then(
             [this, schema, has_expected,  update_info = rjson::copy(update_info), m = std::move(m),
-             &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
+             &client_state, start_time, trace_state] (std::unique_ptr<rjson::value> previous_item) mutable {
         if (has_expected) {
             verify_expected(update_info, previous_item);
         }
-        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
+        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([this, start_time] () {
             _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
             // Without special options on what to return, PutItem returns nothing.
             return make_ready_future<json::json_return_type>(json_string(""));
@@ -806,13 +807,13 @@ static mutation make_delete_item_mutation(const rjson::value& key, schema_ptr sc
     return m;
 }
 
-future<json::json_return_type> executor::delete_item(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.delete_item++;
     auto start_time = std::chrono::steady_clock::now();
     rjson::value update_info = rjson::parse(content);
 
     schema_ptr schema = get_table(_proxy, update_info);
-    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     if (rjson::find(update_info, "ConditionExpression")) {
         throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
@@ -831,11 +832,11 @@ future<json::json_return_type> executor::delete_item(client_state& client_state,
 
     return maybe_get_previous_item(_proxy, client_state, schema, key, has_expected, _stats).then(
             [this, schema, has_expected,  update_info = rjson::copy(update_info), m = std::move(m),
-             &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
+             &client_state, start_time, trace_state] (std::unique_ptr<rjson::value> previous_item) mutable {
         if (has_expected) {
             verify_expected(update_info, previous_item);
         }
-        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
+        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([this, start_time] () {
             _stats.api_operations.delete_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.delete_item_latency._count + 1);
             // Without special options on what to return, DeleteItem returns nothing.
             return make_ready_future<json::json_return_type>(json_string(""));
@@ -868,7 +869,7 @@ struct primary_key_equal {
     }
 };
 
-future<json::json_return_type> executor::batch_write_item(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::batch_write_item(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.batch_write_item++;
     rjson::value batch_info = rjson::parse(content);
     rjson::value& request_items = batch_info["RequestItems"];
@@ -878,7 +879,7 @@ future<json::json_return_type> executor::batch_write_item(client_state& client_s
 
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
-        tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+        tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
             if (!request.IsObject() || request.MemberCount() != 1) {
@@ -911,7 +912,7 @@ future<json::json_return_type> executor::batch_write_item(client_state& client_s
         }
     }
 
-    return _proxy.mutate(std::move(mutations), db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([] () {
+    return _proxy.mutate(std::move(mutations), db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([] () {
         // Without special options on what to return, BatchWriteItem returns nothing,
         // unless there are UnprocessedItems - it's possible to just stop processing a batch
         // due to throttling. TODO(sarna): Consider UnprocessedItems when returning.
@@ -1410,13 +1411,13 @@ static future<std::unique_ptr<rjson::value>> maybe_get_previous_item(
 }
 
 
-future<json::json_return_type> executor::update_item(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::update_item(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.update_item++;
     auto start_time = std::chrono::steady_clock::now();
     rjson::value update_info = rjson::parse(content);
     elogger.trace("update_item {}", update_info);
     schema_ptr schema = get_table(_proxy, update_info);
-    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     if (rjson::find(update_info, "ConditionExpression")) {
         throw api_error("ValidationException", "ConditionExpression is not yet implemented in alternator");
@@ -1472,7 +1473,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
     return maybe_get_previous_item(_proxy, client_state, schema, pk, ck, has_update_expression, expression, has_expected, _stats).then(
             [this, schema, expression = std::move(expression), has_update_expression, ck = std::move(ck), has_expected,
              update_info = rjson::copy(update_info), m = std::move(m), attrs_collector = std::move(attrs_collector),
-             attribute_updates = rjson::copy(attribute_updates), ts, &client_state, start_time] (std::unique_ptr<rjson::value> previous_item) mutable {
+             attribute_updates = rjson::copy(attribute_updates), ts, &client_state, start_time, trace_state] (std::unique_ptr<rjson::value> previous_item) mutable {
         if (has_expected) {
             verify_expected(update_info, previous_item);
         }
@@ -1603,7 +1604,7 @@ future<json::json_return_type> executor::update_item(client_state& client_state,
         row.apply(row_marker(ts));
 
         elogger.trace("Applying mutation {}", m);
-        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), client_state.get_trace_state(), empty_service_permit()).then([this, start_time] () {
+        return _proxy.mutate(std::vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([this, start_time] () {
             // Without special options on what to return, UpdateItem returns nothing.
             _stats.api_operations.update_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.update_item_latency._count + 1);
             return make_ready_future<json::json_return_type>(json_string(""));
@@ -1630,7 +1631,7 @@ static db::consistency_level get_read_consistency(const rjson::value& request) {
     return consistent_read ? db::consistency_level::LOCAL_QUORUM : db::consistency_level::LOCAL_ONE;
 }
 
-future<json::json_return_type> executor::get_item(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::get_item(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.get_item++;
     auto start_time = std::chrono::steady_clock::now();
     rjson::value table_info = rjson::parse(content);
@@ -1638,7 +1639,7 @@ future<json::json_return_type> executor::get_item(client_state& client_state, st
 
     schema_ptr schema = get_table(_proxy, table_info);
 
-    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     rjson::value& query_key = table_info["Key"];
     db::consistency_level cl = get_read_consistency(table_info);
@@ -1673,7 +1674,7 @@ future<json::json_return_type> executor::get_item(client_state& client_state, st
     });
 }
 
-future<json::json_return_type> executor::batch_get_item(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     // FIXME: In this implementation, an unbounded batch size can cause
     // unbounded response JSON object to be buffered in memory, unbounded
     // parallelism of the requests, and unbounded amount of non-preemptable
@@ -1701,7 +1702,7 @@ future<json::json_return_type> executor::batch_get_item(client_state& client_sta
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         table_requests rs;
         rs.schema = get_table_from_batch_request(_proxy, it);
-        tracing::add_table_name(client_state.get_trace_state(), KEYSPACE_NAME, rs.schema->cf_name());
+        tracing::add_table_name(trace_state, KEYSPACE_NAME, rs.schema->cf_name());
         rs.cl = get_read_consistency(it->value);
         rs.attrs_to_get = calculate_attrs_to_get(it->value);
         auto& keys = (it->value)["Keys"];
@@ -1867,10 +1868,11 @@ static future<json::json_return_type> do_query(schema_ptr schema,
         db::consistency_level cl,
         ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions,
         service::client_state& client_state,
-        cql3::cql_stats& cql_stats) {
+        cql3::cql_stats& cql_stats,
+        tracing::trace_state_ptr trace_state) {
     ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
 
-    tracing::trace(client_state.get_trace_state(), "Performing a database query");
+    tracing::trace(trace_state, "Performing a database query");
 
     if (exclusive_start_key) {
         partition_key pk = pk_from_json(*exclusive_start_key, schema);
@@ -1887,7 +1889,7 @@ static future<json::json_return_type> do_query(schema_ptr schema,
     auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
 
-    auto query_state_ptr = std::make_unique<service::query_state>(client_state, empty_service_permit());
+    auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, empty_service_permit());
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
@@ -1919,7 +1921,7 @@ static future<json::json_return_type> do_query(schema_ptr schema,
 // 2. Filtering - by passing appropriately created restrictions to pager as a last parameter
 // 3. Proper timeouts instead of gc_clock::now() and db::no_timeout
 // 4. Implement parallel scanning via Segments
-future<json::json_return_type> executor::scan(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::scan(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.scan++;
     rjson::value request_info = rjson::parse(content);
     elogger.trace("Scanning {}", request_info);
@@ -1956,7 +1958,7 @@ future<json::json_return_type> executor::scan(client_state& client_state, std::s
         partition_ranges = filtering_restrictions->get_partition_key_ranges(query_options);
         ck_bounds = filtering_restrictions->get_clustering_bounds(query_options);
     }
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats);
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats, trace_state);
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, comparison_operator_type op, const rjson::value& attrs) {
@@ -2079,14 +2081,14 @@ calculate_bounds(schema_ptr schema, const rjson::value& conditions) {
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
-future<json::json_return_type> executor::query(client_state& client_state, std::string content) {
+future<json::json_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, std::string content) {
     _stats.api_operations.query++;
     rjson::value request_info = rjson::parse(content);
     elogger.trace("Querying {}", request_info);
 
     schema_ptr schema = get_table_or_view(_proxy, request_info);
 
-    tracing::add_table_name(client_state.get_trace_state(), schema->ks_name(), schema->cf_name());
+    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     rjson::value* exclusive_start_key = rjson::find(request_info, "ExclusiveStartKey");
     db::consistency_level cl = get_read_consistency(request_info);
@@ -2129,7 +2131,7 @@ future<json::json_return_type> executor::query(client_state& client_state, std::
             throw api_error("ValidationException", format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", ck_defs.front()->name_as_text()));
         }
     }
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats);
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats, std::move(trace_state));
 }
 
 static void validate_limit(int limit) {
@@ -2238,18 +2240,20 @@ future<> executor::maybe_create_keyspace() {
     });
 }
 
-static void create_tracing_session(executor::client_state& client_state) {
+static tracing::trace_state_ptr create_tracing_session() {
     tracing::trace_state_props_set props;
     props.set<tracing::trace_state_props::full_tracing>();
-    client_state.create_tracing_session(tracing::trace_type::QUERY, props);
+    return tracing::tracing::get_local_tracing_instance().create_session(tracing::trace_type::QUERY, props);
 }
 
-void executor::maybe_trace_query(client_state& client_state, sstring_view op, sstring_view query) {
+tracing::trace_state_ptr executor::maybe_trace_query(client_state& client_state, sstring_view op, sstring_view query) {
+    tracing::trace_state_ptr trace_state;
     if (tracing::tracing::get_local_tracing_instance().trace_next_query()) {
-        create_tracing_session(client_state);
-        tracing::add_query(client_state.get_trace_state(), query);
-        tracing::begin(client_state.get_trace_state(), format("Alternator {}", op), client_state.get_client_address());
+        trace_state = create_tracing_session();
+        tracing::add_query(trace_state, query);
+        tracing::begin(trace_state, format("Alternator {}", op), client_state.get_client_address());
     }
+    return trace_state;
 }
 
 future<> executor::start() {
