@@ -58,7 +58,7 @@ ExternalSizeMax=1024G
             makedirs('/var/lib/scylla/coredump')
             os.symlink('/var/lib/scylla/coredump', '/var/lib/systemd/coredump')
         run('systemctl daemon-reload')
-        if is_debian_variant():
+        if os.path.exists('/usr/lib/sysctl.d/50-coredump.conf'):
             run('sysctl -p /usr/lib/sysctl.d/50-coredump.conf')
         else:
             with open('/etc/sysctl.d/99-scylla-coredump.conf', 'w') as f:
