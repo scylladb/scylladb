@@ -37,12 +37,9 @@ if __name__ == '__main__':
         cfg = sysconfig_parser('/etc/default/cpufrequtils')
         cfg.set('GOVERNOR', 'performance')
         cfg.commit()
-        if is_systemd():
-            cpufreq = systemd_unit('cpufrequtils.service')
-            cpufreq.enable()
-            cpufreq.restart()
-        else:
-            run('service cpufrequtils restart')
+        cpufreq = systemd_unit('cpufrequtils.service')
+        cpufreq.enable()
+        cpufreq.restart()
     if is_gentoo_variant():
         run('emerge -uq sys-power/cpupower')
         with open('/etc/conf.d/cpupower') as f:

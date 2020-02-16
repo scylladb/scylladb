@@ -39,36 +39,30 @@ fi
 
 AMB_SUPPORT=`grep -c ^CapAmb: /proc/self/status`
 
-# all other distributions supported by Scylla are systemd enabled, only older debian/ubuntu need these checks.
-if [[ "$ID" = "debian" && "$VERSION_ID" = "8" ]] || [[ "$ID" = "ubuntu" && "$VERSION_ID" = "14.04" ]]; then
-    echo "kernel.core_pattern=|/opt/scylladb/scripts/scylla_save_coredump %e %t %p" > /etc/sysctl.d/99-scylla-coredump.conf
-    echo "scylla ALL=(ALL) NOPASSWD: /opt/scylladb/scripts/scylla_prepare,/opt/scylladb/scripts/scylla_stop,/opt/scylladb/scripts/scylla_io_setup,/opt/scylladb/scripts/scylla-ami/scylla_ami_setup" > /etc/sudoers.d/scylla
-else
-    # AmbientCapabilities supported from v229 but it backported to v219-33 on RHEL7
-    if [ $SYSTEMD_VER -ge 229 ] || [[ $SYSTEMD_VER -eq 219 && $SYSTEMD_REL -ge 33 ]]; then
-        if [ $AMB_SUPPORT -eq 1 ]; then
-            mkdir -p /etc/systemd/system/scylla-server.service.d/
-            cat << EOS > /etc/systemd/system/scylla-server.service.d/capabilities.conf
+# AmbientCapabilities supported from v229 but it backported to v219-33 on RHEL7
+if [ $SYSTEMD_VER -ge 229 ] || [[ $SYSTEMD_VER -eq 219 && $SYSTEMD_REL -ge 33 ]]; then
+    if [ $AMB_SUPPORT -eq 1 ]; then
+        mkdir -p /etc/systemd/system/scylla-server.service.d/
+        cat << EOS > /etc/systemd/system/scylla-server.service.d/capabilities.conf
 [Service]
 AmbientCapabilities=CAP_SYS_NICE
 EOS
-        fi
     fi
+fi
 
-    # For systems with not a lot of memory, override default reservations for the slices
-    # seastar has a minimum reservation of 1.5GB that kicks in, and 21GB * 0.07 = 1.5GB.
-    # So for anything smaller than that we will not use percentages in the helper slice
-    MEMTOTAL=$(cat /proc/meminfo |grep -e "^MemTotal:"|sed -s 's/^MemTotal:\s*\([0-9]*\) kB$/\1/')
-    MEMTOTAL_BYTES=$(($MEMTOTAL * 1024))
-    if [ $MEMTOTAL_BYTES -lt 23008753371 ]; then
-        mkdir -p /etc/systemd/system/scylla-helper.slice.d/
-        cat << EOS > /etc/systemd/system/scylla-helper.slice.d/memory.conf
+# For systems with not a lot of memory, override default reservations for the slices
+# seastar has a minimum reservation of 1.5GB that kicks in, and 21GB * 0.07 = 1.5GB.
+# So for anything smaller than that we will not use percentages in the helper slice
+MEMTOTAL=$(cat /proc/meminfo |grep -e "^MemTotal:"|sed -s 's/^MemTotal:\s*\([0-9]*\) kB$/\1/')
+MEMTOTAL_BYTES=$(($MEMTOTAL * 1024))
+if [ $MEMTOTAL_BYTES -lt 23008753371 ]; then
+    mkdir -p /etc/systemd/system/scylla-helper.slice.d/
+    cat << EOS > /etc/systemd/system/scylla-helper.slice.d/memory.conf
 [Slice]
 MemoryHigh=1200M
 MemoryMax=1400M
 MemoryLimit=1400M
 EOS
-    fi
-
-    systemctl --system daemon-reload >/dev/null || true
 fi
+
+systemctl --system daemon-reload >/dev/null || true

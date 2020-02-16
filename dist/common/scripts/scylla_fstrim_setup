@@ -33,5 +33,3 @@ if __name__ == '__main__':
         systemd_unit('scylla-fstrim.timer').unmask()
     if is_redhat_variant():
         systemd_unit('fstrim.timer').disable()
-    if dist_name() == 'Ubuntu' and os.path.exists('/etc/cron.weekly/fstrim'):
-        shutil.move('/etc/cron.weekly/fstrim', '/etc/cron.weekly/fstrim.old')
