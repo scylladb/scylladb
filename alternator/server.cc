@@ -132,16 +132,34 @@ protected:
     sstring _type;
 };
 
-class health_handler : public handler_base {
-    virtual future<std::unique_ptr<reply>> handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+class gated_handler : public handler_base {
+    seastar::gate& _gate;
+public:
+    gated_handler(seastar::gate& gate) : _gate(gate) {}
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) = 0;
+    virtual future<std::unique_ptr<reply>> handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) final override {
+        return with_gate(_gate, [this, &path, req = std::move(req), rep = std::move(rep)] () mutable {
+            return do_handle(path, std::move(req), std::move(rep));
+        });
+    }
+};
+
+class health_handler : public gated_handler {
+public:
+    health_handler(seastar::gate& pending_requests) : gated_handler(pending_requests) {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         rep->set_status(reply::status_type::ok);
         rep->write_body("txt", format("healthy: {}", req->get_header("Host")));
         return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
 
-class local_nodelist_handler : public handler_base {
-    virtual future<std::unique_ptr<reply>> handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+class local_nodelist_handler : public gated_handler {
+public:
+    local_nodelist_handler(seastar::gate& pending_requests) : gated_handler(pending_requests) {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         rjson::value results = rjson::empty_array();
         // It's very easy to get a list of all live nodes on the cluster,
         // using gms::get_local_gossiper().get_live_members(). But getting
@@ -282,7 +300,7 @@ void server::set_routes(routes& r) {
     });
 
     r.put(operation_type::POST, "/", req_handler);
-    r.put(operation_type::GET, "/", new health_handler);
+    r.put(operation_type::GET, "/", new health_handler(_pending_requests.local()));
     // The "/localnodes" request is a new Alternator feature, not supported by
     // DynamoDB and not required for DynamoDB compatibility. It allows a
     // client to enquire - using a trivial HTTP request without requiring
@@ -294,7 +312,7 @@ void server::set_routes(routes& r) {
     // consider this to be a security risk, because an attacker can already
     // scan an entire subnet for nodes responding to the health request,
     // or even just scan for open ports.
-    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler);
+    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler(_pending_requests.local()));
 }
 
 //FIXME: A way to immediately invalidate the cache should be considered,
