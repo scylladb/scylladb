@@ -27,6 +27,7 @@
 #include <seastar/net/tls.hh>
 #include <optional>
 #include <alternator/auth.hh>
+#include <utils/small_vector.hh>
 
 namespace alternator {
 
@@ -39,11 +40,14 @@ class server {
     seastar::sharded<executor>& _executor;
     key_cache _key_cache;
     bool _enforce_authorization;
+    utils::small_vector<std::reference_wrapper<seastar::httpd::http_server_control>, 2> _enabled_servers;
+    seastar::sharded<seastar::gate> _pending_requests;
     alternator_callbacks_map _callbacks;
 public:
     server(seastar::sharded<executor>& executor);
 
     seastar::future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization);
+    future<> stop();
 private:
     void set_routes(seastar::httpd::routes& r);
     future<> verify_signature(const seastar::httpd::request& r);

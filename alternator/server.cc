@@ -132,16 +132,34 @@ protected:
     sstring _type;
 };
 
-class health_handler : public handler_base {
-    virtual future<std::unique_ptr<reply>> handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+class gated_handler : public handler_base {
+    seastar::gate& _gate;
+public:
+    gated_handler(seastar::gate& gate) : _gate(gate) {}
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) = 0;
+    virtual future<std::unique_ptr<reply>> handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) final override {
+        return with_gate(_gate, [this, &path, req = std::move(req), rep = std::move(rep)] () mutable {
+            return do_handle(path, std::move(req), std::move(rep));
+        });
+    }
+};
+
+class health_handler : public gated_handler {
+public:
+    health_handler(seastar::gate& pending_requests) : gated_handler(pending_requests) {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         rep->set_status(reply::status_type::ok);
         rep->write_body("txt", format("healthy: {}", req->get_header("Host")));
         return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
 
-class local_nodelist_handler : public handler_base {
-    virtual future<std::unique_ptr<reply>> handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+class local_nodelist_handler : public gated_handler {
+public:
+    local_nodelist_handler(seastar::gate& pending_requests) : gated_handler(pending_requests) {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         rjson::value results = rjson::empty_array();
         // It's very easy to get a list of all live nodes on the cluster,
         // using gms::get_local_gossiper().get_live_members(). But getting
@@ -263,12 +281,15 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             throw api_error("UnknownOperationException",
                     format("Unsupported operation {}", op));
         }
-        //FIXME: Client state can provide more context, e.g. client's endpoint address
-        // We use unique_ptr because client_state cannot be moved or copied
-        return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()), [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
-            tracing::trace_state_ptr trace_state = executor::maybe_trace_query(*client_state, op, req->content);
-            tracing::trace(trace_state, op);
-            return callback_it->second(_executor.local(), *client_state, trace_state, std::move(req)).finally([trace_state] {});
+        return with_gate(_pending_requests.local(), [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] () mutable {
+            //FIXME: Client state can provide more context, e.g. client's endpoint address
+            // We use unique_ptr because client_state cannot be moved or copied
+            return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()),
+                    [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
+                tracing::trace_state_ptr trace_state = executor::maybe_trace_query(*client_state, op, req->content);
+                tracing::trace(trace_state, op);
+                return callback_it->second(_executor.local(), *client_state, trace_state, std::move(req)).finally([trace_state] {});
+            });
         });
     });
 }
@@ -279,7 +300,7 @@ void server::set_routes(routes& r) {
     });
 
     r.put(operation_type::POST, "/", req_handler);
-    r.put(operation_type::GET, "/", new health_handler);
+    r.put(operation_type::GET, "/", new health_handler(_pending_requests.local()));
     // The "/localnodes" request is a new Alternator feature, not supported by
     // DynamoDB and not required for DynamoDB compatibility. It allows a
     // client to enquire - using a trivial HTTP request without requiring
@@ -291,14 +312,14 @@ void server::set_routes(routes& r) {
     // consider this to be a security risk, because an attacker can already
     // scan an entire subnet for nodes responding to the health request,
     // or even just scan for open ports.
-    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler);
+    r.put(operation_type::GET, "/localnodes", new local_nodelist_handler(_pending_requests.local()));
 }
 
 //FIXME: A way to immediately invalidate the cache should be considered,
 // e.g. when the system table which stores the keys is changed.
 // For now, this propagation may take up to 1 minute.
 server::server(seastar::sharded<executor>& e)
-        : _executor(e), _key_cache(1024, 1min, slogger), _enforce_authorization(false)
+        : _executor(e), _key_cache(1024, 1min, slogger), _enforce_authorization(false), _enabled_servers{}, _pending_requests{}
       , _callbacks{
         {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, std::unique_ptr<request> req) { return e.create_table(client_state, std::move(trace_state), req->content); }},
         {"DescribeTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, std::unique_ptr<request> req) { return e.describe_table(client_state, std::move(trace_state), req->content); }},
@@ -326,6 +347,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 " must be specified in order to init an alternator HTTP server instance"));
     }
     return seastar::async([this, addr, port, https_port, creds] {
+        _pending_requests.start().get();
         try {
             _executor.invoke_on_all([] (executor& e) {
                 return e.start();
@@ -335,6 +357,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 _control.start().get();
                 _control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1)).get();
                 _control.listen(socket_address{addr, *port}).get();
+                _enabled_servers.push_back(std::ref(_control));
                 slogger.info("Alternator HTTP server listening on {} port {}", addr, *port);
             }
             if (https_port) {
@@ -345,6 +368,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 }).get();
 
                 _https_control.listen(socket_address{addr, *https_port}).get();
+                _enabled_servers.push_back(std::ref(_https_control));
                 slogger.info("Alternator HTTPS server listening on {} port {}", addr, *https_port);
             }
         } catch (...) {
@@ -355,6 +379,20 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                             addr, port ? std::to_string(*port) : "OFF", https_port ? std::to_string(*https_port) : "OFF")));
         }
     });
+}
+
+future<> server::stop() {
+    if (engine().cpu_id() != 0) {
+        return make_ready_future<>();
+    }
+    return parallel_for_each(_enabled_servers, [] (httpd::http_server_control& control) {
+        return control.server().stop();
+    }).then([this] {
+        return _pending_requests.invoke_on_all([] (seastar::gate& pending) {
+            return pending.close();
+        });
+    });
+
 }
 
 }
