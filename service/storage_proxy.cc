@@ -1612,6 +1612,7 @@ void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep
             sm::make_derive(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
                             sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {storage_proxy_stats::current_scheduling_group_label(), datacenter_label(dc), op_type_label(_op_type)})
         });
+        _dc_stats.emplace(dc, stats_counter{});
     }
 }
 
