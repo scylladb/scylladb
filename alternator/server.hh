@@ -41,6 +41,7 @@ class server {
     key_cache _key_cache;
     bool _enforce_authorization;
     utils::small_vector<std::reference_wrapper<seastar::httpd::http_server_control>, 2> _enabled_servers;
+    seastar::sharded<seastar::gate> _pending_requests;
     alternator_callbacks_map _callbacks;
 public:
     server(seastar::sharded<executor>& executor);
