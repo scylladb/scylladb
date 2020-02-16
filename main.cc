@@ -1056,6 +1056,8 @@ int main(int ac, char** av) {
                 }).get();
             }
 
+            static sharded<alternator::executor> alternator_executor;
+            static alternator::server alternator_server(alternator_executor);
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 if (!cfg->check_experimental(db::experimental_features_t::LWT)) {
                     throw std::runtime_error("Alternator enabled, but needs experimental LWT feature which wasn't enabled");
@@ -1066,9 +1068,7 @@ int main(int ac, char** av) {
                 } catch (...) {
                     std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve alternator_address {}", cfg->alternator_address())));
                 }
-                static sharded<alternator::executor> alternator_executor;
                 alternator_executor.start(std::ref(proxy), std::ref(mm)).get();
-                static alternator::server alternator_server(alternator_executor);
                 std::optional<uint16_t> alternator_port;
                 if (cfg->alternator_port()) {
                     alternator_port = cfg->alternator_port();
@@ -1134,6 +1134,13 @@ int main(int ac, char** av) {
 
             auto do_drain = defer_verbose_shutdown("local storage", [] {
                 service::get_local_storage_service().drain_on_shutdown().get();
+            });
+
+            auto stop_alternator = defer_verbose_shutdown("alternator", [cfg] {
+                if (cfg->alternator_port() || cfg->alternator_https_port()) {
+                    alternator_server.stop().get();
+                    alternator_executor.stop().get();
+                }
             });
 
             auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {

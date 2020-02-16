@@ -298,7 +298,7 @@ void server::set_routes(routes& r) {
 // e.g. when the system table which stores the keys is changed.
 // For now, this propagation may take up to 1 minute.
 server::server(seastar::sharded<executor>& e)
-        : _executor(e), _key_cache(1024, 1min, slogger), _enforce_authorization(false)
+        : _executor(e), _key_cache(1024, 1min, slogger), _enforce_authorization(false), _enabled_servers{}
       , _callbacks{
         {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, std::unique_ptr<request> req) { return e.create_table(client_state, std::move(trace_state), req->content); }},
         {"DescribeTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, std::unique_ptr<request> req) { return e.describe_table(client_state, std::move(trace_state), req->content); }},
@@ -335,6 +335,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 _control.start().get();
                 _control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1)).get();
                 _control.listen(socket_address{addr, *port}).get();
+                _enabled_servers.push_back(std::ref(_control));
                 slogger.info("Alternator HTTP server listening on {} port {}", addr, *port);
             }
             if (https_port) {
@@ -345,6 +346,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 }).get();
 
                 _https_control.listen(socket_address{addr, *https_port}).get();
+                _enabled_servers.push_back(std::ref(_https_control));
                 slogger.info("Alternator HTTPS server listening on {} port {}", addr, *https_port);
             }
         } catch (...) {
@@ -354,6 +356,15 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                     format("Failed to set up Alternator HTTP server on {} port {}, TLS port {}",
                             addr, port ? std::to_string(*port) : "OFF", https_port ? std::to_string(*https_port) : "OFF")));
         }
+    });
+}
+
+future<> server::stop() {
+    if (engine().cpu_id() != 0) {
+        return make_ready_future<>();
+    }
+    return parallel_for_each(_enabled_servers, [] (httpd::http_server_control& control) {
+        return control.server().stop();
     });
 }
 
