@@ -49,7 +49,7 @@ metadata::metadata(std::vector<::shared_ptr<column_specification>> names_)
 { }
 
 metadata::metadata(flag_enum_set flags, std::vector<::shared_ptr<column_specification>> names_, uint32_t column_count,
-        ::shared_ptr<const service::pager::paging_state> paging_state)
+        lw_shared_ptr<const service::pager::paging_state> paging_state)
     : _flags(flags)
     , _column_info(make_lw_shared<column_info>(std::move(names_), column_count))
     , _paging_state(std::move(paging_state))
@@ -74,12 +74,12 @@ bool metadata::all_in_same_cf() const {
     return column_specification::all_in_same_table(_column_info->_names);
 }
 
-void metadata::set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state) {
+void metadata::set_paging_state(lw_shared_ptr<const service::pager::paging_state> paging_state) {
     _flags.set<flag::HAS_MORE_PAGES>();
     _paging_state = std::move(paging_state);
 }
 
-void metadata::maybe_set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state) {
+void metadata::maybe_set_paging_state(lw_shared_ptr<const service::pager::paging_state> paging_state) {
     assert(paging_state);
     if (paging_state->get_remaining() > 0) {
         set_paging_state(std::move(paging_state));
@@ -97,7 +97,7 @@ metadata::flag_enum_set metadata::flags() const {
     return _flags;
 }
 
-::shared_ptr<const service::pager::paging_state> metadata::paging_state() const {
+lw_shared_ptr<const service::pager::paging_state> metadata::paging_state() const {
     return _paging_state;
 }
 

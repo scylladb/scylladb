@@ -27,21 +27,21 @@
 namespace cql3 {
 
 shared_ptr<column_specification>
-tuples::component_spec_of(shared_ptr<column_specification> column, size_t component) {
+tuples::component_spec_of(const column_specification& column, size_t component) {
     return ::make_shared<column_specification>(
-            column->ks_name,
-            column->cf_name,
-            ::make_shared<column_identifier>(format("{}[{:d}]", column->name, component), true),
-            static_pointer_cast<const tuple_type_impl>(column->type->underlying_type())->type(component));
+            column.ks_name,
+            column.cf_name,
+            ::make_shared<column_identifier>(format("{}[{:d}]", column.name, component), true),
+            static_pointer_cast<const tuple_type_impl>(column.type->underlying_type())->type(component));
 }
 
 shared_ptr<term>
 tuples::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
-    validate_assignable_to(db, keyspace, receiver);
+    validate_assignable_to(db, keyspace, *receiver);
     std::vector<shared_ptr<term>> values;
     bool all_terminal = true;
     for (size_t i = 0; i < _elements.size(); ++i) {
-        auto&& value = _elements[i]->prepare(db, keyspace, component_spec_of(receiver, i));
+        auto&& value = _elements[i]->prepare(db, keyspace, component_spec_of(*receiver, i));
         if (dynamic_pointer_cast<non_terminal>(value)) {
             all_terminal = false;
         }

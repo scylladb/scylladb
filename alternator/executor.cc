@@ -2706,7 +2706,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
         service::client_state& client_state,
         cql3::cql_stats& cql_stats,
         tracing::trace_state_ptr trace_state) {
-    ::shared_ptr<service::pager::paging_state> paging_state = nullptr;
+    lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
 
     tracing::trace(trace_state, "Performing a database query");
 
@@ -2716,7 +2716,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
         if (schema->clustering_key_size() > 0) {
             ck = ck_from_json(*exclusive_start_key, schema);
         }
-        paging_state = ::make_shared<service::pager::paging_state>(pk, ck, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
+        paging_state = make_lw_shared<service::pager::paging_state>(pk, ck, query::max_partitions, utils::UUID(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 0);
     }
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(

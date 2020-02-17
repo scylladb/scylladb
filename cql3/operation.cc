@@ -68,12 +68,12 @@ operation::set_element::prepare(database& db, const sstring& keyspace, const col
     }
 
     if (rtype->get_kind() == abstract_type::kind::list) {
-        auto&& lval = _value->prepare(db, keyspace, lists::value_spec_of(receiver.column_specification));
+        auto&& lval = _value->prepare(db, keyspace, lists::value_spec_of(*receiver.column_specification));
         if (_by_uuid) {
-            auto&& idx = _selector->prepare(db, keyspace, lists::uuid_index_spec_of(receiver.column_specification));
+            auto&& idx = _selector->prepare(db, keyspace, lists::uuid_index_spec_of(*receiver.column_specification));
             return make_shared<lists::setter_by_uuid>(receiver, idx, lval);
         } else {
-            auto&& idx = _selector->prepare(db, keyspace, lists::index_spec_of(receiver.column_specification));
+            auto&& idx = _selector->prepare(db, keyspace, lists::index_spec_of(*receiver.column_specification));
             return make_shared<lists::setter_by_index>(receiver, idx, lval);
         }
     } else if (rtype->get_kind() == abstract_type::kind::set) {
@@ -115,7 +115,7 @@ operation::set_field::prepare(database& db, const sstring& keyspace, const colum
                 format("UDT column {} does not have a field named {}", receiver.name_as_text(), *_field));
     }
 
-    auto val = _value->prepare(db, keyspace, user_types::field_spec_of(receiver.column_specification, *idx));
+    auto val = _value->prepare(db, keyspace, user_types::field_spec_of(*receiver.column_specification, *idx));
     return make_shared<user_types::setter_by_field>(receiver, *idx, std::move(val));
 }
 
@@ -376,10 +376,10 @@ operation::element_deletion::prepare(database& db, const sstring& keyspace, cons
     }
     auto ctype = static_pointer_cast<const collection_type_impl>(receiver.type);
     if (ctype->get_kind() == abstract_type::kind::list) {
-        auto&& idx = _element->prepare(db, keyspace, lists::index_spec_of(receiver.column_specification));
+        auto&& idx = _element->prepare(db, keyspace, lists::index_spec_of(*receiver.column_specification));
         return make_shared<lists::discarder_by_index>(receiver, std::move(idx));
     } else if (ctype->get_kind() == abstract_type::kind::set) {
-        auto&& elt = _element->prepare(db, keyspace, sets::value_spec_of(receiver.column_specification));
+        auto&& elt = _element->prepare(db, keyspace, sets::value_spec_of(*receiver.column_specification));
         return make_shared<sets::element_discarder>(receiver, std::move(elt));
     } else if (ctype->get_kind() == abstract_type::kind::map) {
         auto&& key = _element->prepare(db, keyspace, maps::key_spec_of(*receiver.column_specification));

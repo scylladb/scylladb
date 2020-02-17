@@ -287,12 +287,13 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
         // later be used to validate the parameter type is compatible with receiver type.
         shared_ptr<column_specification> element_spec;
         auto ctype = static_cast<const collection_type_impl*>(receiver.type.get());
+        const column_specification& recv_column_spec = *receiver.column_specification;
         if (ctype->get_kind() == abstract_type::kind::list) {
-            element_spec = lists::index_spec_of(receiver.column_specification);
-            value_spec = lists::value_spec_of(receiver.column_specification);
+            element_spec = lists::index_spec_of(recv_column_spec);
+            value_spec = lists::value_spec_of(recv_column_spec);
         } else if (ctype->get_kind() == abstract_type::kind::map) {
-            element_spec = maps::key_spec_of(*receiver.column_specification);
-            value_spec = maps::value_spec_of(*receiver.column_specification);
+            element_spec = maps::key_spec_of(recv_column_spec);
+            value_spec = maps::value_spec_of(recv_column_spec);
         } else if (ctype->get_kind() == abstract_type::kind::set) {
             throw exceptions::invalid_request_exception(format("Invalid element access syntax for set column {}",
                         receiver.name_as_text()));

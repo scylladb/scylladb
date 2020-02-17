@@ -139,7 +139,7 @@ public:
      * @return the current paging state. If the pager is exhausted, the result is a valid pointer
      * to a paging_state instance which will return 0 on calling get_remaining() on it.
      */
-    ::shared_ptr<const paging_state> state() const;
+    lw_shared_ptr<const paging_state> state() const;
 
 protected:
     template<typename Base>

@@ -93,13 +93,13 @@ private:
 
 private:
     lw_shared_ptr<column_info> _column_info;
-    ::shared_ptr<const service::pager::paging_state> _paging_state;
+    lw_shared_ptr<const service::pager::paging_state> _paging_state;
 
 public:
     metadata(std::vector<::shared_ptr<column_specification>> names_);
 
     metadata(flag_enum_set flags, std::vector<::shared_ptr<column_specification>> names_, uint32_t column_count,
-            ::shared_ptr<const service::pager::paging_state> paging_state);
+            lw_shared_ptr<const service::pager::paging_state> paging_state);
 
     // The maximum number of values that the ResultSet can hold. This can be bigger than columnCount due to CASSANDRA-4911
     uint32_t value_count() const;
@@ -110,8 +110,8 @@ private:
     bool all_in_same_cf() const;
 
 public:
-    void set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state);
-    void maybe_set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state);
+    void set_paging_state(lw_shared_ptr<const service::pager::paging_state> paging_state);
+    void maybe_set_paging_state(lw_shared_ptr<const service::pager::paging_state> paging_state);
 
     void set_skip_metadata();
 
@@ -119,7 +119,7 @@ public:
 
     uint32_t column_count() const { return _column_info->_column_count; }
 
-    ::shared_ptr<const service::pager::paging_state> paging_state() const;
+    lw_shared_ptr<const service::pager::paging_state> paging_state() const;
 
     const std::vector<::shared_ptr<column_specification>>& get_names() const {
         return _column_info->_names;

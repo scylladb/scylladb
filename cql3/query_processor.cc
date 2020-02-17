@@ -661,7 +661,7 @@ query_options query_processor::make_internal_options(
         }
     }
     if (page_size > 0) {
-        ::shared_ptr<service::pager::paging_state> paging_state;
+        lw_shared_ptr<service::pager::paging_state> paging_state;
         db::consistency_level serial_consistency = db::consistency_level::SERIAL;
         api::timestamp_type ts = api::missing_timestamp;
         return query_options(
@@ -790,7 +790,7 @@ query_processor::execute_paged_internal(::shared_ptr<internal_query_state> state
                         _state->more_results = false;
                     } else {
                         const service::pager::paging_state& st = *rs.get_metadata().paging_state();
-                        shared_ptr<service::pager::paging_state> shrd = ::make_shared<service::pager::paging_state>(st);
+                        lw_shared_ptr<service::pager::paging_state> shrd = make_lw_shared<service::pager::paging_state>(st);
                         _state->opts = std::make_unique<query_options>(std::move(_state->opts), shrd);
                         _state->p = _qp.prepare_internal(_state->query_string);
                     }

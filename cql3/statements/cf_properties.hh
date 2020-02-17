@@ -69,7 +69,7 @@ public:
         return _defined_ordering;
     }
 
-    data_type get_reversable_type(::shared_ptr<column_identifier> t, data_type type) const {
+    data_type get_reversable_type(const column_identifier& t, data_type type) const {
         auto is_reversed = find_ordering_info(t).value_or(false);
         if (!is_reversed && type->is_reversed()) {
             return static_pointer_cast<const reversed_type_impl>(type)->underlying_type();
@@ -80,9 +80,9 @@ public:
         return type;
     }
 
-    std::optional<bool> find_ordering_info(::shared_ptr<column_identifier> type) const {
+    std::optional<bool> find_ordering_info(const column_identifier& type) const {
         for (auto& t: _defined_ordering) {
-            if (*(t.first) == *type) {
+            if (*(t.first) == type) {
                 return t.second;
             }
         }

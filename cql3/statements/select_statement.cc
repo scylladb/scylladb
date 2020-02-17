@@ -474,7 +474,7 @@ indexed_table_select_statement::do_execute_base_query(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state) const {
+        lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     uint32_t queried_ranges_count = partition_ranges.size();
@@ -531,7 +531,7 @@ indexed_table_select_statement::execute_base_query(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state) const {
+        lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(proxy, std::move(partition_ranges), state, options, now, paging_state).then(
             [this, &proxy, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
         return process_base_query_results(std::move(result), std::move(cmd), proxy, state, options, now, std::move(paging_state));
@@ -545,7 +545,7 @@ indexed_table_select_statement::do_execute_base_query(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state) const {
+        lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
 
@@ -607,7 +607,7 @@ indexed_table_select_statement::execute_base_query(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state) const {
+        lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(proxy, std::move(primary_keys), state, options, now, paging_state).then(
             [this, &proxy, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
         return process_base_query_results(std::move(result), std::move(cmd), proxy, state, options, now, std::move(paging_state));
@@ -661,7 +661,7 @@ indexed_table_select_statement::process_base_query_results(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        ::shared_ptr<const service::pager::paging_state> paging_state) const
+        lw_shared_ptr<const service::pager::paging_state> paging_state) const
 {
     if (paging_state) {
         paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, proxy, state, options);
@@ -831,7 +831,7 @@ static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_
     std::move(begin, key_view.end(), std::back_inserter(exploded_index_ck));
 }
 
-::shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(::shared_ptr<const service::pager::paging_state> paging_state,
+lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
         const foreign_ptr<lw_shared_ptr<query::result>>& results, service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
     if (!cdef) {
@@ -876,7 +876,7 @@ static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_
         return std::move(paging_state);
     }
 
-    auto paging_state_copy = ::make_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
+    auto paging_state_copy = make_lw_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
     paging_state_copy->set_partition_key(std::move(index_pk));
     paging_state_copy->set_clustering_key(std::move(index_ck));
     return std::move(paging_state_copy);
@@ -965,18 +965,18 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
 
                 if (whole_partitions || partition_slices) {
                     return find_index_partition_ranges(proxy, state, *internal_options).then(
-                            [this, now, &state, &internal_options, &proxy, consume_results = std::move(consume_results)] (dht::partition_range_vector partition_ranges, ::shared_ptr<const service::pager::paging_state> paging_state) {
+                            [this, now, &state, &internal_options, &proxy, consume_results = std::move(consume_results)] (dht::partition_range_vector partition_ranges, lw_shared_ptr<const service::pager::paging_state> paging_state) {
                         bool has_more_pages = paging_state && paging_state->get_remaining() > 0;
-                        internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? ::make_shared<service::pager::paging_state>(*paging_state) : nullptr));
+                        internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
                         return do_execute_base_query(proxy, std::move(partition_ranges), state, *internal_options, now, std::move(paging_state)).then(consume_results).then([has_more_pages] {
                             return stop_iteration(!has_more_pages);
                         });
                     });
                 } else {
                     return find_index_clustering_rows(proxy, state, *internal_options).then(
-                            [this, now, &state, &internal_options, &proxy, consume_results = std::move(consume_results)] (std::vector<primary_key> primary_keys, ::shared_ptr<const service::pager::paging_state> paging_state) {
+                            [this, now, &state, &internal_options, &proxy, consume_results = std::move(consume_results)] (std::vector<primary_key> primary_keys, lw_shared_ptr<const service::pager::paging_state> paging_state) {
                         bool has_more_pages = paging_state && paging_state->get_remaining() > 0;
-                        internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? ::make_shared<service::pager::paging_state>(*paging_state) : nullptr));
+                        internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
                         return this->do_execute_base_query(proxy, std::move(primary_keys), state, *internal_options, now, std::move(paging_state)).then(consume_results).then([has_more_pages] {
                             return stop_iteration(!has_more_pages);
                         });
@@ -995,13 +995,13 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     if (whole_partitions || partition_slices) {
         // In this case, can use our normal query machinery, which retrieves
         // entire partitions or the same slice for many partitions.
-        return find_index_partition_ranges(proxy, state, options).then([now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges, ::shared_ptr<const service::pager::paging_state> paging_state) {
+        return find_index_partition_ranges(proxy, state, options).then([now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges, lw_shared_ptr<const service::pager::paging_state> paging_state) {
             return this->execute_base_query(proxy, std::move(partition_ranges), state, options, now, std::move(paging_state));
         });
     } else {
         // In this case, we need to retrieve a list of rows (not entire
         // partitions) and then retrieve those specific rows.
-        return find_index_clustering_rows(proxy, state, options).then([now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys, ::shared_ptr<const service::pager::paging_state> paging_state) {
+        return find_index_clustering_rows(proxy, state, options).then([now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys, lw_shared_ptr<const service::pager::paging_state> paging_state) {
             return this->execute_base_query(proxy, std::move(primary_keys), state, options, now, std::move(paging_state));
         });
     }
@@ -1153,7 +1153,7 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
 
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
-future<dht::partition_range_vector, ::shared_ptr<const service::pager::paging_state>>
+future<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>
 indexed_table_select_statement::find_index_partition_ranges(service::storage_proxy& proxy,
                                              service::query_state& state,
                                              const query_options& options) const
@@ -1189,13 +1189,13 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
             partition_ranges.emplace_back(range);
         }
         auto paging_state = rows->rs().get_metadata().paging_state();
-        return make_ready_future<dht::partition_range_vector, ::shared_ptr<const service::pager::paging_state>>(std::move(partition_ranges), std::move(paging_state));
+        return make_ready_future<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>(std::move(partition_ranges), std::move(paging_state));
     });
 }
 
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
-future<std::vector<indexed_table_select_statement::primary_key>, ::shared_ptr<const service::pager::paging_state>>
+future<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>
 indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const
 {
     auto now = gc_clock::now();
@@ -1220,7 +1220,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
             primary_keys.emplace_back(primary_key{std::move(dk), std::move(ck)});
         }
         auto paging_state = rows->rs().get_metadata().paging_state();
-        return make_ready_future<std::vector<indexed_table_select_statement::primary_key>, ::shared_ptr<const service::pager::paging_state>>(std::move(primary_keys), std::move(paging_state));
+        return make_ready_future<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>(std::move(primary_keys), std::move(paging_state));
     });
 }
 
@@ -1357,7 +1357,7 @@ select_statement::prepare_restrictions(database& db,
         return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, std::move(_where_clause), bound_names,
             selection->contains_only_static_columns(), selection->contains_a_collection(), for_view, allow_filtering);
     } catch (const exceptions::unrecognized_entity_exception& e) {
-        if (contains_alias(e.entity)) {
+        if (contains_alias(*e.entity)) {
             throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the where clause ('{}')", e.relation->to_string()));
         }
         throw;
@@ -1415,12 +1415,12 @@ void select_statement::validate_distinct_selection(schema_ptr schema,
     }
 }
 
-void select_statement::handle_unrecognized_ordering_column(::shared_ptr<column_identifier> column)
+void select_statement::handle_unrecognized_ordering_column(const column_identifier& column)
 {
     if (contains_alias(column)) {
-        throw exceptions::invalid_request_exception(format("Aliases are not allowed in order by clause ('{}')", *column));
+        throw exceptions::invalid_request_exception(format("Aliases are not allowed in order by clause ('{}')", column));
     }
-    throw exceptions::invalid_request_exception(format("Order by on unknown column {}", *column));
+    throw exceptions::invalid_request_exception(format("Order by on unknown column {}", column));
 }
 
 select_statement::ordering_comparator_type
@@ -1443,7 +1443,7 @@ select_statement::get_ordering_comparator(schema_ptr schema,
         ::shared_ptr<column_identifier> column = raw->prepare_column_identifier(schema);
         const column_definition* def = schema->get_column_definition(column->name());
         if (!def) {
-            handle_unrecognized_ordering_column(column);
+            handle_unrecognized_ordering_column(*column);
         }
         auto index = selection->index_of(*def);
         if (index < 0) {
@@ -1485,7 +1485,7 @@ bool select_statement::is_reversed(schema_ptr schema) {
 
         auto def = schema->get_column_definition(column->name());
         if (!def) {
-            handle_unrecognized_ordering_column(column);
+            handle_unrecognized_ordering_column(*column);
         }
 
         if (!def->is_clustering_key()) {
@@ -1550,9 +1550,9 @@ void select_statement::ensure_filtering_columns_retrieval(database& db,
     }
 }
 
-bool select_statement::contains_alias(::shared_ptr<column_identifier> name) {
-    return std::any_of(_select_clause.begin(), _select_clause.end(), [name] (auto raw) {
-        return raw->alias && *name == *raw->alias;
+bool select_statement::contains_alias(const column_identifier& name) {
+    return std::any_of(_select_clause.begin(), _select_clause.end(), [&name] (auto raw) {
+        return raw->alias && name == *raw->alias;
     });
 }
 

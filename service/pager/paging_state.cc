@@ -72,7 +72,7 @@ service::pager::paging_state::paging_state(partition_key pk,
     , _rows_fetched_for_last_partition(rows_fetched_for_last_partition) {
 }
 
-::shared_ptr<service::pager::paging_state> service::pager::paging_state::deserialize(
+lw_shared_ptr<service::pager::paging_state> service::pager::paging_state::deserialize(
         bytes_opt data) {
     if (!data) {
         return nullptr;
@@ -87,7 +87,7 @@ service::pager::paging_state::paging_state(partition_key pk,
     seastar::simple_input_stream in(reinterpret_cast<char*>(data.value().begin() + sizeof(uint32_t)), data.value().size() - sizeof(uint32_t));
 
     try {
-        return ::make_shared<paging_state>(ser::deserialize(in, boost::type<paging_state>()));
+        return make_lw_shared<paging_state>(ser::deserialize(in, boost::type<paging_state>()));
     } catch (...) {
         std::throw_with_nested(
                 exceptions::protocol_exception(

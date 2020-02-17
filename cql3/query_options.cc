@@ -130,7 +130,7 @@ query_options::query_options(db::consistency_level cl, const ::timeout_config& t
 {
 }
 
-query_options::query_options(std::unique_ptr<query_options> qo, ::shared_ptr<service::pager::paging_state> paging_state)
+query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<service::pager::paging_state> paging_state)
         : query_options(qo->_cql_config,
         qo->_consistency,
         qo->get_timeout_config(),
@@ -143,7 +143,7 @@ query_options::query_options(std::unique_ptr<query_options> qo, ::shared_ptr<ser
 
 }
 
-query_options::query_options(std::unique_ptr<query_options> qo, ::shared_ptr<service::pager::paging_state> paging_state, int32_t page_size)
+query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<service::pager::paging_state> paging_state, int32_t page_size)
         : query_options(qo->_cql_config,
         qo->_consistency,
         qo->get_timeout_config(),

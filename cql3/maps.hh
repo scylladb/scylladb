@@ -56,8 +56,8 @@ class maps {
 private:
     maps() = delete;
 public:
-    static shared_ptr<column_specification> key_spec_of(column_specification& column);
-    static shared_ptr<column_specification> value_spec_of(column_specification& column);
+    static shared_ptr<column_specification> key_spec_of(const column_specification& column);
+    static shared_ptr<column_specification> value_spec_of(const column_specification& column);
 
     class literal : public term::raw {
     public:
@@ -68,7 +68,7 @@ public:
         { }
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override;
     private:
-        void validate_assignable_to(database& db, const sstring& keyspace, column_specification& receiver) const;
+        void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
     public:
         virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override;
         virtual sstring to_string() const override;

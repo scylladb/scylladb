@@ -31,28 +31,28 @@
 namespace cql3 {
 
 shared_ptr<column_specification>
-lists::index_spec_of(shared_ptr<column_specification> column) {
-    return make_shared<column_specification>(column->ks_name, column->cf_name,
-            ::make_shared<column_identifier>(format("idx({})", *column->name), true), int32_type);
+lists::index_spec_of(const column_specification& column) {
+    return make_shared<column_specification>(column.ks_name, column.cf_name,
+            ::make_shared<column_identifier>(format("idx({})", *column.name), true), int32_type);
 }
 
 shared_ptr<column_specification>
-lists::value_spec_of(shared_ptr<column_specification> column) {
-    return make_shared<column_specification>(column->ks_name, column->cf_name,
-            ::make_shared<column_identifier>(format("value({})", *column->name), true),
-                dynamic_pointer_cast<const list_type_impl>(column->type)->get_elements_type());
+lists::value_spec_of(const column_specification& column) {
+    return make_shared<column_specification>(column.ks_name, column.cf_name,
+            ::make_shared<column_identifier>(format("value({})", *column.name), true),
+                dynamic_pointer_cast<const list_type_impl>(column.type)->get_elements_type());
 }
 
 shared_ptr<column_specification>
-lists::uuid_index_spec_of(shared_ptr<column_specification> column) {
-    return make_shared<column_specification>(column->ks_name, column->cf_name,
-            ::make_shared<column_identifier>(format("uuid_idx({})", *column->name), true), uuid_type);
+lists::uuid_index_spec_of(const column_specification& column) {
+    return make_shared<column_specification>(column.ks_name, column.cf_name,
+            ::make_shared<column_identifier>(format("uuid_idx({})", *column.name), true), uuid_type);
 }
 
 
 shared_ptr<term>
 lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
-    validate_assignable_to(db, keyspace, receiver);
+    validate_assignable_to(db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
     // other words a non-frozen collection only exists if it has elements. Return nullptr right
@@ -62,7 +62,7 @@ lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column
         return cql3::constants::null_literal::NULL_VALUE;
     }
 
-    auto&& value_spec = value_spec_of(receiver);
+    auto&& value_spec = value_spec_of(*receiver);
     std::vector<shared_ptr<term>> values;
     values.reserve(_elements.size());
     bool all_terminal = true;
@@ -86,16 +86,16 @@ lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column
 }
 
 void
-lists::literal::validate_assignable_to(database& db, const sstring keyspace, shared_ptr<column_specification> receiver) const {
-    if (!dynamic_pointer_cast<const list_type_impl>(receiver->type)) {
+lists::literal::validate_assignable_to(database& db, const sstring keyspace, const column_specification& receiver) const {
+    if (!dynamic_pointer_cast<const list_type_impl>(receiver.type)) {
         throw exceptions::invalid_request_exception(format("Invalid list literal for {} of type {}",
-                *receiver->name, receiver->type->as_cql3_type()));
+                *receiver.name, receiver.type->as_cql3_type()));
     }
     auto&& value_spec = value_spec_of(receiver);
     for (auto rt : _elements) {
         if (!is_assignable(rt->test_assignment(db, keyspace, value_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid list literal for {}: value {} is not of type {}",
-                    *receiver->name, *rt, value_spec->type->as_cql3_type()));
+                    *receiver.name, *rt, value_spec->type->as_cql3_type()));
         }
     }
 }
@@ -111,7 +111,7 @@ lists::literal::test_assignment(database& db, const sstring& keyspace, shared_pt
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     }
 
-    auto&& value_spec = value_spec_of(receiver);
+    auto&& value_spec = value_spec_of(*receiver);
     std::vector<shared_ptr<assignment_testable>> to_test;
     to_test.reserve(_elements.size());
     std::copy(_elements.begin(), _elements.end(), std::back_inserter(to_test));
