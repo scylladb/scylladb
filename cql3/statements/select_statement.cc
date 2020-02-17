@@ -503,10 +503,15 @@ indexed_table_select_statement::do_execute_base_query(
             if (old_paging_state && concurrency == 1) {
                 auto base_pk = generate_base_key_from_index_pk<partition_key>(old_paging_state->get_partition_key(),
                         old_paging_state->get_clustering_key(), *_schema, *_view_schema);
+                if (_schema->clustering_key_size() > 0) {
+                    assert(old_paging_state->get_clustering_key().has_value());
                 auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
                         old_paging_state->get_clustering_key(), *_schema, *_view_schema);
                 command->slice.set_range(*_schema, base_pk,
                         std::vector<query::clustering_range>{query::clustering_range::make_starting_with(range_bound<clustering_key>(base_ck, false))});
+                } else {
+                    command->slice.set_range(*_schema, base_pk, std::vector<query::clustering_range>{query::clustering_range::make_open_ended_both_sides()});
+                }
             }
             concurrency *= 2;
             return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
