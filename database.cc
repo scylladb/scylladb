@@ -641,13 +641,8 @@ database::init_commitlog() {
 }
 
 unsigned
-database::shard_of(const dht::token& t) {
-    return dht::shard_of(t);
-}
-
-unsigned
 database::shard_of(const mutation& m) {
-    return shard_of(m.token());
+    return dht::shard_of(*m.schema(), m.token());
 }
 
 unsigned
@@ -656,7 +651,7 @@ database::shard_of(const frozen_mutation& m) {
     // sent the partition key in legacy form or together
     // with token.
     schema_ptr schema = find_schema(m.column_family_id());
-    return shard_of(dht::global_partitioner().get_token(*schema, m.key(*schema)));
+    return dht::shard_of(*schema, dht::get_token(*schema, m.key(*schema)));
 }
 
 void database::add_keyspace(sstring name, keyspace k) {

@@ -162,7 +162,6 @@ expiry_generator no_expiry_expiry_generator();
 /// The generation is deterministic, the same seed will generate the same schema.
 class random_schema {
     schema_ptr _schema;
-    dht::i_partitioner& _partitioner;
 
 private:
     static data_model::mutation_description::key make_key(uint32_t n, value_generator& gen, schema::const_iterator_range_type columns,
@@ -176,7 +175,7 @@ public:
     /// Passing the same seed and spec will yield the same schema. Part of this
     /// guarantee rests on the spec, which, if a custom one is used, should
     /// make sure to honor this guarantee.
-    random_schema(uint32_t seed, random_schema_specification& spec, dht::i_partitioner& partitioner);
+    random_schema(uint32_t seed, random_schema_specification& spec);
 
     schema_ptr schema() const {
         return _schema;

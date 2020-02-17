@@ -338,7 +338,7 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
             return mutation_fragment(range_tombstone(rt));
         },
         [&] (ser::partition_start_view ps) {
-            auto dkey = dht::global_partitioner().decorate_key(s, ps.key());
+            auto dkey = dht::decorate_key(s, ps.key());
             return mutation_fragment(partition_start(std::move(dkey), ps.partition_tombstone()));
         },
         [] (partition_end) {

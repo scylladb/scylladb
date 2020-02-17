@@ -49,6 +49,7 @@
 #include "message/messaging_service.hh"
 #include "range.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/sharder.hh"
 #include "service/priority_manager.hh"
 #include <boost/range/irange.hpp>
 #include "service/storage_service.hh"
@@ -110,7 +111,7 @@ struct send_info {
         return do_with(false, [this] (bool& found_relevant_range) {
             return do_for_each(ranges, [this, &found_relevant_range] (dht::token_range range) {
                 if (!found_relevant_range) {
-                    auto sharder = dht::selective_token_range_sharder(range, engine().cpu_id());
+                    auto sharder = dht::selective_token_range_sharder(cf.schema()->get_partitioner(), range, engine().cpu_id());
                     auto range_shard = sharder.next();
                     if (range_shard) {
                         found_relevant_range = true;

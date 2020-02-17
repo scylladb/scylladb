@@ -90,7 +90,7 @@ static atomic_cell make_collection_member(data_type dt, T value) {
 };
 
 static mutation_partition get_partition(memtable& mt, const partition_key& key) {
-    auto dk = dht::global_partitioner().decorate_key(*mt.schema(), key);
+    auto dk = dht::decorate_key(*mt.schema(), key);
     auto range = dht::partition_range::make_singular(dk);
     auto reader = mt.make_flat_reader(mt.schema(), range);
     auto mo = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
@@ -516,7 +516,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
         {
             auto verify_row = [&] (int32_t c1, int32_t r1) {
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
-                auto p_key = dht::global_partitioner().decorate_key(*s, key);
+                auto p_key = dht::decorate_key(*s, key);
                 auto r = cf.find_row(cf.schema(), p_key, c_key).get0();
                 {
                     BOOST_REQUIRE(r);
@@ -557,7 +557,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             // populate
             auto new_key = [&] {
                 static thread_local int next = 0;
-                return dht::global_partitioner().decorate_key(*s,
+                return dht::decorate_key(*s,
                     partition_key::from_single_value(*s, to_bytes(format("key{:d}", next++))));
             };
             auto make_mutation = [&] {
@@ -1766,7 +1766,7 @@ SEASTAR_TEST_CASE(test_collection_cell_diff) {
             {{"p", utf8_type}}, {}, {{"v", list_type_impl::get_instance(bytes_type, true)}}, {}, utf8_type));
 
         auto& col = s->column_at(column_kind::regular_column, 0);
-        auto k = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key")));
+        auto k = dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key")));
         mutation m1(s, k);
         auto uuid = utils::UUID_gen::get_time_UUID_bytes();
         collection_mutation_description mcol1;
@@ -2943,10 +2943,9 @@ void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_
 } // anonymous namespace
 
 SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
-    auto& partitioner = dht::global_partitioner();
     auto spec = tests::make_random_schema_specification(get_name());
 
-    tests::random_schema random_schema(tests::random::get_int<uint32_t>(), *spec, partitioner);
+    tests::random_schema random_schema(tests::random::get_int<uint32_t>(), *spec);
     const auto& schema = *random_schema.schema();
 
     tlog.info("Random schema:\n{}", random_schema.cql());

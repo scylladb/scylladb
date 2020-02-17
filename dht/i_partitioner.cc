@@ -20,6 +20,7 @@
  */
 
 #include "i_partitioner.hh"
+#include "sharder.hh"
 #include <seastar/core/reactor.hh>
 #include "dht/murmur3_partitioner.hh"
 #include "dht/token-sharding.hh"
@@ -183,8 +184,14 @@ std::ostream& operator<<(std::ostream& out, ring_position_view pos) {
     return out << "}";
 }
 
-unsigned shard_of(const token& t) {
-    return global_partitioner().shard_of(t);
+std::ostream& operator<<(std::ostream& out, const i_partitioner& p) {
+    out << "{partitioner name = " << p.name();
+    out << ", sharding_ignore_msb = " << p.sharding_ignore_msb();
+    return out << "}";
+}
+
+unsigned shard_of(const schema& s, const token& t) {
+    return s.get_partitioner().shard_of(t);
 }
 
 std::optional<dht::token_range>
@@ -241,10 +248,6 @@ ring_position_exponential_sharder::ring_position_exponential_sharder(const i_par
     }
 }
 
-ring_position_exponential_sharder::ring_position_exponential_sharder(partition_range pr)
-        : ring_position_exponential_sharder(global_partitioner(), std::move(pr)) {
-}
-
 std::optional<ring_position_exponential_sharder_result>
 ring_position_exponential_sharder::next(const schema& s) {
     auto ret = ring_position_exponential_sharder_result{};
@@ -289,40 +292,9 @@ ring_position_exponential_sharder::next(const schema& s) {
     return std::make_optional(std::move(ret));
 }
 
-
-ring_position_exponential_vector_sharder::ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>&& ranges) {
-    std::move(ranges.begin(), ranges.end(), std::back_inserter(_ranges));
-    if (!_ranges.empty()) {
-        _current_sharder.emplace(_ranges.front());
-        _ranges.pop_front();
-        ++_element;
-    }
-}
-
-std::optional<ring_position_exponential_vector_sharder_result>
-ring_position_exponential_vector_sharder::next(const schema& s) {
-    if (!_current_sharder) {
-        return std::nullopt;
-    }
-    while (true) {  // yuch
-        auto ret = _current_sharder->next(s);
-        if (ret) {
-            auto augmented = ring_position_exponential_vector_sharder_result{std::move(*ret), _element};
-            return std::make_optional(std::move(augmented));
-        }
-        if (_ranges.empty()) {
-            _current_sharder = std::nullopt;
-            return std::nullopt;
-        }
-        _current_sharder.emplace(_ranges.front());
-        _ranges.pop_front();
-        ++_element;
-    }
-}
-
-
-ring_position_range_vector_sharder::ring_position_range_vector_sharder(dht::partition_range_vector ranges)
+ring_position_range_vector_sharder::ring_position_range_vector_sharder(const dht::i_partitioner& p, dht::partition_range_vector ranges)
         : _ranges(std::move(ranges))
+        , _partitioner(p)
         , _current_range(_ranges.begin()) {
     next_range();
 }
@@ -377,7 +349,7 @@ split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, c
 
 future<utils::chunked_vector<partition_range>>
 split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
-    return split_range_to_single_shard(global_partitioner(), s, pr, shard);
+    return split_range_to_single_shard(s.get_partitioner(), s, pr, shard);
 }
 
 
@@ -463,7 +435,7 @@ to_partition_range(dht::token_range r) {
 std::map<unsigned, dht::partition_range_vector>
 split_range_to_shards(dht::partition_range pr, const schema& s) {
     std::map<unsigned, dht::partition_range_vector> ret;
-    auto sharder = dht::ring_position_range_sharder(std::move(pr));
+    auto sharder = dht::ring_position_range_sharder(s.get_partitioner(), std::move(pr));
     auto rprs = sharder.next(s);
     while (rprs) {
         ret[rprs->shard].emplace_back(rprs->ring_range);
@@ -477,7 +449,7 @@ split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s) {
     std::map<unsigned, dht::partition_range_vector> ret;
     for (const auto& range : ranges) {
         auto pr = dht::to_partition_range(range);
-        auto sharder = dht::ring_position_range_sharder(std::move(pr));
+        auto sharder = dht::ring_position_range_sharder(s.get_partitioner(), std::move(pr));
         auto rprs = sharder.next(s);
         while (rprs) {
             ret[rprs->shard].emplace_back(rprs->ring_range);

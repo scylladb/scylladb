@@ -21,6 +21,7 @@
 
 #include "dht/token-sharding.hh"
 #include "utils/exceptions.hh"
+#include "exceptions/exceptions.hh"
 
 #include "cdc/generation.hh"
 #include "cdc/metadata.hh"

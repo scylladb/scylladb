@@ -249,9 +249,8 @@ public:
     }
 
     void move_to(std::vector<frozen_mutation_and_schema>& mutations) && {
-        auto& partitioner = dht::global_partitioner();
         std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
-            auto mut = mutation(_view, partitioner.decorate_key(*_view, std::move(m.first)), std::move(m.second));
+            auto mut = mutation(_view, dht::decorate_key(*_view, std::move(m.first)), std::move(m.second));
             return frozen_mutation_and_schema{freeze(mut), std::move(_view)};
         });
     }
@@ -1069,9 +1068,8 @@ future<> mutate_MV(
 {
     auto fs = std::make_unique<std::vector<future<>>>();
     fs->reserve(view_updates.size());
-    auto& partitioner = dht::global_partitioner();
     for (frozen_mutation_and_schema& mut : view_updates) {
-        auto view_token = partitioner.get_token(*mut.s, mut.fm.key(*mut.s));
+        auto view_token = dht::get_token(*mut.s, mut.fm.key(*mut.s));
         auto& keyspace_name = mut.s->ks_name();
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);

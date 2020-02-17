@@ -74,7 +74,7 @@ future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy& proxy
     auto ps = partition_slice_builder(*schema).build();
     query::read_command cmd(schema->id(), schema->version(), ps, 1, gc_clock::now(), std::nullopt, 1); 
     auto pkey = partition_key::from_single_value(*schema, key);
-    auto partition_range = dht::partition_range::make_singular(dht::global_partitioner().decorate_key(*schema, std::move(pkey)));
+    auto partition_range = dht::partition_range::make_singular(dht::decorate_key(*schema, std::move(pkey)));
     dht::partition_range_vector partition_ranges;
     partition_ranges.emplace_back(std::move(partition_range));
     auto read_consistency_level = options.get_read_consistency_level();

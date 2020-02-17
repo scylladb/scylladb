@@ -340,7 +340,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
 
     if (db::is_serial_consistency(options.get_consistency())) {
-        unsigned shard = dht::shard_of(key_ranges[0].start()->value().as_decorated_key().token());
+        unsigned shard = dht::shard_of(*_schema, key_ranges[0].start()->value().as_decorated_key().token());
         if (engine().cpu_id() != shard) {
             proxy.get_stats().replica_cross_shard_ops++;
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
@@ -861,8 +861,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     if (_index.metadata().local()) {
         exploded_index_ck.push_back(bytes_view(*indexed_column_value));
     } else {
-        dht::i_partitioner& partitioner = dht::global_partitioner();
-        token_bytes = partitioner.get_token(*_schema, last_base_pk).data();
+        token_bytes = dht::get_token(*_schema, last_base_pk).data();
         exploded_index_ck.push_back(bytes_view(token_bytes));
         append_base_key_to_index_ck<partition_key>(exploded_index_ck, last_base_pk, *cdef);
     }
@@ -1022,7 +1021,7 @@ dht::partition_range_vector indexed_table_select_statement::get_partition_ranges
     bytes_opt value = _used_index_restrictions->value_for(*cdef, options);
     if (value) {
         auto pk = partition_key::from_single_value(*_view_schema, *value);
-        auto dk = dht::global_partitioner().decorate_key(*_view_schema, pk);
+        auto dk = dht::decorate_key(*_view_schema, pk);
         auto range = dht::partition_range::make_singular(dk);
         partition_ranges.emplace_back(range);
     }
@@ -1041,7 +1040,7 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
             // Computed token column needs to be added to index view restrictions
             const column_definition& token_cdef = *_view_schema->clustering_key_columns().begin();
             auto base_pk = partition_key::from_optional_exploded(*_schema, _restrictions->get_partition_key_restrictions()->values(options));
-            bytes token_value = dht::global_partitioner().get_token(*_schema, base_pk).data();
+            bytes token_value = dht::get_token(*_schema, base_pk).data();
             auto token_restriction = ::make_shared<restrictions::single_column_restriction::EQ>(token_cdef, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value)));
             clustering_restrictions->merge_with(token_restriction);
 
@@ -1178,7 +1177,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
                 pk_columns.push_back(row.get_blob(column->name->to_string()));
             }
             auto pk = partition_key::from_exploded(*_schema, pk_columns);
-            auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+            auto dk = dht::decorate_key(*_schema, pk);
             if (last_dk && last_dk->equal(*_schema, dk)) {
                 // Another row of the same partition, no need to output the
                 // same partition key again.
@@ -1212,7 +1211,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
                 return row.get_blob(cdef.name_as_text());
             });
             auto pk = partition_key::from_range(pk_columns);
-            auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+            auto dk = dht::decorate_key(*_schema, pk);
             auto ck_columns = _schema->clustering_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
                 return row.get_blob(cdef.name_as_text());
             });

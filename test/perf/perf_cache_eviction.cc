@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
 
             auto make_pkey = [s] (sstring pk) {
                 auto key = partition_key::from_single_value(*s, serialized(pk));
-                return dht::global_partitioner().decorate_key(*s, key);
+                return dht::decorate_key(*s, key);
             };
 
             auto pkey = make_pkey("key1");

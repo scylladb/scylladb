@@ -377,7 +377,7 @@ static partition_generation_result generate_partitions(
     const auto part_count = pop_gen.partition_count();
     for (size_t i = 0; i < part_count; ++i) {
         auto part_gen = pop_gen.make_partition_content_generator();
-        partition_description part_desc(dht::global_partitioner().decorate_key(schema, part_gen->generate_partition_key(schema)));
+        partition_description part_desc(dht::decorate_key(schema, part_gen->generate_partition_key(schema)));
         written_bytes += part_desc.dkey.key().external_memory_usage();
 
         {

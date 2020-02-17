@@ -123,7 +123,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
 
         auto mt = make_lw_shared<memtable>(s);
         while (mt->occupancy().total_space() < memtable_size) {
-            auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
+            auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
                 serialized(utils::UUID_gen::get_time_UUID())));
             mutation m = gen();
             mt->apply(m);
@@ -204,7 +204,7 @@ void test_small_partitions() {
         .build();
 
     run_test("Small partitions, no overwrites", s, [&] {
-        auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
+        auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
             serialized(utils::UUID_gen::get_time_UUID())));
         mutation m(s, pk);
         auto val = data_value(bytes(bytes::initialized_later(), cell_size));
@@ -224,7 +224,7 @@ void test_partition_with_lots_of_small_rows() {
         .with_column("v3", bytes_type, column_kind::regular_column)
         .build();
 
-    auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
+    auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
         serialized(utils::UUID_gen::get_time_UUID())));
     int ck_idx = 0;
 
@@ -249,7 +249,7 @@ void test_partition_with_few_small_rows() {
         .build();
 
     run_test("Small partition with a few rows", s, [&] {
-        auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
+        auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
             serialized(utils::UUID_gen::get_time_UUID())));
 
         mutation m(s, pk);
@@ -274,7 +274,7 @@ void test_partition_with_lots_of_range_tombstones() {
         .with_column("v3", bytes_type, column_kind::regular_column)
         .build();
 
-    auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s,
+    auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
         serialized(utils::UUID_gen::get_time_UUID())));
     int ck_idx = 0;
 

@@ -63,7 +63,7 @@ public:
 
     bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override {
         auto key = partition_key::from_optional_exploded(*_schema, parameters);
-        auto tok = dht::global_partitioner().get_token(*_schema, key);
+        auto tok = dht::get_token(*_schema, key);
         warn(unimplemented::cause::VALIDATION);
         return tok.data();
     }

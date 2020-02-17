@@ -1722,11 +1722,12 @@ static std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(un
 
     key_and_token_pair.reserve(tokens_to_generate);
     dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp_count, ignore_msb);
+    dht::murmur3_partitioner partitioner(smp_count, ignore_msb);
 
     while (tokens < tokens_to_generate) {
         sstring key = to_sstring(key_id++);
-        dht::token token = create_token_from_key(key);
-        if (shard != dht::global_partitioner().shard_of(token)) {
+        dht::token token = create_token_from_key(partitioner, key);
+        if (shard != partitioner.shard_of(token)) {
             continue;
         }
         tokens++;
@@ -1770,9 +1771,10 @@ static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_p
 
 // ranges: [a,b] and [c,d]
 // returns true if token ranges overlap.
-static bool key_range_overlaps(sstring a, sstring b, sstring c, sstring d) {
-    auto range1 = create_token_range_from_keys(a, b);
-    auto range2 = create_token_range_from_keys(c, d);
+static bool key_range_overlaps(column_family_for_tests& cf, sstring a, sstring b, sstring c, sstring d) {
+    dht::i_partitioner& p = cf->schema()->get_partitioner();
+    auto range1 = create_token_range_from_keys(p, a, b);
+    auto range2 = create_token_range_from_keys(p, c, d);
     return range1.overlaps(range2, dht::token_comparator());
 }
 
@@ -1809,7 +1811,7 @@ SEASTAR_TEST_CASE(leveled_01) {
     add_sstable_for_leveled_test(env, cf, /*gen*/2, max_sstable_size, /*level*/0, key_and_token_pair[1].first, max_key);
     BOOST_REQUIRE(cf->get_sstables()->size() == 2);
 
-    BOOST_REQUIRE(key_range_overlaps(min_key, max_key, key_and_token_pair[1].first, max_key) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, max_key, key_and_token_pair[1].first, max_key) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
@@ -1856,9 +1858,9 @@ SEASTAR_TEST_CASE(leveled_02) {
     add_sstable_for_leveled_test(env, cf, /*gen*/3, max_sstable_size, /*level*/0, key_and_token_pair[30].first, max_key);
     BOOST_REQUIRE(cf->get_sstables()->size() == 3);
 
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[20].first, key_and_token_pair[30].first, max_key) == false);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, key_and_token_pair[30].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[20].first, key_and_token_pair[30].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, key_and_token_pair[30].first, max_key) == false);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 2, 1) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 3) == false);
@@ -1904,11 +1906,11 @@ SEASTAR_TEST_CASE(leveled_03) {
 
     BOOST_REQUIRE(cf->get_sstables()->size() == 4);
 
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[30].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[20].first, min_key, key_and_token_pair[30].first) == true);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, key_and_token_pair[40].first, max_key) == false);
-    BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[30].first, key_and_token_pair[40].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[30].first) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[20].first, min_key, key_and_token_pair[30].first) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[10].first, key_and_token_pair[40].first, max_key) == false);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, key_and_token_pair[30].first, key_and_token_pair[40].first, max_key) == false);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 3) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 2, 3) == true);
@@ -1968,7 +1970,7 @@ SEASTAR_TEST_CASE(leveled_04) {
 
     BOOST_REQUIRE(cf->get_sstables()->size() == 4);
 
-    BOOST_REQUIRE(key_range_overlaps(min_key, max_key, min_key, max_key) == true);
+    BOOST_REQUIRE(key_range_overlaps(cf, min_key, max_key, min_key, max_key) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 3) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 2, 3) == false);
@@ -2709,7 +2711,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
             .build();
         clustering_key::equality ck_eq(*s);
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
-        auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
+        auto dkey = dht::decorate_key(*s, std::move(pkey));
 
         auto sst = env.make_sstable(s, get_test_dir("wrong_range_tombstone_order", s), 1, version, big);
         sst->load().get0();
@@ -3307,7 +3309,7 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
         sst->load().get0();
 
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
-        auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
+        auto dkey = dht::decorate_key(*s, std::move(pkey));
 
         auto rd = make_normalizing_sstable_reader(sst, s);
         using kind = mutation_fragment::kind;
@@ -3590,7 +3592,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
         std::vector<dht::decorated_key> keys;
         for (int i = 0; i < 10; i++) {
             auto pk = partition_key::from_single_value(*s, int32_type->decompose(i));
-            keys.emplace_back(dht::global_partitioner().decorate_key(*s, std::move(pk)));
+            keys.emplace_back(dht::decorate_key(*s, std::move(pk)));
         }
         dht::decorated_key::less_comparator cmp(s);
         std::sort(keys.begin(), keys.end(), cmp);
@@ -3890,7 +3892,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
             key_and_token_pair | boost::adaptors::transformed([&s] (const std::pair<sstring, dht::token>& key_and_token) {
                 auto value = bytes(reinterpret_cast<const signed char*>(key_and_token.first.data()), key_and_token.first.size());
                 auto pk = sstables::key::from_bytes(value).to_partition_key(*s);
-                return dht::global_partitioner().decorate_key(*s, std::move(pk));
+                return dht::decorate_key(*s, std::move(pk));
             }));
 
     auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<int64_t> expected_gens) {
@@ -4528,7 +4530,7 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
                 sst->load().get0();
 
                 auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
-                auto dk = dht::global_partitioner().decorate_key(*s, pk);
+                auto dk = dht::decorate_key(*s, pk);
                 auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
                 mutation m(s, dk);
                 m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(1), { }));
@@ -5190,7 +5192,7 @@ SEASTAR_TEST_CASE(test_reads_cassandra_static_compact) {
         sst->load().get0();
 
         auto pkey = partition_key::from_exploded(*s, { utf8_type->decompose("a") });
-        auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
+        auto dkey = dht::decorate_key(*s, std::move(pkey));
         mutation m(s, dkey);
         m.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("c1"),
                     atomic_cell::make_live(*utf8_type, 1551785032379079, utf8_type->decompose("abc"), {}));

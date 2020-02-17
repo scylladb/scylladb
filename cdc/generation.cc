@@ -26,9 +26,9 @@
 
 #include "keys.hh"
 #include "schema_builder.hh"
+#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
-#include "dht/i_partitioner.hh"
 #include "dht/token-sharding.hh"
 #include "locator/token_metadata.hh"
 #include "gms/application_state.hh"
@@ -119,9 +119,9 @@ static stream_id make_random_stream_id() {
  */
 // Run in seastar::async context.
 topology_description generate_topology_description(
+        const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata& token_metadata,
-        const dht::i_partitioner& partitioner,
         const gms::gossiper& gossiper) {
     if (bootstrap_tokens.empty()) {
         throw std::runtime_error(
@@ -142,7 +142,7 @@ topology_description generate_topology_description(
 
         if (bootstrap_tokens.count(entry.token_range_end) > 0) {
             entry.streams.resize(smp::count);
-            entry.sharding_ignore_msb = partitioner.sharding_ignore_msb();
+            entry.sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits();
         } else {
             auto endpoint = token_metadata.get_endpoint(entry.token_range_end);
             if (!endpoint) {
@@ -172,7 +172,7 @@ topology_description generate_topology_description(
     repeat([&] {
         for (int i = 0; i < 500; ++i) {
             auto stream_id = make_random_stream_id();
-            auto token = partitioner.get_token(*schema, stream_id.to_partition_key(*schema));
+            auto token = dht::get_token(*schema, stream_id.to_partition_key(*schema));
 
             // Find the token range into which our stream_id's token landed.
             auto it = std::lower_bound(tokens.begin(), tokens.end(), token);
@@ -293,6 +293,7 @@ future<db_clock::time_point> get_local_streams_timestamp() {
 
 // Run inside seastar::async context.
 db_clock::time_point make_new_cdc_generation(
+        const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata& tm,
         const gms::gossiper& g,
@@ -301,8 +302,7 @@ db_clock::time_point make_new_cdc_generation(
         bool for_testing) {
     assert(!bootstrap_tokens.empty());
 
-    auto gen = generate_topology_description(
-            bootstrap_tokens, tm, dht::global_partitioner(), g);
+    auto gen = generate_topology_description(cfg, bootstrap_tokens, tm, g);
 
     // Begin the race.
     auto ts = db_clock::now() + (

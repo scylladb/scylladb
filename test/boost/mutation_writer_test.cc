@@ -60,25 +60,25 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                 auto muts = gen(partition_nr);
                 std::vector<size_t> shards_before(smp::count, 0);
                 std::vector<size_t> shards_after(smp::count, 0);
+                schema_ptr s = gen.schema();
 
                 for (auto& m : muts) {
-                    auto shard = dht::global_partitioner().shard_of(m.token());
+                    auto shard = s->get_partitioner().shard_of(m.token());
                     shards_before[shard]++;
                 }
-                schema_ptr s = gen.schema();
                 auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(muts) : make_empty_flat_reader(s);
+                auto& partitioner = s->get_partitioner();
                 size_t partitions_received = distribute_reader_and_consume_on_shards(s,
-                    dht::global_partitioner(),
                     std::move(source_reader),
-                    [&shards_after, error] (flat_mutation_reader reader) mutable {
+                    [&partitioner, &shards_after, error] (flat_mutation_reader reader) mutable {
                         if (error) {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
                         }
-                        return repeat([&shards_after, reader = std::move(reader), error] () mutable {
-                            return reader(db::no_timeout).then([&shards_after, error] (mutation_fragment_opt mf_opt) mutable {
+                        return repeat([&partitioner, &shards_after, reader = std::move(reader), error] () mutable {
+                            return reader(db::no_timeout).then([&partitioner, &shards_after, error] (mutation_fragment_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
-                                        auto shard = dht::global_partitioner().shard_of(mf_opt->as_partition_start().key().token());
+                                        auto shard = partitioner.shard_of(mf_opt->as_partition_start().key().token());
                                         BOOST_REQUIRE_EQUAL(shard, engine().cpu_id());
                                         shards_after[shard]++;
                                     }
@@ -238,7 +238,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
             std::uniform_int_distribution<size_t>(2, 4),
             std::uniform_int_distribution<size_t>(2, 8),
             std::uniform_int_distribution<size_t>(2, 8));
-    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec, dht::global_partitioner()};
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
 
     tlog.info("Random schema:\n{}", random_schema.cql());
 

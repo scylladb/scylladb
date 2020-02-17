@@ -744,8 +744,8 @@ public:
     }
 
     virtual flat_mutation_reader::filter make_partition_filter() const override {
-        return [] (const dht::decorated_key& dk){
-            return dht::shard_of(dk.token()) == engine().cpu_id();
+        return [&s = *_schema] (const dht::decorated_key& dk){
+            return dht::shard_of(s, dk.token()) == engine().cpu_id();
         };
     }
 
@@ -889,7 +889,7 @@ public:
         dht::token_range_vector owned_ranges = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
 
         return [this, owned_ranges = std::move(owned_ranges)] (const dht::decorated_key& dk) {
-            if (dht::shard_of(dk.token()) != engine().cpu_id()) {
+            if (dht::shard_of(*_schema, dk.token()) != engine().cpu_id()) {
                 clogger.trace("Token {} does not belong to CPU {}, skipping", dk.token(), engine().cpu_id());
                 return false;
             }
@@ -1192,7 +1192,7 @@ public:
     }
 
     sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
-        _shard = dht::shard_of(dk.token());
+        _shard = dht::shard_of(*_schema, dk.token());
         auto& sst = _output_sstables[_shard].first;
         auto& writer = _output_sstables[_shard].second;
 

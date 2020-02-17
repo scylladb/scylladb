@@ -50,7 +50,6 @@ public:
 class multishard_writer {
 private:
     schema_ptr _s;
-    dht::i_partitioner& _partitioner;
     std::vector<foreign_ptr<std::unique_ptr<shard_writer>>> _shard_writers;
     std::vector<future<>> _pending_consumers;
     std::vector<std::optional<queue_reader_handle>> _queue_reader_handles;
@@ -60,7 +59,7 @@ private:
     std::function<future<> (flat_mutation_reader)> _consumer;
 private:
     unsigned shard_for_mf(const mutation_fragment& mf) {
-        return _partitioner.shard_of(mf.as_partition_start().key().token());
+        return _s->get_partitioner().shard_of(mf.as_partition_start().key().token());
     }
     future<> make_shard_writer(unsigned shard);
     future<stop_iteration> handle_mutation_fragment(mutation_fragment mf);
@@ -71,7 +70,6 @@ private:
 public:
     multishard_writer(
         schema_ptr s,
-        dht::i_partitioner& partitioner,
         flat_mutation_reader producer,
         std::function<future<> (flat_mutation_reader)> consumer);
     future<uint64_t> operator()();
@@ -96,15 +94,13 @@ future<> shard_writer::consume() {
 
 multishard_writer::multishard_writer(
     schema_ptr s,
-    dht::i_partitioner& partitioner,
     flat_mutation_reader producer,
     std::function<future<> (flat_mutation_reader)> consumer)
     : _s(std::move(s))
-    , _partitioner(partitioner)
-    , _queue_reader_handles(_partitioner.shard_count())
+    , _queue_reader_handles(_s->get_partitioner().shard_count())
     , _producer(std::move(producer))
     , _consumer(std::move(consumer)) {
-    _shard_writers.resize(_partitioner.shard_count());
+    _shard_writers.resize(_s->get_partitioner().shard_count());
 }
 
 future<> multishard_writer::make_shard_writer(unsigned shard) {
@@ -141,7 +137,7 @@ future<stop_iteration> multishard_writer::handle_mutation_fragment(mutation_frag
 }
 
 future<stop_iteration> multishard_writer::handle_end_of_stream() {
-    return parallel_for_each(boost::irange(0u, _partitioner.shard_count()), [this] (unsigned shard) {
+    return parallel_for_each(boost::irange(0u, _s->get_partitioner().shard_count()), [this] (unsigned shard) {
         if (_queue_reader_handles[shard]) {
             _queue_reader_handles[shard]->push_end_of_stream();
         }
@@ -189,11 +185,10 @@ future<uint64_t> multishard_writer::operator()() {
 }
 
 future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
-    dht::i_partitioner& partitioner,
     flat_mutation_reader producer,
     std::function<future<> (flat_mutation_reader)> consumer,
     utils::phased_barrier::operation&& op) {
-    return do_with(multishard_writer(std::move(s), partitioner, std::move(producer), std::move(consumer)), std::move(op), [] (multishard_writer& writer, utils::phased_barrier::operation&) {
+    return do_with(multishard_writer(std::move(s), std::move(producer), std::move(consumer)), std::move(op), [] (multishard_writer& writer, utils::phased_barrier::operation&) {
         return writer();
     });
 }

@@ -12,6 +12,7 @@
 #include <seastar/testing/test_case.hh>
 #include "schema.hh"
 #include "database.hh"
+#include "dht/murmur3_partitioner.hh"
 #include "sstables/compaction_manager.hh"
 #include "mutation_reader.hh"
 #include "test/boost/sstable_test.hh"
@@ -30,12 +31,12 @@ static inline std::vector<std::pair<sstring, dht::token>> token_generation_for_s
     std::vector<std::pair<sstring, dht::token>> key_and_token_pair;
 
     key_and_token_pair.reserve(tokens_to_generate);
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
+    dht::murmur3_partitioner partitioner(smp::count, 12);
 
     while (tokens < tokens_to_generate) {
         sstring key = to_sstring(key_id++);
-        dht::token token = create_token_from_key(key);
-        if (shard != dht::global_partitioner().shard_of(token)) {
+        dht::token token = create_token_from_key(partitioner, key);
+        if (shard != partitioner.shard_of(token)) {
             continue;
         }
         tokens++;

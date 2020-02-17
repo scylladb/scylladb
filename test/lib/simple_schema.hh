@@ -102,7 +102,7 @@ public:
 
     dht::decorated_key make_pkey(sstring pk) {
         auto key = partition_key::from_single_value(*_s, serialized(pk));
-        return dht::global_partitioner().decorate_key(*_s, key);
+        return dht::decorate_key(*_s, key);
     }
 
     api::timestamp_type add_row(mutation& m, const clustering_key& key, const sstring& v, api::timestamp_type t = api::missing_timestamp) {

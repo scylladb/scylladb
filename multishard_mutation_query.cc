@@ -353,7 +353,7 @@ future<> read_context::stop() {
 
 read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer,
         const dht::decorated_key& pkey) {
-    auto& partitioner = dht::global_partitioner();
+    auto& partitioner = _schema->get_partitioner();
 
     std::vector<mutation_fragment> tmp_buffer;
     dismantle_buffer_stats stats;
@@ -401,7 +401,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
 
 read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(detached_compaction_state compaction_state) {
     auto stats = dismantle_buffer_stats();
-    auto& partitioner = dht::global_partitioner();
+    auto& partitioner = _schema->get_partitioner();
     const auto shard = partitioner.shard_of(compaction_state.partition_start.key().token());
 
     // It is possible that the reader this partition originates from does not
@@ -592,7 +592,8 @@ static future<reconcilable_result> do_query_mutations(
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding,
                     mutation_reader::forwarding fwd_mr) {
-                return make_multishard_combining_reader(ctx, dht::global_partitioner(), std::move(s), pr, ps, pc, std::move(trace_state), fwd_mr);
+                    auto& partitioner = s->get_partitioner();
+                return make_multishard_combining_reader(ctx, partitioner, std::move(s), pr, ps, pc, std::move(trace_state), fwd_mr);
             });
             auto reader = make_flat_multi_range_reader(s, std::move(ms), ranges, cmd.slice,
                     service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);

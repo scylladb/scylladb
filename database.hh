@@ -1463,7 +1463,6 @@ public:
     future<> close_tables(table_kind kind_to_close);
 
     future<> stop_large_data_handler();
-    unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>, cache_temperature> query(schema_ptr, const query::read_command& cmd, query::result_options opts,

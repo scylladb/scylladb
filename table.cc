@@ -53,11 +53,6 @@ using namespace std::chrono_literals;
 
 sstables::sstable::version_types get_highest_supported_format();
 
-static
-bool belongs_to_current_shard(const dht::decorated_key& dk) {
-    return dht::shard_of(dk.token()) == engine().cpu_id();
-}
-
 // Stores ranges for all components of the same clustering key, index 0 referring to component
 // range 0, and so on.
 using ck_filter_clustering_key_components = std::vector<nonwrapping_range<bytes_view>>;
@@ -350,7 +345,7 @@ table::make_sstable_reader(schema_ptr s,
     auto ms = [&] () -> mutation_source {
         if (pr.is_singular() && pr.start()->value().has_key()) {
             const dht::ring_position& pos = pr.start()->value();
-            if (dht::shard_of(pos.token()) != engine().cpu_id()) {
+            if (dht::shard_of(*s, pos.token()) != engine().cpu_id()) {
                 return mutation_source([] (
                         schema_ptr s,
                         reader_permit permit,
@@ -416,7 +411,7 @@ table::find_partition(schema_ptr s, const dht::decorated_key& key) const {
 
 future<table::const_mutation_partition_ptr>
 table::find_partition_slow(schema_ptr s, const partition_key& key) const {
-    return find_partition(s, dht::global_partitioner().decorate_key(*s, key));
+    return find_partition(s, dht::decorate_key(*s, key));
 }
 
 future<table::const_row_ptr>
@@ -593,8 +588,10 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         flat_mutation_reader reader = sst->read_range_rows_flat(s, permit, pr, slice, pc,
                 trace_state, fwd, fwd_mr, monitor_generator(sst));
         if (sst->is_shared()) {
-            using sig = bool (&)(const dht::decorated_key&);
-            reader = make_filtering_reader(std::move(reader), sig(belongs_to_current_shard));
+            auto filter = [&s = *s](const dht::decorated_key& dk) -> bool {
+                return dht::shard_of(s, dk.token()) == engine().cpu_id();
+            };
+            reader = make_filtering_reader(std::move(reader), std::move(filter));
         }
         return reader;
     };
@@ -1429,7 +1426,7 @@ future<std::unordered_set<sstring>> table::get_sstables_by_partition_key(const s
     return do_with(std::unordered_set<sstring>(), lw_shared_ptr<sstables::sstable_set::incremental_selector>(make_lw_shared(get_sstable_set().make_incremental_selector())),
             partition_key(partition_key::from_nodetool_style_string(_schema, key)),
             [this] (std::unordered_set<sstring>& filenames, lw_shared_ptr<sstables::sstable_set::incremental_selector>& sel, partition_key& pk) {
-        return do_with(dht::decorated_key(dht::global_partitioner().decorate_key(*_schema, pk)),
+        return do_with(dht::decorated_key(dht::decorate_key(*_schema, pk)),
                 [this, &filenames, &sel, &pk](dht::decorated_key& dk) mutable {
             auto sst = sel->select(dk).sstables;
             auto hk = sstables::sstable::make_hashed_key(*_schema, dk.key());

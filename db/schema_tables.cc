@@ -735,7 +735,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
     lw_shared_ptr<query::read_command> cmd,
     partition_key pkey)
 {
-    auto dk = dht::global_partitioner().decorate_key(*s, pkey);
+    auto dk = dht::decorate_key(*s, pkey);
     return do_with(dht::partition_range::make_singular(dk), [&proxy, dk, s = std::move(s), cmd = std::move(cmd)] (auto& range) {
         return proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout)
                 .then([dk = std::move(dk), s](rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> res_hit_rate) {
@@ -756,7 +756,7 @@ future<schema_result_value_type>
 read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
 {
     auto schema = proxy.local().get_db().local().find_schema(NAME, schema_table_name);
-    auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
+    auto keyspace_key = dht::decorate_key(*schema,
         partition_key::from_singular(*schema, keyspace_name));
     return db::system_keyspace::query(proxy, NAME, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
         return schema_result_value_type{keyspace_name, std::move(rs)};
@@ -826,7 +826,7 @@ future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mu
 // Returns names of live table definitions of given keyspace
 future<std::vector<sstring>>
 static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {
-    auto pkey = dht::global_partitioner().decorate_key(*schema_table, partition_key::from_singular(*schema_table, keyspace_name));
+    auto pkey = dht::decorate_key(*schema_table, partition_key::from_singular(*schema_table, keyspace_name));
     return db::system_keyspace::query(proxy, schema_table->ks_name(), schema_table->cf_name(), pkey).then([schema_table] (auto&& rs) {
         return boost::copy_range<std::vector<sstring>>(rs->rows() | boost::adaptors::transformed([schema_table] (const query::result_set_row& row) {
             const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();

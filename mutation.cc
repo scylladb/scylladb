@@ -32,7 +32,7 @@ mutation::data::data(dht::decorated_key&& key, schema_ptr&& schema)
 
 mutation::data::data(partition_key&& key_, schema_ptr&& schema)
     : _schema(std::move(schema))
-    , _dk(dht::global_partitioner().decorate_key(*_schema, std::move(key_)))
+    , _dk(dht::decorate_key(*_schema, std::move(key_)))
     , _p(_schema)
 { }
 

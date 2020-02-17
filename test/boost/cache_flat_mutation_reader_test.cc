@@ -61,7 +61,7 @@ static partition_key make_pk(int value) {
 
 static const thread_local partition_key PK = make_pk(0);
 static const thread_local dht::decorated_key DK =
-    dht::global_partitioner().decorate_key(*SCHEMA, PK);
+    dht::decorate_key(*SCHEMA, PK);
 
 static clustering_key make_ck(int value) {
     return clustering_key_prefix::from_single_value(*SCHEMA, int32_type->decompose(value));

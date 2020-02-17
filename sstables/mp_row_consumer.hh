@@ -411,7 +411,7 @@ public:
         }
         auto pk = partition_key::from_exploded(key.explode(*_schema));
         setup_for_partition(pk);
-        auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+        auto dk = dht::decorate_key(*_schema, pk);
         _reader->on_next_partition(std::move(dk), tombstone(deltime));
         return proceed::yes;
     }
@@ -1105,7 +1105,7 @@ public:
         }
         auto pk = partition_key::from_exploded(key.explode(*_schema));
         setup_for_partition(pk);
-        auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+        auto dk = dht::decorate_key(*_schema, pk);
         _reader->on_next_partition(std::move(dk), tombstone(deltime));
         return proceed::yes;
     }

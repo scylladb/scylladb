@@ -25,6 +25,7 @@
 #include "mutation_fragment.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/sharder.hh"
 #include "to_string.hh"
 #include "xx_hasher.hh"
 #include "dht/i_partitioner.hh"
@@ -495,7 +496,7 @@ public:
         };
         auto& db = service::get_local_storage_service().db();
         table& t = db.local().find_column_family(_schema->id());
-        _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema, dht::global_partitioner(),
+        _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema,
                 make_generating_reader(_schema, std::move(get_next_mutation_fragment)),
                 [&db, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
             auto& t = db.local().find_column_family(reader.schema());
@@ -676,7 +677,7 @@ public:
                     _cf,
                     _schema,
                     _range,
-                    dht::global_partitioner(),
+                    _schema->get_partitioner(),
                     *_remote_partitioner,
                     _master_node_shard_config.shard,
                     _seed,
@@ -943,9 +944,9 @@ private:
     bool is_same_sharding_config() {
         rlogger.debug("is_same_sharding_config: remote_partitioner_name={}, remote_shard={}, remote_shard_count={}, remote_ignore_msb={}",
                 _master_node_shard_config.partitioner_name, _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb);
-        return dht::global_partitioner().name() == _master_node_shard_config.partitioner_name
-               && dht::global_partitioner().shard_count() == _master_node_shard_config.shard_count
-               && dht::global_partitioner().sharding_ignore_msb() == _master_node_shard_config.ignore_msb
+        return _schema->get_partitioner().name() == _master_node_shard_config.partitioner_name
+               && _schema->get_partitioner().shard_count() == _master_node_shard_config.shard_count
+               && _schema->get_partitioner().sharding_ignore_msb() == _master_node_shard_config.ignore_msb
                && engine().cpu_id() == _master_node_shard_config.shard;
     }
 
@@ -1256,7 +1257,7 @@ private:
         return do_with(std::move(rows), std::list<repair_row>(), lw_shared_ptr<const decorated_key_with_hash>(), lw_shared_ptr<mutation_fragment>(), position_in_partition::tri_compare(*_schema),
           [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list, lw_shared_ptr<const decorated_key_with_hash>& dk_ptr, lw_shared_ptr<mutation_fragment>& last_mf, position_in_partition::tri_compare& cmp) mutable {
             return do_for_each(rows, [this, &dk_ptr, &row_list, &last_mf, &cmp] (partition_key_and_mutation_fragments& x) mutable {
-                dht::decorated_key dk = dht::global_partitioner().decorate_key(*_schema, x.get_key());
+                dht::decorated_key dk = dht::decorate_key(*_schema, x.get_key());
                 if (!(dk_ptr && dk_ptr->dk.equal(*_schema, dk))) {
                     dk_ptr = make_lw_shared<const decorated_key_with_hash>(*_schema, dk, _seed);
                 }
@@ -2436,9 +2437,9 @@ public:
             auto max_row_buf_size = get_max_row_buf_size(algorithm);
             auto master_node_shard_config = shard_config {
                     engine().cpu_id(),
-                    dht::global_partitioner().shard_count(),
-                    dht::global_partitioner().sharding_ignore_msb(),
-                    dht::global_partitioner().name()
+                    _ri.partitioner.shard_count(),
+                    _ri.partitioner.sharding_ignore_msb(),
+                    _ri.partitioner.name()
             };
             auto s = _cf.schema();
             auto schema_version = s->version();

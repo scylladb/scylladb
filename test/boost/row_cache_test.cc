@@ -232,7 +232,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
 
 dht::partition_range make_single_partition_range(schema_ptr& s, int pkey) {
     auto pk = partition_key::from_exploded(*s, { int32_type->decompose(pkey) });
-    auto dk = dht::global_partitioner().decorate_key(*s, pk);
+    auto dk = dht::decorate_key(*s, pk);
     return dht::partition_range::make_singular(dk);
 }
 
@@ -893,7 +893,7 @@ SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
 
         std::vector<dht::decorated_key> keys;
         while (tracker.get_stats().partition_evictions == prev_evictions) {
-            auto dk = dht::global_partitioner().decorate_key(*gen.schema(), new_key(gen.schema()));
+            auto dk = dht::decorate_key(*gen.schema(), new_key(gen.schema()));
             auto m = mutation(gen.schema(), dk, make_fully_continuous(gen()).partition());
             keys.emplace_back(dk);
             cache.populate(m);
@@ -980,7 +980,7 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
             .with_column("v", int32_type)
             .build();
         auto pk = partition_key::from_exploded(*s, { int32_type->decompose(100) });
-        auto dk = dht::global_partitioner().decorate_key(*s, pk);
+        auto dk = dht::decorate_key(*s, pk);
         auto range = dht::partition_range::make_singular(dk);
         auto make_ck = [&s] (int v) {
             return clustering_key_prefix::from_single_value(*s, int32_type->decompose(v));
@@ -1663,7 +1663,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
             reader = cache.make_reader(s, query::full_partition_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
 
-            auto dk = dht::global_partitioner().decorate_key(*s, pk);
+            auto dk = dht::decorate_key(*s, pk);
             auto singular_range = dht::partition_range::make_singular(dk);
 
             reader = cache.make_reader(s, singular_range, ps);
@@ -2893,7 +2893,7 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
         cache_tracker tracker;
         memtable_snapshot_source underlying(s);
 
-        auto pk = dht::global_partitioner().decorate_key(*s,
+        auto pk = dht::decorate_key(*s,
             partition_key::from_single_value(*s, serialized(3)));
         auto pr = dht::partition_range::make_singular(pk);
 

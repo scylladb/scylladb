@@ -69,7 +69,7 @@ frozen_mutation::key(const schema& s) const {
 
 dht::decorated_key
 frozen_mutation::decorated_key(const schema& s) const {
-    return dht::global_partitioner().decorate_key(s, key(s));
+    return dht::decorate_key(s, key(s));
 }
 
 partition_key frozen_mutation::deserialize_key() const {

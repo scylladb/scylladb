@@ -142,8 +142,8 @@ public:
     }
 
     template <typename T>
-    int binary_search(const T& entries, const key& sk) {
-        return sstables::binary_search(entries, sk);
+    int binary_search(dht::i_partitioner& p, const T& entries, const key& sk) {
+        return sstables::binary_search(p, entries, sk);
     }
 
     void change_generation_number(int64_t generation) {
@@ -716,5 +716,5 @@ inline
 inline dht::decorated_key make_dkey(schema_ptr s, bytes b)
 {
     auto sst_key = sstables::key::from_bytes(b);
-    return dht::global_partitioner().decorate_key(*s, sst_key.to_partition_key(*s));
+    return dht::decorate_key(*s, sst_key.to_partition_key(*s));
 }

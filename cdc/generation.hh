@@ -39,13 +39,14 @@
 
 #include "database_fwd.hh"
 #include "db_clock.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/token.hh"
 
 namespace seastar {
     class abort_source;
 } // namespace seastar
 
 namespace db {
+    class config;
     class system_distributed_keyspace;
 } // namespace db
 
@@ -142,6 +143,7 @@ future<db_clock::time_point> get_local_streams_timestamp();
  *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
  */
 db_clock::time_point make_new_cdc_generation(
+        const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata& tm,
         const gms::gossiper& g,

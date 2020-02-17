@@ -1068,7 +1068,7 @@ static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr s
 }
 
 static dht::partition_range_vector to_partition_ranges(const schema& schema, const partition_key& pk) {
-    return dht::partition_range_vector{dht::partition_range(dht::global_partitioner().decorate_key(schema, pk))};
+    return dht::partition_range_vector{dht::partition_range(dht::decorate_key(schema, pk))};
 }
 static dht::partition_range_vector to_partition_ranges(const dht::decorated_key& pk) {
     return dht::partition_range_vector{dht::partition_range(pk)};
@@ -1131,8 +1131,8 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
     }
     // If we're still here, cas() *will* be called by execute(), so let's
     // find the appropriate shard to run it on:
-    auto token = dht::global_partitioner().get_token(*_schema, _pk);
-    auto desired_shard = service::storage_proxy::cas_shard(token);
+    auto token = dht::get_token(*_schema, _pk);
+    auto desired_shard = service::storage_proxy::cas_shard(*_schema, token);
     if (desired_shard == engine().cpu_id()) {
         return {};
     }
@@ -1486,7 +1486,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         std::unordered_map<schema_decorated_key, std::vector<put_or_delete_item>, schema_decorated_key_hash, schema_decorated_key_equal>
             key_builders(1, schema_decorated_key_hash{}, schema_decorated_key_equal{});
         for (auto& b : mutation_builders) {
-            auto dk = dht::global_partitioner().decorate_key(*b.first, b.second.pk());
+            auto dk = dht::decorate_key(*b.first, b.second.pk());
             auto it = key_builders.find({b.first, dk});
             if (it == key_builders.end()) {
                 key_builders.emplace(schema_decorated_key{b.first, dk}, std::vector<put_or_delete_item>{std::move(b.second)});
@@ -1496,7 +1496,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         }
         return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state] (auto& e) {
             stats.write_using_lwt++;
-            auto desired_shard = service::storage_proxy::cas_shard(e.first.dk.token());
+            auto desired_shard = service::storage_proxy::cas_shard(*e.first.schema, e.first.dk.token());
             if (desired_shard == engine().cpu_id()) {
                 return cas_write(proxy, e.first.schema, e.first.dk, std::move(e.second), client_state, trace_state);
             } else {
@@ -2481,7 +2481,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     db::consistency_level cl = get_read_consistency(table_info);
 
     partition_key pk = pk_from_json(query_key, schema);
-    dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*schema, pk))};
+    dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
 
     std::vector<query::clustering_range> bounds;
     if (schema->clustering_key_size() == 0) {
@@ -2554,7 +2554,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     std::vector<future<std::tuple<std::string, std::optional<rjson::value>>>> response_futures;
     for (const auto& rs : requests) {
         for (const auto &r : rs.requests) {
-            dht::partition_range_vector partition_ranges{dht::partition_range(dht::global_partitioner().decorate_key(*rs.schema, std::move(r.pk)))};
+            dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*rs.schema, std::move(r.pk)))};
             std::vector<query::clustering_range> bounds;
             if (rs.schema->clustering_key_size() == 0) {
                 bounds.push_back(query::clustering_range::make_open_ended_both_sides());
@@ -2805,7 +2805,7 @@ static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_d
     }
     bytes raw_value = pk_cdef.type->from_string(attrs[0][type_to_string(pk_cdef.type)].GetString());
     partition_key pk = partition_key::from_singular(*schema, pk_cdef.type->deserialize(raw_value));
-    auto decorated_key = dht::global_partitioner().decorate_key(*schema, pk);
+    auto decorated_key = dht::decorate_key(*schema, pk);
     if (op != comparison_operator_type::EQ) {
         throw api_error("ValidationException", format("Hash key {} can only be restricted with equality operator (EQ)"));
     }
@@ -3125,7 +3125,7 @@ calculate_bounds_condition_expression(schema_ptr schema,
                 bytes raw_value = get_valref_value(cond._values[!toplevel_ind],
                         expression_attribute_values, used_attribute_values, pk_cdef);
                 partition_key pk = partition_key::from_singular(*schema, pk_cdef.type->deserialize(raw_value));
-                auto decorated_key = dht::global_partitioner().decorate_key(*schema, pk);
+                auto decorated_key = dht::decorate_key(*schema, pk);
                 partition_ranges.push_back(dht::partition_range(decorated_key));
             } else if (ck_cdef && sstring(key) == ck_cdef->name_as_text()) {
                 if (!ck_bounds.empty()) {

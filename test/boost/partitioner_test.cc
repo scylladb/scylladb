@@ -23,6 +23,7 @@
 #include <seastar/testing/thread_test_case.hh>
 
 #include "dht/i_partitioner.hh"
+#include "dht/sharder.hh"
 #include "dht/murmur3_partitioner.hh"
 #include "schema.hh"
 #include "types.hh"
@@ -96,9 +97,9 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
         .build();
 
     std::vector<dht::decorated_key> keys = {
-        dht::global_partitioner().decorate_key(*s,
+        dht::decorate_key(*s,
             partition_key::from_single_value(*s, "key1")),
-        dht::global_partitioner().decorate_key(*s,
+        dht::decorate_key(*s,
             partition_key::from_single_value(*s, "key2")),
     };
 
@@ -326,8 +327,6 @@ static
 void
 test_exponential_sharder(const dht::i_partitioner& part, const schema& s, const dht::partition_range& pr) {
 
-    dht::set_global_partitioner(part.name()); // so we can print tokens, also ring_position_comparator is not global_partitioner() clean
-
     // Step 1: run the exponential sharder fully, and collect all results
 
     debug("input range: %s\n", pr);
@@ -482,8 +481,6 @@ SEASTAR_THREAD_TEST_CASE(test_exponential_sharders) {
 static
 void
 do_test_split_range_to_single_shard(const dht::i_partitioner& part, const schema& s, const dht::partition_range& pr) {
-    dht::set_global_partitioner(part.name()); // so we can print tokens, also ring_position_comparator is not global_partitioner() clean
-
     for (auto shard : boost::irange(0u, part.shard_count())) {
         auto ranges = dht::split_range_to_single_shard(part, s, pr, shard).get0();
         auto sharder = dht::ring_position_range_sharder(part, pr);
@@ -587,7 +584,6 @@ test_something_with_some_interesting_ranges_and_partitioners_with_token_range(st
 static
 void
 do_test_selective_token_range_sharder(const dht::i_partitioner& part, const schema& s, const dht::token_range& range) {
-    dht::set_global_partitioner(part.name());
     bool debug = false;
     for (auto shard : boost::irange(0u, part.shard_count())) {
         auto sharder = dht::selective_token_range_sharder(part, range, shard);

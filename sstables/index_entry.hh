@@ -20,6 +20,7 @@
  */
 
 #pragma once
+#include <functional>
 #include <variant>
 #include "position_in_partition.hh"
 #include "consumer.hh"
@@ -541,6 +542,7 @@ public:
 
 class index_entry {
 private:
+    std::reference_wrapper<const schema> _s;
     temporary_buffer<char> _key;
     mutable std::optional<dht::token> _token;
     uint64_t _position;
@@ -558,7 +560,7 @@ public:
 
     decorated_key_view get_decorated_key() const {
         if (!_token) {
-            _token.emplace(dht::global_partitioner().get_token(get_key()));
+            _token.emplace(_s.get().get_partitioner().get_token(get_key()));
         }
         return decorated_key_view(*_token, get_key());
     }
@@ -575,8 +577,9 @@ public:
 
     uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
 
-    index_entry(temporary_buffer<char>&& key, uint64_t position, std::unique_ptr<promoted_index>&& index)
-        : _key(std::move(key))
+    index_entry(const schema& s, temporary_buffer<char>&& key, uint64_t position, std::unique_ptr<promoted_index>&& index)
+        : _s(std::cref(s))
+        , _key(std::move(key))
         , _position(position)
         , _index(std::move(index))
     {}
