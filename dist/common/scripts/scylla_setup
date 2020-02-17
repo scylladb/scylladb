@@ -250,8 +250,8 @@ if __name__ == '__main__':
         ec2_check = interactive_ask_service('Do you want to run Amazon EC2 configuration check?', 'Yes - runs a script to verify that this instance is optimized for running Scylla. No - skips the configuration check.', ec2_check)
         args.no_ec2_check = not ec2_check
         if ec2_check:
-            nic = interactive_choose_nic()
-        if ec2_check:
+            if interactive:
+                nic = interactive_choose_nic()
             run('{}/scylla_ec2_check --nic {}'.format(scriptsdir(), nic))
 
     if not is_nonroot():
@@ -393,7 +393,8 @@ if __name__ == '__main__':
         if sysconfig_setup:
             set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', set_nic_and_disks)
             setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
-            nic = interactive_choose_nic()
+            if interactive:
+                nic = interactive_choose_nic()
 
             set_clocksource = interactive_ask_service('The clocksource is the physical device that Linux uses to take time measurements. In most cases Linux chooses the fastest available clocksource device as long as it is accurate. In some situations, however, Linux errs in the side of caution and does not choose the fastest available clocksource despite it being accurate enough. If you know your hardware''s fast clocksource is stable enough, choose "yes" here. The safest is the choose "no" (the default)', 'Yes - enforce clocksource setting. No - keep current configuration.', set_clocksource)
             setup_args += ' --set-clocksource' if set_clocksource else ''
