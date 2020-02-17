@@ -69,7 +69,8 @@ std::ostream& gms::operator<<(std::ostream& os, const inet_address& x) {
     auto&& bytes = x.bytes();
     auto i = 0u;
     auto acc = 0u;
-    for (auto b : bytes) {
+    // extra paranoid sign extension evasion - #5808
+    for (uint8_t b : bytes) {
         acc <<= 8;
         acc |= b;
         if ((++i & 1) == 0) {
