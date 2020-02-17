@@ -154,7 +154,7 @@ if __name__ == '__main__':
                         help='specify disks for RAID')
     group.add_argument('--no-raid-setup', action='store_true', default=False,
                         help='skip raid setup')
-    parser.add_argument('--nic', default='eth0',
+    parser.add_argument('--nic',
                         help='specify NIC')
     parser.add_argument('--ntp-domain',
                         help='specify NTP domain')
@@ -201,9 +201,16 @@ if __name__ == '__main__':
 
     if not interactive:
         if not args.no_sysconfig_setup or (is_ec2() and not args.no_ec2_check):
-            if not is_valid_nic(args.nic):
-                print('NIC {} doesn\'t exist.'.format(args.nic))
-                sys.exit(1)
+            if args.nic:
+                if not is_valid_nic(args.nic):
+                    print('NIC {} doesn\'t exist.'.format(args.nic))
+                    sys.exit(1)
+            else:
+                # when non-interactive mode and --nic is not specified, try to use eth0
+                args.nic = 'eth0'
+                if not is_valid_nic(args.nic):
+                    parser.print_help()
+                    sys.exit(1)
 
     disks = args.disks
     nic = args.nic
