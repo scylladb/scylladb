@@ -42,9 +42,9 @@
 #include "cql3/statements/drop_index_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
 #include "schema_builder.hh"
 #include "database.hh"
+#include "gms/feature_service.hh"
 
 namespace cql3 {
 

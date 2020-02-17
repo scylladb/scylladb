@@ -52,10 +52,10 @@
 #include "auth/resource.hh"
 #include "auth/service.hh"
 #include "schema_builder.hh"
-#include "service/storage_service.hh"
 #include "db/extensions.hh"
 #include "database.hh"
 #include "types/user.hh"
+#include "gms/feature_service.hh"
 
 namespace cql3 {
 

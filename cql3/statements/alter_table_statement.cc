@@ -43,7 +43,6 @@
 #include "index/secondary_index_manager.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
 #include <boost/range/adaptor/filtered.hpp>

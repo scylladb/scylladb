@@ -83,8 +83,6 @@ static future<result_message_ptr> void_result_message() {
 }
 
 void validate_cluster_support(service::storage_proxy& proxy) {
-    // TODO(jhaberku): All other feature-checking CQL statements also grab the `storage_service` globally. I'm not sure
-    // if it's accessible through some other object, but for now I'm sticking with convention.
     if (!proxy.features().cluster_supports_roles()) {
         throw exceptions::invalid_request_exception(
                 "You cannot modify access-control information until the cluster has fully upgraded.");

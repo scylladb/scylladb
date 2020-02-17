@@ -62,8 +62,8 @@
 #include "service/storage_proxy.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
-#include "service/storage_service.hh"
 #include "database.hh"
+#include "gms/feature_service.hh"
 
 namespace cql3 {
 

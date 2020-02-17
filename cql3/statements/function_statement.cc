@@ -23,7 +23,7 @@
 #include "cql3/functions/functions.hh"
 #include "db/config.hh"
 #include "database.hh"
-#include "service/storage_service.hh"
+#include "gms/feature_service.hh"
 
 namespace cql3 {
 namespace statements {
