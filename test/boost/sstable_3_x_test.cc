@@ -5176,7 +5176,8 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     };
 
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), f);
-    auto env = test_env(&handler);
+    sstables_manager manager(handler);
+    auto env = test_env(manager);
     tmpdir dir;
     auto sst = env.make_sstable(
             s, dir.path().string(), 1 /* generation */, sstable_version_types::mc, sstables::sstable::format_types::big);
@@ -5231,7 +5232,8 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     };
 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, f);
-    auto env = test_env(&handler);
+    sstables_manager manager(handler);
+    auto env = test_env(manager);
     tmpdir dir;
     auto sst = env.make_sstable(sc, dir.path().string(), 1, sstable_version_types::mc, sstables::sstable::format_types::big);
     sst->write_components(mt->make_flat_reader(sc), 1, sc, sstable_writer_config{}, encoding_stats{}).get();
