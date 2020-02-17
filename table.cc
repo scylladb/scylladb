@@ -1320,50 +1320,23 @@ table::compact_sstables(sstables::compaction_descriptor descriptor) {
     });
 }
 
-static bool needs_cleanup(const sstables::shared_sstable& sst,
-                   const dht::token_range_vector& owned_ranges,
-                   schema_ptr s) {
-    auto first = sst->get_first_partition_key();
-    auto last = sst->get_last_partition_key();
-    auto first_token = dht::global_partitioner().get_token(*s, first);
-    auto last_token = dht::global_partitioner().get_token(*s, last);
-    dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
-
-    // return true iff sst partition range isn't fully contained in any of the owned ranges.
-    for (auto& r : owned_ranges) {
-        if (r.contains(sst_token_range, dht::token_comparator())) {
-            return false;
-        }
-    }
-    return true;
-}
-
-future<> table::cleanup_sstables(sstables::compaction_descriptor descriptor, bool is_actual_cleanup) {
-    dht::token_range_vector r;
-
-    if (is_actual_cleanup) {
-        r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
-    }
-
-    return do_with(std::move(descriptor.sstables), std::move(r), std::move(descriptor.release_exhausted), [this, is_actual_cleanup] (auto& sstables, auto& owned_ranges, auto& release_fn) {
-        return do_for_each(sstables, [this, &owned_ranges, &release_fn, is_actual_cleanup] (auto& sst) {
-            if (!owned_ranges.empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
-                return make_ready_future<>();
-            }
-
-            // this semaphore ensures that only one cleanup will run per shard.
+future<> table::rewrite_sstables(sstables::compaction_descriptor descriptor) {
+    return do_with(std::move(descriptor.sstables), std::move(descriptor.release_exhausted),
+            [this, options = descriptor.options] (auto& sstables, auto& release_fn) {
+        return do_for_each(sstables, [this, &release_fn, options] (auto& sst) {
+            // this semaphore ensures that only one rewrite will run per shard.
             // That's to prevent node from running out of space when almost all sstables
-            // need cleanup, so if sstables are cleaned in parallel, we may need almost
+            // need rewrite, so if sstables are rewritten in parallel, we may need almost
             // twice the disk space used by those sstables.
-            static thread_local named_semaphore sem(1, named_semaphore_exception_factory{"cleanup sstables"});
+            static thread_local named_semaphore sem(1, named_semaphore_exception_factory{"rewrite sstables"});
 
-            return with_semaphore(sem, 1, [this, &sst, &release_fn, is_actual_cleanup] {
+            return with_semaphore(sem, 1, [this, &sst, &release_fn, options] {
                 // release reference to sstables cleaned up, otherwise space usage from their data and index
                 // components cannot be reclaimed until all of them are cleaned.
                 auto sstable_level = sst->get_sstable_level();
                 auto run_identifier = sst->run_identifier();
                 auto descriptor = sstables::compaction_descriptor({ std::move(sst) }, sstable_level,
-                    sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, is_actual_cleanup);
+                    sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, options);
                 descriptor.release_exhausted = release_fn;
                 return this->compact_sstables(std::move(descriptor));
             });

@@ -827,15 +827,12 @@ public:
     // not a real compaction policy.
     future<> compact_all_sstables();
     // Compact all sstables provided in the vector.
-    // If descriptor.cleanup is set to true, compaction_sstables will run on behalf of a cleanup job,
-    // meaning that irrelevant keys will be discarded.
     future<> compact_sstables(sstables::compaction_descriptor descriptor);
-    // Performs a cleanup on each sstable of this column family, excluding
-    // those ones that are irrelevant to this node or being compacted.
-    // Cleanup is about discarding keys that are no longer relevant for a
-    // given sstable, e.g. after node loses part of its token range because
-    // of a newly added node.
-    future<> cleanup_sstables(sstables::compaction_descriptor descriptor, bool is_actual_cleanup);
+    // Compact all sstables provided in the descriptor one-by-one.
+    //
+    // Will call `compact_sstables()` for each sstable. Use by compaction
+    // types such as cleanup or upgrade.
+    future<> rewrite_sstables(sstables::compaction_descriptor descriptor);
 
     future<bool> snapshot_exists(sstring name);
 

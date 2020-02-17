@@ -24,6 +24,7 @@
 #include "compaction_backlog_manager.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
+#include "service/storage_service.hh"
 #include <seastar/core/metrics.hh>
 #include "exceptions.hh"
 #include <cmath>
@@ -485,7 +486,9 @@ inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task)
 
 inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration will_stop) {
     bool retry = false;
-    const char* retry_msg = will_stop ? "will stop" : "retrying";
+    const char* stop_msg = "stopping";
+    const char* retry_msg = "retrying";
+    const char* decision_msg = will_stop ? stop_msg : retry_msg;
 
     try {
         f.get();
@@ -493,15 +496,18 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f, stop_iteration w
         // We want compaction stopped here to be retried because this may have
         // happened at user request (using nodetool stop), and to mimic C*
         // behavior, compaction is retried later on.
-        cmlog.info("compaction info: {}: {}", e.what(), retry_msg);
-        retry = true;
+        // The compaction might request to not try again (e.retry()), in this
+        // case we won't retry.
+        retry = e.retry();
+        decision_msg = !retry ? stop_msg : decision_msg;
+        cmlog.info("compaction info: {}: {}", e.what(), decision_msg);
     } catch (storage_io_error& e) {
         cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
         retry = false;
         // FIXME discarded future.
         (void)stop();
     } catch (...) {
-        cmlog.error("compaction failed: {}: {}", std::current_exception(), retry_msg);
+        cmlog.error("compaction failed: {}: {}", std::current_exception(), decision_msg);
         retry = true;
     }
     return retry;
@@ -577,25 +583,21 @@ void compaction_manager::submit(column_family* cf) {
 
 inline bool compaction_manager::check_for_cleanup(column_family* cf) {
     for (auto& task : _tasks) {
-        if (task->compacting_cf == cf && task->cleanup) {
+        if (task->compacting_cf == cf && task->type == sstables::compaction_type::Cleanup) {
             return true;
         }
     }
     return false;
 }
 
-future<> compaction_manager::rewrite_sstables(column_family* cf, bool is_cleanup, get_candidates_func get_func) {
-    if (is_cleanup && check_for_cleanup(cf)) {
-        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
-            cf->schema()->ks_name(), cf->schema()->cf_name()));
-    }
+future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compaction_options options, get_candidates_func get_func) {
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
-    task->cleanup = is_cleanup;
+    task->type = options.type();
     _tasks.push_back(task);
     _stats.pending_tasks++;
 
-    task->compaction_done = repeat([this, task, get_func = std::move(get_func)] () mutable {
+    task->compaction_done = repeat([this, task, options, get_func = std::move(get_func)] () mutable {
         // FIXME: lock cf here
         if (!can_proceed(task)) {
             _stats.pending_tasks--;
@@ -603,6 +605,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, bool is_cleanup
         }
         column_family& cf = *task->compacting_cf;
         sstables::compaction_descriptor descriptor = sstables::compaction_descriptor(get_func(cf));
+        descriptor.options = options;
         auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
         // Releases reference to cleaned sstable such that respective used disk space can be freed.
         descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
@@ -613,9 +616,9 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, bool is_cleanup
         _stats.active_tasks++;
         task->compaction_running = true;
         compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
-        return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor), task] (compaction_backlog_tracker& bt) mutable {
-            return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor), task] () mutable {
-                return cf.cleanup_sstables(std::move(descriptor), task->cleanup);
+        return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
+            return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
+                return cf.rewrite_sstables(std::move(descriptor));
             });
         }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
             task->compaction_running = false;
@@ -642,8 +645,39 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, bool is_cleanup
     return task->compaction_done.get_future().then([task] {});
 }
 
+static bool needs_cleanup(const sstables::shared_sstable& sst,
+                   const dht::token_range_vector& owned_ranges,
+                   schema_ptr s) {
+    auto first = sst->get_first_partition_key();
+    auto last = sst->get_last_partition_key();
+    auto first_token = dht::global_partitioner().get_token(*s, first);
+    auto last_token = dht::global_partitioner().get_token(*s, last);
+    dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
+
+    // return true iff sst partition range isn't fully contained in any of the owned ranges.
+    for (auto& r : owned_ranges) {
+        if (r.contains(sst_token_range, dht::token_comparator())) {
+            return false;
+        }
+    }
+    return true;
+}
+
 future<> compaction_manager::perform_cleanup(column_family* cf) {
-    return rewrite_sstables(cf, true, std::bind(&compaction_manager::get_candidates, this, std::placeholders::_1));
+    if (check_for_cleanup(cf)) {
+        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
+            cf->schema()->ks_name(), cf->schema()->cf_name()));
+    }
+    return rewrite_sstables(cf, sstables::compaction_options::make_cleanup(), [this] (const table& table) {
+        auto schema = table.schema();
+        auto owned_ranges = service::get_local_storage_service().get_local_ranges(schema->ks_name());
+        auto sstables = std::vector<sstables::shared_sstable>{};
+        const auto candidates = table.candidates_for_compaction();
+        std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&owned_ranges, schema] (const sstables::shared_sstable& sst) {
+            return owned_ranges.empty() || needs_cleanup(sst, owned_ranges, schema);
+        });
+        return sstables;
+    });
 }
 
 sstables::sstable::version_types get_highest_supported_format();
@@ -675,7 +709,7 @@ future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exc
             // Note that we potentially could be doing multiple
             // upgrades here in parallel, but that is really the users
             // problem.
-            return rewrite_sstables(cf, false, [&](auto&) {
+            return rewrite_sstables(cf, sstables::compaction_options::make_upgrade(), [&](auto&) {
                 return tables;
             });
         });
@@ -683,9 +717,10 @@ future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exc
 }
 
 // Submit a column family to be scrubbed and wait for its termination.
-future<> compaction_manager::perform_sstable_scrub(column_family* cf) {
-    // TODO: "skip_corrupted"?
-    return perform_sstable_upgrade(cf, false);
+future<> compaction_manager::perform_sstable_scrub(column_family* cf, bool skip_corrupted) {
+    return rewrite_sstables(cf, sstables::compaction_options::make_scrub(skip_corrupted), [] (const table& cf) {
+        return cf.candidates_for_compaction();
+    });
 }
 
 future<> compaction_manager::remove(column_family* cf) {

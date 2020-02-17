@@ -30,7 +30,58 @@
 #include <seastar/core/thread.hh>
 #include <functional>
 
+class flat_mutation_reader;
+
 namespace sstables {
+
+    enum class compaction_type;
+
+    class compaction_options {
+    public:
+        struct regular {
+        };
+        struct cleanup {
+        };
+        struct upgrade {
+        };
+        struct scrub {
+            bool skip_corrupted;
+        };
+
+    private:
+        using options_variant = std::variant<regular, cleanup, upgrade, scrub>;
+
+    private:
+        options_variant _options;
+
+    private:
+        explicit compaction_options(options_variant options) : _options(std::move(options)) {
+        }
+
+    public:
+        static compaction_options make_regular() {
+            return compaction_options(regular{});
+        }
+
+        static compaction_options make_cleanup() {
+            return compaction_options(cleanup{});
+        }
+
+        static compaction_options make_upgrade() {
+            return compaction_options(upgrade{});
+        }
+
+        static compaction_options make_scrub(bool skip_corrupted) {
+            return compaction_options(scrub{skip_corrupted});
+        }
+
+        template <typename... Visitor>
+        auto visit(Visitor&&... visitor) const {
+            return std::visit(std::forward<Visitor>(visitor)..., _options);
+        }
+
+        compaction_type type() const;
+    };
 
     struct compaction_descriptor {
         // List of sstables to be compacted.
@@ -45,7 +96,9 @@ namespace sstables {
         std::optional<compaction_weight_registration> weight_registration;
         // Calls compaction manager's task for this compaction to release reference to exhausted sstables.
         std::function<void(const std::vector<shared_sstable>& exhausted_sstables)> release_exhausted;
-        bool cleanup;
+        // The options passed down to the compaction code.
+        // This also selects the kind of compaction to do.
+        compaction_options options = compaction_options::make_regular();
 
         compaction_descriptor() = default;
 
@@ -55,12 +108,12 @@ namespace sstables {
         explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level = default_level,
                                        uint64_t max_sstable_bytes = default_max_sstable_bytes,
                                        utils::UUID run_identifier = utils::make_random_uuid(),
-                                       bool cleanup = false)
+                                       compaction_options options = compaction_options::make_regular())
             : sstables(std::move(sstables))
             , level(level)
             , max_sstable_bytes(max_sstable_bytes)
             , run_identifier(run_identifier)
-            , cleanup(cleanup)
+            , options(options)
         {}
     };
 
@@ -78,6 +131,7 @@ namespace sstables {
         Scrub = 3,
         Index_build = 4,
         Reshard = 5,
+        Upgrade = 6,
     };
 
     static inline sstring compaction_name(compaction_type type) {
@@ -94,6 +148,8 @@ namespace sstables {
             return "INDEX_BUILD";
         case compaction_type::Reshard:
             return "RESHARD";
+        case compaction_type::Upgrade:
+            return "UPGRADE";
         default:
             throw std::runtime_error("Invalid Compaction Type");
         }
@@ -164,4 +220,7 @@ namespace sstables {
     // and possibly doesn't contain any tombstone that covers cells in other sstables.
     std::unordered_set<sstables::shared_sstable>
     get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
+
+    // For tests, can drop after we virtualize sstables.
+    flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_corrupted);
 }

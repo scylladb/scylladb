@@ -903,6 +903,205 @@ public:
     }
 };
 
+class scrub_compaction final : public regular_compaction {
+    class reader : public flat_mutation_reader::impl {
+        bool _skip_corrupted;
+        flat_mutation_reader _reader;
+        mutation_fragment_stream_validator _validator;
+        bool _skip_to_next_partition = false;
+
+    private:
+        void maybe_abort_scrub() {
+            if (!_skip_corrupted) {
+                throw compaction_stop_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data", false);
+            }
+        }
+
+        void on_unexpected_partition_start(const mutation_fragment& ps) {
+            maybe_abort_scrub();
+            const auto& new_key = ps.as_partition_start().key();
+            const auto& current_key = _validator.previous_partition_key();
+            clogger.error("[scrub compaction {}.{}] Unexpected partition-start for partition {} ({}),"
+                    " rectifying by adding assumed missing partition-end to the current partition {} ({}).",
+                    _schema->ks_name(),
+                    _schema->cf_name(),
+                    new_key.key().with_schema(*_schema),
+                    new_key,
+                    current_key.key().with_schema(*_schema),
+                    current_key);
+
+            auto pe = mutation_fragment(partition_end{});
+            if (!_validator(pe)) {
+                throw compaction_stop_exception(
+                        _schema->ks_name(),
+                        _schema->cf_name(),
+                        "scrub compaction failed to rectify unexpected partition-start, validator rejects the injected partition-end",
+                        false);
+            }
+            push_mutation_fragment(std::move(pe));
+
+            if (!_validator(ps)) {
+                throw compaction_stop_exception(
+                        _schema->ks_name(),
+                        _schema->cf_name(),
+                        "scrub compaction failed to rectify unexpected partition-start, validator rejects it even after the injected partition-end",
+                        false);
+            }
+        }
+
+        void on_invalid_partition(const dht::decorated_key& new_key) {
+            maybe_abort_scrub();
+            const auto& current_key = _validator.previous_partition_key();
+            clogger.error("[scrub compaction {}.{}] Skipping invalid partition {} ({}):"
+                    " partition has non-monotonic key compared to current one {} ({})",
+                    _schema->ks_name(),
+                    _schema->cf_name(),
+                    new_key.key().with_schema(*_schema),
+                    new_key,
+                    current_key.key().with_schema(*_schema),
+                    current_key);
+            _skip_to_next_partition = true;
+        }
+
+        void on_invalid_mutation_fragment(const mutation_fragment& mf) {
+            maybe_abort_scrub();
+            const auto& key = _validator.previous_partition_key();
+            clogger.error("[scrub compaction {}.{}] Skipping invalid {} fragment {}in partition {} ({}):"
+                    " fragment has non-monotonic position {} compared to previous position {}.",
+                    _schema->ks_name(),
+                    _schema->cf_name(),
+                    mf.mutation_fragment_kind(),
+                    mf.has_key() ? format("with key {} ({}) ", mf.key().with_schema(*_schema), mf.key()) : "",
+                    key.key().with_schema(*_schema),
+                    key,
+                    mf.position(),
+                    _validator.previous_position());
+        }
+
+        void on_invalid_end_of_stream() {
+            maybe_abort_scrub();
+            // Handle missing partition_end
+            push_mutation_fragment(partition_end{});
+            clogger.error("[scrub compaction {}.{}] Adding missing partition-end to the end of the stream.",
+                    _schema->ks_name(), _schema->cf_name());
+        }
+
+        void fill_buffer_from_underlying() {
+            while (!_reader.is_buffer_empty() && !is_buffer_full()) {
+                auto mf = _reader.pop_mutation_fragment();
+                if (mf.is_partition_start()) {
+                    // First check that fragment kind monotonicity stands.
+                    // When skipping to another partition the fragment
+                    // monotonicity of the partition-start doesn't have to be
+                    // and shouldn't be verified. We know the last fragment the
+                    // validator saw is a partition-start, passing it another one
+                    // will confuse it.
+                    if (!_skip_to_next_partition && !_validator(mf)) {
+                        on_unexpected_partition_start(mf);
+                        // Continue processing this partition start.
+                    }
+                    _skip_to_next_partition = false;
+                    // Then check that the partition monotonicity stands.
+                    const auto& dk = mf.as_partition_start().key();
+                    if (!_validator(dk)) {
+                        on_invalid_partition(dk);
+                        continue;
+                    }
+                } else if (_skip_to_next_partition) {
+                    continue;
+                } else {
+                    if (!_validator(mf)) {
+                        on_invalid_mutation_fragment(mf);
+                        continue;
+                    }
+                }
+                push_mutation_fragment(std::move(mf));
+            }
+
+            _end_of_stream = _reader.is_end_of_stream() && _reader.is_buffer_empty();
+
+            if (_end_of_stream) {
+                if (!_validator.on_end_of_stream()) {
+                    on_invalid_end_of_stream();
+                }
+            }
+        }
+
+    public:
+        reader(flat_mutation_reader underlying, bool skip_corrupted)
+            : impl(underlying.schema())
+            , _skip_corrupted(skip_corrupted)
+            , _reader(std::move(underlying))
+            , _validator(*_schema) {
+        }
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            return repeat([this, timeout] {
+                return _reader.fill_buffer(timeout).then([this] {
+                    fill_buffer_from_underlying();
+                    return stop_iteration(is_buffer_full() || _end_of_stream);
+                });
+            }).handle_exception([this] (std::exception_ptr e) {
+                try {
+                    std::rethrow_exception(std::move(e));
+                } catch (const compaction_stop_exception&) {
+                    // Propagate these unchanged.
+                    throw;
+                } catch (const storage_io_error&) {
+                    // Propagate these unchanged.
+                    throw;
+                } catch (...) {
+                    // We don't want failed scrubs to be retried.
+                    throw compaction_stop_exception(
+                            _schema->ks_name(),
+                            _schema->cf_name(),
+                            format("scrub compaction failed due to unrecoverable error: {}", std::current_exception()),
+                            false);
+                }
+            });
+        }
+        virtual void next_partition() override {
+            throw std::bad_function_call();
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+            throw std::bad_function_call();
+        }
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+            throw std::bad_function_call();
+        }
+        virtual size_t buffer_size() const override {
+            return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();
+        }
+    };
+
+private:
+    compaction_options::scrub _options;
+
+public:
+    scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_options::scrub options, std::function<shared_sstable()> creator,
+            replacer_fn replacer)
+        : regular_compaction(cf, std::move(descriptor), std::move(creator), std::move(replacer))
+        , _options(options) {
+        _info->type = compaction_type::Scrub;
+    }
+
+    void report_start(const sstring& formatted_msg) const override {
+        clogger.info("Scrubbing {}", formatted_msg);
+    }
+
+    void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
+        clogger.info("Finished scrubbing {}", formatted_msg);
+    }
+
+    flat_mutation_reader make_sstable_reader() const override {
+        return make_flat_mutation_reader<reader>(regular_compaction::make_sstable_reader(), _options.skip_corrupted);
+    }
+
+    friend flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_corrupted);
+};
+
+flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_corrupted) {
+    return make_flat_mutation_reader<scrub_compaction::reader>(std::move(rd), skip_corrupted);
+}
 
 class resharding_compaction final : public compaction {
     std::vector<std::pair<shared_sstable, std::optional<sstable_writer>>> _output_sstables;
@@ -1056,21 +1255,44 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c, GCConsume
     });
 }
 
-template <typename ...Params>
-static std::unique_ptr<compaction> make_compaction(bool cleanup, Params&&... params) {
-    if (cleanup) {
-        return std::make_unique<cleanup_compaction>(std::forward<Params>(params)...);
-    } else {
-        return std::make_unique<regular_compaction>(std::forward<Params>(params)...);
-    }
+compaction_type compaction_options::type() const {
+    // Maps options_variant indexes to the corresponding compaction_type member.
+    static const compaction_type index_to_type[] = {compaction_type::Compaction, compaction_type::Cleanup, compaction_type::Upgrade, compaction_type::Scrub};
+    return index_to_type[_options.index()];
+}
+
+static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::compaction_descriptor descriptor,
+        std::function<shared_sstable()> creator, replacer_fn replacer) {
+    struct {
+        column_family& cf;
+        sstables::compaction_descriptor&& descriptor;
+        std::function<shared_sstable()>&& creator;
+        replacer_fn&& replacer;
+
+        std::unique_ptr<compaction> operator()(compaction_options::regular) {
+            return std::make_unique<regular_compaction>(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+        }
+        std::unique_ptr<compaction> operator()(compaction_options::cleanup) {
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+        }
+        std::unique_ptr<compaction> operator()(compaction_options::upgrade) {
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+        }
+        std::unique_ptr<compaction> operator()(compaction_options::scrub scrub_options) {
+            return std::make_unique<scrub_compaction>(cf, std::move(descriptor), scrub_options, std::move(creator), std::move(replacer));
+        }
+    } visitor_factory{cf, std::move(descriptor), std::move(creator), std::move(replacer)};
+
+    return descriptor.options.visit(visitor_factory);
 }
 
 future<compaction_info>
 compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator, replacer_fn replacer) {
     if (descriptor.sstables.empty()) {
-        throw std::runtime_error(format("Called compaction with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
+        throw std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}", compaction_name(descriptor.options.type()),
+                cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
-    auto c = make_compaction(descriptor.cleanup, cf, std::move(descriptor), std::move(creator), std::move(replacer));
+    auto c = make_compaction(cf, std::move(descriptor), std::move(creator), std::move(replacer));
     if (c->contains_multi_fragment_runs()) {
         auto gc_writer = c->make_garbage_collected_sstable_writer();
         return compaction::run(std::move(c), std::move(gc_writer));
