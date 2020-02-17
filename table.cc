@@ -1267,6 +1267,7 @@ void table::replace_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancest
     }
     rebuild_sstable_list(new_sstables, old_sstables);
     rebuild_statistics();
+    trigger_compaction();
 }
 
 void table::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors) {
@@ -1281,6 +1282,7 @@ void table::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancesto
     }
     rebuild_sstable_list({}, old_sstables);
     rebuild_statistics();
+    trigger_compaction();
 }
 
 future<>
