@@ -405,11 +405,8 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_m
             return _proxy.send_to_endpoint(std::move(m), end_point_key(), { }, write_type::SIMPLE, service::allow_hints::no);
         } else {
             manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
-            // FIXME: using 1h as infinite timeout. If a node is down, we should get an
-            // unavailable exception.
-            auto timeout = db::timeout_clock::now() + 1h;
             //FIXME: Add required frozen_mutation overloads
-            return _proxy.mutate({m.fm.unfreeze(m.s)}, consistency_level::ALL, timeout, nullptr);
+            return _proxy.mutate_hint_from_scratch(std::move(m));
         }
     });
 }
