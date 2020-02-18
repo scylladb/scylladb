@@ -72,7 +72,7 @@ public:
 
     std::vector<::shared_ptr<column_specification>> get_specifications() &&;
 
-    std::vector<uint16_t> get_partition_key_bind_indexes(schema_ptr schema) const;
+    std::vector<uint16_t> get_partition_key_bind_indexes(const schema& schema) const;
 
     void add(int32_t bind_index, ::shared_ptr<column_specification> spec);
 

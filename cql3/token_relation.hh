@@ -72,7 +72,7 @@ private:
      * @return the definition of the columns to which apply the token restriction.
      * @throws InvalidRequestException if the entity cannot be resolved
      */
-    std::vector<const column_definition*> get_column_definitions(schema_ptr s);
+    std::vector<const column_definition*> get_column_definitions(const schema& s);
 
     /**
      * Returns the receivers for this relation.
@@ -82,7 +82,7 @@ private:
      * @return the receivers for the specified relation.
      * @throws InvalidRequestException if the relation is invalid
      */
-    std::vector<::shared_ptr<column_specification>> to_receivers(schema_ptr schema, const std::vector<const column_definition*>& column_defs) const;
+    std::vector<::shared_ptr<column_specification>> to_receivers(const schema& schema, const std::vector<const column_definition*>& column_defs) const;
 
 public:
     token_relation(std::vector<::shared_ptr<column_identifier::raw>> entities,

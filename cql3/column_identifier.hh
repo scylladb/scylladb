@@ -112,9 +112,9 @@ private:
 public:
     raw(sstring raw_text, bool keep_case);
 
-    virtual ::shared_ptr<selectable> prepare(schema_ptr s) override;
+    virtual ::shared_ptr<selectable> prepare(const schema& s) override;
 
-    ::shared_ptr<column_identifier> prepare_column_identifier(schema_ptr s);
+    ::shared_ptr<column_identifier> prepare_column_identifier(const schema& s);
 
     virtual bool processes_selection() const override;
 
@@ -130,8 +130,8 @@ public:
 };
 
 static inline
-const column_definition* get_column_definition(schema_ptr schema, const column_identifier& id) {
-    return schema->get_column_definition(id.bytes_);
+const column_definition* get_column_definition(const schema& schema, const column_identifier& id) {
+    return schema.get_column_definition(id.bytes_);
 }
 
 static inline

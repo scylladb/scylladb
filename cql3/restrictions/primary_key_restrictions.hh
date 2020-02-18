@@ -111,7 +111,7 @@ public:
         return 0;
     }
 
-    size_t prefix_size(const schema_ptr schema) const {
+    size_t prefix_size(const schema&) const {
         return 0;
     }
 };
@@ -167,15 +167,15 @@ public:
         return 0;
     }
 
-    size_t prefix_size(const schema_ptr schema) const {
+    size_t prefix_size(const schema& schema) const {
         size_t count = 0;
-        if (schema->clustering_key_columns().empty()) {
+        if (schema.clustering_key_columns().empty()) {
             return count;
         }
         auto column_defs = get_column_defs();
-        column_id expected_column_id = schema->clustering_key_columns().begin()->id;
+        column_id expected_column_id = schema.clustering_key_columns().begin()->id;
         for (auto&& cdef : column_defs) {
-            if (schema->position(*cdef) != expected_column_id) {
+            if (schema.position(*cdef) != expected_column_id) {
                 return count;
             }
             expected_column_id++;

@@ -137,7 +137,7 @@ public:
      * @param schema the column family schema
      * @return a column specification
      */
-    ::shared_ptr<column_specification> get_column_specification(schema_ptr schema) const;
+    ::shared_ptr<column_specification> get_column_specification(const schema& schema) const;
 
     /**
      * Creates a new <code>selector</code> instance.

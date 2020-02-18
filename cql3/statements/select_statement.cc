@@ -1254,8 +1254,8 @@ void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr sche
         std::vector<data_type> selector_types;
         std::vector<const column_definition*> defs;
         selector_names.reserve(_select_clause.size());
-        auto selectables = selection::raw_selector::to_selectables(_select_clause, schema);
-        selection::selector_factories factories(selection::raw_selector::to_selectables(_select_clause, schema), db, schema, defs);
+        auto selectables = selection::raw_selector::to_selectables(_select_clause, *schema);
+        selection::selector_factories factories(selection::raw_selector::to_selectables(_select_clause, *schema), db, schema, defs);
         auto selectors = factories.new_instances();
         for (size_t i = 0; i < selectors.size(); ++i) {
             selector_names.push_back(selectables[i]->to_string());
@@ -1304,7 +1304,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
 
     check_needs_filtering(restrictions);
     ensure_filtering_columns_retrieval(db, selection, restrictions);
-    auto group_by_cell_indices = ::make_shared<std::vector<size_t>>(prepare_group_by(schema, *selection));
+    auto group_by_cell_indices = ::make_shared<std::vector<size_t>>(prepare_group_by(*schema, *selection));
 
     ::shared_ptr<cql3::statements::select_statement> stmt;
     if (restrictions->uses_secondary_indexing()) {
@@ -1336,7 +1336,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                 stats);
     }
 
-    auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(schema);
+    auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(*schema);
 
     return std::make_unique<prepared_statement>(std::move(stmt), bound_names, std::move(partition_key_bind_indices));
 }
@@ -1436,7 +1436,7 @@ select_statement::get_ordering_comparator(schema_ptr schema,
     // ultimately ship them to the client (CASSANDRA-4911).
     for (auto&& e : _parameters->orderings()) {
         auto&& raw = e.first;
-        ::shared_ptr<column_identifier> column = raw->prepare_column_identifier(schema);
+        ::shared_ptr<column_identifier> column = raw->prepare_column_identifier(*schema);
         const column_definition* def = schema->get_column_definition(column->name());
         if (!def) {
             handle_unrecognized_ordering_column(*column);
@@ -1476,7 +1476,7 @@ bool select_statement::is_reversed(schema_ptr schema) {
     bool relation_order_unsupported = false;
 
     for (auto&& e : _parameters->orderings()) {
-        ::shared_ptr<column_identifier> column = e.first->prepare_column_identifier(schema);
+        ::shared_ptr<column_identifier> column = e.first->prepare_column_identifier(*schema);
         bool reversed = e.second;
 
         auto def = schema->get_column_definition(column->name());
@@ -1562,7 +1562,7 @@ namespace {
 
 /// True iff one of \p relations is a single-column EQ involving \p def.
 bool equality_restricted(
-        const column_definition& def, schema_ptr schema, const std::vector<::shared_ptr<relation>>& relations) {
+        const column_definition& def, const schema& schema, const std::vector<::shared_ptr<relation>>& relations) {
     for (const auto& relation : relations) {
         if (const auto sc_rel = dynamic_pointer_cast<single_column_relation>(relation)) {
             if (sc_rel->is_EQ() && sc_rel->get_entity()->prepare_column_identifier(schema)->name() == def.name()) {
@@ -1580,7 +1580,7 @@ auto make_order_exception(const column_identifier::raw& col) {
 
 } // anonymous namespace
 
-std::vector<size_t> select_statement::prepare_group_by(schema_ptr schema, selection::selection& selection) const {
+std::vector<size_t> select_statement::prepare_group_by(const schema& schema, selection::selection& selection) const {
     if (_group_by_columns.empty()) {
         return {};
     }
@@ -1591,13 +1591,13 @@ std::vector<size_t> select_statement::prepare_group_by(schema_ptr schema, select
     // primary-key column is equality-restricted by the WHERE clause, it can be skipped in GROUP BY.
     // It's OK if GROUP BY columns list ends before the primary key is exhausted.
 
-    const auto key_size = schema->partition_key_size() + schema->clustering_key_size();
-    const auto all_columns = schema->all_columns_in_select_order();
+    const auto key_size = schema.partition_key_size() + schema.clustering_key_size();
+    const auto all_columns = schema.all_columns_in_select_order();
     uint32_t expected_index = 0; // Index of the next column we expect to encounter.
 
     using exceptions::invalid_request_exception;
     for (const auto& col : _group_by_columns) {
-        auto def = schema->get_column_definition(col->prepare_column_identifier(schema)->name());
+        auto def = schema.get_column_definition(col->prepare_column_identifier(schema)->name());
         if (!def) {
             throw invalid_request_exception(format("Group by unknown column {}", *col));
         }
@@ -1621,7 +1621,7 @@ std::vector<size_t> select_statement::prepare_group_by(schema_ptr schema, select
         indices.push_back(index != -1 ? index : selection.add_column_for_post_processing(*def));
     }
 
-    if (expected_index < schema->partition_key_size()) {
+    if (expected_index < schema.partition_key_size()) {
         throw invalid_request_exception(format("GROUP BY must include the entire partition key"));
     }
 

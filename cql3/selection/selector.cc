@@ -27,9 +27,9 @@ namespace cql3 {
 namespace selection {
 
 ::shared_ptr<column_specification>
-selector::factory::get_column_specification(schema_ptr schema) const {
-    return ::make_shared<column_specification>(schema->ks_name(),
-        schema->cf_name(),
+selector::factory::get_column_specification(const schema& schema) const {
+    return ::make_shared<column_specification>(schema.ks_name(),
+        schema.cf_name(),
         ::make_shared<column_identifier>(column_name(), true),
         get_return_type());
 }

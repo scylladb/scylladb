@@ -80,13 +80,13 @@ column_identifier::raw::raw(sstring raw_text, bool keep_case)
     }
 }
 
-::shared_ptr<selection::selectable> column_identifier::raw::prepare(schema_ptr s) {
+::shared_ptr<selection::selectable> column_identifier::raw::prepare(const schema& s) {
     return prepare_column_identifier(s);
 }
 
 ::shared_ptr<column_identifier>
-column_identifier::raw::prepare_column_identifier(schema_ptr schema) {
-    if (schema->regular_column_name_type() == utf8_type) {
+column_identifier::raw::prepare_column_identifier(const schema& schema) {
+    if (schema.regular_column_name_type() == utf8_type) {
         return ::make_shared<column_identifier>(_text, true);
     }
 
@@ -94,12 +94,12 @@ column_identifier::raw::prepare_column_identifier(schema_ptr schema) {
     // to get the correct ByteBuffer representation.  However, this doesn't apply to key aliases, so we need to
     // make a special check for those and treat them normally.  See CASSANDRA-8178.
     auto text_bytes = to_bytes(_text);
-    auto def = schema->get_column_definition(text_bytes);
+    auto def = schema.get_column_definition(text_bytes);
     if (def) {
         return ::make_shared<column_identifier>(std::move(text_bytes), _text);
     }
 
-    return ::make_shared<column_identifier>(schema->regular_column_name_type()->from_string(_raw_text), _text);
+    return ::make_shared<column_identifier>(schema.regular_column_name_type()->from_string(_raw_text), _text);
 }
 
 bool column_identifier::raw::processes_selection() const {
@@ -124,7 +124,7 @@ std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id) {
 
 ::shared_ptr<selection::selector::factory>
 column_identifier::new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) {
-    auto def = get_column_definition(schema, *this);
+    auto def = get_column_definition(*schema, *this);
     if (!def) {
         throw exceptions::invalid_request_exception(format("Undefined name {} in selection clause", _text));
     }

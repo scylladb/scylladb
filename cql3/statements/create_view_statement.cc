@@ -97,15 +97,15 @@ void create_view_statement::validate(service::storage_proxy& proxy, const servic
     }
 }
 
-static const column_definition* get_column_definition(schema_ptr schema, column_identifier::raw& identifier) {
+static const column_definition* get_column_definition(const schema& schema, column_identifier::raw& identifier) {
     auto prepared = identifier.prepare(schema);
     assert(dynamic_pointer_cast<column_identifier>(prepared));
     auto id = static_pointer_cast<column_identifier>(prepared);
-    return schema->get_column_definition(id->name());
+    return schema.get_column_definition(id->name());
 }
 
 static bool validate_primary_key(
-        schema_ptr schema,
+        const schema& schema,
         const column_definition* def,
         const std::unordered_set<const column_definition*>& base_pk,
         bool has_non_pk_column,
@@ -134,7 +134,7 @@ static bool validate_primary_key(
     // We don't need to include the "IS NOT NULL" filter on a non-composite partition key
     // because we will never allow a single partition key to be NULL
     bool is_non_composite_partition_key = def->is_partition_key() &&
-            schema->partition_key_columns().size() == 1;
+            schema.partition_key_columns().size() == 1;
     if (!is_non_composite_partition_key && !restrictions.is_restricted(def)) {
         throw exceptions::invalid_request_exception(format("Primary key column '{}' is required to be filtered by 'IS NOT NULL'", def->name_as_text()));
     }
@@ -214,7 +214,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
 
         assert(dynamic_pointer_cast<column_identifier::raw>(selectable));
         auto identifier = static_pointer_cast<column_identifier::raw>(selectable);
-        auto* def = get_column_definition(schema, *identifier);
+        auto* def = get_column_definition(*schema, *identifier);
         if (!def) {
             throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement: {}", identifier));
         }
@@ -245,7 +245,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     std::vector<const column_definition*> target_clustering_keys;
     auto validate_pk = [&] (const std::vector<::shared_ptr<cql3::column_identifier::raw>>& keys, std::vector<const column_definition*>& target_keys) mutable {
         for (auto&& identifier : keys) {
-            auto* def = get_column_definition(schema, *identifier);
+            auto* def = get_column_definition(*schema, *identifier);
             if (!def) {
                 throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement: {}", identifier));
             }
@@ -253,7 +253,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
                 throw exceptions::invalid_request_exception(format("Duplicate entry found in PRIMARY KEY: {}", identifier));
             }
             target_keys.push_back(def);
-            has_non_pk_column |= validate_primary_key(schema, def, base_primary_key_cols, has_non_pk_column, *restrictions);
+            has_non_pk_column |= validate_primary_key(*schema, def, base_primary_key_cols, has_non_pk_column, *restrictions);
         }
     };
     validate_pk(_partition_keys, target_partition_keys);

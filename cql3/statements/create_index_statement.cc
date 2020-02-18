@@ -99,7 +99,7 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
 
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {
-        targets.emplace_back(raw_target->prepare(schema));
+        targets.emplace_back(raw_target->prepare(*schema));
     }
 
     if (targets.empty() && !_properties->is_custom) {
@@ -180,7 +180,7 @@ void create_index_statement::validate_for_local_index(schema_ptr schema) const {
     if (!_raw_targets.empty()) {
             if (const auto* index_pk = std::get_if<std::vector<::shared_ptr<column_identifier::raw>>>(&_raw_targets.front()->value)) {
                 auto base_pk_identifiers = *index_pk | boost::adaptors::transformed([&schema] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
-                    return raw_ident->prepare_column_identifier(schema);
+                    return raw_ident->prepare_column_identifier(*schema);
                 });
                 auto remaining_base_pk_columns = schema->partition_key_columns();
                 auto next_expected_base_column = remaining_base_pk_columns.begin();
@@ -279,7 +279,7 @@ create_index_statement::announce_migration(service::storage_proxy& proxy, bool i
     auto schema = db.find_schema(keyspace(), column_family());
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {
-        targets.emplace_back(raw_target->prepare(schema));
+        targets.emplace_back(raw_target->prepare(*schema));
     }
     sstring accepted_name = _index_name;
     if (accepted_name.empty()) {

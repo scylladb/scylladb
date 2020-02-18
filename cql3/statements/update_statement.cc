@@ -328,8 +328,8 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
     std::unordered_set<bytes> column_ids;
     for (size_t i = 0; i < _column_names.size(); i++) {
         auto&& col = _column_names[i];
-        auto id = col->prepare_column_identifier(schema);
-        auto def = get_column_definition(schema, *id);
+        auto id = col->prepare_column_identifier(*schema);
+        auto def = get_column_definition(*schema, *id);
         if (!def) {
             throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
         }
@@ -395,8 +395,8 @@ update_statement::prepare_internal(database& db, schema_ptr schema,
     auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, bound_names.size(), schema, std::move(attrs), stats);
 
     for (auto&& entry : _updates) {
-        auto id = entry.first->prepare_column_identifier(schema);
-        auto def = get_column_definition(schema, *id);
+        auto id = entry.first->prepare_column_identifier(*schema);
+        auto def = get_column_definition(*schema, *id);
         if (!def) {
             throw exceptions::invalid_request_exception(format("Unknown identifier {}", *entry.first));
         }

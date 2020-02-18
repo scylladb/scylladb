@@ -215,7 +215,7 @@ bool modification_statement::applies_to(const update_parameters::prefetch_data::
     //   CREATE TABLE t(p int, c int, s int static, PRIMARY KEY(p, c));
     //   INSERT INTO t(p, c) VALUES(1, 1);
     //   INSERT INTO t(p, s) VALUES(1, 1) IF NOT EXISTS;
-    if (has_only_static_column_conditions() && row && !row->has_static_columns(s)) {
+    if (has_only_static_column_conditions() && row && !row->has_static_columns(*s)) {
         row = nullptr;
     }
 
@@ -537,7 +537,7 @@ modification_statement::prepare(database& db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
     auto statement = prepare(db, bound_names, stats);
-    auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(schema);
+    auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(*schema);
     return std::make_unique<prepared_statement>(std::move(statement), bound_names, std::move(partition_key_bind_indices));
 }
 
@@ -575,8 +575,8 @@ modification_statement::prepare_conditions(database& db, schema_ptr schema, vari
             stmt.set_if_exist_condition();
         } else {
             for (auto&& entry : _conditions) {
-                auto id = entry.first->prepare_column_identifier(schema);
-                const column_definition* def = get_column_definition(schema, *id);
+                auto id = entry.first->prepare_column_identifier(*schema);
+                const column_definition* def = get_column_definition(*schema, *id);
                 if (!def) {
                     throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
                 }

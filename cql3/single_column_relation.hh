@@ -157,7 +157,7 @@ protected:
             variable_specifications& bound_names,
             statements::bound bound,
             bool inclusive) override {
-        auto&& column_def = to_column_definition(schema, _entity);
+        auto&& column_def = to_column_definition(*schema, _entity);
 
         if (column_def.type->references_duration()) {
             using statements::request_validations::check_false;
@@ -171,15 +171,15 @@ protected:
             throw exceptions::invalid_request_exception("Slice restrictions are not supported on duration columns");
         }
 
-        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), bound_names);
+        auto term = to_term(to_receivers(*schema, column_def), _value, db, schema->ks_name(), bound_names);
         return ::make_shared<restrictions::single_column_restriction::slice>(column_def, bound, inclusive, std::move(term));
     }
 
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
                                                  variable_specifications& bound_names,
                                                  bool is_key) override {
-        auto&& column_def = to_column_definition(schema, _entity);
-        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), bound_names);
+        auto&& column_def = to_column_definition(*schema, _entity);
+        auto term = to_term(to_receivers(*schema, column_def), _value, db, schema->ks_name(), bound_names);
         return ::make_shared<restrictions::single_column_restriction::contains>(column_def, std::move(term), is_key);
     }
 
@@ -202,7 +202,7 @@ private:
      * @return the receivers for the specified relation.
      * @throws exceptions::invalid_request_exception if the relation is invalid
      */
-    std::vector<::shared_ptr<column_specification>> to_receivers(schema_ptr schema, const column_definition& column_def) const;
+    std::vector<::shared_ptr<column_specification>> to_receivers(const schema& schema, const column_definition& column_def) const;
 
     static shared_ptr<column_specification> make_collection_receiver(shared_ptr<column_specification> receiver, bool for_key) {
         return static_cast<const collection_type_impl*>(receiver->type.get())->make_collection_receiver(*receiver, for_key);

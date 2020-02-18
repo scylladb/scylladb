@@ -285,7 +285,7 @@ protected:
      * @return the column definition corresponding to the specified entity
      * @throws InvalidRequestException if the entity cannot be recognized
      */
-    virtual const column_definition& to_column_definition(schema_ptr schema, ::shared_ptr<column_identifier::raw> entity) final;
+    virtual const column_definition& to_column_definition(const schema& schema, ::shared_ptr<column_identifier::raw> entity) final;
 };
 
 using relation_ptr = ::shared_ptr<relation>;

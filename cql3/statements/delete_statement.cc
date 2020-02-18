@@ -85,8 +85,8 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, variable_spe
     auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, bound_names.size(), schema, std::move(attrs), stats);
 
     for (auto&& deletion : _deletions) {
-        auto&& id = deletion->affected_column()->prepare_column_identifier(schema);
-        auto def = get_column_definition(schema, *id);
+        auto&& id = deletion->affected_column()->prepare_column_identifier(*schema);
+        auto def = get_column_definition(*schema, *id);
         if (!def) {
             throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
         }

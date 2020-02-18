@@ -119,9 +119,9 @@ index_target::raw::columns(std::vector<::shared_ptr<column_identifier::raw>> c) 
 }
 
 ::shared_ptr<index_target>
-index_target::raw::prepare(schema_ptr schema) {
+index_target::raw::prepare(const schema& s) {
     struct prepare_visitor {
-        schema_ptr _schema;
+        const schema& _schema;
         target_type _type;
 
         ::shared_ptr<index_target> operator()(const std::vector<::shared_ptr<column_identifier::raw>>& columns) const {
@@ -138,7 +138,7 @@ index_target::raw::prepare(schema_ptr schema) {
         }
     };
 
-    return std::visit(prepare_visitor{schema, type}, value);
+    return std::visit(prepare_visitor{s, type}, value);
 }
 
 sstring to_sstring(index_target::target_type type)

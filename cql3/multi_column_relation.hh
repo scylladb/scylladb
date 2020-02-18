@@ -139,7 +139,7 @@ public:
 protected:
     virtual shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
                                                                      variable_specifications& bound_names) override {
-        auto rs = receivers(db, schema);
+        auto rs = receivers(db, *schema);
         std::vector<::shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
@@ -150,7 +150,7 @@ protected:
 
     virtual shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
                                                                      variable_specifications& bound_names) override {
-        auto rs = receivers(db, schema);
+        auto rs = receivers(db, *schema);
         std::vector<::shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
@@ -174,7 +174,7 @@ protected:
     virtual shared_ptr<restrictions::restriction> new_slice_restriction(database& db, schema_ptr schema,
                                                                         variable_specifications& bound_names,
                                                                         statements::bound bound, bool inclusive) override {
-        auto rs = receivers(db, schema);
+        auto rs = receivers(db, *schema);
         std::vector<::shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
@@ -209,7 +209,7 @@ protected:
         return t;
     }
 
-    std::vector<const column_definition*> receivers(database& db, schema_ptr schema) {
+    std::vector<const column_definition*> receivers(database& db, const schema& schema) {
         using namespace statements::request_validations;
 
         int previous_position = -1;

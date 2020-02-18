@@ -204,8 +204,8 @@ statement_restrictions::statement_restrictions(database& db,
                 // "IS NOT", so this assertion should not be able to fail
                 assert(r->get_value() == cql3::constants::NULL_LITERAL);
 
-                auto col_id = r->get_entity()->prepare_column_identifier(schema);
-                const auto *cd = get_column_definition(schema, *col_id);
+                auto col_id = r->get_entity()->prepare_column_identifier(*schema);
+                const auto *cd = get_column_definition(*schema, *col_id);
                 if (!cd) {
                     throw exceptions::invalid_request_exception(format("restriction '{}' unknown column {}", relation->to_string(), r->get_entity()->to_string()));
                 }

@@ -63,13 +63,13 @@ std::vector<::shared_ptr<column_specification>> variable_specifications::get_spe
     return std::move(_specs);
 }
 
-std::vector<uint16_t> variable_specifications::get_partition_key_bind_indexes(schema_ptr schema) const {
-    auto count = schema->partition_key_columns().size();
+std::vector<uint16_t> variable_specifications::get_partition_key_bind_indexes(const schema& schema) const {
+    auto count = schema.partition_key_columns().size();
     std::vector<uint16_t> partition_key_positions(count, uint16_t(0));
     std::vector<bool> set(count, false);
     for (size_t i = 0; i < _target_columns.size(); i++) {
         auto& target_column = _target_columns[i];
-        const auto* cdef = target_column ? schema->get_column_definition(target_column->name->name()) : nullptr;
+        const auto* cdef = target_column ? schema.get_column_definition(target_column->name->name()) : nullptr;
         if (cdef && cdef->is_partition_key()) {
             partition_key_positions[cdef->position()] = i;
             set[cdef->position()] = true;

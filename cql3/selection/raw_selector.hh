@@ -66,7 +66,7 @@ public:
      * @return a list of <code>Selectable</code>s
      */
     static std::vector<::shared_ptr<selectable>> to_selectables(const std::vector<::shared_ptr<raw_selector>>& raws,
-            schema_ptr schema) {
+            const schema& schema) {
         std::vector<::shared_ptr<selectable>> r;
         r.reserve(raws.size());
         for (auto&& raw : raws) {

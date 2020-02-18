@@ -44,19 +44,19 @@
 #include "term.hh"
 #include "to_string.hh"
 
-std::vector<const column_definition*> cql3::token_relation::get_column_definitions(schema_ptr s) {
+std::vector<const column_definition*> cql3::token_relation::get_column_definitions(const schema& s) {
     std::vector<const column_definition*> res;
     std::transform(_entities.begin(), _entities.end(), std::back_inserter(res),
-            [this, s](auto& cr) {
+            [this, &s](auto& cr) {
                 return &this->to_column_definition(s, cr);
             });
     return res;
 }
 
 std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_receivers(
-        schema_ptr schema,
+        const schema& schema,
         const std::vector<const column_definition*>& column_defs) const {
-    auto pk = schema->partition_key_columns();
+    auto pk = schema.partition_key_columns();
     if (!std::equal(column_defs.begin(), column_defs.end(), pk.begin(),
             pk.end(), [](auto* c1, auto& c2) {
                 return c1 == &c2; // same, not "equal".
@@ -74,7 +74,7 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
                         std::to_string(column_defs)));
     }
     //auto* c = column_defs.front();
-    return {::make_shared<column_specification>(schema->ks_name(), schema->cf_name(),
+    return {::make_shared<column_specification>(schema.ks_name(), schema.cf_name(),
                 ::make_shared<column_identifier>("partition key token", true),
                 dht::token::get_token_validator())};
 }
@@ -82,8 +82,8 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
 ::shared_ptr<cql3::restrictions::restriction> cql3::token_relation::new_EQ_restriction(
         database& db, schema_ptr schema,
         variable_specifications& bound_names) {
-    auto column_defs = get_column_definitions(schema);
-    auto term = to_term(to_receivers(schema, column_defs), _value, db,
+    auto column_defs = get_column_definitions(*schema);
+    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
             schema->ks_name(), bound_names);
     return ::make_shared<restrictions::token_restriction::EQ>(column_defs, term);
 }
@@ -101,8 +101,8 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
         variable_specifications& bound_names,
         statements::bound bound,
         bool inclusive) {
-    auto column_defs = get_column_definitions(schema);
-    auto term = to_term(to_receivers(schema, column_defs), _value, db,
+    auto column_defs = get_column_definitions(*schema);
+    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
             schema->ks_name(), bound_names);
     return ::make_shared<restrictions::token_restriction::slice>(column_defs,
             bound, inclusive, term);

@@ -158,7 +158,7 @@ public:
     }
 
     virtual size_t prefix_size() const override {
-        return primary_key_restrictions<ValueType>::prefix_size(_schema);
+        return primary_key_restrictions<ValueType>::prefix_size(*_schema);
     }
 
     ::shared_ptr<single_column_primary_key_restrictions<clustering_key>> get_longest_prefix_restrictions() {
