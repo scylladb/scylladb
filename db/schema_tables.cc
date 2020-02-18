@@ -1073,7 +1073,14 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
 
     proxy.local().get_db().invoke_on_all([&] (database& db) {
         return seastar::async([&] {
-            parallel_for_each(boost::range::join(tables_diff.dropped, views_diff.dropped), [&] (schema_diff::dropped_schema& dt) {
+            // First drop views and *only then* the tables, if interleaved it can lead
+            // to a mv not finding its schema when snapshoting since the main table
+            // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
+            parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) {
+                auto& s = *dt.schema.get();
+                return db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+            }).get();
+            parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) {
                 auto& s = *dt.schema.get();
                 return db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
             }).get();
