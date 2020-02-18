@@ -2183,6 +2183,14 @@ future<> storage_proxy::send_to_endpoint(
             allow_hints);
 }
 
+future<> storage_proxy::mutate_hint_from_scratch(frozen_mutation_and_schema fm_a_s) {
+    // FIXME: using 1h as infinite timeout. If a node is down, we should get an
+    // unavailable exception.
+    const auto timeout = db::timeout_clock::now() + 1h;
+    std::array<mutation, 1> ms{fm_a_s.fm.unfreeze(fm_a_s.s)};
+    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit(), timeout);
+}
+
 /**
  * Send the mutations to the right targets, write it locally if it corresponds or writes a hint when the node
  * is not available.

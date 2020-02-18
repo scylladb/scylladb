@@ -459,6 +459,8 @@ public:
     */
     future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit);
 
+    future<> mutate_hint_from_scratch(frozen_mutation_and_schema fm_a_s);
+
     // Send a mutation to one specific remote target.
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
