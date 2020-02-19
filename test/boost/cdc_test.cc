@@ -464,6 +464,45 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
     }, mk_cdc_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_range_deletion) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {'enabled':'true'}");
+        cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 123 AND ck > 1 AND ck < 23");
+        cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 123 AND ck >= 4 AND ck <= 56");
+
+        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_ck\", operation FROM ks.{}", cdc::log_name("tbl"))).get0();
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        BOOST_REQUIRE(rows);
+
+        auto results = to_bytes(*rows);
+        sort_by_time(*rows, results);
+
+        auto ck_index = column_index(*rows, "_ck");
+        auto ck_type = int32_type;
+        auto op_index = column_index(*rows, "operation");
+        auto op_type = data_type_for<std::underlying_type_t<cdc::operation>>();
+
+        size_t row_idx = 0;
+
+        auto check_row = [&](int32_t ck, cdc::operation operation) {
+            BOOST_TEST_MESSAGE(format("{}", results[row_idx][ck_index]));
+            BOOST_TEST_MESSAGE(format("{}", bytes_opt(ck_type->decompose(ck))));
+            BOOST_REQUIRE_EQUAL(results[row_idx][ck_index], bytes_opt(ck_type->decompose(ck)));
+            BOOST_REQUIRE_EQUAL(results[row_idx][op_index], bytes_opt(op_type->decompose(std::underlying_type_t<cdc::operation>(operation))));
+            ++row_idx;
+        };
+
+        BOOST_REQUIRE_EQUAL(results.size(), 4);
+
+        // ck > 1 AND ck < 23
+        check_row(1, cdc::operation::range_delete_start_exclusive);
+        check_row(23, cdc::operation::range_delete_end_exclusive);
+        // ck >= 4 AND ck <= 56
+        check_row(4, cdc::operation::range_delete_start_inclusive);
+        check_row(56, cdc::operation::range_delete_end_inclusive);
+    }, mk_cdc_test_config()).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_add_columns) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
