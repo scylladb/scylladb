@@ -243,7 +243,7 @@ static std::string get_string_attribute(const rjson::value& value, rjson::string
         throw api_error("ValidationException", format("Expected string value for attribute {}, got: {}",
                 attribute_name, value));
     }
-    return attribute_value->GetString();
+    return std::string(attribute_value->GetString(), attribute_value->GetStringLength());
 }
 
 // Convenience function for getting the value of a boolean attribute, or a
