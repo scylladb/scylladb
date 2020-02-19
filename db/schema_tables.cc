@@ -1073,11 +1073,24 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
 
     proxy.local().get_db().invoke_on_all([&] (database& db) {
         return seastar::async([&] {
-            parallel_for_each(boost::range::join(tables_diff.dropped, views_diff.dropped), [&] (schema_diff::dropped_schema& dt) {
+            // First drop views and *only then* the tables, if interleaved it can lead
+            // to a mv not finding its schema when snapshoting since the main table
+            // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
+            parallel_for_each(views_diff.dropped, [&] (schema_diff::dropped_schema& dt) {
                 auto& s = *dt.schema.get();
                 return db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
             }).get();
-            parallel_for_each(boost::range::join(tables_diff.created, views_diff.created), [&] (global_schema_ptr& gs) {
+            parallel_for_each(tables_diff.dropped, [&] (schema_diff::dropped_schema& dt) {
+                auto& s = *dt.schema.get();
+                return db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+            }).get();
+            
+            // In order to avoid possible races we first create the tables and only then the views.
+            // That way if a view seeks information about its base table it's guarantied to find it.
+            parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) {
+                return db.add_column_family_and_make_directory(gs);
+            }).get();
+            parallel_for_each(views_diff.created, [&] (global_schema_ptr& gs) {
                 return db.add_column_family_and_make_directory(gs);
             }).get();
             for (auto&& gs : boost::range::join(tables_diff.created, views_diff.created)) {
