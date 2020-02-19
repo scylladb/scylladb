@@ -405,7 +405,7 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_m
             return _proxy.send_hint_to_endpoint(std::move(m), end_point_key());
         } else {
             manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
-            return _proxy.mutate_hint_from_scratch(std::move(m));
+            return _proxy.send_hint_to_all_replicas(std::move(m));
         }
     });
 }
