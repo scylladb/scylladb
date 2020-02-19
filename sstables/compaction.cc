@@ -453,6 +453,11 @@ protected:
     encoding_stats get_encoding_stats() const {
         return _stats_collector.get();
     }
+
+    virtual compaction_completion_desc
+    get_compaction_completion_desc(std::vector<shared_sstable> input_sstables, std::vector<shared_sstable> output_sstables) {
+        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables)};
+    }
 public:
     compaction& operator=(const compaction&) = delete;
     compaction(const compaction&) = delete;
@@ -829,7 +834,7 @@ private:
                 _compacting->erase(sst);
             });
             auto exhausted_ssts = std::vector<shared_sstable>(exhausted, _sstables.end());
-            _replacer(compaction_completion_desc{exhausted_ssts, std::move(_new_unused_sstables)});
+            _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
             backlog_tracker_incrementally_adjust_charges(std::move(exhausted_ssts));
         }
@@ -839,7 +844,7 @@ private:
         if (!_sstables.empty()) {
             std::vector<shared_sstable> sstables_compacted;
             std::move(_sstables.begin(), _sstables.end(), std::back_inserter(sstables_compacted));
-            _replacer(compaction_completion_desc{std::move(sstables_compacted), std::move(_new_unused_sstables)});
+            _replacer(get_compaction_completion_desc(std::move(sstables_compacted), std::move(_new_unused_sstables)));
         }
     }
 
