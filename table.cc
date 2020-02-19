@@ -1203,7 +1203,10 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
     // rebuilding _sstables_compacted_but_not_deleted first to make the entire rebuild operation exception safe.
     new_compacted_but_not_deleted.insert(new_compacted_but_not_deleted.end(), desc.input_sstables.begin(), desc.input_sstables.end());
 
-    rebuild_sstable_list(desc.output_sstables, desc.input_sstables);
+    _cache.invalidate([this, &desc] () noexcept {
+        // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
+        rebuild_sstable_list(desc.output_sstables, desc.input_sstables);
+    }, std::move(desc.ranges_for_cache_invalidation)).get();
 
     // refresh underlying data source in row cache to prevent it from holding reference
     // to sstables files that are about to be deleted.
