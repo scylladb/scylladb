@@ -59,6 +59,18 @@ def test_expired_signature(dynamodb, test_table):
     assert not response.ok
     assert "InvalidSignatureException" in response.text and "Signature expired" in response.text
 
+# A test verifying that missing Authorization header is handled properly
+def test_no_authorization_header(dynamodb, test_table):
+    url = dynamodb.meta.client._endpoint.host
+    print(url)
+    headers = {'Content-Type': 'application/x-amz-json-1.0',
+               'X-Amz-Date': '20170101T010101Z',
+               'X-Amz-Target': 'DynamoDB_20120810.DescribeEndpoints',
+    }
+    response = requests.post(url, headers=headers, verify=False)
+    assert not response.ok
+    assert "InvalidSignatureException" in response.text and "Authorization header" in response.text
+
 # A test ensuring that signatures that exceed current time too much are not accepted.
 # Watch out - this test is valid only for around next 1000 years, it needs to be updated later.
 def test_signature_too_futuristic(dynamodb, test_table):

@@ -191,7 +191,7 @@ future<> server::verify_signature(const request& req) {
         throw api_error("InvalidSignatureException", "Host header is mandatory for signature verification");
     }
     auto authorization_it = req._headers.find("Authorization");
-    if (host_it == req._headers.end()) {
+    if (authorization_it == req._headers.end()) {
         throw api_error("InvalidSignatureException", "Authorization header is mandatory for signature verification");
     }
     std::string host = host_it->second;
