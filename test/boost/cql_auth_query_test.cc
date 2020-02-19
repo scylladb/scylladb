@@ -25,6 +25,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/testing/test_case.hh>
 #include <seastar/util/defer.hh>
 
 #include "auth/authenticated_user.hh"
@@ -39,7 +40,7 @@
 #include "seastarx.hh"
 #include "service/client_state.hh"
 #include "test/lib/cql_test_env.hh"
-#include <seastar/testing/test_case.hh>
+#include "test/lib/cql_assertions.hh"
 
 static const auto alice = std::string_view("alice");
 static const auto bob = std::string_view("bob");
@@ -324,5 +325,32 @@ SEASTAR_TEST_CASE(create_table_default_permissions) {
                 "GRANT CREATE ON KEYSPACE ks TO alice",
                 "CREATE TABLE orcs (id int PRIMARY KEY, strength int)",
                 auth::make_data_resource("ks", "orcs"));
+    }, db_config_with_auth());
+}
+
+SEASTAR_TEST_CASE(modify_table_with_view) {
+    return do_with_cql_env_thread([](auto&& env) {
+        cquery_nofail(env, "CREATE TABLE t (p int PRIMARY KEY)");
+        cquery_nofail(env, "CREATE MATERIALIZED VIEW v AS SELECT * FROM t WHERE p > 0 PRIMARY KEY (p)");
+        create_user_if_not_exists(env, bob);
+        cquery_nofail(env, "GRANT ALL PERMISSIONS ON t TO bob");
+        with_user(env, bob, [&env] {
+            cquery_nofail(env, "INSERT INTO t (p) values (1337)");
+        });
+        assert_that(cquery_nofail(env, "SELECT * FROM v;")).is_rows().with_rows({{int32_type->decompose(1337)}});
+    }, db_config_with_auth());
+}
+
+SEASTAR_TEST_CASE(modify_table_with_index) {
+    return do_with_cql_env_thread([](auto&& env) {
+        cquery_nofail(env, "CREATE TABLE t (p int PRIMARY KEY, v text)");
+        cquery_nofail(env, "CREATE INDEX ON t(v)");
+        create_user_if_not_exists(env, bob);
+        cquery_nofail(env, "GRANT ALL PERMISSIONS ON t TO bob");
+        with_user(env, bob, [&env] {
+            cquery_nofail(env, "INSERT INTO t (p, v) values (14, 'aaa')");
+        });
+        assert_that(cquery_nofail(env, "SELECT p FROM t WHERE v='aaa' ALLOW FILTERING;")).is_rows().with_rows(
+                {{int32_type->decompose(14)}});
     }, db_config_with_auth());
 }

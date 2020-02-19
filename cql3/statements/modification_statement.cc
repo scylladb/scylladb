@@ -151,19 +151,6 @@ future<> modification_statement::check_access(const service::client_state& state
            return state.has_column_family_access(keyspace(), column_family(), auth::permission::SELECT);
         });
     }
-    // MV updates need to get the current state from the table, and might update the views
-    // Require Permission.SELECT on the base table, and Permission.MODIFY on the views
-    auto& db = service::get_local_storage_service().db().local();
-    auto&& views = db.find_column_family(keyspace(), column_family()).views();
-    if (!views.empty()) {
-        f = f.then([this, &state] {
-            return state.has_column_family_access(keyspace(), column_family(), auth::permission::SELECT);
-        }).then([this, &state, views = std::move(views)] {
-            return parallel_for_each(views, [this, &state] (auto&& view) {
-                return state.has_column_family_access(this->keyspace(), view->cf_name(), auth::permission::MODIFY);
-            });
-        });
-    }
     return f;
 }
 
