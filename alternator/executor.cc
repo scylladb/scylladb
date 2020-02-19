@@ -1074,10 +1074,39 @@ static dht::partition_range_vector to_partition_ranges(const dht::decorated_key&
     return dht::partition_range_vector{dht::partition_range(pk)};
 }
 
+// Parse the different options for the ReturnValues parameter. We parse all
+// the known options, but only UpdateItem actually supports all of them. The
+// other operations (DeleteItem and PutItem) will refuse some of them.
+rmw_operation::returnvalues rmw_operation::parse_returnvalues(const rjson::value& request) {
+    const rjson::value* attribute_value = rjson::find(request, "ReturnValues");
+    if (!attribute_value) {
+        return rmw_operation::returnvalues::NONE;
+    }
+    if (!attribute_value->IsString()) {
+        throw api_error("ValidationException", format("Expected string value for ReturnValues, got: {}", *attribute_value));
+    }
+    auto s = rjson::to_string_view(*attribute_value);
+    if (s == "NONE") {
+        return rmw_operation::returnvalues::NONE;
+    } else if (s == "ALL_OLD") {
+        return rmw_operation::returnvalues::ALL_OLD;
+    } else if (s == "UPDATED_OLD") {
+        return rmw_operation::returnvalues::UPDATED_OLD;
+    } else if (s == "ALL_NEW") {
+        return rmw_operation::returnvalues::ALL_NEW;
+    } else if (s == "UPDATED_NEW") {
+        return rmw_operation::returnvalues::UPDATED_NEW;
+    } else {
+        throw api_error("ValidationException", format("Unrecognized value for ReturnValues: {}", s));
+    }
+}
+
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
     : _request(std::move(request))
     , _schema(get_table(proxy, _request))
-    , _write_isolation(get_write_isolation_for_schema(_schema)) {
+    , _write_isolation(get_write_isolation_for_schema(_schema))
+    , _returnvalues(parse_returnvalues(_request))
+{
     // _pk and _ck will be assigned later, by the subclass's constructor
     // (each operation puts the key in a slightly different location in
     // the request).
@@ -1139,6 +1168,22 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
     return desired_shard;
 }
 
+// Build the return value from the different RMW operations (UpdateItem,
+// PutItem, DeleteItem). All these return nothing by default, but can
+// optionally return Attributes if requested via the ReturnValues option.
+static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes) {
+    // As an optimization, in the simple and common case that nothing is to be
+    // returned, quickly return an empty result:
+    if (attributes.IsNull()) {
+        return make_ready_future<executor::request_return_type>(json_string(""));
+    }
+    rjson::value ret = rjson::empty_object();
+    if (!attributes.IsNull()) {
+        rjson::set(ret, "Attributes", std::move(attributes));
+    }
+    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+}
+
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
@@ -1153,22 +1198,20 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, stats).then([this, &client_state, &proxy, trace_state] (std::unique_ptr<rjson::value> previous_item) mutable {
-                std::optional<mutation> m = apply(previous_item, api::new_timestamp());
+                std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp());
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([] () {
-                    // Without special options on what to return, all these
-                    // operations return nothing. FIXME: support those options
-                    return make_ready_future<executor::request_return_type>(json_string(""));
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([this] () mutable {
+                    return rmw_operation_return(std::move(_return_attributes));
                 });
             });
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         assert(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([] () {
-            return make_ready_future<executor::request_return_type>(json_string(""));
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([this] () mutable {
+            return rmw_operation_return(std::move(_return_attributes));
         });
     }
     // If we're still here, we need to do this write using LWT:
@@ -1180,11 +1223,11 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             read_nothing_read_command(schema());
     return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
             {timeout, empty_service_permit(), client_state, trace_state},
-            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([read_command] (bool is_applied) {
+            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command] (bool is_applied) mutable {
         if (!is_applied) {
             return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
         }
-        return make_ready_future<executor::request_return_type>(json_string(""));
+        return rmw_operation_return(std::move(_return_attributes));
     });
 }
 
@@ -1246,14 +1289,17 @@ public:
         , _mutation_builder(rjson::get(_request, "Item"), schema(), put_or_delete_item::put_item{}) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
-        auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
-        if (return_values != "NONE") {
-            // FIXME: Need to support also the ALL_OLD option. See issue #5053.
-            throw api_error("ValidationException", format("Unsupported ReturnValues={} for PutItem operation", return_values));
+        if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
+            throw api_error("ValidationException", format("PutItem supports only NONE or ALL_OLD for ReturnValues"));
         }
         _condition_expression = get_parsed_condition_expression(_request);
     }
-    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) override {
+    bool needs_read_before_write() const {
+        return _request.HasMember("Expected") ||
+               check_needs_read_before_write(_condition_expression) ||
+               _returnvalues == returnvalues::ALL_OLD;
+    }
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) override {
         std::unordered_set<std::string> used_attribute_values;
         std::unordered_set<std::string> used_attribute_names;
         if (!verify_expected(_request, previous_item) ||
@@ -1264,6 +1310,14 @@ public:
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
             return {};
+        }
+        if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
+            // previous_item is supposed to have been created with
+            // describe_item(), so has the "Item" attribute:
+            rjson::value* item = rjson::find(*previous_item, "Item");
+            if (item) {
+                _return_attributes = std::move(*item);
+            }
         }
         if (!_condition_expression.empty()) {
             verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
@@ -1282,8 +1336,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
 
     auto op = make_shared<put_item_operation>(_proxy, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
-    const bool needs_read_before_write = op->request().HasMember("Expected") ||
-            check_needs_read_before_write(op->_condition_expression);
+    const bool needs_read_before_write = op->needs_read_before_write();
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
@@ -1312,14 +1365,17 @@ public:
         , _mutation_builder(rjson::get(_request, "Key"), schema(), put_or_delete_item::delete_item{}) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
-        auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
-        if (return_values != "NONE") {
-            // FIXME: Need to support also the ALL_OLD option. See issue #5053.
-            throw api_error("ValidationException", format("Unsupported ReturnValues={} for DeleteItem operation", return_values));
+        if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
+            throw api_error("ValidationException", format("DeleteItem supports only NONE or ALL_OLD for ReturnValues"));
         }
         _condition_expression = get_parsed_condition_expression(_request);
     }
-    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) override {
+    bool needs_read_before_write() const {
+        return _request.HasMember("Expected") ||
+                check_needs_read_before_write(_condition_expression) ||
+                _returnvalues == returnvalues::ALL_OLD;
+    }
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) override {
         std::unordered_set<std::string> used_attribute_values;
         std::unordered_set<std::string> used_attribute_names;
         if (!verify_expected(_request, previous_item) ||
@@ -1330,6 +1386,12 @@ public:
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
             return {};
+        }
+        if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
+            rjson::value* item = rjson::find(*previous_item, "Item");
+            if (item) {
+                _return_attributes = std::move(*item);
+            }
         }
         if (!_condition_expression.empty()) {
             verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
@@ -1348,8 +1410,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
 
     auto op = make_shared<delete_item_operation>(_proxy, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
-    const bool needs_read_before_write = op->request().HasMember("Expected") ||
-            check_needs_read_before_write(op->_condition_expression);
+    const bool needs_read_before_write = op->needs_read_before_write();
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
@@ -2215,17 +2276,16 @@ public:
 
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
     virtual ~update_item_operation() = default;
-    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) override;
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) override;
+    bool needs_read_before_write() const;
 };
 
 update_item_operation::update_item_operation(service::storage_proxy& proxy, rjson::value&& update_info)
     : rmw_operation(proxy, std::move(update_info))
 {
-    auto return_values = get_string_attribute(_request, "ReturnValues", "NONE");
-    if (return_values != "NONE") {
-        // FIXME: Need to support also ALL_OLD, UPDATED_OLD, ALL_NEW and UPDATED_NEW options. See issue #5053.
-        throw api_error("ValidationException",
-                format("Unsupported ReturnValues={} for UpdateItem operation", return_values));
+    if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
+        // FIXME: Need to support also UPDATED_OLD, ALL_NEW and UPDATED_NEW options.
+        throw api_error("ValidationException", format("UpdateItem support for ReturnValues options UPDATED_OLD, ALL_NEW and UPDATED_NEW not yet implemented."));
     }
     const rjson::value* key = rjson::find(_request, "Key");
     if (!key) {
@@ -2275,8 +2335,16 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
     }
 }
 
+bool
+update_item_operation::needs_read_before_write() const {
+    return check_needs_read_before_write(_update_expression) ||
+           check_needs_read_before_write(_condition_expression) ||
+           _request.HasMember("Expected") ||
+           (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::UPDATED_NEW);
+}
+
 std::optional<mutation>
-update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) {
+update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) {
     std::unordered_set<std::string> used_attribute_values;
     std::unordered_set<std::string> used_attribute_names;
     if (!verify_expected(_request, previous_item) ||
@@ -2370,6 +2438,12 @@ update_item_operation::apply(const std::unique_ptr<rjson::value>& previous_item,
             }, action._action);
         }
     }
+    if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
+        rjson::value* item = rjson::find(*previous_item, "Item");
+        if (item) {
+            _return_attributes = std::move(*item);
+        }
+    }
     if (!_update_expression.empty() || !_condition_expression.empty()) {
         verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
         verify_all_are_used(_request, "ExpressionAttributeValues", used_attribute_values, "UpdateExpression");
@@ -2427,9 +2501,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
 
     auto op = make_shared<update_item_operation>(_proxy, std::move(update_info));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
-    const bool needs_read_before_write = check_needs_read_before_write(op->_update_expression) ||
-                    check_needs_read_before_write(op->_condition_expression) ||
-                    op->request().HasMember("Expected");
+    const bool needs_read_before_write = op->needs_read_before_write();
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;

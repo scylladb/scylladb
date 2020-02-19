@@ -58,7 +58,6 @@ def test_trivial_returnvalues(test_table_s):
 # Test the ReturnValues parameter on a PutItem operation. Only two settings
 # are supported for this parameter for this operation: NONE (the default)
 # and ALL_OLD.
-@pytest.mark.xfail(reason="ReturnValues not supported")
 def test_put_item_returnvalues(test_table_s):
     # By default, the previous value of an item is not returned:
     p = random_string()
@@ -100,7 +99,6 @@ def test_put_item_returnvalues(test_table_s):
 # Test the ReturnValues parameter on a DeleteItem operation. Only two settings
 # are supported for this parameter for this operation: NONE (the default)
 # and ALL_OLD.
-@pytest.mark.xfail(reason="ReturnValues not supported")
 def test_delete_item_returnvalues(test_table_s):
     # By default, the previous value of an item is not returned:
     p = random_string()
@@ -175,7 +173,6 @@ def test_update_item_returnvalues_none(test_table_s):
             UpdateExpression='SET a = :val',
             ExpressionAttributeValues={':val': 1})
 
-@pytest.mark.xfail(reason="ReturnValues not supported")
 def test_update_item_returnvalues_all_old(test_table_s):
     # With ReturnValues=ALL_OLD, the entire old value of the item (even
     # attributes we did not modify) is returned in an "Attributes" attribute:

@@ -70,6 +70,17 @@ protected:
     partition_key _pk = partition_key::make_empty();
     clustering_key _ck = clustering_key::make_empty();
     write_isolation _write_isolation;
+
+    // All RMW operations can have a ReturnValues parameter from the following
+    // choices. But note that only UpdateItem actually supports all of them:
+    enum class returnvalues {
+        NONE, ALL_OLD, UPDATED_OLD, ALL_NEW, UPDATED_NEW
+    } _returnvalues;
+    static returnvalues parse_returnvalues(const rjson::value& request);
+    // When _returnvalues != NONE, apply() should store here, in JSON form,
+    // the values which are to be returned in the "Attributes" field.
+    // The default null JSON means do not return an Attributes field at all.
+    rjson::value _return_attributes;
 public:
     // The constructor of a rmw_operation subclass should parse the request
     // and try to discover as many input errors as it can before really
@@ -82,7 +93,7 @@ public:
     // conditional expression, apply() should return an empty optional.
     // apply() may throw if it encounters input errors not discovered during
     // the constructor.
-    virtual std::optional<mutation> apply(const std::unique_ptr<rjson::value>& previous_item, api::timestamp_type ts) = 0;
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) = 0;
     // Convert the above apply() into the signature needed by cas_request:
     virtual std::optional<mutation> apply(query::result& qr, const query::partition_slice& slice, api::timestamp_type ts) override;
     virtual ~rmw_operation() = default;
