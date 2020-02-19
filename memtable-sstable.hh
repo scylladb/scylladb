@@ -37,10 +37,10 @@ future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
         sstables::write_monitor& mon,
-        bool backup = false,
-        const io_priority_class& pc = default_priority_class(),
-        bool leave_unsealed = false);
+        sstables::sstable_writer_config& cfg,
+        const io_priority_class& pc = default_priority_class());
 
 future<>
 write_memtable_to_sstable(memtable& mt,
-        sstables::shared_sstable sst);
+        sstables::shared_sstable sst,
+        sstables::sstable_writer_config cfg);
