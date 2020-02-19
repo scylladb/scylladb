@@ -423,7 +423,7 @@ GCC6_CONCEPT(
     requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
 )
 static KeyType
-generate_base_key_from_index_pk(const partition_key& index_pk, const clustering_key& index_ck, const schema& base_schema, const schema& view_schema) {
+generate_base_key_from_index_pk(const partition_key& index_pk, const std::optional<clustering_key>& index_ck, const schema& base_schema, const schema& view_schema) {
     const auto& base_columns = std::is_same_v<KeyType, partition_key> ? base_schema.partition_key_columns() : base_schema.clustering_key_columns();
     std::vector<bytes_view> exploded_base_key;
     exploded_base_key.reserve(base_columns.size());
@@ -432,8 +432,8 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const clustering_
         const column_definition* view_col = view_schema.view_info()->view_column(base_col);
         if (view_col->is_partition_key()) {
             exploded_base_key.push_back(index_pk.get_component(view_schema, view_col->id));
-        } else {
-            exploded_base_key.push_back(index_ck.get_component(view_schema, view_col->id));
+        } else if (index_ck) {
+            exploded_base_key.push_back(index_ck->get_component(view_schema, view_col->id));
         }
     }
     return KeyType::from_range(exploded_base_key);
@@ -497,11 +497,16 @@ indexed_table_select_statement::do_execute_base_query(
             auto old_paging_state = options.get_paging_state();
             if (old_paging_state && concurrency == 1) {
                 auto base_pk = generate_base_key_from_index_pk<partition_key>(old_paging_state->get_partition_key(),
-                        *old_paging_state->get_clustering_key(), *_schema, *_view_schema);
-                auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
-                        *old_paging_state->get_clustering_key(), *_schema, *_view_schema);
-                command->slice.set_range(*_schema, base_pk,
-                        std::vector<query::clustering_range>{query::clustering_range::make_starting_with(range_bound<clustering_key>(base_ck, false))});
+                        old_paging_state->get_clustering_key(), *_schema, *_view_schema);
+                if (_schema->clustering_key_size() > 0) {
+                    assert(old_paging_state->get_clustering_key().has_value());
+                    auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
+                            old_paging_state->get_clustering_key(), *_schema, *_view_schema);
+                    command->slice.set_range(*_schema, base_pk,
+                            std::vector<query::clustering_range>{query::clustering_range::make_starting_with(range_bound<clustering_key>(base_ck, false))});
+                } else {
+                    command->slice.set_range(*_schema, base_pk, std::vector<query::clustering_range>{query::clustering_range::make_open_ended_both_sides()});
+                }
             }
             concurrency *= 2;
             return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
