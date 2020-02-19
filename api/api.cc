@@ -68,10 +68,16 @@ future<> set_server_init(http_context& ctx) {
         rb->set_api_doc(r);
         rb02->set_api_doc(r);
         rb02->register_api_file(r, "swagger20_header");
-        set_config(rb02, ctx, r);
         rb->register_function(r, "system",
                 "The system related API");
         set_system(ctx, r);
+    });
+}
+
+future<> set_server_config(http_context& ctx) {
+    auto rb02 = std::make_shared < api_registry_builder20 > (ctx.api_doc, "/v2");
+    return ctx.http_server.set_routes([&ctx, rb02](routes& r) {
+        set_config(rb02, ctx, r);
     });
 }
 

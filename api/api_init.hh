@@ -45,6 +45,7 @@ struct http_context {
 };
 
 future<> set_server_init(http_context& ctx);
+future<> set_server_config(http_context& ctx);
 future<> set_server_snitch(http_context& ctx);
 future<> set_server_storage_service(http_context& ctx);
 future<> set_server_snapshot(http_context& ctx);

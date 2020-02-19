@@ -739,6 +739,7 @@ int main(int ac, char** av) {
                     return sstables::await_background_jobs_on_all_shards();
                 }).get();
             });
+            api::set_server_config(ctx).get();
             verify_seastar_io_scheduler(opts.count("max-io-requests"), opts.count("io-properties") || opts.count("io-properties-file"),
                                         cfg->developer_mode()).get();
 
