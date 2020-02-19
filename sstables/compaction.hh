@@ -27,6 +27,7 @@
 #include "gc_clock.hh"
 #include "compaction_weight_registration.hh"
 #include "utils/UUID.hh"
+#include "dht/i_partitioner.hh"
 #include <seastar/core/thread.hh>
 #include <functional>
 
@@ -192,6 +193,8 @@ namespace sstables {
     struct compaction_completion_desc {
         std::vector<shared_sstable> input_sstables;
         std::vector<shared_sstable> output_sstables;
+        // Set of compacted partition ranges that should be invalidated in the cache.
+        dht::partition_range_vector ranges_for_cache_invalidation;
     };
 
     // Replaces old sstable(s) by new one(s) which contain all non-expired data.
