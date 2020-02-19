@@ -651,8 +651,8 @@ static bool needs_cleanup(const sstables::shared_sstable& sst,
                    schema_ptr s) {
     auto first = sst->get_first_partition_key();
     auto last = sst->get_last_partition_key();
-    auto first_token = dht::global_partitioner().get_token(*s, first);
-    auto last_token = dht::global_partitioner().get_token(*s, last);
+    auto first_token = dht::get_token(*s, first);
+    auto last_token = dht::get_token(*s, last);
     dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
 
     // return true iff sst partition range isn't fully contained in any of the owned ranges.
