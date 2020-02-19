@@ -875,9 +875,42 @@ private:
 };
 
 class cleanup_compaction final : public regular_compaction {
+    dht::token_range_vector _owned_ranges;
+private:
+    dht::partition_range_vector
+    get_ranges_for_invalidation(const std::vector<shared_sstable>& sstables) {
+        auto owned_ranges = dht::to_partition_ranges(_owned_ranges);
+
+        auto non_owned_ranges = boost::copy_range<dht::partition_range_vector>(sstables
+                | boost::adaptors::transformed([] (const shared_sstable& sst) {
+            return dht::partition_range::make({sst->get_first_decorated_key(), true},
+                                              {sst->get_last_decorated_key(), true});
+        }));
+        // optimize set of potentially overlapping ranges by deoverlapping them.
+        non_owned_ranges = dht::partition_range::deoverlap(std::move(non_owned_ranges), dht::ring_position_comparator(*_schema));
+
+        // subtract *each* owned range from the partition range of *each* sstable*,
+        // such that we'll be left only with a set of non-owned ranges.
+        for (auto& owned_range : owned_ranges) {
+            dht::partition_range_vector new_non_owned_ranges;
+            for (auto& non_owned_range : non_owned_ranges) {
+                auto ret = non_owned_range.subtract(owned_range, dht::ring_position_comparator(*_schema));
+                new_non_owned_ranges.insert(new_non_owned_ranges.end(), ret.begin(), ret.end());
+            }
+            non_owned_ranges = std::move(new_non_owned_ranges);
+        }
+        return non_owned_ranges;
+    }
+protected:
+    virtual compaction_completion_desc
+    get_compaction_completion_desc(std::vector<shared_sstable> input_sstables, std::vector<shared_sstable> output_sstables) override {
+        auto ranges_for_for_invalidation = get_ranges_for_invalidation(input_sstables);
+        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges_for_for_invalidation)};
+    }
 public:
     cleanup_compaction(column_family& cf, compaction_descriptor descriptor, std::function<shared_sstable()> creator, replacer_fn replacer)
         : regular_compaction(cf, std::move(descriptor), std::move(creator), std::move(replacer))
+        , _owned_ranges(service::get_local_storage_service().get_local_ranges(_schema->ks_name()))
     {
         _info->type = compaction_type::Cleanup;
     }
@@ -891,15 +924,13 @@ public:
     }
 
     flat_mutation_reader::filter make_partition_filter() const override {
-        dht::token_range_vector owned_ranges = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
-
-        return [this, owned_ranges = std::move(owned_ranges)] (const dht::decorated_key& dk) {
+        return [this] (const dht::decorated_key& dk) {
             if (dht::shard_of(*_schema, dk.token()) != engine().cpu_id()) {
                 clogger.trace("Token {} does not belong to CPU {}, skipping", dk.token(), engine().cpu_id());
                 return false;
             }
 
-            if (!belongs_to_current_node(dk.token(), owned_ranges)) {
+            if (!belongs_to_current_node(dk.token(), _owned_ranges)) {
                 clogger.trace("Token {} does not belong to this node, skipping", dk.token());
                 return false;
             }
