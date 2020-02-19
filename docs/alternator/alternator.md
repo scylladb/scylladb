@@ -88,9 +88,8 @@ progresses and compatibility continues to improve.
 ### Batch Operations
 * BatchGetItem: Almost complete except that projection expressions can only
   ask for top-level attributes.
-* BatchWriteItem: Supported. Doesn't yet verify that there are no duplicates
-  in the list of items. Doesn't limit the number of items (DynamoDB limits to
-  25) or size of items (400 KB) or total request size (16 MB).
+* BatchWriteItem: Supported. Doesn't limit the number of items (DynamoDB
+  limits to 25) or size of items (400 KB) or total request size (16 MB).
 ### Scans
 * Scan: As usual, projection expressions only support top-level attributes.
   Filter expressions (to filter some of the items) partially supported:
