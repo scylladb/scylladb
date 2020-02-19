@@ -189,8 +189,13 @@ namespace sstables {
         }
     };
 
+    struct compaction_completion_desc {
+        std::vector<shared_sstable> input_sstables;
+        std::vector<shared_sstable> output_sstables;
+    };
+
     // Replaces old sstable(s) by new one(s) which contain all non-expired data.
-    using replacer_fn = std::function<void(std::vector<shared_sstable> removed, std::vector<shared_sstable> added)>;
+    using replacer_fn = std::function<void(compaction_completion_desc)>;
 
     // Compact a list of N sstables into M sstables.
     // Returns info about the finished compaction, which includes vector to new sstables.

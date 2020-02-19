@@ -829,7 +829,7 @@ private:
                 _compacting->erase(sst);
             });
             auto exhausted_ssts = std::vector<shared_sstable>(exhausted, _sstables.end());
-            _replacer(exhausted_ssts, std::move(_new_unused_sstables));
+            _replacer(compaction_completion_desc{exhausted_ssts, std::move(_new_unused_sstables)});
             _sstables.erase(exhausted, _sstables.end());
             backlog_tracker_incrementally_adjust_charges(std::move(exhausted_ssts));
         }
@@ -839,7 +839,7 @@ private:
         if (!_sstables.empty()) {
             std::vector<shared_sstable> sstables_compacted;
             std::move(_sstables.begin(), _sstables.end(), std::back_inserter(sstables_compacted));
-            _replacer(std::move(sstables_compacted), std::move(_new_unused_sstables));
+            _replacer(compaction_completion_desc{std::move(sstables_compacted), std::move(_new_unused_sstables)});
         }
     }
 
