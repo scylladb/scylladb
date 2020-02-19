@@ -150,15 +150,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
     } else {
         _sstables_format = sstables::sstable_version_types::mc;
     }
-
-    //FIXME: discarded future.
-    (void)_feature_service.cluster_supports_unbounded_range_tombstones().when_enabled().then([&db] () mutable {
-        slogger.debug("Enabling infinite bound range deletions");
-        //FIXME: discarded future.
-        (void)db.invoke_on_all([] (database& local_db) mutable {
-            local_db.enable_infinite_bound_range_deletions();
-        });
-    });
 }
 
 void storage_service::enable_all_features() {
