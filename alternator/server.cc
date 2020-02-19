@@ -215,6 +215,7 @@ future<> server::verify_signature(const request& req) {
 }
 
 future<json::json_return_type> server::handle_api_request(std::unique_ptr<request>&& req) {
+    _executor.local()._stats.total_operations++;
     sstring target = req->get_header(TARGET);
     std::vector<std::string_view> split_target = split(target, '.');
     //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
