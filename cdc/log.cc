@@ -500,15 +500,19 @@ public:
                 {
                     auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
                     set_bound(log_ck, rt.start);
-                    // TODO: separate inclusive/exclusive range
-                    set_operation(log_ck, ts, operation::range_delete_start, res);
+                    const auto start_operation = rt.start_kind == bound_kind::incl_start
+                            ? operation::range_delete_start_inclusive
+                            : operation::range_delete_start_exclusive;
+                    set_operation(log_ck, ts, start_operation, res);
                     ++batch_no;
                 }
                 {
                     auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
                     set_bound(log_ck, rt.end);
-                    // TODO: separate inclusive/exclusive range
-                    set_operation(log_ck, ts, operation::range_delete_end, res);
+                    const auto end_operation = rt.end_kind == bound_kind::incl_end
+                            ? operation::range_delete_end_inclusive
+                            : operation::range_delete_end_exclusive;
+                    set_operation(log_ck, ts, end_operation, res);
                     ++batch_no;
                 }
             }
