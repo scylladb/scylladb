@@ -67,7 +67,7 @@ namespace cql3 {
 
 namespace statements {
 
-thread_local const shared_ptr<select_statement::parameters> select_statement::_default_parameters = ::make_shared<select_statement::parameters>();
+thread_local const lw_shared_ptr<const select_statement::parameters> select_statement::_default_parameters = make_lw_shared<select_statement::parameters>();
 
 select_statement::parameters::parameters()
     : _is_distinct{false}
@@ -127,7 +127,7 @@ select_timeout(const restrictions::statement_restrictions& restrictions) {
 
 select_statement::select_statement(schema_ptr schema,
                                    uint32_t bound_terms,
-                                   ::shared_ptr<parameters> parameters,
+                                   lw_shared_ptr<const parameters> parameters,
                                    ::shared_ptr<selection::selection> selection,
                                    ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                    ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
@@ -725,7 +725,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
 }
 
 primary_key_select_statement::primary_key_select_statement(schema_ptr schema, uint32_t bound_terms,
-                                                           ::shared_ptr<parameters> parameters,
+                                                           lw_shared_ptr<const parameters> parameters,
                                                            ::shared_ptr<selection::selection> selection,
                                                            ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                                            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
@@ -752,7 +752,7 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
 indexed_table_select_statement::prepare(database& db,
                                         schema_ptr schema,
                                         uint32_t bound_terms,
-                                        ::shared_ptr<parameters> parameters,
+                                        lw_shared_ptr<const parameters> parameters,
                                         ::shared_ptr<selection::selection> selection,
                                         ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                         ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
@@ -791,7 +791,7 @@ indexed_table_select_statement::prepare(database& db,
 }
 
 indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms,
-                                                           ::shared_ptr<parameters> parameters,
+                                                           lw_shared_ptr<const parameters> parameters,
                                                            ::shared_ptr<selection::selection> selection,
                                                            ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                                            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
@@ -1228,7 +1228,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
 namespace raw {
 
 select_statement::select_statement(::shared_ptr<cf_name> cf_name,
-                                   ::shared_ptr<parameters> parameters,
+                                   lw_shared_ptr<const parameters> parameters,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
                                    std::vector<::shared_ptr<relation>> where_clause,
                                    ::shared_ptr<term::raw> limit,
@@ -1294,7 +1294,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
     auto restrictions = prepare_restrictions(db, schema, bound_names, selection, for_view, _parameters->allow_filtering());
 
     if (_parameters->is_distinct()) {
-        validate_distinct_selection(schema, selection, restrictions);
+        validate_distinct_selection(*schema, *selection, *restrictions);
     }
 
     select_statement::ordering_comparator_type ordering_comparator;
@@ -1302,13 +1302,13 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
 
     if (!_parameters->orderings().empty()) {
         assert(!for_view);
-        verify_ordering_is_allowed(restrictions);
-        ordering_comparator = get_ordering_comparator(schema, selection, restrictions);
-        is_reversed_ = is_reversed(schema);
+        verify_ordering_is_allowed(*restrictions);
+        ordering_comparator = get_ordering_comparator(*schema, *selection, *restrictions);
+        is_reversed_ = is_reversed(*schema);
     }
 
-    check_needs_filtering(restrictions);
-    ensure_filtering_columns_retrieval(db, selection, restrictions);
+    check_needs_filtering(*restrictions);
+    ensure_filtering_columns_retrieval(db, *selection, *restrictions);
     auto group_by_cell_indices = ::make_shared<std::vector<size_t>>(prepare_group_by(*schema, *selection));
 
     ::shared_ptr<cql3::statements::select_statement> stmt;
@@ -1378,25 +1378,25 @@ select_statement::prepare_limit(database& db, variable_specifications& bound_nam
     return prep_limit;
 }
 
-void select_statement::verify_ordering_is_allowed(::shared_ptr<restrictions::statement_restrictions> restrictions)
+void select_statement::verify_ordering_is_allowed(const restrictions::statement_restrictions& restrictions)
 {
-    if (restrictions->uses_secondary_indexing()) {
+    if (restrictions.uses_secondary_indexing()) {
         throw exceptions::invalid_request_exception("ORDER BY with 2ndary indexes is not supported.");
     }
-    if (restrictions->is_key_range()) {
+    if (restrictions.is_key_range()) {
         throw exceptions::invalid_request_exception("ORDER BY is only supported when the partition key is restricted by an EQ or an IN.");
     }
 }
 
-void select_statement::validate_distinct_selection(schema_ptr schema,
-                                                   ::shared_ptr<selection::selection> selection,
-                                                   ::shared_ptr<restrictions::statement_restrictions> restrictions)
+void select_statement::validate_distinct_selection(const schema& schema,
+                                                   const selection::selection& selection,
+                                                   const restrictions::statement_restrictions& restrictions)
 {
-    if (restrictions->has_non_primary_key_restriction() || restrictions->has_clustering_columns_restriction()) {
+    if (restrictions.has_non_primary_key_restriction() || restrictions.has_clustering_columns_restriction()) {
         throw exceptions::invalid_request_exception(
             "SELECT DISTINCT with WHERE clause only supports restriction by partition key.");
     }
-    for (auto&& def : selection->get_columns()) {
+    for (auto&& def : selection.get_columns()) {
         if (!def->is_partition_key() && !def->is_static()) {
             throw exceptions::invalid_request_exception(format("SELECT DISTINCT queries must only request partition key columns and/or static columns (not {})",
                 def->name_as_text()));
@@ -1405,18 +1405,18 @@ void select_statement::validate_distinct_selection(schema_ptr schema,
 
     // If it's a key range, we require that all partition key columns are selected so we don't have to bother
     // with post-query grouping.
-    if (!restrictions->is_key_range()) {
+    if (!restrictions.is_key_range()) {
         return;
     }
 
-    for (auto&& def : schema->partition_key_columns()) {
-        if (!selection->has_column(def)) {
+    for (auto&& def : schema.partition_key_columns()) {
+        if (!selection.has_column(def)) {
             throw exceptions::invalid_request_exception(format("SELECT DISTINCT queries must request all the partition key columns (missing {})", def.name_as_text()));
         }
     }
 }
 
-void select_statement::handle_unrecognized_ordering_column(const column_identifier& column)
+void select_statement::handle_unrecognized_ordering_column(const column_identifier& column) const
 {
     if (contains_alias(column)) {
         throw exceptions::invalid_request_exception(format("Aliases are not allowed in order by clause ('{}')", column));
@@ -1425,11 +1425,11 @@ void select_statement::handle_unrecognized_ordering_column(const column_identifi
 }
 
 select_statement::ordering_comparator_type
-select_statement::get_ordering_comparator(schema_ptr schema,
-                                          ::shared_ptr<selection::selection> selection,
-                                          ::shared_ptr<restrictions::statement_restrictions> restrictions)
+select_statement::get_ordering_comparator(const schema& schema,
+                                          selection::selection& selection,
+                                          const restrictions::statement_restrictions& restrictions)
 {
-    if (!restrictions->key_is_in_relation()) {
+    if (!restrictions.key_is_in_relation()) {
         return {};
     }
 
@@ -1441,14 +1441,14 @@ select_statement::get_ordering_comparator(schema_ptr schema,
     // ultimately ship them to the client (CASSANDRA-4911).
     for (auto&& e : _parameters->orderings()) {
         auto&& raw = e.first;
-        ::shared_ptr<column_identifier> column = raw->prepare_column_identifier(*schema);
-        const column_definition* def = schema->get_column_definition(column->name());
+        ::shared_ptr<column_identifier> column = raw->prepare_column_identifier(schema);
+        const column_definition* def = schema.get_column_definition(column->name());
         if (!def) {
             handle_unrecognized_ordering_column(*column);
         }
-        auto index = selection->index_of(*def);
+        auto index = selection.index_of(*def);
         if (index < 0) {
-            index = selection->add_column_for_post_processing(*def);
+            index = selection.add_column_for_post_processing(*def);
         }
 
         sorters.emplace_back(index, def->type);
@@ -1474,17 +1474,17 @@ select_statement::get_ordering_comparator(schema_ptr schema,
     };
 }
 
-bool select_statement::is_reversed(schema_ptr schema) {
+bool select_statement::is_reversed(const schema& schema) const {
     assert(_parameters->orderings().size() > 0);
     parameters::orderings_type::size_type i = 0;
     bool is_reversed_ = false;
     bool relation_order_unsupported = false;
 
     for (auto&& e : _parameters->orderings()) {
-        ::shared_ptr<column_identifier> column = e.first->prepare_column_identifier(*schema);
+        ::shared_ptr<column_identifier> column = e.first->prepare_column_identifier(schema);
         bool reversed = e.second;
 
-        auto def = schema->get_column_definition(column->name());
+        auto def = schema.get_column_definition(column->name());
         if (!def) {
             handle_unrecognized_ordering_column(*column);
         }
@@ -1518,14 +1518,14 @@ bool select_statement::is_reversed(schema_ptr schema) {
 }
 
 /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
-void select_statement::check_needs_filtering(::shared_ptr<restrictions::statement_restrictions> restrictions)
+void select_statement::check_needs_filtering(const restrictions::statement_restrictions& restrictions)
 {
     // non-key-range non-indexed queries cannot involve filtering underneath
-    if (!_parameters->allow_filtering() && (restrictions->is_key_range() || restrictions->uses_secondary_indexing())) {
+    if (!_parameters->allow_filtering() && (restrictions.is_key_range() || restrictions.uses_secondary_indexing())) {
         // We will potentially filter data if either:
         //  - Have more than one IndexExpression
         //  - Have no index expression and the column filter is not the identity
-        if (restrictions->need_filtering()) {
+        if (restrictions.need_filtering()) {
             throw exceptions::invalid_request_exception(
                 "Cannot execute this query as it might involve data filtering and "
                     "thus may have unpredictable performance. If you want to execute "
@@ -1542,16 +1542,16 @@ void select_statement::check_needs_filtering(::shared_ptr<restrictions::statemen
  * to the user.
  */
 void select_statement::ensure_filtering_columns_retrieval(database& db,
-                                        ::shared_ptr<selection::selection> selection,
-                                        ::shared_ptr<restrictions::statement_restrictions> restrictions) {
-    for (auto&& cdef : restrictions->get_column_defs_for_filtering(db)) {
-        if (!selection->has_column(*cdef)) {
-            selection->add_column_for_post_processing(*cdef);
+                                        selection::selection& selection,
+                                        const restrictions::statement_restrictions& restrictions) {
+    for (auto&& cdef : restrictions.get_column_defs_for_filtering(db)) {
+        if (!selection.has_column(*cdef)) {
+            selection.add_column_for_post_processing(*cdef);
         }
     }
 }
 
-bool select_statement::contains_alias(const column_identifier& name) {
+bool select_statement::contains_alias(const column_identifier& name) const {
     return std::any_of(_select_clause.begin(), _select_clause.end(), [&name] (auto raw) {
         return raw->alias && name == *raw->alias;
     });

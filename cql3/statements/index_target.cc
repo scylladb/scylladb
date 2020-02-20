@@ -119,7 +119,7 @@ index_target::raw::columns(std::vector<::shared_ptr<column_identifier::raw>> c) 
 }
 
 ::shared_ptr<index_target>
-index_target::raw::prepare(const schema& s) {
+index_target::raw::prepare(const schema& s) const {
     struct prepare_visitor {
         const schema& _schema;
         target_type _type;

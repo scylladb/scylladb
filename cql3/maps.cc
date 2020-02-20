@@ -196,12 +196,12 @@ maps::value::get_with_protocol_version(cql_serialization_format sf) {
 }
 
 bool
-maps::value::equals(map_type mt, const value& v) {
+maps::value::equals(const map_type_impl& mt, const value& v) {
     return std::equal(map.begin(), map.end(),
                       v.map.begin(), v.map.end(),
-                      [mt] (auto&& e1, auto&& e2) {
-        return mt->get_keys_type()->compare(e1.first, e2.first) == 0
-                && mt->get_values_type()->compare(e1.second, e2.second) == 0;
+                      [&mt] (auto&& e1, auto&& e2) {
+        return mt.get_keys_type()->compare(e1.first, e2.first) == 0
+                && mt.get_values_type()->compare(e1.second, e2.second) == 0;
     });
 }
 

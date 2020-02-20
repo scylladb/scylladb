@@ -225,7 +225,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         throw exceptions::invalid_request_exception(format("Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
     }
 
-    auto parameters = ::make_shared<raw::select_statement::parameters>(raw::select_statement::parameters::orderings_type(), false, true);
+    auto parameters = make_lw_shared<raw::select_statement::parameters>(raw::select_statement::parameters::orderings_type(), false, true);
     raw::select_statement raw_select(_base_name, std::move(parameters), _select_clause, _where_clause, nullptr, nullptr, {});
     raw_select.prepare_keyspace(keyspace());
     raw_select.set_bound_variables({});

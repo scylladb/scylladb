@@ -70,10 +70,10 @@ public:
     using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
 protected:
-    static thread_local const ::shared_ptr<parameters> _default_parameters;
+    static thread_local const lw_shared_ptr<const parameters> _default_parameters;
     schema_ptr _schema;
     uint32_t _bound_terms;
-    ::shared_ptr<parameters> _parameters;
+    lw_shared_ptr<const parameters> _parameters;
     ::shared_ptr<selection::selection> _selection;
     ::shared_ptr<restrictions::statement_restrictions> _restrictions;
     ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
@@ -103,7 +103,7 @@ protected :
 public:
     select_statement(schema_ptr schema,
             uint32_t bound_terms,
-            ::shared_ptr<parameters> parameters,
+            lw_shared_ptr<const parameters> parameters,
             ::shared_ptr<selection::selection> selection,
             ::shared_ptr<restrictions::statement_restrictions> restrictions,
             ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
@@ -165,7 +165,7 @@ class primary_key_select_statement : public select_statement {
 public:
     primary_key_select_statement(schema_ptr schema,
                      uint32_t bound_terms,
-                     ::shared_ptr<parameters> parameters,
+                     lw_shared_ptr<const parameters> parameters,
                      ::shared_ptr<selection::selection> selection,
                      ::shared_ptr<restrictions::statement_restrictions> restrictions,
                      ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
@@ -186,7 +186,7 @@ public:
     static ::shared_ptr<cql3::statements::select_statement> prepare(database& db,
                                                                     schema_ptr schema,
                                                                     uint32_t bound_terms,
-                                                                    ::shared_ptr<parameters> parameters,
+                                                                    lw_shared_ptr<const parameters> parameters,
                                                                     ::shared_ptr<selection::selection> selection,
                                                                     ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                                                     ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
@@ -198,7 +198,7 @@ public:
 
     indexed_table_select_statement(schema_ptr schema,
                                    uint32_t bound_terms,
-                                   ::shared_ptr<parameters> parameters,
+                                   lw_shared_ptr<const parameters> parameters,
                                    ::shared_ptr<selection::selection> selection,
                                    ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                    ::shared_ptr<std::vector<size_t>> group_by_cell_indices,

@@ -66,7 +66,7 @@ public:
         }
         virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override;
 
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override;
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) const override;
 
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
@@ -234,7 +234,7 @@ public:
     public:
         using abstract_marker::raw::raw;
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override {
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) const override {
             return make_shared<tuples::marker>(_bind_index, make_receiver(receivers));
         }
 
@@ -276,7 +276,7 @@ public:
     public:
         using abstract_marker::raw::raw;
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override {
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) const override {
             return make_shared<tuples::in_marker>(_bind_index, make_in_receiver(receivers));
         }
 

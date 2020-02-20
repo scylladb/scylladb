@@ -250,7 +250,7 @@ protected:
      * @throws InvalidRequestException if the <code>Raw</code> term is not valid
      */
     virtual ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
-                                       ::shared_ptr<term::raw> raw,
+                                       const term::raw& raw,
                                        database& db,
                                        const sstring& keyspace,
                                        variable_specifications& boundNames) const = 0;
@@ -271,8 +271,8 @@ protected:
                                              const sstring& keyspace,
                                              variable_specifications& boundNames) const {
         std::vector<::shared_ptr<term>> terms;
-        for (auto&& r : raws) {
-            terms.emplace_back(to_term(receivers, r, db, keyspace, boundNames));
+        for (const auto& r : raws) {
+            terms.emplace_back(to_term(receivers, *r, db, keyspace, boundNames));
         }
         return terms;
     }
@@ -285,7 +285,7 @@ protected:
      * @return the column definition corresponding to the specified entity
      * @throws InvalidRequestException if the entity cannot be recognized
      */
-    virtual const column_definition& to_column_definition(const schema& schema, ::shared_ptr<column_identifier::raw> entity) final;
+    virtual const column_definition& to_column_definition(const schema& schema, const column_identifier::raw& entity) final;
 };
 
 using relation_ptr = ::shared_ptr<relation>;

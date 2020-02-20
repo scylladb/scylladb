@@ -118,7 +118,7 @@ public:
 
 protected:
     virtual ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
-                          ::shared_ptr<term::raw> raw, database& db, const sstring& keyspace,
+                          const term::raw& raw, database& db, const sstring& keyspace,
                           variable_specifications& bound_names) const override;
 
 #if 0
@@ -157,7 +157,7 @@ protected:
             variable_specifications& bound_names,
             statements::bound bound,
             bool inclusive) override {
-        auto&& column_def = to_column_definition(*schema, _entity);
+        auto&& column_def = to_column_definition(*schema, *_entity);
 
         if (column_def.type->references_duration()) {
             using statements::request_validations::check_false;
@@ -171,15 +171,15 @@ protected:
             throw exceptions::invalid_request_exception("Slice restrictions are not supported on duration columns");
         }
 
-        auto term = to_term(to_receivers(*schema, column_def), _value, db, schema->ks_name(), bound_names);
+        auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
         return ::make_shared<restrictions::single_column_restriction::slice>(column_def, bound, inclusive, std::move(term));
     }
 
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
                                                  variable_specifications& bound_names,
                                                  bool is_key) override {
-        auto&& column_def = to_column_definition(*schema, _entity);
-        auto term = to_term(to_receivers(*schema, column_def), _value, db, schema->ks_name(), bound_names);
+        auto&& column_def = to_column_definition(*schema, *_entity);
+        auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
         return ::make_shared<restrictions::single_column_restriction::contains>(column_def, std::move(term), is_key);
     }
 

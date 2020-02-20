@@ -69,7 +69,7 @@ public:
         raw(shared_ptr<column_identifier::raw> id, bool is_writetime)
             : _id(std::move(id)), _is_writetime(is_writetime) {
         }
-        virtual shared_ptr<selectable> prepare(const schema& s) override;
+        virtual shared_ptr<selectable> prepare(const schema& s) const override;
         virtual bool processes_selection() const override;
     };
 };

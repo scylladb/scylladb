@@ -95,7 +95,7 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
                 "Secondary indexes are not supported on COMPACT STORAGE tables that have clustering columns");
     }
 
-    validate_for_local_index(schema);
+    validate_for_local_index(*schema);
 
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {
@@ -157,11 +157,11 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
             throw exceptions::invalid_request_exception(
                     format("Cannot create secondary index on non-frozen collection or UDT column {}", cd->name_as_text()));
         } else if (cd->type->is_collection()) {
-            validate_for_frozen_collection(target);
+            validate_for_frozen_collection(*target);
         } else {
-            validate_not_full_index(target);
-            validate_is_values_index_if_target_column_not_collection(cd, target);
-            validate_target_column_is_map_if_index_involves_keys(cd->type->is_map(), target);
+            validate_not_full_index(*target);
+            validate_is_values_index_if_target_column_not_collection(cd, *target);
+            validate_target_column_is_map_if_index_involves_keys(cd->type->is_map(), *target);
         }
     }
 
@@ -176,17 +176,17 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
     _properties->validate();
 }
 
-void create_index_statement::validate_for_local_index(schema_ptr schema) const {
+void create_index_statement::validate_for_local_index(const schema& schema) const {
     if (!_raw_targets.empty()) {
             if (const auto* index_pk = std::get_if<std::vector<::shared_ptr<column_identifier::raw>>>(&_raw_targets.front()->value)) {
                 auto base_pk_identifiers = *index_pk | boost::adaptors::transformed([&schema] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
-                    return raw_ident->prepare_column_identifier(*schema);
+                    return raw_ident->prepare_column_identifier(schema);
                 });
-                auto remaining_base_pk_columns = schema->partition_key_columns();
+                auto remaining_base_pk_columns = schema.partition_key_columns();
                 auto next_expected_base_column = remaining_base_pk_columns.begin();
                 for (const auto& ident : base_pk_identifiers) {
-                    auto it = schema->columns_by_name().find(ident->name());
-                    if (it == schema->columns_by_name().end() || !it->second->is_partition_key()) {
+                    auto it = schema.columns_by_name().find(ident->name());
+                    if (it == schema.columns_by_name().end() || !it->second->is_partition_key()) {
                         throw exceptions::invalid_request_exception(format("Local index definition must contain full partition key only. Redundant column: {}", ident->to_string()));
                     }
                     if (next_expected_base_column == remaining_base_pk_columns.end()) {
@@ -212,44 +212,44 @@ void create_index_statement::validate_for_local_index(schema_ptr schema) const {
         }
 }
 
-void create_index_statement::validate_for_frozen_collection(::shared_ptr<index_target> target) const
+void create_index_statement::validate_for_frozen_collection(const index_target& target) const
 {
-    if (target->type != index_target::target_type::full) {
+    if (target.type != index_target::target_type::full) {
         throw exceptions::invalid_request_exception(
                 format("Cannot create index on {} of frozen<map> column {}",
-                        index_target::index_option(target->type),
-                        target->as_string()));
+                        index_target::index_option(target.type),
+                        target.as_string()));
     }
 }
 
-void create_index_statement::validate_not_full_index(::shared_ptr<index_target> target) const
+void create_index_statement::validate_not_full_index(const index_target& target) const
 {
-    if (target->type == index_target::target_type::full) {
+    if (target.type == index_target::target_type::full) {
         throw exceptions::invalid_request_exception("full() indexes can only be created on frozen collections");
     }
 }
 
 void create_index_statement::validate_is_values_index_if_target_column_not_collection(
-        const column_definition* cd, ::shared_ptr<index_target> target) const
+        const column_definition* cd, const index_target& target) const
 {
     if (!cd->type->is_collection()
-            && target->type != index_target::target_type::values) {
+            && target.type != index_target::target_type::values) {
         throw exceptions::invalid_request_exception(
                 format("Cannot create index on {} of column {}; only non-frozen collections support {} indexes",
-                       index_target::index_option(target->type),
-                       target->as_string(),
-                       index_target::index_option(target->type)));
+                       index_target::index_option(target.type),
+                       target.as_string(),
+                       index_target::index_option(target.type)));
     }
 }
 
-void create_index_statement::validate_target_column_is_map_if_index_involves_keys(bool is_map, ::shared_ptr<index_target> target) const
+void create_index_statement::validate_target_column_is_map_if_index_involves_keys(bool is_map, const index_target& target) const
 {
-    if (target->type == index_target::target_type::keys
-            || target->type == index_target::target_type::keys_and_values) {
+    if (target.type == index_target::target_type::keys
+            || target.type == index_target::target_type::keys_and_values) {
         if (!is_map) {
             throw exceptions::invalid_request_exception(
                     format("Cannot create index on {} of column {} with non-map type",
-                           index_target::index_option(target->type), target->as_string()));
+                           index_target::index_option(target.type), target.as_string()));
         }
     }
 }
@@ -299,7 +299,7 @@ create_index_statement::announce_migration(service::storage_proxy& proxy, bool i
     } else {
         kind = schema->is_compound() ? index_metadata_kind::composites : index_metadata_kind::keys;
     }
-    auto index = make_index_metadata(schema, targets, accepted_name, kind, index_options);
+    auto index = make_index_metadata(targets, accepted_name, kind, index_options);
     auto existing_index = schema->find_index_noname(index);
     if (existing_index) {
         if (_if_not_exists) {
@@ -329,8 +329,7 @@ create_index_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_index_statement>(*this));
 }
 
-index_metadata create_index_statement::make_index_metadata(schema_ptr schema,
-                                                           const std::vector<::shared_ptr<index_target>>& targets,
+index_metadata create_index_statement::make_index_metadata(const std::vector<::shared_ptr<index_target>>& targets,
                                                            const sstring& name,
                                                            index_metadata_kind kind,
                                                            const index_options_map& options)

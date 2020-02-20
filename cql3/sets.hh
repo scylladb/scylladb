@@ -81,7 +81,7 @@ public:
         static value from_serialized(const fragmented_temporary_buffer::view& v, const set_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
         virtual bytes get_with_protocol_version(cql_serialization_format sf) override;
-        bool equals(set_type st, const value& v);
+        bool equals(const set_type_impl& st, const value& v);
         virtual sstring to_string() const override;
     };
 

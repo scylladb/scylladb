@@ -162,11 +162,11 @@ sets::value::get_with_protocol_version(cql_serialization_format sf) {
 }
 
 bool
-sets::value::equals(set_type st, const value& v) {
+sets::value::equals(const set_type_impl& st, const value& v) {
     if (_elements.size() != v._elements.size()) {
         return false;
     }
-    auto&& elements_type = st->get_elements_type();
+    auto&& elements_type = st.get_elements_type();
     return std::equal(_elements.begin(), _elements.end(),
             v._elements.begin(),
             [elements_type] (bytes_view v1, bytes_view v2) {

@@ -529,7 +529,7 @@ modification_statement::prepare(database& db, cql_stats& stats) {
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
-modification_statement::prepare(database& db, variable_specifications& bound_names, cql_stats& stats) {
+modification_statement::prepare(database& db, variable_specifications& bound_names, cql_stats& stats) const {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
@@ -539,7 +539,7 @@ modification_statement::prepare(database& db, variable_specifications& bound_nam
 }
 
 void
-modification_statement::prepare_conditions(database& db, schema_ptr schema, variable_specifications& bound_names,
+modification_statement::prepare_conditions(database& db, const schema& schema, variable_specifications& bound_names,
         cql3::statements::modification_statement& stmt) const
 {
     if (_if_not_exists || _if_exists || !_conditions.empty()) {
@@ -562,8 +562,8 @@ modification_statement::prepare_conditions(database& db, schema_ptr schema, vari
             stmt.set_if_exist_condition();
         } else {
             for (auto&& entry : _conditions) {
-                auto id = entry.first->prepare_column_identifier(*schema);
-                const column_definition* def = get_column_definition(*schema, *id);
+                auto id = entry.first->prepare_column_identifier(schema);
+                const column_definition* def = get_column_definition(schema, *id);
                 if (!def) {
                     throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
                 }

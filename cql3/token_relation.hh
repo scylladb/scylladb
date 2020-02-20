@@ -123,7 +123,7 @@ public:
 
 protected:
     ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
-                                       ::shared_ptr<term::raw> raw,
+                                       const term::raw& raw,
                                        database& db,
                                        const sstring& keyspace,
                                        variable_specifications& bound_names) const override;

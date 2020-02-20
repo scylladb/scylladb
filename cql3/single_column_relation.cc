@@ -54,37 +54,37 @@ namespace cql3 {
 
 ::shared_ptr<term>
 single_column_relation::to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
-                                ::shared_ptr<term::raw> raw,
+                                const term::raw& raw,
                                 database& db,
                                 const sstring& keyspace,
                                 variable_specifications& bound_names) const {
     // TODO: optimize vector away, accept single column_specification
     assert(receivers.size() == 1);
-    auto term = raw->prepare(db, keyspace, receivers[0]);
+    auto term = raw.prepare(db, keyspace, receivers[0]);
     term->collect_marker_specification(bound_names);
     return term;
 }
 
 ::shared_ptr<restrictions::restriction>
 single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, variable_specifications& bound_names) {
-    const column_definition& column_def = to_column_definition(*schema, _entity);
+    const column_definition& column_def = to_column_definition(*schema, *_entity);
     if (!_map_key) {
-        auto term = to_term(to_receivers(*schema, column_def), _value, db, schema->ks_name(), bound_names);
+        auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
         return ::make_shared<single_column_restriction::EQ>(column_def, std::move(term));
     }
     auto&& receivers = to_receivers(*schema, column_def);
-    auto&& entry_key = to_term({receivers[0]}, _map_key, db, schema->ks_name(), bound_names);
-    auto&& entry_value = to_term({receivers[1]}, _value, db, schema->ks_name(), bound_names);
+    auto&& entry_key = to_term({receivers[0]}, *_map_key, db, schema->ks_name(), bound_names);
+    auto&& entry_value = to_term({receivers[1]}, *_value, db, schema->ks_name(), bound_names);
     return make_shared<single_column_restriction::contains>(column_def, std::move(entry_key), std::move(entry_value));
 }
 
 ::shared_ptr<restrictions::restriction>
 single_column_relation::new_IN_restriction(database& db, schema_ptr schema, variable_specifications& bound_names) {
-    const column_definition& column_def = to_column_definition(*schema, _entity);
+    const column_definition& column_def = to_column_definition(*schema, *_entity);
     auto receivers = to_receivers(*schema, column_def);
     assert(_in_values.empty() || !_value);
     if (_value) {
-        auto term = to_term(receivers, _value, db, schema->ks_name(), bound_names);
+        auto term = to_term(receivers, *_value, db, schema->ks_name(), bound_names);
         return make_shared<single_column_restriction::IN_with_marker>(column_def, dynamic_pointer_cast<lists::marker>(term));
     }
     auto terms = to_terms(receivers, _in_values, db, schema->ks_name(), bound_names);
@@ -98,12 +98,12 @@ single_column_relation::new_IN_restriction(database& db, schema_ptr schema, vari
 ::shared_ptr<restrictions::restriction>
 single_column_relation::new_LIKE_restriction(
         database& db, schema_ptr schema, variable_specifications& bound_names) {
-    const column_definition& column_def = to_column_definition(*schema, _entity);
+    const column_definition& column_def = to_column_definition(*schema, *_entity);
     if (!column_def.type->is_string()) {
         throw exceptions::invalid_request_exception(
                 format("LIKE is allowed only on string types, which {} is not", column_def.name_as_text()));
     }
-    auto term = to_term(to_receivers(*schema, column_def), _value, db, schema->ks_name(), bound_names);
+    auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
     return ::make_shared<single_column_restriction::LIKE>(column_def, std::move(term));
 }
 

@@ -112,9 +112,9 @@ private:
 public:
     raw(sstring raw_text, bool keep_case);
 
-    virtual ::shared_ptr<selectable> prepare(const schema& s) override;
+    virtual ::shared_ptr<selectable> prepare(const schema& s) const override;
 
-    ::shared_ptr<column_identifier> prepare_column_identifier(const schema& s);
+    ::shared_ptr<column_identifier> prepare_column_identifier(const schema& s) const;
 
     virtual bool processes_selection() const override;
 

@@ -132,11 +132,6 @@ private:
 
     std::optional<bool> _is_raw_counter_shard_write;
 
-    const std::function<const column_definition&(::shared_ptr<column_condition>)> get_column_for_condition =
-        [](::shared_ptr<column_condition> cond) -> const column_definition& {
-            return cond->column;
-        };
-
 protected:
     std::optional<restrictions::statement_restrictions> _restrictions;
 public:

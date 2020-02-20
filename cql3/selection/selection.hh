@@ -197,7 +197,7 @@ private:
             [] (auto&& s) { return s->processes_selection(); });
     }
 
-    static std::vector<::shared_ptr<column_specification>> collect_metadata(schema_ptr schema,
+    static std::vector<::shared_ptr<column_specification>> collect_metadata(const schema& schema,
         const std::vector<::shared_ptr<raw_selector>>& raw_selectors, const selector_factories& factories);
 public:
     static ::shared_ptr<selection> from_selectors(database& db, schema_ptr schema, const std::vector<::shared_ptr<raw_selector>>& raw_selectors);

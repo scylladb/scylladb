@@ -70,7 +70,7 @@ public:
         raw(shared_ptr<selectable::raw> selected, shared_ptr<column_identifier::raw> field)
                 : _selected(std::move(selected)), _field(std::move(field)) {
         }
-        virtual shared_ptr<selectable> prepare(const schema& s) override;
+        virtual shared_ptr<selectable> prepare(const schema& s) const override;
         virtual bool processes_selection() const override;
     };
 };

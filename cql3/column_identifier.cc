@@ -80,12 +80,12 @@ column_identifier::raw::raw(sstring raw_text, bool keep_case)
     }
 }
 
-::shared_ptr<selection::selectable> column_identifier::raw::prepare(const schema& s) {
+::shared_ptr<selection::selectable> column_identifier::raw::prepare(const schema& s) const {
     return prepare_column_identifier(s);
 }
 
 ::shared_ptr<column_identifier>
-column_identifier::raw::prepare_column_identifier(const schema& schema) {
+column_identifier::raw::prepare_column_identifier(const schema& schema) const {
     if (schema.regular_column_name_type() == utf8_type) {
         return ::make_shared<column_identifier>(_text, true);
     }

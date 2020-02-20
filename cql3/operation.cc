@@ -58,7 +58,7 @@ operation::set_element::to_string(const column_definition& receiver) const {
 }
 
 shared_ptr<operation>
-operation::set_element::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+operation::set_element::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
     using exceptions::invalid_request_exception;
     auto rtype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!rtype) {
@@ -99,7 +99,7 @@ operation::set_field::to_string(const column_definition& receiver) const {
 }
 
 shared_ptr<operation>
-operation::set_field::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+operation::set_field::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
     if (!receiver.type->is_user_type()) {
         throw exceptions::invalid_request_exception(
                 format("Invalid operation ({}) for non-UDT column {}", to_string(receiver), receiver.name_as_text()));
@@ -129,13 +129,13 @@ operation::set_field::is_compatible_with(shared_ptr<raw_update> other) const {
     return !dynamic_pointer_cast<set_value>(std::move(other));
 }
 
-shared_ptr<column_identifier::raw>
-operation::field_deletion::affected_column() {
-    return _id;
+const column_identifier::raw&
+operation::field_deletion::affected_column() const {
+    return *_id;
 }
 
 shared_ptr<operation>
-operation::field_deletion::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+operation::field_deletion::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
     if (!receiver.type->is_user_type()) {
         throw exceptions::invalid_request_exception(
                 format("Invalid deletion operation for non-UDT column {}", receiver.name_as_text()));
@@ -160,7 +160,7 @@ operation::addition::to_string(const column_definition& receiver) const {
 }
 
 shared_ptr<operation>
-operation::addition::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+operation::addition::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
     auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
@@ -195,7 +195,7 @@ operation::subtraction::to_string(const column_definition& receiver) const {
 }
 
 shared_ptr<operation>
-operation::subtraction::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+operation::subtraction::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
         if (!receiver.is_counter()) {
@@ -237,7 +237,7 @@ operation::prepend::to_string(const column_definition& receiver) const {
 }
 
 shared_ptr<operation>
-operation::prepend::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+operation::prepend::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
     auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
     if (!dynamic_cast<const list_type_impl*>(receiver.type.get())) {
@@ -256,7 +256,7 @@ operation::prepend::is_compatible_with(shared_ptr<raw_update> other) const {
 
 
 ::shared_ptr <operation>
-operation::set_value::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+operation::set_value::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
     auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
     if (receiver.type->is_counter()) {
@@ -284,7 +284,7 @@ operation::set_value::prepare(database& db, const sstring& keyspace, const colum
 }
 
 ::shared_ptr <operation>
-operation::set_counter_value_from_tuple_list::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+operation::set_counter_value_from_tuple_list::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
     static thread_local const data_type counter_tuple_type = tuple_type_impl::get_instance({int32_type, uuid_type, long_type, long_type});
     static thread_local const data_type counter_tuple_list_type = list_type_impl::get_instance(counter_tuple_type, true);
 
@@ -362,13 +362,13 @@ operation::set_value::is_compatible_with(::shared_ptr <raw_update> other) const 
     return false;
 }
 
-shared_ptr<column_identifier::raw>
-operation::element_deletion::affected_column() {
-    return _id;
+const column_identifier::raw&
+operation::element_deletion::affected_column() const {
+    return *_id;
 }
 
 shared_ptr<operation>
-operation::element_deletion::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+operation::element_deletion::prepare(database& db, const sstring& keyspace, const column_definition& receiver) const {
     if (!receiver.type->is_collection()) {
         throw exceptions::invalid_request_exception(format("Invalid deletion operation for non collection column {}", receiver.name()));
     } else if (!receiver.type->is_multi_cell()) {

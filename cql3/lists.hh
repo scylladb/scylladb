@@ -83,7 +83,7 @@ public:
         static value from_serialized(const fragmented_temporary_buffer::view& v, const list_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
         virtual bytes get_with_protocol_version(cql_serialization_format sf) override;
-        bool equals(shared_ptr<list_type_impl> lt, const value& v);
+        bool equals(const list_type_impl& lt, const value& v);
         virtual const std::vector<bytes_opt>& get_elements() const override;
         virtual sstring to_string() const;
         friend class lists;

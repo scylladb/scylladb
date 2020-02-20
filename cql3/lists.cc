@@ -165,13 +165,13 @@ lists::value::get_with_protocol_version(cql_serialization_format sf) {
 }
 
 bool
-lists::value::equals(shared_ptr<list_type_impl> lt, const value& v) {
+lists::value::equals(const list_type_impl& lt, const value& v) {
     if (_elements.size() != v._elements.size()) {
         return false;
     }
     return std::equal(_elements.begin(), _elements.end(),
             v._elements.begin(),
-            [t = lt->get_elements_type()] (const bytes_opt& e1, const bytes_opt& e2) { return t->equal(*e1, *e2); });
+            [t = lt.get_elements_type()] (const bytes_opt& e1, const bytes_opt& e2) { return t->equal(*e1, *e2); });
 }
 
 const std::vector<bytes_opt>&

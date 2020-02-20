@@ -144,7 +144,7 @@ protected:
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto t = to_term(col_specs, get_value(), db, schema->ks_name(), bound_names);
+        auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), bound_names);
         return ::make_shared<restrictions::multi_column_restriction::EQ>(schema, rs, t);
     }
 
@@ -156,7 +156,7 @@ protected:
             return cs->column_specification;
         });
         if (_in_marker) {
-            auto t = to_term(col_specs, get_value(), db, schema->ks_name(), bound_names);
+            auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), bound_names);
             auto as_abstract_marker = static_pointer_cast<abstract_marker>(t);
             return ::make_shared<restrictions::multi_column_restriction::IN_with_marker>(schema, rs, as_abstract_marker);
         } else {
@@ -179,7 +179,7 @@ protected:
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        auto t = to_term(col_specs, get_value(), db, schema->ks_name(), bound_names);
+        auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), bound_names);
         return ::make_shared<restrictions::multi_column_restriction::slice>(schema, rs, bound, inclusive, t);
     }
 
@@ -201,10 +201,10 @@ protected:
     }
 
     virtual shared_ptr<term> to_term(const std::vector<shared_ptr<column_specification>>& receivers,
-                                     ::shared_ptr<term::raw> raw, database& db, const sstring& keyspace,
+                                     const term::raw& raw, database& db, const sstring& keyspace,
                                      variable_specifications& bound_names) const override {
-        auto as_multi_column_raw = dynamic_pointer_cast<term::multi_column_raw>(raw);
-        auto t = as_multi_column_raw->prepare(db, keyspace, receivers);
+        const auto& as_multi_column_raw = dynamic_cast<const term::multi_column_raw&>(raw);
+        auto t = as_multi_column_raw.prepare(db, keyspace, receivers);
         t->collect_marker_specification(bound_names);
         return t;
     }
@@ -215,7 +215,7 @@ protected:
         int previous_position = -1;
         std::vector<const column_definition*> names;
         for (auto&& raw : get_entities()) {
-            const auto& def = to_column_definition(schema, raw);
+            const auto& def = to_column_definition(schema, *raw);
             check_true(def.is_clustering_key(), "Multi-column relations can only be applied to clustering columns but was applied to: %s", def.name_as_text());
             check_false(std::count(names.begin(), names.end(), &def), "Column \"%s\" appeared twice in a relation: %s", def.name_as_text(), to_string());
 

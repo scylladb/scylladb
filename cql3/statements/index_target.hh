@@ -90,7 +90,7 @@ struct index_target {
         static ::shared_ptr<raw> keys_and_values_of(::shared_ptr<column_identifier::raw> c);
         static ::shared_ptr<raw> full_collection(::shared_ptr<column_identifier::raw> c);
         static ::shared_ptr<raw> columns(std::vector<::shared_ptr<column_identifier::raw>> c);
-        ::shared_ptr<index_target> prepare(const schema&);
+        ::shared_ptr<index_target> prepare(const schema&) const;
     };
 };
 

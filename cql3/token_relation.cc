@@ -47,8 +47,8 @@
 std::vector<const column_definition*> cql3::token_relation::get_column_definitions(const schema& s) {
     std::vector<const column_definition*> res;
     std::transform(_entities.begin(), _entities.end(), std::back_inserter(res),
-            [this, &s](auto& cr) {
-                return &this->to_column_definition(s, cr);
+            [this, &s](const auto& cr) {
+                return &this->to_column_definition(s, *cr);
             });
     return res;
 }
@@ -83,7 +83,7 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
         database& db, schema_ptr schema,
         variable_specifications& bound_names) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
+    auto term = to_term(to_receivers(*schema, column_defs), *_value, db,
             schema->ks_name(), bound_names);
     return ::make_shared<restrictions::token_restriction::EQ>(column_defs, term);
 }
@@ -102,7 +102,7 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
         statements::bound bound,
         bool inclusive) {
     auto column_defs = get_column_definitions(*schema);
-    auto term = to_term(to_receivers(*schema, column_defs), _value, db,
+    auto term = to_term(to_receivers(*schema, column_defs), *_value, db,
             schema->ks_name(), bound_names);
     return ::make_shared<restrictions::token_restriction::slice>(column_defs,
             bound, inclusive, term);
@@ -127,9 +127,9 @@ sstring cql3::token_relation::to_string() const {
 
 ::shared_ptr<cql3::term> cql3::token_relation::to_term(
         const std::vector<::shared_ptr<column_specification>>& receivers,
-        ::shared_ptr<term::raw> raw, database& db, const sstring& keyspace,
+        const term::raw& raw, database& db, const sstring& keyspace,
         variable_specifications& bound_names) const {
-    auto term = raw->prepare(db, keyspace, receivers.front());
+    auto term = raw.prepare(db, keyspace, receivers.front());
     term->collect_marker_specification(bound_names);
     return term;
 }

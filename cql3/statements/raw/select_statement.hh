@@ -99,7 +99,7 @@ public:
     using result_row_type = std::vector<bytes_opt>;
     using ordering_comparator_type = compare_fn<result_row_type>;
 private:
-    ::shared_ptr<parameters> _parameters;
+    lw_shared_ptr<const parameters> _parameters;
     std::vector<::shared_ptr<selection::raw_selector>> _select_clause;
     std::vector<::shared_ptr<relation>> _where_clause;
     ::shared_ptr<term::raw> _limit;
@@ -107,7 +107,7 @@ private:
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _group_by_columns;
 public:
     select_statement(::shared_ptr<cf_name> cf_name,
-            ::shared_ptr<parameters> parameters,
+            lw_shared_ptr<const parameters> parameters,
             std::vector<::shared_ptr<selection::raw_selector>> select_clause,
             std::vector<::shared_ptr<relation>> where_clause,
             ::shared_ptr<term::raw> limit,
@@ -131,31 +131,31 @@ private:
     /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
     ::shared_ptr<term> prepare_limit(database& db, variable_specifications& bound_names, ::shared_ptr<term::raw> limit);
 
-    static void verify_ordering_is_allowed(::shared_ptr<restrictions::statement_restrictions> restrictions);
+    static void verify_ordering_is_allowed(const restrictions::statement_restrictions& restrictions);
 
-    static void validate_distinct_selection(schema_ptr schema,
-        ::shared_ptr<selection::selection> selection,
-        ::shared_ptr<restrictions::statement_restrictions> restrictions);
+    static void validate_distinct_selection(const schema& schema,
+        const selection::selection& selection,
+        const restrictions::statement_restrictions& restrictions);
 
-    void handle_unrecognized_ordering_column(const column_identifier& column);
+    void handle_unrecognized_ordering_column(const column_identifier& column) const;
 
-    select_statement::ordering_comparator_type get_ordering_comparator(schema_ptr schema,
-        ::shared_ptr<selection::selection> selection,
-        ::shared_ptr<restrictions::statement_restrictions> restrictions);
+    select_statement::ordering_comparator_type get_ordering_comparator(const schema& schema,
+        selection::selection& selection,
+        const restrictions::statement_restrictions& restrictions);
 
-    bool is_reversed(schema_ptr schema);
+    bool is_reversed(const schema& schema) const;
 
     /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
-    void check_needs_filtering(::shared_ptr<restrictions::statement_restrictions> restrictions);
+    void check_needs_filtering(const restrictions::statement_restrictions& restrictions);
 
     void ensure_filtering_columns_retrieval(database& db,
-                                            ::shared_ptr<selection::selection> selection,
-                                            ::shared_ptr<restrictions::statement_restrictions> restrictions);
+                                            selection::selection& selection,
+                                            const restrictions::statement_restrictions& restrictions);
 
     /// Returns indices of GROUP BY cells in fetched rows.
     std::vector<size_t> prepare_group_by(const schema& schema, selection::selection& selection) const;
 
-    bool contains_alias(const column_identifier& name);
+    bool contains_alias(const column_identifier& name) const;
 
     ::shared_ptr<column_specification> limit_receiver(bool per_partition = false);
 

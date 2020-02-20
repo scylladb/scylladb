@@ -56,7 +56,7 @@ tuples::literal::prepare(database& db, const sstring& keyspace, shared_ptr<colum
 }
 
 shared_ptr<term>
-tuples::literal::prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) {
+tuples::literal::prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) const {
     if (_elements.size() != receivers.size()) {
         throw exceptions::invalid_request_exception(format("Expected {:d} elements in value tuple, but got {:d}: {}", receivers.size(), _elements.size(), *this));
     }

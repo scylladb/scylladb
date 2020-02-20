@@ -61,7 +61,7 @@ selectable::writetime_or_ttl::to_string() const {
 }
 
 shared_ptr<selectable>
-selectable::writetime_or_ttl::raw::prepare(const schema& s) {
+selectable::writetime_or_ttl::raw::prepare(const schema& s) const {
     return make_shared<writetime_or_ttl>(_id->prepare_column_identifier(s), _is_writetime);
 }
 
@@ -92,7 +92,7 @@ selectable::with_function::to_string() const {
 }
 
 shared_ptr<selectable>
-selectable::with_function::raw::prepare(const schema& s) {
+selectable::with_function::raw::prepare(const schema& s) const {
         std::vector<shared_ptr<selectable>> prepared_args;
         prepared_args.reserve(_args.size());
         for (auto&& arg : _args) {
@@ -125,7 +125,7 @@ selectable::with_anonymous_function::to_string() const {
 }
 
 shared_ptr<selectable>
-selectable::with_anonymous_function::raw::prepare(const schema& s) {
+selectable::with_anonymous_function::raw::prepare(const schema& s) const {
         std::vector<shared_ptr<selectable>> prepared_args;
         prepared_args.reserve(_args.size());
         for (auto&& arg : _args) {
@@ -164,7 +164,7 @@ selectable::with_field_selection::to_string() const {
 }
 
 shared_ptr<selectable>
-selectable::with_field_selection::raw::prepare(const schema& s) {
+selectable::with_field_selection::raw::prepare(const schema& s) const {
     // static_pointer_cast<> needed due to lack of covariant return type
     // support with smart pointers
     return make_shared<with_field_selection>(_selected->prepare(s),
@@ -191,7 +191,7 @@ selectable::with_cast::to_string() const {
 }
 
 shared_ptr<selectable>
-selectable::with_cast::raw::prepare(const schema& s) {
+selectable::with_cast::raw::prepare(const schema& s) const {
     return ::make_shared<selectable::with_cast>(_arg->prepare(s), _type);
 }
 
