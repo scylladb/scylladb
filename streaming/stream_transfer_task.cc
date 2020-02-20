@@ -102,7 +102,7 @@ struct send_info {
         return do_with(false, [this] (bool& found_relevant_range) {
             return do_for_each(ranges, [this, &found_relevant_range] (dht::token_range range) {
                 if (!found_relevant_range) {
-                    auto sharder = dht::selective_token_range_sharder(cf.schema()->get_partitioner(), range, engine().cpu_id());
+                    auto sharder = dht::selective_token_range_sharder(cf.schema()->get_partitioner(), std::move(range), engine().cpu_id());
                     auto range_shard = sharder.next();
                     if (range_shard) {
                         found_relevant_range = true;
@@ -284,13 +284,13 @@ void stream_transfer_task::sort_and_merge_ranges() {
     for (auto& range : ranges) {
         // TODO: We should convert range_to_interval and interval_to_range to
         // take nonwrapping_range ranges.
-        myset += locator::token_metadata::range_to_interval(range);
+        myset += locator::token_metadata::range_to_interval(std::move(range));
     }
     ranges.clear();
     ranges.shrink_to_fit();
     for (auto& i : myset) {
         auto r = locator::token_metadata::interval_to_range(i);
-        _ranges.push_back(dht::token_range(r));
+        _ranges.push_back(dht::token_range(std::move(r)));
     }
     sslog.debug("cf_id = {}, after  ranges = {}, size={}", cf_id, _ranges, _ranges.size());
 }
