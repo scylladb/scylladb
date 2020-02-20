@@ -637,7 +637,7 @@ private:
         bool _wait_for_sync = false; // true if all writes using this schema have to be synced immediately by commitlog
         // Partitioner is not stored in the schema mutation and does not affect
         // schema digest. It is also not set locally on a schema tables.
-        std::optional<std::reference_wrapper<const dht::i_partitioner>> _partitioner;
+        std::reference_wrapper<const dht::i_partitioner> _partitioner;
     };
     raw_schema _raw;
     thrift_schema _thrift;

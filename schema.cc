@@ -122,14 +122,11 @@ void schema::set_default_partitioner(const sstring& class_name, unsigned ignore_
 }
 
 const dht::i_partitioner& schema::get_partitioner() const {
-    if (_raw._partitioner) {
-        return _raw._partitioner->get();
-    }
-    return ::get_partitioner(default_partitioner_name, smp::count, default_partitioner_ignore_msb);
+    return _raw._partitioner.get();
 }
 
 bool schema::has_custom_partitioner() const {
-    return bool(_raw._partitioner);
+    return _raw._partitioner.get().name() != default_partitioner_name;
 }
 
 ::shared_ptr<cql3::column_specification>
@@ -283,7 +280,7 @@ const column_mapping& schema::get_column_mapping() const {
 }
 
 schema::raw_schema::raw_schema(utils::UUID id)
-    : _id(id)
+    : _id(id), _partitioner(::get_partitioner(default_partitioner_name, smp::count, default_partitioner_ignore_msb))
 { }
 
 schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info)
