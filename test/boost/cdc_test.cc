@@ -24,6 +24,7 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include "cdc/log.hh"
+#include "cdc/cdc_extension.hh"
 #include "db/config.hh"
 #include "schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
@@ -42,7 +43,9 @@
 using namespace std::string_literals;
 
 static cql_test_config mk_cdc_test_config() {
-    shared_ptr<db::config> cfg(make_shared<db::config>());
+    auto ext = std::make_shared<db::extensions>();
+    ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
+    auto cfg = ::make_shared<db::config>(std::move(ext));
     auto features = cfg->experimental_features();
     features.emplace_back(db::experimental_features_t::CDC);
     cfg->experimental_features(features);

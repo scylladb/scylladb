@@ -23,6 +23,7 @@
 #include "serializer.hh"
 #include "db/extensions.hh"
 #include "cdc/cdc_options.hh"
+#include "schema.hh"
 
 namespace cdc {
 
