@@ -52,9 +52,7 @@ SEASTAR_TEST_CASE(simple_schema_extension) {
     };
 
     auto ext = std::make_shared<db::extensions>();
-    ext->add_schema_extension("los_lobos", [](db::extensions::schema_ext_config cfg) {
-        return std::visit([](auto v) { return ::make_shared<dummy_ext>(v); }, cfg);
-    });
+    ext->add_schema_extension<dummy_ext>("los_lobos");
 
     /**
      * Ensure we can create a table with the extension, and that it (and its data) is preserved
@@ -115,9 +113,7 @@ SEASTAR_TEST_CASE(simple_sstable_extension) {
 SEASTAR_TEST_CASE(cdc_schema_extension) {
     auto ext = std::make_shared<db::extensions>();
     // Extensions have to be registered here - config needs to have them before construction of test env.
-    ext->add_schema_extension(cdc::cdc_extension::NAME, [] (db::extensions::schema_ext_config cfg) {
-        return std::visit([] (auto v) { return ::make_shared<cdc::cdc_extension>(v); }, cfg);
-    });
+    ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     auto cfg = ::make_shared<db::config>(ext);
     cfg->experimental_features({db::experimental_features_t::feature::CDC});
 
