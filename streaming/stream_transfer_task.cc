@@ -70,15 +70,6 @@ stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, U
 
 stream_transfer_task::~stream_transfer_task() = default;
 
-dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges) {
-    dht::partition_range_vector prs;
-    prs.reserve(ranges.size());
-    for (auto& range : ranges) {
-        prs.push_back(dht::to_partition_range(range));
-    }
-    return prs;
-}
-
 struct send_info {
     database& db;
     utils::UUID plan_id;
@@ -104,7 +95,7 @@ struct send_info {
         , reason(reason_)
         , cf(db.find_column_family(cf_id))
         , ranges(std::move(ranges_))
-        , prs(to_partition_ranges(ranges))
+        , prs(dht::to_partition_ranges(ranges))
         , reader(cf.make_streaming_reader(cf.schema(), prs)) {
     }
     future<bool> has_relevant_range_on_this_shard() {
