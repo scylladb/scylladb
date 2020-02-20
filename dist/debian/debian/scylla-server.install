@@ -4,7 +4,6 @@ etc/security/limits.d/scylla.conf
 etc/scylla.d/*.conf
 opt/scylladb/share/doc/scylla/*
 opt/scylladb/share/doc/scylla/licenses/
-usr/lib/systemd/system/*.service
 usr/lib/systemd/system/*.timer
 usr/lib/systemd/system/*.slice
 usr/bin/scylla
