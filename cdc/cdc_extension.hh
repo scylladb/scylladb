@@ -22,25 +22,29 @@
 
 #include "serializer.hh"
 #include "db/extensions.hh"
+#include "cdc/cdc_options.hh"
 
 namespace cdc {
 
 class cdc_extension : public schema_extension {
-    std::map<sstring, sstring> _cdc_info;
+    cdc::options _cdc_options;
 public:
     static constexpr auto NAME = "cdc";
 
     cdc_extension() = default;
-    explicit cdc_extension(std::map<sstring, sstring> tags) : _cdc_info(std::move(tags)) {}
-    explicit cdc_extension(const bytes& b) : _cdc_info(cdc_extension::deserialize(b)) {}
+    explicit cdc_extension(std::map<sstring, sstring> tags) : _cdc_options(std::move(tags)) {}
+    explicit cdc_extension(const bytes& b) : _cdc_options(cdc_extension::deserialize(b)) {}
     explicit cdc_extension(const sstring& s) {
         throw std::logic_error("Cannot create cdc info from string");
     }
     bytes serialize() const override {
-        return ser::serialize_to_buffer<bytes>(_cdc_info);
+        return ser::serialize_to_buffer<bytes>(_cdc_options.to_map());
     }
     static std::map<sstring, sstring> deserialize(const bytes_view& buffer) {
         return ser::deserialize_from_buffer(buffer, boost::type<std::map<sstring, sstring>>());
+    }
+    const options& get_options() const {
+        return _cdc_options;
     }
 };
 
