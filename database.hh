@@ -121,6 +121,7 @@ namespace sstables {
 class sstable;
 class entry_descriptor;
 class compaction_descriptor;
+class compaction_completion_desc;
 class foreign_sstable_open_info;
 class sstables_manager;
 
@@ -608,9 +609,8 @@ private:
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
         const std::vector<sstables::shared_sstable>& old_sstables);
 
-    // Rebuilds the sstable set right away and schedule deletion of old sstables.
-    void on_compaction_completion(const std::vector<sstables::shared_sstable>& new_sstables,
-        const std::vector<sstables::shared_sstable>& sstables_to_remove);
+    // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
+    void on_compaction_completion(sstables::compaction_completion_desc& desc);
 
     void rebuild_statistics();
 
