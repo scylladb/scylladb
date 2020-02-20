@@ -223,7 +223,7 @@ public:
 };
 
 inline auto replacer_fn_no_op() {
-    return [](std::vector<shared_sstable> removed, std::vector<shared_sstable> added) -> void {};
+    return [](sstables::compaction_completion_desc desc) -> void {};
 }
 
 inline sstring get_test_dir(const sstring& name, const sstring& ks, const sstring& cf)

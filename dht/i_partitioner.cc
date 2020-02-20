@@ -543,6 +543,15 @@ to_partition_range(dht::token_range r) {
     return { std::move(start), std::move(end) };
 }
 
+dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges) {
+    dht::partition_range_vector prs;
+    prs.reserve(ranges.size());
+    for (auto& range : ranges) {
+        prs.push_back(dht::to_partition_range(range));
+    }
+    return prs;
+}
+
 std::map<unsigned, dht::partition_range_vector>
 split_range_to_shards(dht::partition_range pr, const schema& s) {
     std::map<unsigned, dht::partition_range_vector> ret;

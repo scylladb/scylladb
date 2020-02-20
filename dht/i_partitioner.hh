@@ -903,6 +903,7 @@ public:
 };
 
 dht::partition_range to_partition_range(dht::token_range);
+dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges);
 
 // Each shard gets a sorted, disjoint vector of ranges
 std::map<unsigned, dht::partition_range_vector>
