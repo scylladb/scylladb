@@ -99,8 +99,10 @@ struct send_info {
         , reader(cf.make_streaming_reader(cf.schema(), prs)) {
     }
     future<bool> has_relevant_range_on_this_shard() {
-        return do_with(false, [this] (bool& found_relevant_range) {
-            return do_for_each(ranges, [this, &found_relevant_range] (dht::token_range range) {
+        return do_with(false, ranges.begin(), [this] (bool& found_relevant_range, dht::token_range_vector::iterator& ranges_it) {
+            auto stop_cond = [this, &found_relevant_range, &ranges_it] { return ranges_it == ranges.end() || found_relevant_range; };
+            return do_until(std::move(stop_cond), [this, &found_relevant_range, &ranges_it] {
+                dht::token_range range = *ranges_it++;
                 if (!found_relevant_range) {
                     auto sharder = dht::selective_token_range_sharder(cf.schema()->get_partitioner(), std::move(range), engine().cpu_id());
                     auto range_shard = sharder.next();
@@ -108,6 +110,7 @@ struct send_info {
                         found_relevant_range = true;
                     }
                 }
+                return make_ready_future<>();
             }).then([&found_relevant_range] {
                 return found_relevant_range;
             });
