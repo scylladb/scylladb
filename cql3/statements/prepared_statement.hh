@@ -68,7 +68,6 @@ public:
     typedef seastar::checked_ptr<weak_ptr<prepared_statement>> checked_weak_ptr;
 
 public:
-    sstring raw_cql_statement;
     const ::shared_ptr<cql_statement> statement;
     const std::vector<::shared_ptr<column_specification>> bound_names;
     std::vector<uint16_t> partition_key_bind_indices;

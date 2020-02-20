@@ -513,6 +513,7 @@ query_processor::execute_prepared(
             });
         });
     }
+    log.trace("execute_prepared: \"{}\"", statement->raw_cql_statement);
 
     return fut.then([this, statement = std::move(statement), &query_state, &options] () mutable {
         return process_authorized_statement(std::move(statement), query_state, options);
@@ -612,7 +613,9 @@ query_processor::get_statement(const sstring_view& query, const service::client_
         cf_stmt->prepare_keyspace(client_state);
     }
     ++_stats.prepare_invocations;
-    return statement->prepare(_db, _cql_stats);
+    auto p = statement->prepare(_db, _cql_stats);
+    p->statement->raw_cql_statement = sstring(query);
+    return p;
 }
 
 ::shared_ptr<raw::parsed_statement>
@@ -672,6 +675,7 @@ statements::prepared_statement::checked_weak_ptr query_processor::prepare_intern
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
         auto np = parse_statement(query_string)->prepare(_db, _cql_stats);
+        np->statement->raw_cql_statement = query_string;
         np->statement->validate(_proxy, *_internal_state);
         p = std::move(np); // inserts it into map
     }
@@ -809,10 +813,15 @@ query_processor::execute_internal(
         const timeout_config& timeout_config,
         const std::initializer_list<data_value>& values,
         bool cache) {
+
+    if (log.is_enabled(logging::log_level::trace)) {
+        log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, ::join(", ", values));
+    }
     if (cache) {
         return execute_with_params(prepare_internal(query_string), cl, timeout_config, values);
     } else {
         auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
+        p->statement->raw_cql_statement = query_string;
         p->statement->validate(_proxy, *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
         return execute_with_params(std::move(checked_weak_ptr), cl, timeout_config, values).finally([p = std::move(p)] {});
@@ -848,6 +857,13 @@ query_processor::execute_batch(
             batch->validate();
             batch->validate(_proxy, query_state.get_client_state());
             _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
+            if (log.is_enabled(logging::log_level::trace)) {
+                std::ostringstream oss;
+                for (const auto& s: batch->get_statements()) {
+                    oss << std::endl <<  s.statement->raw_cql_statement;
+                }
+                log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
+            }
             return batch->execute(_proxy, query_state, options);
         });
     });

@@ -397,7 +397,6 @@ private:
                                    std::numeric_limits<uint16_t>::max()));
                 }
                 assert(bound_terms == prepared->bound_names.size());
-                prepared->raw_cql_statement = query_string;
                 return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
             }).then([&key, &id_getter] (auto prep_ptr) {
                 return make_ready_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(
