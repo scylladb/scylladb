@@ -1316,7 +1316,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                             v.emplace_back(iovec{ buf.get_write(), s});
                             m += s;
                         }
-                        return f.dma_write(max_size - rem, std::move(v)).then([&rem](size_t s) {
+                        return f.dma_write(max_size - rem, std::move(v), service::get_local_commitlog_priority()).then([&rem](size_t s) {
                             rem -= s;
                             return stop_iteration::no;
                         });
