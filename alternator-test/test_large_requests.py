@@ -1,0 +1,80 @@
+# Copyright 2020 ScyllaDB
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+# Tests for large requests
+
+import pytest
+import requests
+from botocore.exceptions import ClientError
+
+def gen_json(n):
+    return '{"":'*n + '{}' + '}'*n
+
+# Test that deeply nested objects (e.g. with depth of 200k) are parsed correctly,
+# i.e. do not cause stack overflows for the server. It's totally fine for the
+# server to refuse these packets with an error message though.
+# NOTE: The test uses raw HTTP requests, because it's not easy to send
+# a deeply nested object via boto3 - it quickly crashes on 'too deep recursion'
+# for objects with depth as low as 150 (with sys.getrecursionlimit() == 3000).
+# Hence, a request is manually crafted to contain a deeply nested JSON document.
+def test_deeply_nested_put(dynamodb, test_table):
+    big_json = gen_json(200000)
+    payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}, "attribute":' + big_json + '}}'
+
+    # NOTE: Signing routines use boto3 implementation details and may be prone
+    # to unexpected changes
+    class Request:
+        url=dynamodb.meta.client._endpoint.host
+        headers={'X-Amz-Target': 'DynamoDB_20120810.PutItem'}
+        body=payload.encode(encoding='UTF-8')
+        method='POST'
+        context={}
+        params={}
+    req = Request()
+    signer = dynamodb.meta.client._request_signer
+    signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
+    print(signer.signing_name, signer.region_name)
+
+    # Check that the request delivery succeeded and the server
+    # responded with a comprehensible message - it can be either
+    # a success report or an error - both are acceptable as long as
+    # the oversized message did not make the server crash.
+    response = requests.post(req.url, headers=req.headers, data=req.body)
+    print(response, response.text)
+
+    # If the PutItem request above failed, the deeply nested item
+    # was not put into the database, so it's fine for this request
+    # to receive a response that it was not found. An error informing
+    # about not being able to process this request is also acceptable,
+    # as long as the server didn't crash.
+    item = test_table.get_item(Key={'p': 'x', 'c':'x'})
+    print(item)
+
+# Test that a too deeply nested object is refused,
+# assuming max depth of 32 - and keeping the nested level
+# low enough for Python not to choke on it with too deep recursion
+def test_exceed_nested_level_a_little(dynamodb, test_table):
+    p = 'xxx'
+    c = 'yyy'
+    nested = dict()
+    nested_it = nested
+    for i in range(50):
+        nested_it['a'] = dict()
+        nested_it = nested_it['a']
+    with pytest.raises(ClientError, match='ValidationException.*nested'):
+        test_table.put_item(Item={'p': p, 'c': c, 'nested': nested})
+

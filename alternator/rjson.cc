@@ -27,9 +27,79 @@ namespace rjson {
 
 static allocator the_allocator;
 
+/*
+ * This wrapper class adds nested level checks to rapidjson's handlers.
+ * Each rapidjson handler implements functions for accepting JSON values,
+ * which includes strings, numbers, objects, arrays, etc.
+ * Parsing objects and arrays needs to be performed carefully with regard
+ * to stack overflow - each object/array layer adds another stack frame
+ * to parsing, printing and destroying the parent JSON document.
+ * To prevent stack overflow, a rapidjson handler can be wrapped with
+ * guarded_json_handler, which accepts an additional max_nested_level parameter.
+ * After trying to exceed the max nested level, a proper rjson::error will be thrown.
+ */
+template<typename Handler>
+struct guarded_json_handler : public Handler {
+    size_t _nested_level = 0;
+    size_t _max_nested_level;
+public:
+    using handler_base = Handler;
+
+    explicit guarded_json_handler(size_t max_nested_level) : _max_nested_level(max_nested_level) {}
+    explicit guarded_json_handler(string_buffer& buf, size_t max_nested_level)
+            : handler_base(buf), _max_nested_level(max_nested_level) {}
+
+    void Parse(const char* str, size_t length) {
+        rapidjson::MemoryStream ms(static_cast<const char*>(str), length * sizeof(typename encoding::Ch));
+        rapidjson::EncodedInputStream<encoding, rapidjson::MemoryStream> is(ms);
+        rapidjson::GenericReader<encoding, encoding, allocator> reader(&the_allocator);
+        reader.Parse(is, *this);
+        //NOTICE: The handler has parsed the string, but in case of rapidjson::GenericDocument
+        // the data now resides in an internal stack_ variable, which is private instead of
+        // protected... which means we cannot simply access its data. Fortunately, another
+        // function for populating documents from SAX events can be abused to extract the data
+        // from the stack via gadget-oriented programming - we use an empty event generator
+        // which does nothing, and use it to call Populate(), which assumes that the generator
+        // will fill the stack with something. It won't, but our stack is already filled with
+        // data we want to steal, so once Populate() ends, our document will be properly parsed.
+        // A proper solution could be programmed once rapidjson declares this stack_ variable
+        // as protected instead of private, so that this class can access it.
+        auto dummy_generator = [](handler_base&){return true;};
+        handler_base::Populate(dummy_generator);
+    }
+
+    bool StartObject() {
+        ++_nested_level;
+        check_nested_level();
+        return handler_base::StartObject();
+    }
+
+    bool EndObject(rapidjson::SizeType elements_count = 0) {
+        --_nested_level;
+        return handler_base::EndObject(elements_count);
+    }
+
+    bool StartArray() {
+        ++_nested_level;
+        check_nested_level();
+        return handler_base::StartArray();
+    }
+
+    bool EndArray(rapidjson::SizeType elements_count = 0) {
+        --_nested_level;
+        return handler_base::EndArray(elements_count);
+    }
+protected:
+    void check_nested_level() const {
+        if (RAPIDJSON_UNLIKELY(_nested_level > _max_nested_level)) {
+            throw rjson::error(format("Max nested level reached: {}", _max_nested_level));
+        }
+    }
+};
+
 std::string print(const rjson::value& value) {
     string_buffer buffer;
-    writer writer(buffer);
+    guarded_json_handler<writer> writer(buffer, 39);
     value.Accept(writer);
     return std::string(buffer.GetString());
 }
@@ -43,7 +113,7 @@ rjson::value parse(const std::string& str) {
 }
 
 rjson::value parse_raw(const char* c_str, size_t size) {
-    rjson::document d;
+    guarded_json_handler<document> d(39);
     d.Parse(c_str, size);
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
