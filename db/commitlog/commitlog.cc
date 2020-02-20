@@ -1323,7 +1323,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                         std::vector<iovec> v;
                         v.reserve(n);
                         size_t m = 0;
-                        while (m < rem && n < max_write) {
+                        while (m < rem && n--) {
                             auto s = std::min(rem - m, buf_size);
                             v.emplace_back(iovec{ buf.get_write(), s});
                             m += s;
