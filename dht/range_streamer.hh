@@ -173,6 +173,7 @@ private:
     streaming::stream_reason _reason;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
+    std::unordered_map<sstring, std::unordered_set<inet_address>> _trigger_compaction;
     stream_plan _stream_plan;
     // Retry the stream plan _nr_max_retry times
     unsigned _nr_retried = 0;

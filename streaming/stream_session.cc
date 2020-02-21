@@ -218,22 +218,25 @@ void stream_session::init_messaging_service_handler() {
                         make_generating_reader(s, std::move(get_next_mutation_fragment)),
                         [plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
                             auto& cf = get_local_db().find_column_family(reader.schema());
-                            return db::view::check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
+                            return db::view::check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader), reason] (bool use_view_update_path) mutable {
                                 //FIXME: for better estimations this should be transmitted from remote
                                 auto metadata = mutation_source_metadata{};
                                 auto& cs = cf->get_compaction_strategy();
                                 const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
                                 auto consumer = cf->get_compaction_strategy().make_interposer_consumer(metadata,
-                                        [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path] (flat_mutation_reader reader) {
+                                        [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, reason] (flat_mutation_reader reader) {
                                     sstables::shared_sstable sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
                                     schema_ptr s = reader.schema();
                                     auto& pc = service::get_local_streaming_write_priority();
 
                                     return sst->write_components(std::move(reader), std::max(1ul, adjusted_estimated_partitions), s,
-                                                                 sstables::sstable_writer_config{}, encoding_stats{}, pc).then([sst] {
+                                                                 sstables::sstable_writer_config{}, encoding_stats{}, pc).then([sst, reason] {
                                         return sst->open_data();
-                                    }).then([cf, sst] {
-                                        return cf->add_sstable_and_update_cache(sst);
+                                    }).then([cf, sst, reason] {
+                                        // Trigger compaction for repair. Compaction for other stream reasons
+                                        // will be triggered when the operation is done.
+                                        bool trigger_compaction = reason == stream_reason::repair;
+                                        return cf->add_sstable_and_update_cache(sst, trigger_compaction);
                                     }).then([cf, s, sst, use_view_update_path]() mutable -> future<> {
                                         if (!use_view_update_path) {
                                             return make_ready_future<>();
@@ -270,8 +273,21 @@ void stream_session::init_messaging_service_handler() {
                 });
         });
     });
-    ms().register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
+    ms().register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id, rpc::optional<sstring> trigger_compaction_opt) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        if (trigger_compaction_opt && !trigger_compaction_opt->empty()) {
+            auto& db = service::get_local_storage_proxy().get_db().local();
+            for (auto& x : db.get_column_families()) {
+                table& table = *(x.second);
+                auto cf_name = table.schema()->cf_name();
+                auto ks_name = table.schema()->ks_name();
+                if (ks_name == *trigger_compaction_opt) {
+                    sslog.info("Trigger compaction requested from node {} for keyspace={}, table={}", from, ks_name, cf_name);
+                    table.trigger_compaction();
+                }
+            }
+            return make_ready_future<>();
+        }
         return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
             auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
             return session->get_db().invoke_on_all([ranges = std::move(ranges), plan_id, from, cf_id] (database& db) {

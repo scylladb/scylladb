@@ -890,17 +890,17 @@ future<> messaging_service::send_stream_mutation(msg_addr id, UUID plan_id, froz
 
 // STREAM_MUTATION_DONE
 void messaging_service::register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo,
-        UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id)>&& func) {
+        UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id, rpc::optional<sstring> trigger_compaction)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION_DONE,
             [func = std::move(func)] (const rpc::client_info& cinfo,
                     UUID plan_id, std::vector<wrapping_range<dht::token>> ranges,
-                    UUID cf_id, unsigned dst_cpu_id) mutable {
-        return func(cinfo, plan_id, ::compat::unwrap(std::move(ranges)), cf_id, dst_cpu_id);
+                    UUID cf_id, unsigned dst_cpu_id, rpc::optional<sstring> trigger_compaction) mutable {
+        return func(cinfo, plan_id, ::compat::unwrap(std::move(ranges)), cf_id, dst_cpu_id, trigger_compaction);
     });
 }
-future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
+future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id, sstring trigger_compaction) {
     return send_message<void>(this, messaging_verb::STREAM_MUTATION_DONE, id,
-        plan_id, std::move(ranges), cf_id, dst_cpu_id);
+        plan_id, std::move(ranges), cf_id, dst_cpu_id, std::move(trigger_compaction));
 }
 
 // COMPLETE_MESSAGE

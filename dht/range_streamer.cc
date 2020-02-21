@@ -47,6 +47,7 @@
 #include "streaming/stream_state.hh"
 #include "service/storage_service.hh"
 #include "db/config.hh"
+#include "message/messaging_service.hh"
 #include <seastar/core/semaphore.hh>
 #include <boost/range/adaptors.hpp>
 
@@ -310,8 +311,12 @@ future<> range_streamer::do_stream_async() {
                             description, source, keyspace, nr_ranges_streamed, nr_ranges_total, ranges_to_stream.size());
                     nr_ranges_streamed += ranges_to_stream.size();
                     if (_nr_rx_added) {
+                        // This node is the stream receiver, trigger compaction on local node only
+                        _trigger_compaction[keyspace].insert(_address);
                         sp.request_ranges(source, keyspace, ranges_to_stream);
                     } else if (_nr_tx_added) {
+                        // This node is the stream sender, trigger compaction on remote node.
+                        _trigger_compaction[keyspace].insert(source);
                         sp.transfer_ranges(source, keyspace, ranges_to_stream);
                     }
                     sp.execute().discard_result().get();
@@ -342,6 +347,22 @@ future<> range_streamer::do_stream_async() {
                 logger.info("{} with {} for keyspace={} succeeded, took {} seconds", description, source, keyspace, t);
               });
           });
+        });
+    }).then([this, start] {
+        return do_for_each(_trigger_compaction, [] (auto& trigger) {
+            const sstring& keyspace = trigger.first;
+            const std::unordered_set<gms::inet_address>& nodes = trigger.second;
+            return parallel_for_each(nodes, [&keyspace] (const gms::inet_address& node) {
+                logger.info("Trigger compaction on node {} for keyspace={}", node, keyspace);
+                return netw::get_local_messaging_service().send_stream_mutation_done(netw::msg_addr(node), {}, {}, {}, 0, keyspace
+                        ).handle_exception([node, keyspace] (std::exception_ptr ep) {
+                    // In a mixed cluster, node that does not support trigger
+                    // compaction will fail the verb to trigger the compaction.
+                    // It is fine because they already trigger the compaction
+                    // when the stream session is finished in the old way.
+                    logger.warn("Trigger compaction on node {} for keyspace={} failed:{}", node, keyspace, ep);
+                });
+            });
         });
     }).finally([this, start] {
         auto t = std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start).count();
