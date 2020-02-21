@@ -392,9 +392,6 @@ private:
     /* Sends a Gossip message to a live member */
     future<> do_gossip_to_live_member(gossip_digest_syn message, inet_address ep);
 
-    /* Sends a Gossip message to an unreachable member */
-    future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
-
     /* Gossip to a seed for facilitating partition healing */
     future<> do_gossip_to_seed(gossip_digest_syn prod);
 

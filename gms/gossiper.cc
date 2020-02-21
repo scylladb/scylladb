@@ -768,12 +768,6 @@ void gossiper::run() {
                     });
                 }
 
-                /* Gossip to some unreachable member with some probability to check if he is back up */
-                // Do it in the background.
-                (void)do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
-                    logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
-                });
-
                 /* Gossip to a seed if we did not do so above, or we have seen less nodes
                    than there are seeds.  This prevents partitions where each group of nodes
                    is only gossiping to a subset of the seeds.
@@ -1183,30 +1177,6 @@ future<int> gossiper::get_current_heart_beat_version(inet_address endpoint) {
 
 future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message, gms::inet_address ep) {
     return send_gossip(message, {ep});
-}
-
-future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
-    double live_endpoint_count = _live_endpoints.size();
-    double unreachable_endpoint_count = _unreachable_endpoints.size();
-    if (unreachable_endpoint_count > 0) {
-        /* based on some probability */
-        double prob = unreachable_endpoint_count / (live_endpoint_count + 1);
-        std::uniform_real_distribution<double> dist(0, 1);
-        double rand_dbl = dist(_random_engine);
-        if (rand_dbl < prob) {
-            std::set<inet_address> addrs;
-            for (auto&& x : _unreachable_endpoints) {
-                // Ignore the node which is decommissioned
-                if (get_gossip_status(x.first) != sstring(versioned_value::STATUS_LEFT)) {
-                    addrs.insert(x.first);
-                }
-            }
-            logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
-                live_endpoint_count, unreachable_endpoint_count);
-            return send_gossip(message, addrs);
-        }
-    }
-    return make_ready_future<>();
 }
 
 future<> gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
