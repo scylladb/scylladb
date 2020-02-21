@@ -400,3 +400,30 @@ def test_put_item_replace(test_table_s, test_table):
     assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'a': 'hi'}
     test_table.put_item(Item={'p': p, 'c': c, 'b': 'hello'})
     assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'b': 'hello'}
+
+# Test what UpdateItem does on a non-existent item. An operation that puts an
+# attribute, creates this item. Even an empty operation creates an item
+# (this is test_empty_update() above). But an operation that only deletes
+# attributes, does not create an empty item. This reproduces issue #5862.
+def test_update_item_non_existent(test_table_s):
+    # An update that puts an attribute on a non-existent item, creates it:
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 3, 'Action': 'PUT'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 3}
+    # An update that does *nothing* on a non-existent item, still creates it:
+    p = random_string()
+    test_table_s.update_item(Key={'p': p}, AttributeUpdates={})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p}
+    # HOWEVER, an update that only deletes an attribute on a non-existent
+    # item, does NOT creates it: (issue #5862 was about Alternator wrongly
+    # creating and empty item in this case).
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Action': 'DELETE'}})
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # Test the same thing - that an attribute-deleting update does not
+    # create a non-existing item - but now with the update expression syntax:
+    p = random_string()
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='REMOVE a')
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)

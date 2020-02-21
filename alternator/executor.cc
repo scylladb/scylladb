@@ -2360,7 +2360,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     mutation m(_schema, _pk);
     auto& row = m.partition().clustered_row(*_schema, _ck);
     attribute_collector attrs_collector;
+    bool any_updates = false;
     auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
+        any_updates = true;
         const column_definition* cdef = _schema->get_column_definition(column_name);
         if (cdef) {
             bytes column_value = get_key_from_typed_value(json_value, *cdef);
@@ -2369,7 +2371,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             attrs_collector.put(std::move(column_name), serialize_item(json_value), ts);
         }
     };
+    bool any_deletes = false;
     auto do_delete = [&] (bytes&& column_name) {
+        any_deletes = true;
         const column_definition* cdef = _schema->get_column_definition(column_name);
         if (cdef) {
             row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
@@ -2488,8 +2492,11 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     }
     // To allow creation of an item with no attributes, we need a row marker.
     // Note that unlike Scylla, even an "update" operation needs to add a row
-    // marker. TODO: a row marker isn't really needed for a DELETE operation.
-    row.apply(row_marker(ts));
+    // marker. An update with only DELETE operations must not add a row marker
+    // (this was issue #5862) but any other update, even an empty one, should.
+    if (any_updates || !any_deletes) {
+        row.apply(row_marker(ts));
+    }
     return m;
 }
 
