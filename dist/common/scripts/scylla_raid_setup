@@ -82,6 +82,8 @@ if __name__ == '__main__':
 
     if is_debian_variant():
         run('env DEBIAN_FRONTEND=noninteractive apt-get -y install mdadm xfsprogs')
+    elif is_redhat_variant():
+        run('yum install -y mdadm xfsprogs')
     elif is_gentoo_variant():
         run('emerge -uq sys-fs/mdadm sys-fs/xfsprogs')
 
