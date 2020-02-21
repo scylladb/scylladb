@@ -139,11 +139,13 @@ const rjson::value& get(const rjson::value& value, rjson::string_ref_type name);
 // Sets a member in given JSON object by moving the member - allocates the name.
 // Throws if base is not a JSON object.
 void set_with_string_name(rjson::value& base, const std::string& name, rjson::value&& member);
+void set_with_string_name(rjson::value& base, std::string_view name, rjson::value&& member);
 
 // Sets a string member in given JSON object by assigning its reference - allocates the name.
 // NOTICE: member string liveness must be ensured to be at least as long as base's.
 // Throws if base is not a JSON object.
 void set_with_string_name(rjson::value& base, const std::string& name, rjson::string_ref_type member);
+void set_with_string_name(rjson::value& base, std::string_view name, rjson::string_ref_type member);
 
 // Sets a member in given JSON object by moving the member.
 // NOTICE: name liveness must be ensured to be at least as long as base's.

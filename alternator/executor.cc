@@ -2172,7 +2172,7 @@ static std::optional<rjson::value> describe_single_item(schema_ptr schema,
             std::string column_name = (*column_it)->name_as_text();
             if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
                 if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
-                    rjson::set_with_string_name(item, column_name.c_str(), rjson::empty_object());
+                    rjson::set_with_string_name(item, column_name, rjson::empty_object());
                     rjson::value& field = item[column_name.c_str()];
                     rjson::set_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(*cell, **column_it));
                 }
@@ -2755,7 +2755,7 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     std::vector<bytes> exploded_pk = paging_state.get_partition_key().explode();
     auto exploded_pk_it = exploded_pk.begin();
     for (const column_definition& cdef : schema.partition_key_columns()) {
-        rjson::set_with_string_name(last_evaluated_key, cdef.name_as_text(), rjson::empty_object());
+        rjson::set_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
         rjson::value& key_entry = last_evaluated_key[cdef.name_as_text()];
         rjson::set_with_string_name(key_entry, type_to_string(cdef.type), rjson::parse(to_json_string(*cdef.type, *exploded_pk_it)));
         ++exploded_pk_it;
@@ -2765,7 +2765,7 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
         auto exploded_ck = ck->explode();
         auto exploded_ck_it = exploded_ck.begin();
         for (const column_definition& cdef : schema.clustering_key_columns()) {
-            rjson::set_with_string_name(last_evaluated_key, cdef.name_as_text(), rjson::empty_object());
+            rjson::set_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
             rjson::value& key_entry = last_evaluated_key[cdef.name_as_text()];
             rjson::set_with_string_name(key_entry, type_to_string(cdef.type), rjson::parse(to_json_string(*cdef.type, *exploded_ck_it)));
             ++exploded_ck_it;

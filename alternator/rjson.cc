@@ -170,8 +170,16 @@ void set_with_string_name(rjson::value& base, const std::string& name, rjson::va
     base.AddMember(rjson::value(name.c_str(), name.size(), the_allocator), std::move(member), the_allocator);
 }
 
+void set_with_string_name(rjson::value& base, std::string_view name, rjson::value&& member) {
+    base.AddMember(rjson::value(name.data(), name.size(), the_allocator), std::move(member), the_allocator);
+}
+
 void set_with_string_name(rjson::value& base, const std::string& name, rjson::string_ref_type member) {
     base.AddMember(rjson::value(name.c_str(), name.size(), the_allocator), rjson::value(member), the_allocator);
+}
+
+void set_with_string_name(rjson::value& base, std::string_view name, rjson::string_ref_type member) {
+    base.AddMember(rjson::value(name.data(), name.size(), the_allocator), rjson::value(member), the_allocator);
 }
 
 void set(rjson::value& base, rjson::string_ref_type name, rjson::value&& member) {
