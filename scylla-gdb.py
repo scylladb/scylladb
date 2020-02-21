@@ -2744,7 +2744,7 @@ class scylla_sstables(gdb.Command):
             ]
         schema = schema_ptr(sst['_schema'])
         int_type = gdb.lookup_type('int')
-        return formats[sst['_version']].format(
+        return formats[int(sst['_version'])].format(
                 keyspace=str(schema.ks_name)[1:-1],
                 table=str(schema.cf_name)[1:-1],
                 version=version_to_str[int(sst['_version'].cast(int_type))],
