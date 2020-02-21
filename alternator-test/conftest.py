@@ -116,6 +116,15 @@ def test_table_s(dynamodb):
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ])
     yield table
     table.delete()
+# test_table_s_2 has exactly the same schema as test_table_s, and is useful
+# for tests which need two different tables with the same schema.
+@pytest.fixture(scope="session")
+def test_table_s_2(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ])
+    yield table
+    table.delete()
 @pytest.fixture(scope="session")
 def test_table_b(dynamodb):
     table = create_test_table(dynamodb,

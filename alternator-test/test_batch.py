@@ -152,6 +152,20 @@ def test_batch_write_duplicate_write_and_delete(test_table_s, test_table):
         batch.put_item({'p': p, 'c': other})
         batch.put_item({'p': other, 'c': c})
 
+# The BatchWriteIem API allows writing to more than one table in the same
+# batch. This test verifies that the duplicate-key checking doesn't mistake
+# updates to the same key in different tables to be duplicates.
+def test_batch_write_nonduplicate_multiple_tables(test_table_s, test_table_s_2):
+    p = random_string()
+    # The batch_writer() function used in previous tests can't write to more
+    # than one table. So we use the lower level interface boto3 gives us.
+    reply = test_table_s.meta.client.batch_write_item(RequestItems = {
+        test_table_s.name: [{'PutRequest': {'Item': {'p': p, 'a': 'hi'}}}],
+        test_table_s_2.name: [{'PutRequest': {'Item': {'p': p, 'b': 'hello'}}}]
+    })
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 'hi'}
+    assert test_table_s_2.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 'hello'}
+
 # Test that BatchWriteItem's PutRequest completely replaces an existing item.
 # It shouldn't merge it with a previously existing value. See also the same
 # test for PutItem - test_put_item_replace().
