@@ -206,11 +206,6 @@ update lwt set c=3 where a=1 and b contains 1 if c=1;
 	"message" : "exceptions::invalid_request_exception (Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering)",
 	"status" : "error"
 }
-update lwt set c=3 where a=1 if c like 'asd';
-{
-	"message" : "exceptions::invalid_request_exception (Unsupported operator type LIKE in a condition )",
-	"status" : "error"
-}
 
 drop table lwt;
 {

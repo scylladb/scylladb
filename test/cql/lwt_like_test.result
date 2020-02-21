@@ -1,0 +1,144 @@
+create table t (pk int primary key, c text);
+{
+	"status" : "ok"
+}
+insert into  t (pk, c) values (1, 'abc');
+{
+	"status" : "ok"
+}
+insert into  t (pk, c) values (2, 'bcd');
+{
+	"status" : "ok"
+}
+insert into  t (pk, c) values (3, 'cde');
+{
+	"status" : "ok"
+}
+-- match
+update t set c = 'chg' where pk = 1 if c like 'a%';
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"c" : "\"abc\""
+		}
+	]
+}
+update t set c = 'chg' where pk = 2 if c like 'b%';
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"c" : "\"bcd\""
+		}
+	]
+}
+update t set c = 'chg' where pk = 3 if c like 'c%';
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"c" : "\"cde\""
+		}
+	]
+}
+-- null value
+insert into  t (pk, c) values (3, null);
+{
+	"status" : "ok"
+}
+update t set c = 'error' where pk = 3 if c like 'a%';
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+-- unset value
+insert into  t json '{ "pk": 4 }' default unset;
+{
+	"status" : "ok"
+}
+update t set c = 'err' where pk = 4 if c like 'a%';
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+-- empty pattern
+update t set c = 'err' where pk = 1 if c like '';
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false",
+			"c" : "\"chg\""
+		}
+	]
+}
+-- invalid pattern type
+update t set c = 'err' where pk = 1 if c like 1;
+{
+	"message" : "exceptions::invalid_request_exception (Invalid INTEGER constant (1) for \"c\" of type text)",
+	"status" : "error"
+}
+update t set c = 'err' where pk = 1 if c like null;
+{
+	"message" : "exceptions::invalid_request_exception (Invalid NULL value in LIKE pattern)",
+	"status" : "error"
+}
+update t set c = 'err' where pk = 1 if c like bigintAsBlob(1);
+{
+	"message" : "exceptions::invalid_request_exception (Type error: cannot assign result of function system.bigintasblob (type blob) to c (type text))",
+	"status" : "error"
+}
+-- int column
+create table ti (pk int primary key, c int);
+{
+	"status" : "ok"
+}
+insert into  ti (pk, c) values (1, 1);
+{
+	"status" : "ok"
+}
+update ti set c = 2 where pk = 1 if c like 'a%';
+{
+	"message" : "exceptions::invalid_request_exception (Invalid STRING constant (a%) for \"c\" of type int)",
+	"status" : "error"
+}
+-- map column
+create table tm (pk int primary key, m map<int, text>);
+{
+	"status" : "ok"
+}
+insert into  tm (pk, m) values (1, { 1: 'abc' });
+{
+	"status" : "ok"
+}
+update tm set m = { 2: 'error' } where pk = 1 if m like 'a%';
+{
+	"message" : "exceptions::invalid_request_exception (Invalid STRING constant (a%) for \"m\" of type map<int, text>)",
+	"status" : "error"
+}
+-- blob column
+create table tb (pk int primary key, b blob);
+{
+	"status" : "ok"
+}
+insert into  tb (pk, b) values (1, bigintAsBlob(1));
+{
+	"status" : "ok"
+}
+update tb set b = bigintAsBlob(2) where pk = 1 if b like 'a%';
+{
+	"message" : "exceptions::invalid_request_exception (Invalid STRING constant (a%) for \"b\" of type blob)",
+	"status" : "error"
+}
