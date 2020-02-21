@@ -151,14 +151,14 @@ def test_basic_string_more_update(test_table):
     assert item['a2'] == val2
     assert not 'a3' in item
 
-# Test that item operations on a non-existant table name fail with correct
+# Test that item operations on a non-existent table name fail with correct
 # error code.
 def test_item_operations_nonexistent_table(dynamodb):
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         dynamodb.meta.client.put_item(TableName='non_existent_table',
             Item={'a':{'S':'b'}})
 
-# Fetching a non-existant item. According to the DynamoDB doc, "If there is no
+# Fetching a non-existent item. According to the DynamoDB doc, "If there is no
 # matching item, GetItem does not return any data and there will be no Item
 # element in the response."
 def test_get_item_missing_item(test_table):

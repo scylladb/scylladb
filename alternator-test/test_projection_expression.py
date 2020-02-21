@@ -134,10 +134,10 @@ def test_projection_expression_path(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[0]')['Item'] == {'a': {'b': [2]}}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[2]')['Item'] == {'a': {'b': [{'x': 'hi', 'y': 'yo'}]}}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[2].y')['Item'] == {'a': {'b': [{'y': 'yo'}]}}
-    # Trying to read any sort of non-existant attribute returns an empty item.
+    # Trying to read any sort of non-existent attribute returns an empty item.
     # This includes a non-existing top-level attribute, an attempt to read
-    # beyond the end of an array or a non-existant member of a dictionary, as
-    # well as paths which begin with a non-existant prefix.
+    # beyond the end of an array or a non-existent member of a dictionary, as
+    # well as paths which begin with a non-existent prefix.
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='x')['Item'] == {}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[3]')['Item'] == {}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.x')['Item'] == {}

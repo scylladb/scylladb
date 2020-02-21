@@ -71,7 +71,7 @@ def test_gsi_identical(dynamodb):
     # results (in different order).
     assert multiset(items) == multiset(full_scan(table))
     assert_index_scan(table, 'hello', items)
-    # We can't scan a non-existant index
+    # We can't scan a non-existent index
     with pytest.raises(ClientError, match='ValidationException'):
         full_scan(table, IndexName='wrong')
     table.delete()

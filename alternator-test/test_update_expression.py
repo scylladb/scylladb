@@ -370,7 +370,7 @@ def test_update_expression_cannot_modify_key(test_table):
 
 # Test that trying to start an expression with some nonsense like HELLO
 # instead of SET, REMOVE, ADD or DELETE, fails.
-def test_update_expression_non_existant_clause(test_table_s):
+def test_update_expression_non_existent_clause(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
