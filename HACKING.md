@@ -141,7 +141,7 @@ In v3:
 "Tests: unit ({mode}), dtest ({smp})"
 ```
 
-The usual is "Tests: unit (release)", although running debug tests is encouraged.
+The usual is "Tests: unit (dev)", although running debug tests is encouraged.
 
 5. When answering review comments, prefer inline quotes as they make it easier to track the conversation across multiple e-mails.
 
