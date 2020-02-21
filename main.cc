@@ -984,6 +984,15 @@ int main(int ac, char** av) {
                 gossiper.local().unregister_(ss.shared_from_this()).get();
             });
 
+            /*
+             * This fuse prevents gossiper from staying active in case the
+             * drain_on_shutdown below is not registered. When we fix the
+             * start-stop sequence it will be removed.
+             */
+            auto gossiping_fuse = defer_verbose_shutdown("gossiping", [] {
+                gms::stop_gossiping().get();
+            });
+
             ss.init_server_without_the_messaging_service_part().get();
             api::set_server_snapshot(ctx).get();
             auto stop_snapshots = defer_verbose_shutdown("snapshots", [] {
