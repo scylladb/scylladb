@@ -1433,9 +1433,9 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges,
+            auto f = db.invoke_on(shard, [&db, keyspace, cfs, id, ranges,
                     data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
-                auto ri = make_lw_shared<repair_info>(service::get_local_storage_service().db(),
+                auto ri = make_lw_shared<repair_info>(db,
                         std::move(keyspace), std::move(ranges), std::move(cfs),
                         id, std::move(data_centers), std::move(hosts));
                 return repair_ranges(ri);
