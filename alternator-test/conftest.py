@@ -70,7 +70,8 @@ def dynamodb(request):
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         return boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
-            region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass')
+            region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
+            config=botocore.client.Config(retries={"max_attempts": 3}))
 
 # "test_table" fixture: Create and return a temporary table to be used in tests
 # that need a table to work on. The table is automatically deleted at the end.
