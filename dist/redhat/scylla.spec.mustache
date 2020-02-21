@@ -68,7 +68,7 @@ defines=()
 {{#housekeeping}}
 install_arg="--housekeeping"
 {{/housekeeping}}
-./install.sh --root "$RPM_BUILD_ROOT" $install_arg
+./install.sh --packaging --root "$RPM_BUILD_ROOT" $install_arg
 
 %pre server
 getent group scylla || /usr/sbin/groupadd scylla 2> /dev/null || :

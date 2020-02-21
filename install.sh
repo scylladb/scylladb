@@ -33,6 +33,7 @@ Options:
   --housekeeping           enable housekeeping service
   --nonroot                install Scylla without required root priviledge
   --sysconfdir /etc/sysconfig   specify sysconfig directory name
+  --packaging               use install.sh for packaging
   --help                   this helpful message
 EOF
     exit 1
@@ -43,6 +44,7 @@ housekeeping=false
 python3=/opt/scylladb/python3/bin/python3
 sysconfdir=/etc/sysconfig
 nonroot=false
+packaging=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -69,6 +71,10 @@ while [ $# -gt 0 ]; do
         "--sysconfdir")
             sysconfdir="$2"
             shift 2
+            ;;
+        "--packaging")
+            packaging=true
+            shift 1
             ;;
         "--help")
             shift 1
@@ -321,4 +327,33 @@ if $nonroot; then
     touch $rprefix/SCYLLA-NONROOT-FILE
     systemctl --user daemon-reload
     echo "Scylla non-root install completed."
+elif ! $packaging; then
+    nousr=
+    nogrp=
+    getent passwd scylla || nousr=1
+    getent group scylla || nogrp=1
+
+    # this handles both case group is not exist || group already exists
+    if [ $nousr ]; then
+        adduser --system \
+                --quiet \
+                --home /var/lib/scylla \
+                --no-create-home \
+                --disabled-password \
+                --group scylla
+    # only group is not exist, create it and add user to the group
+    elif [ $nogrp ]; then
+        addgroup --system scylla
+        adduser scylla scylla
+    fi
+    chown -R scylla:scylla $rdata
+    chown -R scylla:scylla $rhkdata
+
+    grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
+    echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> /tmp/scylla.yaml
+    echo "api_doc_dir: /opt/scylladb/api/api-doc/" >> /tmp/scylla.yaml
+    mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
+
+
+    $rprefix/scripts/scylla_post_install.sh
 fi
