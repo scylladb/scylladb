@@ -17,7 +17,7 @@ override_dh_auto_clean:
 
 override_dh_auto_install:
 	dh_auto_install
-	./install.sh --root "$(CURDIR)/debian/tmp" $(install_arg) --sysconfdir "/etc/default"
+	./install.sh --packaging --root "$(CURDIR)/debian/tmp" $(install_arg) --sysconfdir "/etc/default"
 	# don't use default sysconfig file, use Debian version
 	cp dist/debian/sysconfig/scylla-housekeeping $(CURDIR)/debian/tmp/etc/default/
 
