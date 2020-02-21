@@ -2283,10 +2283,6 @@ public:
 update_item_operation::update_item_operation(service::storage_proxy& proxy, rjson::value&& update_info)
     : rmw_operation(proxy, std::move(update_info))
 {
-    if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
-        // FIXME: Need to support also UPDATED_OLD, ALL_NEW and UPDATED_NEW options.
-        throw api_error("ValidationException", format("UpdateItem support for ReturnValues options UPDATED_OLD, ALL_NEW and UPDATED_NEW not yet implemented."));
-    }
     const rjson::value* key = rjson::find(_request, "Key");
     if (!key) {
         throw api_error("ValidationException", "UpdateItem requires a Key parameter");
@@ -2357,12 +2353,32 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
         return {};
     }
 
+    // previous_item was created by describe_item() so has an "Item" member.
+    rjson::value* item = previous_item ? rjson::find(*previous_item, "Item") : nullptr;
+
     mutation m(_schema, _pk);
     auto& row = m.partition().clustered_row(*_schema, _ck);
     attribute_collector attrs_collector;
     bool any_updates = false;
     auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
         any_updates = true;
+        if (_returnvalues == returnvalues::ALL_NEW ||
+            _returnvalues == returnvalues::UPDATED_NEW) {
+            rjson::set_with_string_name(_return_attributes,
+                    to_sstring_view(column_name), rjson::copy(json_value));
+        } else if (_returnvalues == returnvalues::UPDATED_OLD && item) {
+            // NOTE: Unfortunately, FindMember (rjson::find) here and
+            // RemoveMember below have a bug where although they can take a
+            // rjson::string_ref_type(data, len), they actually need this data
+            // to be null-terminated, and in "bytes" we don't have this null
+            // termination. So we need to copy column_name to a new string.
+            // Would be nice to avoid this eventually.
+            std::string cn = std::string(to_sstring_view(column_name));
+            rjson::value* col = rjson::find(*item, rjson::string_ref_type(cn.data(), cn.size()));
+            if (col) {
+                rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
+            }
+        }
         const column_definition* cdef = _schema->get_column_definition(column_name);
         if (cdef) {
             bytes column_value = get_key_from_typed_value(json_value, *cdef);
@@ -2374,6 +2390,19 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     bool any_deletes = false;
     auto do_delete = [&] (bytes&& column_name) {
         any_deletes = true;
+        if (_returnvalues == returnvalues::ALL_NEW) {
+            // NOTE: see comment above about why we need this copy, because
+            // of the null termination problem.
+            _return_attributes.RemoveMember(rjson::from_string(to_sstring_view(column_name)));
+        } else if (_returnvalues == returnvalues::UPDATED_OLD && item) {
+            // NOTE: see comment above about why we need this copy, because
+            // of the null termination problem.
+            std::string cn = std::string(to_sstring_view(column_name));
+            rjson::value* col = rjson::find(*item, rjson::string_ref_type(cn.data(), cn.size()));
+            if (col) {
+                rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
+            }
+        }
         const column_definition* cdef = _schema->get_column_definition(column_name);
         if (cdef) {
             row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
@@ -2381,6 +2410,29 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             attrs_collector.del(std::move(column_name), ts);
         }
     };
+
+    // In the ReturnValues=ALL_NEW case, we make a copy of previous_item into
+    // _return_attributes and parts of it will be overwritten by the new
+    // updates (in do_update() and do_delete()). We need to make a copy and
+    // cannot overwrite previous_item directly because we still need its
+    // original content for update expressions. For example, the expression
+    // "REMOVE a SET b=a" is valid, and needs the original value of a to
+    // stick around.
+    // Note that for ReturnValues=ALL_OLD, we don't need to copy here, and
+    // can just move previous_item later, when we don't need it any more.
+    if (_returnvalues == returnvalues::ALL_NEW) {
+        if (item) {
+            _return_attributes = rjson::copy(*item);
+        } else {
+            // If there is no previous item, usually a new item is created
+            // and contains they given key. This may be cancelled at the end
+            // of this function if the update is just deletes.
+           _return_attributes = rjson::copy(rjson::get(_request, "Key"));
+        }
+    } else if (_returnvalues == returnvalues::UPDATED_OLD ||
+               _returnvalues == returnvalues::UPDATED_NEW) {
+        _return_attributes = rjson::empty_object();
+    }
 
     if (!_update_expression.empty()) {
         std::unordered_set<std::string> seen_column_names;
@@ -2442,11 +2494,8 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             }, action._action);
         }
     }
-    if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
-        rjson::value* item = rjson::find(*previous_item, "Item");
-        if (item) {
-            _return_attributes = std::move(*item);
-        }
+    if (_returnvalues == returnvalues::ALL_OLD && item) {
+        _return_attributes = std::move(*item);
     }
     if (!_update_expression.empty() || !_condition_expression.empty()) {
         verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
@@ -2496,7 +2545,19 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     // (this was issue #5862) but any other update, even an empty one, should.
     if (any_updates || !any_deletes) {
         row.apply(row_marker(ts));
+    } else if (_returnvalues == returnvalues::ALL_NEW && !item) {
+        // There was no pre-existing item, and we're not creating one, so
+        // don't report the new item in the returned Attributes.
+        _return_attributes = rjson::null_value();
     }
+    // ReturnValues=UPDATED_OLD/NEW never return an empty Attributes field,
+    // even if a new item was created. Instead it should be missing entirely.
+    if (_returnvalues == returnvalues::UPDATED_OLD || _returnvalues == returnvalues::UPDATED_NEW) {
+        if (_return_attributes.MemberCount() == 0) {
+            _return_attributes = rjson::null_value();
+        }
+    }
+
     return m;
 }
 

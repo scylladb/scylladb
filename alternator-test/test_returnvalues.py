@@ -191,7 +191,6 @@ def test_update_item_returnvalues_all_old(test_table_s):
         ExpressionAttributeValues={':val': 'cat'})
     assert not 'Attributes' in ret
 
-@pytest.mark.xfail(reason="ReturnValues not supported")
 def test_update_item_returnvalues_updated_old(test_table_s):
     # With ReturnValues=UPDATED_OLD, only the overwritten attributes of the
     # old item are returned in an "Attributes" attribute:
@@ -236,7 +235,12 @@ def test_update_item_returnvalues_updated_old(test_table_s):
         ExpressionAttributeValues={':val': 'cat', ':val2': 'tiger'})
     assert ret['Attributes'] == {'b': 'dog', 'd': 'lion'}
 
-@pytest.mark.xfail(reason="ReturnValues not supported")
+    # If we write absolutely nothing (the only way to do this is with the
+    # old AttributeUpdates syntax), we don't get Attributes back.
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_OLD',
+        AttributeUpdates={})
+    assert not 'Attributes' in ret
+
 def test_update_item_returnvalues_all_new(test_table_s):
     # With ReturnValues=ALL_NEW, the entire new value of the item (including
     # old attributes we did not modify) is returned:
@@ -247,6 +251,11 @@ def test_update_item_returnvalues_all_new(test_table_s):
         ExpressionAttributeValues={':val': 'cat'})
     assert ret['Attributes'] == {'p': p, 'a': 'hi', 'b': 'cat'}
 
+    # Verify that if a column is deleted, it is *not* returned:
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_NEW',
+        UpdateExpression='REMOVE b')
+    assert ret['Attributes'] == {'p': p, 'a': 'hi'}
+
     # If the item did not previously exist, that's still fine, we get the
     # new value of the item:
     p = random_string()
@@ -255,12 +264,33 @@ def test_update_item_returnvalues_all_new(test_table_s):
         ExpressionAttributeValues={':val': 'cat'})
     assert ret['Attributes'] == {'p': p, 'b': 'cat'}
 
-@pytest.mark.xfail(reason="ReturnValues not supported")
+    # A more interesting question is what happens if the item did not
+    # previously exist, and all the update does is *delete* an attribute,
+    # which never existed. In this case, the item is not created (see also
+    # test_update_item_non_existent()), and "Attributes" is not returned,
+    p = random_string()
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_NEW',
+        UpdateExpression='REMOVE b')
+    assert not 'Attributes' in ret
+    ret=test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    assert not 'Item' in ret
+
+    # If we write absolutely nothing (the only way to do this is with the
+    # old AttributeUpdates syntax), we get an empty item (just the key)
+    # if it didn't yet exist (and now it does), or the old item if it did.
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_NEW',
+        AttributeUpdates={})
+    assert ret['Attributes'] == {'p': p}
+    test_table_s.put_item(Item={'p': p, 'a': 'hi'})
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_NEW',
+        AttributeUpdates={})
+    assert ret['Attributes'] == {'p': p, 'a': 'hi'}
+
 def test_update_item_returnvalues_updated_new(test_table_s):
     # With ReturnValues=UPDATED_NEW, only the new value of the updated
     # attributes are returned. Note that "updated attributes" means
     # the newly set attributes - it doesn't require that these attributes
-    # have any previous values
+    # have any previous values.
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a': 'hi', 'b': 'dog'})
     ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_NEW',
@@ -292,6 +322,27 @@ def test_update_item_returnvalues_updated_new(test_table_s):
         ExpressionAttributeValues={':val': 1})
     assert ret['Attributes'] == {'a': 2}
 
+    # UPDATED_NEW only returns non-key attributes. Even if the operation
+    # caused a new item to be created, the new key attributes aren't
+    # returned.
+    p = random_string()
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_NEW',
+        UpdateExpression='SET a = :val',
+        ExpressionAttributeValues={':val': 1})
+    assert ret['Attributes'] == {'a': 1}
+
+    # If we write absolutely nothing (the only way to do this is with the
+    # old AttributeUpdates syntax), we don't get back any Attributes.
+    # Not even if the item didn't previously exist and this write caused
+    # it to be created.
+    p = random_string()
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_NEW',
+        AttributeUpdates={})
+    assert not 'Attributes' in ret
+    test_table_s.put_item(Item={'p': p, 'a': 'hi'})
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_NEW',
+        AttributeUpdates={})
+    assert not 'Attributes' in ret
 
 # Test the ReturnValues from an UpdateItem directly modifying a *nested*
 # attribute, in the relevant ReturnValue modes:
@@ -331,3 +382,19 @@ def test_update_item_returnvalues_nested(test_table_s):
         UpdateExpression='SET a.c[1] = :val, a.b = :val2',
         ExpressionAttributeValues={':val': 3, ':val2': 'dog'})
     assert ret['Attributes'] == {'a': {'b': 'dog', 'c': [3]}}
+    # Although ALL_NEW mode returns the entire item and doesn't need to
+    # know how to project a nested attribute, we still need to check that
+    # it can return the post-update value of the attribute within the entire
+    # item.
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_NEW',
+        UpdateExpression='SET a.b = :val',
+        ExpressionAttributeValues={':val': 'hi'})
+    assert ret['Attributes'] == {'p': p, 'a': {'b': 'hi', 'c': [1, 3, 3]}, 'd': 'cat' }
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_NEW',
+        UpdateExpression='SET a.c[1] = :val',
+        ExpressionAttributeValues={':val': 4})
+    assert ret['Attributes'] == {'p': p, 'a': {'b': 'hi', 'c': [1, 4, 3]}, 'd': 'cat' }
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_NEW',
+        UpdateExpression='SET a.c[1] = :val, a.b = :val2',
+        ExpressionAttributeValues={':val': 3, ':val2': 'dog'})
+    assert ret['Attributes'] == {'p': p, 'a': {'b': 'dog', 'c': [1, 3, 3]}, 'd': 'cat' }
