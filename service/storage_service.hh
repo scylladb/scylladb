@@ -319,10 +319,6 @@ public:
     sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();
 
-    void finish_bootstrapping() {
-        _is_bootstrap_mode = false;
-    }
-
     /* Broadcasts the chosen tokens through gossip,
      * together with a CDC streams timestamp (if we start a new CDC generation) and STATUS=NORMAL. */
     void set_gossip_tokens(const std::unordered_set<dht::token>&, std::optional<db_clock::time_point>);
