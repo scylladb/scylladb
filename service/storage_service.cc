@@ -428,14 +428,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     gossip_sharding_info().get();
 
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
-#if 0
-    if (!MessagingService.instance().isListening())
-        MessagingService.instance().listen(FBUtilities.getLocalAddress());
-    LoadBroadcaster.instance.startBroadcasting();
 
-    HintedHandOffManager.instance.start();
-    BatchlogManager.instance.start();
-#endif
     // Wait for gossip to settle so that the fetures will be enabled
     if (do_bind) {
         gms::get_local_gossiper().wait_for_gossip_to_settle().get();
@@ -650,11 +643,6 @@ void storage_service::join_token_ring(int delay) {
             }
         }
     }
-#if 0
-    // if we don't have system_traces keyspace at this point, then create it manually
-    if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
-        MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
-#endif
 
     slogger.debug("Setting tokens to {}", _bootstrap_tokens);
     // This node must know about its chosen tokens before other nodes do
@@ -1331,9 +1319,6 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
         slogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
     });
     if (_token_metadata.is_member(endpoint)) {
-#if 0
-        HintedHandOffManager.instance.scheduleHintDelivery(endpoint, true);
-#endif
         notify_up(endpoint);
     }
 }
@@ -1577,63 +1562,6 @@ future<> storage_service::drain_on_shutdown() {
             slogger.info("Drain on shutdown: done");
         });
     });
-#if 0
-        // daemon threads, like our executors', continue to run while shutdown hooks are invoked
-        drainOnShutdown = new Thread(new WrappedRunnable()
-        {
-            @Override
-            public void runMayThrow() throws InterruptedException
-            {
-                ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
-                ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
-                if (mutationStage.isShutdown() && counterMutationStage.isShutdown())
-                    return; // drained already
-
-                if (daemon != null)
-                    shutdownClientServers();
-                ScheduledExecutors.optionalTasks.shutdown();
-                Gossiper.instance.stop();
-
-                // In-progress writes originating here could generate hints to be written, so shut down MessagingService
-                // before mutation stage, so we can get all the hints saved before shutting down
-                MessagingService.instance().shutdown();
-                counterMutationStage.shutdown();
-                mutationStage.shutdown();
-                counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-                mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-                StorageProxy.instance.verifyNoHintsInProgress();
-
-                List<Future<?>> flushes = new ArrayList<>();
-                for (Keyspace keyspace : Keyspace.all())
-                {
-                    KSMetaData ksm = Schema.instance.getKSMetaData(keyspace.getName());
-                    if (!ksm.durableWrites)
-                    {
-                        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-                            flushes.add(cfs.forceFlush());
-                    }
-                }
-                try
-                {
-                    FBUtilities.waitOnFutures(flushes);
-                }
-                catch (Throwable t)
-                {
-                    JVMStabilityInspector.inspectThrowable(t);
-                    // don't let this stop us from shutting down the commitlog and other thread pools
-                    slogger.warn("Caught exception while waiting for memtable flushes during shutdown hook", t);
-                }
-
-                CommitLog.instance.shutdownBlocking();
-
-                // wait for miscellaneous tasks like sstable and commitlog segment deletion
-                ScheduledExecutors.nonPeriodicTasks.shutdown();
-                if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
-                    slogger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
-            }
-        }, "StorageServiceShutdownHook");
-        Runtime.getRuntime().addShutdownHook(drainOnShutdown);
-#endif
 }
 
 future<> storage_service::init_messaging_service_part() {
@@ -1642,29 +1570,11 @@ future<> storage_service::init_messaging_service_part() {
 
 future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
     return seastar::async([this, delay, do_bind] {
-#if 0
-        slogger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
-        slogger.info("Thrift API version: {}", cassandraConstants.VERSION);
-        slogger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
-#endif
         _initialized = true;
 
         // Register storage_service to migration_notifier so we can update
         // pending ranges when keyspace is chagned
         _mnotifier.local().register_listener(this);
-#if 0
-        try
-        {
-            // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
-            Class.forName("org.apache.cassandra.service.StorageProxy");
-            // also IndexSummaryManager, which is otherwise unreferenced
-            Class.forName("org.apache.cassandra.io.sstable.IndexSummaryManager");
-        }
-        catch (ClassNotFoundException e)
-        {
-            throw new AssertionError(e);
-        }
-#endif
 
         std::vector<inet_address> loaded_endpoints;
         if (get_property_load_ring_state()) {
@@ -1704,12 +1614,6 @@ future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
         }
 
         prepare_to_join(std::move(loaded_endpoints), loaded_peer_features, do_bind);
-#if 0
-        // Has to be called after the host id has potentially changed in prepareToJoin().
-        for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
-            if (cfs.metadata.isCounter())
-                cfs.initCounterCache();
-#endif
 
         join_token_ring(delay);
 
@@ -1780,10 +1684,7 @@ future<> storage_service::stop() {
 
 future<> storage_service::check_for_endpoint_collision(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
     slogger.debug("Starting shadow gossip round to check for endpoint collision");
-#if 0
-    if (!MessagingService.instance().isListening())
-        MessagingService.instance().listen(FBUtilities.getLocalAddress());
-#endif
+
     return seastar::async([this, loaded_peer_features] {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
@@ -2654,10 +2555,6 @@ future<> storage_service::drain() {
             ss.set_mode(mode::DRAINING, "shutting down messaging_service", false);
             ss.do_stop_ms().get();
 
-#if 0
-    StorageProxy.instance.verifyNoHintsInProgress();
-#endif
-
             // Interrupt on going compaction and shutdown to prevent further compaction
             ss.db().invoke_on_all([] (auto& db) {
                 return db.get_compaction_manager().stop();
@@ -2669,11 +2566,6 @@ future<> storage_service::drain() {
             db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
                 return bm.stop();
             }).get();
-#if 0
-    // whilst we've flushed all the CFs, which will have recycled all completed segments, we want to ensure
-    // there are no segments to replay, so we force the recycling of any remaining (should be at most one)
-    CommitLog.instance.forceRecycleAllSegments();
-#endif
 
             ss.set_mode(mode::DRAINING, "shutting down migration manager", false);
             service::get_migration_manager().stop().get();

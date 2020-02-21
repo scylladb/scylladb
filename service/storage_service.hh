@@ -151,12 +151,7 @@ private:
     using application_state = gms::application_state;
     using inet_address = gms::inet_address;
     using versioned_value = gms::versioned_value;
-#if 0
-    private static final Logger logger = LoggerFactory.getLogger(StorageService.class);
 
-    /* JMX notification serial number counter */
-    private final AtomicLong notificationSerialNumber = new AtomicLong();
-#endif
     abort_source& _abort_source;
     gms::feature_service& _feature_service;
     distributed<database>& _db;
@@ -252,35 +247,9 @@ private:
 public:
     std::chrono::milliseconds get_ring_delay();
     gms::versioned_value::factory value_factory;
-#if 0
-    public volatile VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(getPartitioner());
-
-    private Thread drainOnShutdown = null;
-
-    public static final StorageService instance = new StorageService();
-
-    public static IPartitioner getPartitioner()
-    {
-        return DatabaseDescriptor.getPartitioner();
-    }
-#endif
-public:
     dht::token_range_vector get_local_ranges(const sstring& keyspace_name) const {
         return get_ranges_for_endpoint(keyspace_name, get_broadcast_address());
     }
-#if 0
-    public Collection<Range<Token>> getPrimaryRanges(String keyspace)
-    {
-        return getPrimaryRangesForEndpoint(keyspace, FBUtilities.getBroadcastAddress());
-    }
-
-    public Collection<Range<Token>> getPrimaryRangesWithinDC(String keyspace)
-    {
-        return getPrimaryRangeForEndpointWithinDC(keyspace, FBUtilities.getBroadcastAddress());
-    }
-
-    private CassandraDaemon daemon;
-#endif
 private:
 
     std::unordered_set<inet_address> _replicating_nodes;
@@ -314,10 +283,6 @@ private:
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
     friend future<> read_sstables_format(distributed<storage_service>&);
     friend class feature_enabled_listener;
-#if 0
-    /* the probability for tracing any particular request, 0 disables tracing and 1 enables for all */
-    private double traceProbability = 0.0;
-#endif
     /* Used for tracking drain progress */
 public:
     struct drain_progress {
@@ -332,21 +297,10 @@ public:
     };
 private:
     drain_progress _drain_progress{};
-#if 0
-
-    private static final AtomicInteger nextRepairCommand = new AtomicInteger();
-#endif
 
 
     std::vector<endpoint_lifecycle_subscriber*> _lifecycle_subscribers;
 
-#if 0
-    private static final BackgroundActivityMonitor bgMonitor = new BackgroundActivityMonitor();
-
-    private final ObjectName jmxObjectName;
-
-#endif
-private:
     std::unordered_set<token> _bootstrap_tokens;
 
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
@@ -372,13 +326,6 @@ public:
     /* Broadcasts the chosen tokens through gossip,
      * together with a CDC streams timestamp (if we start a new CDC generation) and STATUS=NORMAL. */
     void set_gossip_tokens(const std::unordered_set<dht::token>&, std::optional<db_clock::time_point>);
-#if 0
-
-    public void registerDaemon(CassandraDaemon daemon)
-    {
-        this.daemon = daemon;
-    }
-#endif
 
     void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
 
@@ -411,71 +358,17 @@ private:
     future<> do_stop_native_transport();
     future<> do_stop_ms();
     future<> do_stop_stream_manager();
-#if 0
-    public void stopTransports()
-    {
-        if (isInitialized())
-        {
-            logger.error("Stopping gossiper");
-            stopGossiping();
-        }
-        if (isRPCServerRunning())
-        {
-            logger.error("Stopping RPC server");
-            stopRPCServer();
-        }
-        if (isNativeTransportRunning())
-        {
-            logger.error("Stopping native transport");
-            stopNativeTransport();
-        }
-    }
-#endif
-private:
     future<> shutdown_client_servers();
-#if 0
-    public void stopClient()
-    {
-        Gossiper.instance.unregister(this);
-        Gossiper.instance.stop();
-        MessagingService.instance().shutdown();
-        // give it a second so that task accepted before the MessagingService shutdown gets submitted to the stage (to avoid RejectedExecutionException)
-        Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
-        StageManager.shutdownNow();
-    }
-#endif
-public:
-    future<bool> is_initialized();
-#if 0
 
-    public void stopDaemon()
-    {
-        if (daemon == null)
-            throw new IllegalStateException("No configured daemon");
-        daemon.deactivate();
-    }
-#endif
-private:
     // Tokens and the CDC streams timestamp of the replaced node.
     using replacement_info = std::pair<std::unordered_set<token>, std::optional<db_clock::time_point>>;
     future<replacement_info> prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
 public:
-    future<> check_for_endpoint_collision(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
-#if 0
+    future<bool> is_initialized();
 
-    // for testing only
-    public void unsafeInitialize() throws ConfigurationException
-    {
-        _initialized = true;
-        Gossiper.instance.register(this);
-        Gossiper.instance.start((int) (System.currentTimeMillis() / 1000)); // needed for node-ring gathering.
-        Gossiper.instance.addLocalApplicationState(ApplicationState.NET_VERSION, valueFactory.networkVersion());
-        if (!MessagingService.instance().isListening())
-            MessagingService.instance().listen(FBUtilities.getLocalAddress());
-    }
-#endif
-public:
+    future<> check_for_endpoint_collision(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
+
     /*!
      * \brief Init the messaging service part of the service.
      *
@@ -511,16 +404,7 @@ public:
     future<> stop_transport();
 
     void flush_column_families();
-#if 0
-    /**
-     * In the event of forceful termination we need to remove the shutdown hook to prevent hanging (OOM for instance)
-     */
-    public void removeShutdownHook()
-    {
-        if (drainOnShutdown != null)
-            Runtime.getRuntime().removeShutdownHook(drainOnShutdown);
-    }
-#endif
+
 private:
     bool should_bootstrap() const;
     void prepare_to_join(std::vector<inet_address> loaded_endpoints, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
@@ -535,39 +419,6 @@ public:
     }
 
     future<> rebuild(sstring source_dc);
-
-#if 0
-    public void setStreamThroughputMbPerSec(int value)
-    {
-        DatabaseDescriptor.setStreamThroughputOutboundMegabitsPerSec(value);
-        logger.info("setstreamthroughput: throttle set to {}", value);
-    }
-
-    public int getStreamThroughputMbPerSec()
-    {
-        return DatabaseDescriptor.getStreamThroughputOutboundMegabitsPerSec();
-    }
-
-    public int getCompactionThroughputMbPerSec()
-    {
-        return DatabaseDescriptor.getCompactionThroughputMbPerSec();
-    }
-
-    public void setCompactionThroughputMbPerSec(int value)
-    {
-        DatabaseDescriptor.setCompactionThroughputMbPerSec(value);
-    }
-
-    public boolean isIncrementalBackupsEnabled()
-    {
-        return DatabaseDescriptor.isIncrementalBackupsEnabled();
-    }
-
-    public void setIncrementalBackupsEnabled(boolean value)
-    {
-        DatabaseDescriptor.setIncrementalBackupsEnabled(value);
-    }
-#endif
 
 private:
     void set_mode(mode m, bool log);
@@ -584,91 +435,13 @@ public:
         return _is_bootstrap_mode;
     }
 
-#if 0
-
-    public TokenMetadata getTokenMetadata()
-    {
-        return _token_metadata;
-    }
-
-    /**
-     * Increment about the known Compaction severity of the events in this node
-     */
-    public void reportSeverity(double incr)
-    {
-        bgMonitor.incrCompactionSeverity(incr);
-    }
-
-    public void reportManualSeverity(double incr)
-    {
-        bgMonitor.incrManualSeverity(incr);
-    }
-
-    public double getSeverity(InetAddress endpoint)
-    {
-        return bgMonitor.getSeverity(endpoint);
-    }
-
-    /**
-     * for a keyspace, return the ranges and corresponding listen addresses.
-     * @param keyspace
-     * @return the endpoint map
-     */
-    public Map<List<String>, List<String>> getRangeToEndpointMap(String keyspace)
-    {
-        /* All the ranges for the tokens */
-        Map<List<String>, List<String>> map = new HashMap<>();
-        for (Map.Entry<Range<Token>,List<InetAddress>> entry : getRangeToAddressMap(keyspace).entrySet())
-        {
-            map.put(entry.getKey().asList(), stringify(entry.getValue()));
-        }
-        return map;
-    }
-#endif
     /**
      * Return the rpc address associated with an endpoint as a string.
      * @param endpoint The endpoint to get rpc address for
      * @return the rpc address
      */
     sstring get_rpc_address(const inet_address& endpoint) const;
-#if 0
-    /**
-     * for a keyspace, return the ranges and corresponding RPC addresses for a given keyspace.
-     * @param keyspace
-     * @return the endpoint map
-     */
-    public Map<List<String>, List<String>> getRangeToRpcaddressMap(String keyspace)
-    {
-        /* All the ranges for the tokens */
-        Map<List<String>, List<String>> map = new HashMap<>();
-        for (Map.Entry<Range<Token>, List<InetAddress>> entry : getRangeToAddressMap(keyspace).entrySet())
-        {
-            List<String> rpcaddrs = new ArrayList<>(entry.getValue().size());
-            for (InetAddress endpoint: entry.getValue())
-            {
-                rpcaddrs.add(getRpcaddress(endpoint));
-            }
-            map.put(entry.getKey().asList(), rpcaddrs);
-        }
-        return map;
-    }
 
-    public Map<List<String>, List<String>> getPendingRangeToEndpointMap(String keyspace)
-    {
-        // some people just want to get a visual representation of things. Allow null and set it to the first
-        // non-system keyspace.
-        if (keyspace == null)
-            keyspace = Schema.instance.getNonSystemKeyspaces().get(0);
-
-        Map<List<String>, List<String>> map = new HashMap<>();
-        for (Map.Entry<Range<Token>, Collection<InetAddress>> entry : _token_metadata.getPendingRanges(keyspace).entrySet())
-        {
-            List<InetAddress> l = new ArrayList<>(entry.getValue());
-            map.put(entry.getKey().asList(), stringify(l));
-        }
-        return map;
-    }
-#endif
     std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace) const;
 
     std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_to_address_map_in_local_dc(
@@ -696,16 +469,6 @@ public:
      */
     //std::vector<sstring> describeRingJMX(const sstring& keyspace) const {
 
-#if 0
-
-    /**
-     * The same as {@code describeRing(String)} but considers only the part of the ring formed by nodes in the local DC.
-     */
-    public List<TokenRange> describeLocalRing(String keyspace) throws InvalidRequestException
-    {
-        return describeRing(keyspace, true);
-    }
-#endif
     std::vector<token_range_endpoints> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
     /**
@@ -715,21 +478,6 @@ public:
      */
     std::map<token, inet_address> get_token_to_endpoint_map();
 
-#if 0
-
-    public String getLocalHostId()
-    {
-        return getTokenMetadata().getHostId(FBUtilities.getBroadcastAddress()).toString();
-    }
-
-    public Map<String, String> getHostIdMap()
-    {
-        Map<String, String> mapOut = new HashMap<>();
-        for (Map.Entry<InetAddress, UUID> entry : getTokenMetadata().getEndpointToHostIdMapForReading().entrySet())
-            mapOut.put(entry.getKey().getHostAddress(), entry.getValue().toString());
-        return mapOut;
-    }
-#endif
     /**
      * Construct the range to endpoint mapping based on the true view
      * of the world.
@@ -937,32 +685,7 @@ private:
 
     // needs to be modified to accept either a keyspace or ARS.
     std::unordered_multimap<dht::token_range, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
-#if 0
-    public final void deliverHints(String host) throws UnknownHostException
-    {
-        HintedHandOffManager.instance.scheduleHintDelivery(host);
-    }
 
-    /* These methods belong to the MBean interface */
-
-    public List<String> getTokens()
-    {
-        return getTokens(FBUtilities.getBroadcastAddress());
-    }
-
-    public List<String> getTokens(String endpoint) throws UnknownHostException
-    {
-        return getTokens(InetAddress.getByName(endpoint));
-    }
-
-    private List<String> getTokens(InetAddress endpoint)
-    {
-        List<String> strTokens = new ArrayList<>();
-        for (Token tok : getTokenMetadata().getTokens(endpoint))
-            strTokens.add(tok.toString());
-        return strTokens;
-    }
-#endif
 public:
 
     sstring get_release_version();
@@ -971,97 +694,6 @@ public:
 
     future<std::unordered_map<sstring, std::vector<sstring>>> describe_schema_versions();
 
-#if 0
-    public List<String> getLeavingNodes()
-    {
-        return stringify(_token_metadata.getLeavingEndpoints());
-    }
-
-    public List<String> getMovingNodes()
-    {
-        List<String> endpoints = new ArrayList<>();
-
-        for (Pair<Token, InetAddress> node : _token_metadata.getMovingEndpoints())
-        {
-            endpoints.add(node.right.getHostAddress());
-        }
-
-        return endpoints;
-    }
-
-    public List<String> getJoiningNodes()
-    {
-        return stringify(_token_metadata.getBootstrapTokens().valueSet());
-    }
-
-    public List<String> getLiveNodes()
-    {
-        return stringify(Gossiper.instance.getLiveMembers());
-    }
-
-    public List<String> getUnreachableNodes()
-    {
-        return stringify(Gossiper.instance.getUnreachableMembers());
-    }
-
-    private List<String> stringify(Iterable<InetAddress> endpoints)
-    {
-        List<String> stringEndpoints = new ArrayList<>();
-        for (InetAddress ep : endpoints)
-        {
-            stringEndpoints.add(ep.getHostAddress());
-        }
-        return stringEndpoints;
-    }
-
-    public int forceKeyspaceCleanup(String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
-    {
-        if (keyspaceName.equals(SystemKeyspace.NAME))
-            throw new RuntimeException("Cleanup of the system keyspace is neither necessary nor wise");
-
-        CompactionManager.AllSSTableOpStatus status = CompactionManager.AllSSTableOpStatus.SUCCESSFUL;
-        for (ColumnFamilyStore cfStore : getValidColumnFamilies(false, false, keyspaceName, columnFamilies))
-        {
-            CompactionManager.AllSSTableOpStatus oneStatus = cfStore.forceCleanup();
-            if (oneStatus != CompactionManager.AllSSTableOpStatus.SUCCESSFUL)
-                status = oneStatus;
-        }
-        return status.statusCode;
-    }
-
-    public int scrub(boolean disableSnapshot, boolean skipCorrupted, String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
-    {
-        CompactionManager.AllSSTableOpStatus status = CompactionManager.AllSSTableOpStatus.SUCCESSFUL;
-        for (ColumnFamilyStore cfStore : getValidColumnFamilies(false, false, keyspaceName, columnFamilies))
-        {
-            CompactionManager.AllSSTableOpStatus oneStatus = cfStore.scrub(disableSnapshot, skipCorrupted);
-            if (oneStatus != CompactionManager.AllSSTableOpStatus.SUCCESSFUL)
-                status = oneStatus;
-        }
-        return status.statusCode;
-    }
-
-    public int upgradeSSTables(String keyspaceName, boolean excludeCurrentVersion, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
-    {
-        CompactionManager.AllSSTableOpStatus status = CompactionManager.AllSSTableOpStatus.SUCCESSFUL;
-        for (ColumnFamilyStore cfStore : getValidColumnFamilies(true, true, keyspaceName, columnFamilies))
-        {
-            CompactionManager.AllSSTableOpStatus oneStatus = cfStore.sstablesRewrite(excludeCurrentVersion);
-            if (oneStatus != CompactionManager.AllSSTableOpStatus.SUCCESSFUL)
-                status = oneStatus;
-        }
-        return status.statusCode;
-    }
-
-    public void forceKeyspaceCompaction(String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
-    {
-        for (ColumnFamilyStore cfStore : getValidColumnFamilies(true, false, keyspaceName, columnFamilies))
-        {
-            cfStore.forceMajorCompaction();
-        }
-    }
-
-#endif
     /**
      * Takes the snapshot for all keyspaces. A snapshot name must be specified.
      *
@@ -1087,17 +719,6 @@ public:
      * @param tag the tag given to the snapshot; may not be null or empty
      */
     future<> take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag);
-#if 0
-
-    private Keyspace getValidKeyspace(String keyspaceName) throws IOException
-    {
-        if (!Schema.instance.getKeyspaces().contains(keyspaceName))
-        {
-            throw new IOException("Keyspace " + keyspaceName + " does not exist");
-        }
-        return Keyspace.open(keyspaceName);
-    }
-#endif
 
     /**
      * Remove the snapshot with the given name from the given keyspaces.
@@ -1108,634 +729,7 @@ public:
     future<std::unordered_map<sstring, std::vector<snapshot_details>>> get_snapshot_details();
 
     future<int64_t> true_snapshots_size();
-#if 0
 
-    /**
-     * @param allowIndexes Allow index CF names to be passed in
-     * @param autoAddIndexes Automatically add secondary indexes if a CF has them
-     * @param keyspaceName keyspace
-     * @param cfNames CFs
-     * @throws java.lang.IllegalArgumentException when given CF name does not exist
-     */
-    public Iterable<ColumnFamilyStore> getValidColumnFamilies(boolean allowIndexes, boolean autoAddIndexes, String keyspaceName, String... cfNames) throws IOException
-    {
-        Keyspace keyspace = getValidKeyspace(keyspaceName);
-        Set<ColumnFamilyStore> valid = new HashSet<>();
-
-        if (cfNames.length == 0)
-        {
-            // all stores are interesting
-            for (ColumnFamilyStore cfStore : keyspace.getColumnFamilyStores())
-            {
-                valid.add(cfStore);
-                if (autoAddIndexes)
-                {
-                    for (SecondaryIndex si : cfStore.indexManager.getIndexes())
-                    {
-                        if (si.getIndexCfs() != null) {
-                            logger.info("adding secondary index {} to operation", si.getIndexName());
-                            valid.add(si.getIndexCfs());
-                        }
-                    }
-
-                }
-            }
-            return valid;
-        }
-        // filter out interesting stores
-        for (String cfName : cfNames)
-        {
-            //if the CF name is an index, just flush the CF that owns the index
-            String baseCfName = cfName;
-            String idxName = null;
-            if (cfName.contains(".")) // secondary index
-            {
-                if(!allowIndexes)
-                {
-                   logger.warn("Operation not allowed on secondary Index table ({})", cfName);
-                    continue;
-                }
-
-                String[] parts = cfName.split("\\.", 2);
-                baseCfName = parts[0];
-                idxName = parts[1];
-            }
-
-            ColumnFamilyStore cfStore = keyspace.getColumnFamilyStore(baseCfName);
-            if (idxName != null)
-            {
-                Collection< SecondaryIndex > indexes = cfStore.indexManager.getIndexesByNames(new HashSet<>(Arrays.asList(cfName)));
-                if (indexes.isEmpty())
-                    logger.warn(String.format("Invalid index specified: %s/%s. Proceeding with others.", baseCfName, idxName));
-                else
-                    valid.add(Iterables.get(indexes, 0).getIndexCfs());
-            }
-            else
-            {
-                valid.add(cfStore);
-                if(autoAddIndexes)
-                {
-                    for(SecondaryIndex si : cfStore.indexManager.getIndexes())
-                    {
-                        if (si.getIndexCfs() != null) {
-                            logger.info("adding secondary index {} to operation", si.getIndexName());
-                            valid.add(si.getIndexCfs());
-                        }
-                    }
-                }
-            }
-        }
-        return valid;
-    }
-
-    /**
-     * Flush all memtables for a keyspace and column families.
-     * @param keyspaceName
-     * @param columnFamilies
-     * @throws IOException
-     */
-    public void forceKeyspaceFlush(String keyspaceName, String... columnFamilies) throws IOException
-    {
-        for (ColumnFamilyStore cfStore : getValidColumnFamilies(true, false, keyspaceName, columnFamilies))
-        {
-            logger.debug("Forcing flush on keyspace {}, CF {}", keyspaceName, cfStore.name);
-            cfStore.forceBlockingFlush();
-        }
-    }
-
-    /**
-     * Sends JMX notification to subscribers.
-     *
-     * @param type Message type
-     * @param message Message itself
-     * @param userObject Arbitrary object to attach to notification
-     */
-    public void sendNotification(String type, String message, Object userObject)
-    {
-        Notification jmxNotification = new Notification(type, jmxObjectName, notificationSerialNumber.incrementAndGet(), message);
-        jmxNotification.setUserData(userObject);
-        sendNotification(jmxNotification);
-    }
-
-    public int repairAsync(String keyspace, Map<String, String> repairSpec)
-    {
-        RepairOption option = RepairOption.parse(repairSpec, getPartitioner());
-        // if ranges are not specified
-        if (option.getRanges().isEmpty())
-        {
-            if (option.isPrimaryRange())
-            {
-                // when repairing only primary range, neither dataCenters nor hosts can be set
-                if (option.getDataCenters().isEmpty() && option.getHosts().isEmpty())
-                    option.getRanges().addAll(getPrimaryRanges(keyspace));
-                    // except dataCenters only contain local DC (i.e. -local)
-                else if (option.getDataCenters().size() == 1 && option.getDataCenters().contains(DatabaseDescriptor.getLocalDataCenter()))
-                    option.getRanges().addAll(getPrimaryRangesWithinDC(keyspace));
-                else
-                    throw new IllegalArgumentException("You need to run primary range repair on all nodes in the cluster.");
-            }
-            else
-            {
-                option.getRanges().addAll(getLocalRanges(keyspace));
-            }
-        }
-        return forceRepairAsync(keyspace, option);
-    }
-
-    @Deprecated
-    public int forceRepairAsync(String keyspace,
-                                boolean isSequential,
-                                Collection<String> dataCenters,
-                                Collection<String> hosts,
-                                boolean primaryRange,
-                                boolean fullRepair,
-                                String... columnFamilies)
-    {
-        return forceRepairAsync(keyspace, isSequential ? RepairParallelism.SEQUENTIAL : RepairParallelism.PARALLEL, dataCenters, hosts, primaryRange, fullRepair, columnFamilies);
-    }
-
-    @Deprecated
-    public int forceRepairAsync(String keyspace,
-                                RepairParallelism parallelismDegree,
-                                Collection<String> dataCenters,
-                                Collection<String> hosts,
-                                boolean primaryRange,
-                                boolean fullRepair,
-                                String... columnFamilies)
-    {
-        if (FBUtilities.isWindows() && parallelismDegree != RepairParallelism.PARALLEL)
-        {
-            logger.warn("Snapshot-based repair is not yet supported on Windows.  Reverting to parallel repair.");
-            parallelismDegree = RepairParallelism.PARALLEL;
-        }
-
-        RepairOption options = new RepairOption(parallelismDegree, primaryRange, !fullRepair, false, 1, Collections.<Range<Token>>emptyList());
-        if (dataCenters != null)
-        {
-            options.getDataCenters().addAll(dataCenters);
-        }
-        if (hosts != null)
-        {
-            options.getHosts().addAll(hosts);
-        }
-        if (columnFamilies != null)
-        {
-            for (String columnFamily : columnFamilies)
-            {
-                options.getColumnFamilies().add(columnFamily);
-            }
-        }
-        return forceRepairAsync(keyspace, options);
-    }
-
-    public int forceRepairAsync(String keyspace,
-                                boolean isSequential,
-                                boolean isLocal,
-                                boolean primaryRange,
-                                boolean fullRepair,
-                                String... columnFamilies)
-    {
-        Set<String> dataCenters = null;
-        if (isLocal)
-        {
-            dataCenters = Sets.newHashSet(DatabaseDescriptor.getLocalDataCenter());
-        }
-        return forceRepairAsync(keyspace, isSequential, dataCenters, null, primaryRange, fullRepair, columnFamilies);
-    }
-
-    public int forceRepairRangeAsync(String beginToken,
-                                     String endToken,
-                                     String keyspaceName,
-                                     boolean isSequential,
-                                     Collection<String> dataCenters,
-                                     Collection<String> hosts,
-                                     boolean fullRepair,
-                                     String... columnFamilies)
-    {
-        return forceRepairRangeAsync(beginToken, endToken, keyspaceName, isSequential ? RepairParallelism.SEQUENTIAL : RepairParallelism.PARALLEL, dataCenters, hosts, fullRepair, columnFamilies);
-    }
-
-    public int forceRepairRangeAsync(String beginToken,
-                                     String endToken,
-                                     String keyspaceName,
-                                     RepairParallelism parallelismDegree,
-                                     Collection<String> dataCenters,
-                                     Collection<String> hosts,
-                                     boolean fullRepair,
-                                     String... columnFamilies)
-    {
-        if (FBUtilities.isWindows() && parallelismDegree != RepairParallelism.PARALLEL)
-        {
-            logger.warn("Snapshot-based repair is not yet supported on Windows.  Reverting to parallel repair.");
-            parallelismDegree = RepairParallelism.PARALLEL;
-        }
-        Collection<Range<Token>> repairingRange = createRepairRangeFrom(beginToken, endToken);
-
-        RepairOption options = new RepairOption(parallelismDegree, false, !fullRepair, false, 1, repairingRange);
-        options.getDataCenters().addAll(dataCenters);
-        if (hosts != null)
-        {
-            options.getHosts().addAll(hosts);
-        }
-        if (columnFamilies != null)
-        {
-            for (String columnFamily : columnFamilies)
-            {
-                options.getColumnFamilies().add(columnFamily);
-            }
-        }
-
-        logger.info("starting user-requested repair of range {} for keyspace {} and column families {}",
-                    repairingRange, keyspaceName, columnFamilies);
-        return forceRepairAsync(keyspaceName, options);
-    }
-
-    public int forceRepairRangeAsync(String beginToken,
-                                     String endToken,
-                                     String keyspaceName,
-                                     boolean isSequential,
-                                     boolean isLocal,
-                                     boolean fullRepair,
-                                     String... columnFamilies)
-    {
-        Set<String> dataCenters = null;
-        if (isLocal)
-        {
-            dataCenters = Sets.newHashSet(DatabaseDescriptor.getLocalDataCenter());
-        }
-        return forceRepairRangeAsync(beginToken, endToken, keyspaceName, isSequential, dataCenters, null, fullRepair, columnFamilies);
-    }
-
-    /**
-     * Create collection of ranges that match ring layout from given tokens.
-     *
-     * @param beginToken beginning token of the range
-     * @param endToken end token of the range
-     * @return collection of ranges that match ring layout in TokenMetadata
-     */
-    @SuppressWarnings("unchecked")
-    @VisibleForTesting
-    Collection<Range<Token>> createRepairRangeFrom(String beginToken, String endToken)
-    {
-        Token parsedBeginToken = getPartitioner().getTokenFactory().fromString(beginToken);
-        Token parsedEndToken = getPartitioner().getTokenFactory().fromString(endToken);
-
-        // Break up given range to match ring layout in TokenMetadata
-        ArrayList<Range<Token>> repairingRange = new ArrayList<>();
-
-        ArrayList<Token> tokens = new ArrayList<>(_token_metadata.sortedTokens());
-        if (!tokens.contains(parsedBeginToken))
-        {
-            tokens.add(parsedBeginToken);
-        }
-        if (!tokens.contains(parsedEndToken))
-        {
-            tokens.add(parsedEndToken);
-        }
-        // tokens now contain all tokens including our endpoints
-        Collections.sort(tokens);
-
-        int start = tokens.indexOf(parsedBeginToken), end = tokens.indexOf(parsedEndToken);
-        for (int i = start; i != end; i = (i+1) % tokens.size())
-        {
-            Range<Token> range = new Range<>(tokens.get(i), tokens.get((i+1) % tokens.size()));
-            repairingRange.add(range);
-        }
-
-        return repairingRange;
-    }
-
-    public int forceRepairAsync(String keyspace, RepairOption options)
-    {
-        if (options.getRanges().isEmpty() || Keyspace.open(keyspace).getReplicationStrategy().getReplicationFactor() < 2)
-            return 0;
-
-        int cmd = nextRepairCommand.incrementAndGet();
-        new Thread(createRepairTask(cmd, keyspace, options)).start();
-        return cmd;
-    }
-
-    private Thread createQueryThread(final int cmd, final UUID sessionId)
-    {
-        return new Thread(new WrappedRunnable()
-        {
-            // Query events within a time interval that overlaps the last by one second. Ignore duplicates. Ignore local traces.
-            // Wake up upon local trace activity. Query when notified of trace activity with a timeout that doubles every two timeouts.
-            public void runMayThrow() throws Exception
-            {
-                TraceState state = Tracing.instance.get(sessionId);
-                if (state == null)
-                    throw new Exception("no tracestate");
-
-                String format = "select event_id, source, activity from %s.%s where session_id = ? and event_id > ? and event_id < ?;";
-                String query = String.format(format, TraceKeyspace.NAME, TraceKeyspace.EVENTS);
-                SelectStatement statement = (SelectStatement) QueryProcessor.parseStatement(query).prepare().statement;
-
-                ByteBuffer sessionIdBytes = ByteBufferUtil.bytes(sessionId);
-                InetAddress source = FBUtilities.getBroadcastAddress();
-
-                HashSet<UUID>[] seen = new HashSet[] { new HashSet<UUID>(), new HashSet<UUID>() };
-                int si = 0;
-                UUID uuid;
-
-                long tlast = System.currentTimeMillis(), tcur;
-
-                TraceState.Status status;
-                long minWaitMillis = 125;
-                long maxWaitMillis = 1000 * 1024L;
-                long timeout = minWaitMillis;
-                boolean shouldDouble = false;
-
-                while ((status = state.waitActivity(timeout)) != TraceState.Status.STOPPED)
-                {
-                    if (status == TraceState.Status.IDLE)
-                    {
-                        timeout = shouldDouble ? Math.min(timeout * 2, maxWaitMillis) : timeout;
-                        shouldDouble = !shouldDouble;
-                    }
-                    else
-                    {
-                        timeout = minWaitMillis;
-                        shouldDouble = false;
-                    }
-                    ByteBuffer tminBytes = ByteBufferUtil.bytes(UUIDGen.minTimeUUID(tlast - 1000));
-                    ByteBuffer tmaxBytes = ByteBufferUtil.bytes(UUIDGen.maxTimeUUID(tcur = System.currentTimeMillis()));
-                    QueryOptions options = QueryOptions.forInternalCalls(ConsistencyLevel.ONE, Lists.newArrayList(sessionIdBytes, tminBytes, tmaxBytes));
-                    ResultMessage.Rows rows = statement.execute(QueryState.forInternalCalls(), options);
-                    UntypedResultSet result = UntypedResultSet.create(rows.result);
-
-                    for (UntypedResultSet.Row r : result)
-                    {
-                        if (source.equals(r.getInetAddress("source")))
-                            continue;
-                        if ((uuid = r.getUUID("event_id")).timestamp() > (tcur - 1000) * 10000)
-                            seen[si].add(uuid);
-                        if (seen[si == 0 ? 1 : 0].contains(uuid))
-                            continue;
-                        String message = String.format("%s: %s", r.getInetAddress("source"), r.getString("activity"));
-                        sendNotification("repair", message, new int[]{cmd, ActiveRepairService.Status.RUNNING.ordinal()});
-                    }
-                    tlast = tcur;
-
-                    si = si == 0 ? 1 : 0;
-                    seen[si].clear();
-                }
-            }
-        });
-    }
-
-    private FutureTask<Object> createRepairTask(final int cmd, final String keyspace, final RepairOption options)
-    {
-        if (!options.getDataCenters().isEmpty() && options.getDataCenters().contains(DatabaseDescriptor.getLocalDataCenter()))
-        {
-            throw new IllegalArgumentException("the local data center must be part of the repair");
-        }
-
-        return new FutureTask<>(new WrappedRunnable()
-        {
-            protected void runMayThrow() throws Exception
-            {
-                final TraceState traceState;
-
-                String[] columnFamilies = options.getColumnFamilies().toArray(new String[options.getColumnFamilies().size()]);
-                Iterable<ColumnFamilyStore> validColumnFamilies = getValidColumnFamilies(false, false, keyspace, columnFamilies);
-
-                final long startTime = System.currentTimeMillis();
-                String message = String.format("Starting repair command #%d, repairing keyspace %s with %s", cmd, keyspace, options);
-                logger.info(message);
-                sendNotification("repair", message, new int[]{cmd, ActiveRepairService.Status.STARTED.ordinal()});
-                if (options.isTraced())
-                {
-                    StringBuilder cfsb = new StringBuilder();
-                    for (ColumnFamilyStore cfs : validColumnFamilies)
-                        cfsb.append(", ").append(cfs.keyspace.getName()).append(".").append(cfs.name);
-
-                    UUID sessionId = Tracing.instance.newSession(Tracing.TraceType.REPAIR);
-                    traceState = Tracing.instance.begin("repair", ImmutableMap.of("keyspace", keyspace, "columnFamilies", cfsb.substring(2)));
-                    Tracing.traceRepair(message);
-                    traceState.enableActivityNotification();
-                    traceState.setNotificationHandle(new int[]{ cmd, ActiveRepairService.Status.RUNNING.ordinal() });
-                    Thread queryThread = createQueryThread(cmd, sessionId);
-                    queryThread.setName("RepairTracePolling");
-                    queryThread.start();
-                }
-                else
-                {
-                    traceState = null;
-                }
-
-                final Set<InetAddress> allNeighbors = new HashSet<>();
-                Map<Range, Set<InetAddress>> rangeToNeighbors = new HashMap<>();
-                for (Range<Token> range : options.getRanges())
-                {
-                    try
-                    {
-                        Set<InetAddress> neighbors = ActiveRepairService.getNeighbors(keyspace, range, options.getDataCenters(), options.getHosts());
-                        rangeToNeighbors.put(range, neighbors);
-                        allNeighbors.addAll(neighbors);
-                    }
-                    catch (IllegalArgumentException e)
-                    {
-                        logger.error("Repair failed:", e);
-                        sendNotification("repair", e.getMessage(), new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
-                        return;
-                    }
-                }
-
-                // Validate columnfamilies
-                List<ColumnFamilyStore> columnFamilyStores = new ArrayList<>();
-                try
-                {
-                    Iterables.addAll(columnFamilyStores, validColumnFamilies);
-                }
-                catch (IllegalArgumentException e)
-                {
-                    sendNotification("repair", e.getMessage(), new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
-                    return;
-                }
-
-                final UUID parentSession;
-                long repairedAt;
-                try
-                {
-                    parentSession = ActiveRepairService.instance.prepareForRepair(allNeighbors, options, columnFamilyStores);
-                    repairedAt = ActiveRepairService.instance.getParentRepairSession(parentSession).repairedAt;
-                }
-                catch (Throwable t)
-                {
-                    sendNotification("repair", String.format("Repair failed with error %s", t.getMessage()), new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
-                    return;
-                }
-
-                // Set up RepairJob executor for this repair command.
-                final ListeningExecutorService executor = MoreExecutors.listeningDecorator(new JMXConfigurableThreadPoolExecutor(options.getJobThreads(),
-                                                                                                                           Integer.MAX_VALUE,
-                                                                                                                           TimeUnit.SECONDS,
-                                                                                                                           new LinkedBlockingQueue<Runnable>(),
-                                                                                                                           new NamedThreadFactory("Repair#" + cmd),
-                                                                                                                           "internal"));
-
-                List<ListenableFuture<RepairSessionResult>> futures = new ArrayList<>(options.getRanges().size());
-                String[] cfnames = new String[columnFamilyStores.size()];
-                for (int i = 0; i < columnFamilyStores.size(); i++)
-                {
-                    cfnames[i] = columnFamilyStores.get(i).name;
-                }
-                for (Range<Token> range : options.getRanges())
-                {
-                    final RepairSession session = ActiveRepairService.instance.submitRepairSession(parentSession,
-                                                                      range,
-                                                                      keyspace,
-                                                                      options.getParallelism(),
-                                                                      rangeToNeighbors.get(range),
-                                                                      repairedAt,
-                                                                      executor,
-                                                                      cfnames);
-                    if (session == null)
-                        continue;
-                    // After repair session completes, notify client its result
-                    Futures.addCallback(session, new FutureCallback<RepairSessionResult>()
-                    {
-                        public void onSuccess(RepairSessionResult result)
-                        {
-                            String message = String.format("Repair session %s for range %s finished", session.getId(), session.getRange().toString());
-                            logger.info(message);
-                            sendNotification("repair", message, new int[]{cmd, ActiveRepairService.Status.SESSION_SUCCESS.ordinal()});
-                        }
-
-                        public void onFailure(Throwable t)
-                        {
-                            String message = String.format("Repair session %s for range %s failed with error %s", session.getId(), session.getRange().toString(), t.getMessage());
-                            logger.error(message, t);
-                            sendNotification("repair", message, new int[]{cmd, ActiveRepairService.Status.SESSION_FAILED.ordinal()});
-                        }
-                    });
-                    futures.add(session);
-                }
-
-                // After all repair sessions completes(successful or not),
-                // run anticompaction if necessary and send finish notice back to client
-                final ListenableFuture<List<RepairSessionResult>> allSessions = Futures.successfulAsList(futures);
-                Futures.addCallback(allSessions, new FutureCallback<List<RepairSessionResult>>()
-                {
-                    public void onSuccess(List<RepairSessionResult> result)
-                    {
-                        // filter out null(=failed) results and get successful ranges
-                        Collection<Range<Token>> successfulRanges = new ArrayList<>();
-                        for (RepairSessionResult sessionResult : result)
-                        {
-                            if (sessionResult != null)
-                            {
-                                successfulRanges.add(sessionResult.range);
-                            }
-                        }
-                        try
-                        {
-                            ActiveRepairService.instance.finishParentSession(parentSession, allNeighbors, successfulRanges);
-                        }
-                        catch (Exception e)
-                        {
-                            logger.error("Error in incremental repair", e);
-                        }
-                        repairComplete();
-                    }
-
-                    public void onFailure(Throwable t)
-                    {
-                        repairComplete();
-                    }
-
-                    private void repairComplete()
-                    {
-                        String duration = DurationFormatUtils.formatDurationWords(System.currentTimeMillis() - startTime, true, true);
-                        String message = String.format("Repair command #%d finished in %s", cmd, duration);
-                        sendNotification("repair", message,
-                                         new int[]{cmd, ActiveRepairService.Status.FINISHED.ordinal()});
-                        logger.info(message);
-                        if (options.isTraced())
-                        {
-                            traceState.setNotificationHandle(null);
-                            // Because DebuggableThreadPoolExecutor#afterExecute and this callback
-                            // run in a nondeterministic order (within the same thread), the
-                            // TraceState may have been nulled out at this point. The TraceState
-                            // should be traceState, so just set it without bothering to check if it
-                            // actually was nulled out.
-                            Tracing.instance.set(traceState);
-                            Tracing.traceRepair(message);
-                            Tracing.instance.stopSession();
-                        }
-                        executor.shutdownNow();
-                    }
-                });
-            }
-        }, null);
-    }
-
-    public void forceTerminateAllRepairSessions() {
-        ActiveRepairService.instance.terminateSessions();
-    }
-
-    /* End of MBean interface methods */
-
-    /**
-     * Get the "primary ranges" for the specified keyspace and endpoint.
-     * "Primary ranges" are the ranges that the node is responsible for storing replica primarily.
-     * The node that stores replica primarily is defined as the first node returned
-     * by {@link AbstractReplicationStrategy#calculateNaturalEndpoints}.
-     *
-     * @param keyspace Keyspace name to check primary ranges
-     * @param ep endpoint we are interested in.
-     * @return primary ranges for the specified endpoint.
-     */
-    public Collection<Range<Token>> getPrimaryRangesForEndpoint(String keyspace, InetAddress ep)
-    {
-        AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
-        Collection<Range<Token>> primaryRanges = new HashSet<>();
-        TokenMetadata metadata = _token_metadata.cloneOnlyTokenMap();
-        for (Token token : metadata.sortedTokens())
-        {
-            List<InetAddress> endpoints = strategy.calculateNaturalEndpoints(token, metadata);
-            if (endpoints.size() > 0 && endpoints.get(0).equals(ep))
-                primaryRanges.add(new Range<>(metadata.getPredecessor(token), token));
-        }
-        return primaryRanges;
-    }
-
-    /**
-     * Get the "primary ranges" within local DC for the specified keyspace and endpoint.
-     *
-     * @see #getPrimaryRangesForEndpoint(String, java.net.InetAddress)
-     * @param keyspace Keyspace name to check primary ranges
-     * @param referenceEndpoint endpoint we are interested in.
-     * @return primary ranges within local DC for the specified endpoint.
-     */
-    public Collection<Range<Token>> getPrimaryRangeForEndpointWithinDC(String keyspace, InetAddress referenceEndpoint)
-    {
-        TokenMetadata metadata = _token_metadata.cloneOnlyTokenMap();
-        String localDC = DatabaseDescriptor.getEndpointSnitch().getDatacenter(referenceEndpoint);
-        Collection<InetAddress> localDcNodes = metadata.getTopology().getDatacenterEndpoints().get(localDC);
-        AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
-
-        Collection<Range<Token>> localDCPrimaryRanges = new HashSet<>();
-        for (Token token : metadata.sortedTokens())
-        {
-            List<InetAddress> endpoints = strategy.calculateNaturalEndpoints(token, metadata);
-            for (InetAddress endpoint : endpoints)
-            {
-                if (localDcNodes.contains(endpoint))
-                {
-                    if (endpoint.equals(referenceEndpoint))
-                    {
-                        localDCPrimaryRanges.add(new Range<>(metadata.getPredecessor(token), token));
-                    }
-                    break;
-                }
-            }
-        }
-
-        return localDCPrimaryRanges;
-    }
-#endif
     /**
      * Get all ranges an endpoint is responsible for (by keyspace)
      * Replication strategy's get_ranges() guarantees that no wrap-around range is returned.
@@ -1762,12 +756,7 @@ public:
      */
     std::vector<gms::inet_address> get_natural_endpoints(const sstring& keyspace,
             const sstring& cf, const sstring& key) const;
-#if 0
-    public List<InetAddress> getNaturalEndpoints(String keyspaceName, ByteBuffer key)
-    {
-        return getNaturalEndpoints(keyspaceName, getPartitioner().getToken(key));
-    }
-#endif
+
     /**
      * This method returns the N endpoints that are responsible for storing the
      * specified key i.e for replication.
@@ -1777,80 +766,7 @@ public:
      * @return the endpoint responsible for this token
      */
     std::vector<gms::inet_address>  get_natural_endpoints(const sstring& keyspace, const token& pos) const;
-#if 0
-    /**
-     * This method attempts to return N endpoints that are responsible for storing the
-     * specified key i.e for replication.
-     *
-     * @param keyspace keyspace name also known as keyspace
-     * @param key key for which we need to find the endpoint
-     * @return the endpoint responsible for this key
-     */
-    public List<InetAddress> getLiveNaturalEndpoints(Keyspace keyspace, ByteBuffer key)
-    {
-        return getLiveNaturalEndpoints(keyspace, getPartitioner().decorateKey(key));
-    }
 
-    public List<InetAddress> getLiveNaturalEndpoints(Keyspace keyspace, RingPosition pos)
-    {
-        List<InetAddress> endpoints = keyspace.getReplicationStrategy().getNaturalEndpoints(pos);
-        List<InetAddress> liveEps = new ArrayList<>(endpoints.size());
-
-        for (InetAddress endpoint : endpoints)
-        {
-            if (FailureDetector.instance.isAlive(endpoint))
-                liveEps.add(endpoint);
-        }
-
-        return liveEps;
-    }
-
-    public void setLoggingLevel(String classQualifier, String rawLevel) throws Exception
-    {
-        ch.qos.logback.classic.Logger logBackLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(classQualifier);
-
-        // if both classQualifer and rawLevel are empty, reload from configuration
-        if (StringUtils.isBlank(classQualifier) && StringUtils.isBlank(rawLevel) )
-        {
-            JMXConfiguratorMBean jmxConfiguratorMBean = JMX.newMBeanProxy(ManagementFactory.getPlatformMBeanServer(),
-                    new ObjectName("ch.qos.logback.classic:Name=default,Type=ch.qos.logback.classic.jmx.JMXConfigurator"),
-                    JMXConfiguratorMBean.class);
-            jmxConfiguratorMBean.reloadDefaultConfiguration();
-            return;
-        }
-        // classQualifer is set, but blank level given
-        else if (StringUtils.isNotBlank(classQualifier) && StringUtils.isBlank(rawLevel) )
-        {
-            if (logBackLogger.getLevel() != null || hasAppenders(logBackLogger))
-                logBackLogger.setLevel(null);
-            return;
-        }
-
-        ch.qos.logback.classic.Level level = ch.qos.logback.classic.Level.toLevel(rawLevel);
-        logBackLogger.setLevel(level);
-        logger.info("set log level to {} for classes under '{}' (if the level doesn't look like '{}' then the logger couldn't parse '{}')", level, classQualifier, rawLevel, rawLevel);
-    }
-
-    /**
-     * @return the runtime logging levels for all the configured loggers
-     */
-    @Override
-    public Map<String,String>getLoggingLevels() {
-        Map<String, String> logLevelMaps = Maps.newLinkedHashMap();
-        LoggerContext lc = (LoggerContext) LoggerFactory.getILoggerFactory();
-        for (ch.qos.logback.classic.Logger logger : lc.getLoggerList())
-        {
-            if(logger.getLevel() != null || hasAppenders(logger))
-                logLevelMaps.put(logger.getName(), logger.getLevel().toString());
-        }
-        return logLevelMaps;
-    }
-
-    private boolean hasAppenders(ch.qos.logback.classic.Logger logger) {
-        Iterator<Appender<ILoggingEvent>> it = logger.iteratorForAppenders();
-        return it.hasNext();
-    }
-#endif
     /**
      * @return Vector of Token ranges (_not_ keys!) together with estimated key count,
      *      breaking up the data this node is responsible for into pieces of roughly keys_per_split
@@ -1927,170 +843,9 @@ public:
      */
     future<> drain();
 
-#if 0
-    // Never ever do this at home. Used by tests.
-    IPartitioner setPartitionerUnsafe(IPartitioner newPartitioner)
-    {
-        IPartitioner oldPartitioner = DatabaseDescriptor.getPartitioner();
-        DatabaseDescriptor.setPartitioner(newPartitioner);
-        valueFactory = new VersionedValue.VersionedValueFactory(getPartitioner());
-        return oldPartitioner;
-    }
-
-    TokenMetadata setTokenMetadataUnsafe(TokenMetadata tmd)
-    {
-        TokenMetadata old = _token_metadata;
-        _token_metadata = tmd;
-        return old;
-    }
-
-    public void truncate(String keyspace, String columnFamily) throws TimeoutException, IOException
-    {
-        try
-        {
-            StorageProxy.truncateBlocking(keyspace, columnFamily);
-        }
-        catch (UnavailableException e)
-        {
-            throw new IOException(e.getMessage());
-        }
-    }
-#endif
-public:
     future<std::map<gms::inet_address, float>> get_ownership();
 
     future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name);
-#if 0
-    /**
-     * Calculates ownership. If there are multiple DC's and the replication strategy is DC aware then ownership will be
-     * calculated per dc, i.e. each DC will have total ring ownership divided amongst its nodes. Without replication
-     * total ownership will be a multiple of the number of DC's and this value will then go up within each DC depending
-     * on the number of replicas within itself. For DC unaware replication strategies, ownership without replication
-     * will be 100%.
-     *
-     * @throws IllegalStateException when node is not configured properly.
-     */
-    public LinkedHashMap<InetAddress, Float> effectiveOwnership(String keyspace) throws IllegalStateException
-    {
-    	
-    	if (keyspace != null)
-    	{
-    		Keyspace keyspaceInstance = Schema.instance.getKeyspaceInstance(keyspace);
-			if(keyspaceInstance == null)
-				throw new IllegalArgumentException("The keyspace " + keyspace + ", does not exist");
-    		
-    		if(keyspaceInstance.getReplicationStrategy() instanceof LocalStrategy)
-				throw new IllegalStateException("Ownership values for keyspaces with LocalStrategy are meaningless");
-    	}
-    	else
-    	{
-        	List<String> nonSystemKeyspaces = Schema.instance.getNonSystemKeyspaces();
-        	
-        	//system_traces is a non-system keyspace however it needs to be counted as one for this process
-        	int specialTableCount = 0;
-        	if (nonSystemKeyspaces.contains("system_traces"))
-			{
-        		specialTableCount += 1;
-			}
-        	if (nonSystemKeyspaces.size() > specialTableCount) 	   		
-        		throw new IllegalStateException("Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless");
-        	
-        	keyspace = "system_traces";
-    	}
-    	
-        TokenMetadata metadata = _token_metadata.cloneOnlyTokenMap();
-
-        Collection<Collection<InetAddress>> endpointsGroupedByDc = new ArrayList<>();
-        // mapping of dc's to nodes, use sorted map so that we get dcs sorted
-        SortedMap<String, Collection<InetAddress>> sortedDcsToEndpoints = new TreeMap<>();
-        sortedDcsToEndpoints.putAll(metadata.getTopology().getDatacenterEndpoints().asMap());
-        for (Collection<InetAddress> endpoints : sortedDcsToEndpoints.values())
-            endpointsGroupedByDc.add(endpoints);
-
-        Map<Token, Float> tokenOwnership = getPartitioner().describeOwnership(_token_metadata.sortedTokens());
-        LinkedHashMap<InetAddress, Float> finalOwnership = Maps.newLinkedHashMap();
-
-        // calculate ownership per dc
-        for (Collection<InetAddress> endpoints : endpointsGroupedByDc)
-        {
-            // calculate the ownership with replication and add the endpoint to the final ownership map
-            for (InetAddress endpoint : endpoints)
-            {
-                float ownership = 0.0f;
-                for (Range<Token> range : getRangesForEndpoint(keyspace, endpoint))
-                {
-                    if (tokenOwnership.containsKey(range.right))
-                        ownership += tokenOwnership.get(range.right);
-                }
-                finalOwnership.put(endpoint, ownership);
-            }
-        }
-        return finalOwnership;
-    }
-
-
-    private boolean hasSameReplication(List<String> list)
-    {
-        if (list.isEmpty())
-            return false;
-
-        for (int i = 0; i < list.size() -1; i++)
-        {
-            KSMetaData ksm1 = Schema.instance.getKSMetaData(list.get(i));
-            KSMetaData ksm2 = Schema.instance.getKSMetaData(list.get(i + 1));
-            if (!ksm1.strategyClass.equals(ksm2.strategyClass) ||
-                    !Iterators.elementsEqual(ksm1.strategyOptions.entrySet().iterator(),
-                                             ksm2.strategyOptions.entrySet().iterator()))
-                return false;
-        }
-        return true;
-    }
-
-    public List<String> getKeyspaces()
-    {
-        List<String> keyspaceNamesList = new ArrayList<>(Schema.instance.getKeyspaces());
-        return Collections.unmodifiableList(keyspaceNamesList);
-    }
-
-    public List<String> getNonSystemKeyspaces()
-    {
-        List<String> keyspaceNamesList = new ArrayList<>(Schema.instance.getNonSystemKeyspaces());
-        return Collections.unmodifiableList(keyspaceNamesList);
-    }
-
-    public void updateSnitch(String epSnitchClassName, Boolean dynamic, Integer dynamicUpdateInterval, Integer dynamicResetInterval, Double dynamicBadnessThreshold) throws ClassNotFoundException
-    {
-        IEndpointSnitch oldSnitch = DatabaseDescriptor.getEndpointSnitch();
-
-        // new snitch registers mbean during construction
-        IEndpointSnitch newSnitch;
-        try
-        {
-            newSnitch = FBUtilities.construct(epSnitchClassName, "snitch");
-        }
-        catch (ConfigurationException e)
-        {
-            throw new ClassNotFoundException(e.getMessage());
-        }
-        if (dynamic)
-        {
-            DatabaseDescriptor.setDynamicUpdateInterval(dynamicUpdateInterval);
-            DatabaseDescriptor.setDynamicResetInterval(dynamicResetInterval);
-            DatabaseDescriptor.setDynamicBadnessThreshold(dynamicBadnessThreshold);
-            newSnitch = new DynamicEndpointSnitch(newSnitch);
-        }
-
-        // point snitch references to the new instance
-        DatabaseDescriptor.setEndpointSnitch(newSnitch);
-        for (String ks : Schema.instance.getKeyspaces())
-        {
-            Keyspace.open(ks).getReplicationStrategy().snitch = newSnitch;
-        }
-
-        if (oldSnitch instanceof DynamicEndpointSnitch)
-            ((DynamicEndpointSnitch)oldSnitch).unregisterMBean();
-    }
-#endif
 
     future<std::unordered_map<sstring, sstring>> view_build_statuses(sstring keyspace, sstring view_name) const;
 
@@ -2104,69 +859,8 @@ private:
     future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace);
 
 public:
-#if 0
-    public void bulkLoad(String directory)
-    {
-        try
-        {
-            bulkLoadInternal(directory).get();
-        }
-        catch (Exception e)
-        {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public String bulkLoadAsync(String directory)
-    {
-        return bulkLoadInternal(directory).planId.toString();
-    }
-
-    private StreamResultFuture bulkLoadInternal(String directory)
-    {
-        File dir = new File(directory);
-
-        if (!dir.exists() || !dir.isDirectory())
-            throw new IllegalArgumentException("Invalid directory " + directory);
-
-        SSTableLoader.Client client = new SSTableLoader.Client()
-        {
-            public void init(String keyspace)
-            {
-                try
-                {
-                    setPartitioner(DatabaseDescriptor.getPartitioner());
-                    for (Map.Entry<Range<Token>, List<InetAddress>> entry : StorageService.instance.getRangeToAddressMap(keyspace).entrySet())
-                    {
-                        Range<Token> range = entry.getKey();
-                        for (InetAddress endpoint : entry.getValue())
-                            addRangeForEndpoint(range, endpoint);
-                    }
-                }
-                catch (Exception e)
-                {
-                    throw new RuntimeException(e);
-                }
-            }
-
-            public CFMetaData getCFMetaData(String keyspace, String cfName)
-            {
-                return Schema.instance.getCFMetaData(keyspace, cfName);
-            }
-        };
-
-        SSTableLoader loader = new SSTableLoader(dir, client, new OutputHandler.LogOutput());
-        return loader.stream();
-    }
-#endif
-public:
     int32_t get_exception_count();
-#if 0
-    public void rescheduleFailedDeletions()
-    {
-        SSTableDeletingTask.rescheduleFailedTasks();
-    }
-#endif
+
     /**
      * Load new SSTables not currently tracked by the system
      *
@@ -2180,109 +874,6 @@ public:
      * @return a future<> when the operation finishes.
      */
     future<> load_new_sstables(sstring ks_name, sstring cf_name);
-#if 0
-    /**
-     * #{@inheritDoc}
-     */
-    public List<String> sampleKeyRange() // do not rename to getter - see CASSANDRA-4452 for details
-    {
-        List<DecoratedKey> keys = new ArrayList<>();
-        for (Keyspace keyspace : Keyspace.nonSystem())
-        {
-            for (Range<Token> range : getPrimaryRangesForEndpoint(keyspace.getName(), FBUtilities.getBroadcastAddress()))
-                keys.addAll(keySamples(keyspace.getColumnFamilyStores(), range));
-        }
-
-        List<String> sampledKeys = new ArrayList<>(keys.size());
-        for (DecoratedKey key : keys)
-            sampledKeys.add(key.getToken().toString());
-        return sampledKeys;
-    }
-
-    public void rebuildSecondaryIndex(String ksName, String cfName, String... idxNames)
-    {
-        ColumnFamilyStore.rebuildSecondaryIndex(ksName, cfName, idxNames);
-    }
-
-    public void resetLocalSchema() throws IOException
-    {
-        MigrationManager.resetLocalSchema();
-    }
-
-    public void setTraceProbability(double probability)
-    {
-        this.traceProbability = probability;
-    }
-
-    public double getTraceProbability()
-    {
-        return traceProbability;
-    }
-
-    public void disableAutoCompaction(String ks, String... columnFamilies) throws IOException
-    {
-        for (ColumnFamilyStore cfs : getValidColumnFamilies(true, true, ks, columnFamilies))
-        {
-            cfs.disableAutoCompaction();
-        }
-    }
-
-    public void enableAutoCompaction(String ks, String... columnFamilies) throws IOException
-    {
-        for (ColumnFamilyStore cfs : getValidColumnFamilies(true, true, ks, columnFamilies))
-        {
-            cfs.enableAutoCompaction();
-        }
-    }
-
-    /** Returns the name of the cluster */
-    public String getClusterName()
-    {
-        return DatabaseDescriptor.getClusterName();
-    }
-
-    /** Returns the cluster partitioner */
-    public String getPartitionerName()
-    {
-        return DatabaseDescriptor.getPartitionerName();
-    }
-
-    public int getTombstoneWarnThreshold()
-    {
-        return DatabaseDescriptor.getTombstoneWarnThreshold();
-    }
-
-    public void setTombstoneWarnThreshold(int threshold)
-    {
-        DatabaseDescriptor.setTombstoneWarnThreshold(threshold);
-    }
-
-    public int getTombstoneFailureThreshold()
-    {
-        return DatabaseDescriptor.getTombstoneFailureThreshold();
-    }
-
-    public void setTombstoneFailureThreshold(int threshold)
-    {
-        DatabaseDescriptor.setTombstoneFailureThreshold(threshold);
-    }
-
-    public int getBatchSizeFailureThreshold()
-    {
-        return DatabaseDescriptor.getBatchSizeFailThresholdInKB();
-    }
-
-    public void setBatchSizeFailureThreshold(int threshold)
-    {
-        DatabaseDescriptor.setBatchSizeFailThresholdInKB(threshold);
-    }
-
-    public void setHintedHandoffThrottleInKB(int throttleInKB)
-    {
-        DatabaseDescriptor.setHintedHandoffThrottleInKB(throttleInKB);
-        logger.info(String.format("Updated hinted_handoff_throttle_in_kb to %d", throttleInKB));
-    }
-#endif
 
     template <typename Func>
     auto run_with_api_lock(sstring operation, Func&& func) {
