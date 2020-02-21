@@ -60,6 +60,13 @@ both.
 Seastar documentation can be found [here](http://docs.seastar.io/master/index.html).
 User documentation can be found [here](https://docs.scylladb.com/).
 
+## Training 
+
+Training material and online courses can be found at [Scylla University](https://university.scylladb.com/). 
+The courses are free, self-paced and include hands-on examples. They cover a variety of topics including Scylla data modeling, 
+administration, architecture, basic NoSQL concepts, using drivers for application development, Scylla setup, failover, compactions, 
+multi-datacenters and how Scylla integrates with third-party applications.
+
 ## Building Fedora RPM
 
 As a pre-requisite, you need to install [Mock](https://fedoraproject.org/wiki/Mock) on your machine:
