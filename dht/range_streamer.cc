@@ -308,6 +308,7 @@ future<> range_streamer::do_stream_async() {
                     _abort_source.check();
                     logger.info("{} with {} for keyspace={}, {} out of {} ranges: ranges = {}",
                             description, source, keyspace, nr_ranges_streamed, nr_ranges_total, ranges_to_stream.size());
+                    nr_ranges_streamed += ranges_to_stream.size();
                     if (_nr_rx_added) {
                         sp.request_ranges(source, keyspace, ranges_to_stream);
                     } else if (_nr_tx_added) {
@@ -320,7 +321,6 @@ future<> range_streamer::do_stream_async() {
                     for (auto it = range_vec.begin(); it < range_vec.end();) {
                         ranges_to_stream.push_back(*it);
                         it = range_vec.erase(it);
-                        nr_ranges_streamed++;
                         if (ranges_to_stream.size() < nr_ranges_per_stream_plan) {
                             continue;
                         } else {
