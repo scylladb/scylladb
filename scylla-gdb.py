@@ -2705,6 +2705,19 @@ class scylla_cache(gdb.Command):
             gdb.write("\n")
 
 
+def find_sstables_attached_to_tables():
+    db = find_db(current_shard())
+    for table in all_tables(db):
+        for (key, value) in list_unordered_map(table['_streaming_memtables_big']):
+            memtables = seastar_lw_shared_ptr(value)['memtables']
+            sstables = seastar_lw_shared_ptr(value)['sstables']
+            for sst_ptr in std_vector(sstables):
+                yield seastar_lw_shared_ptr(sst_ptr).get()
+
+        for sst_ptr in list_unordered_set(seastar_lw_shared_ptr(seastar_lw_shared_ptr(table['_sstables']).get()['_all']).get().dereference()):
+            yield seastar_lw_shared_ptr(sst_ptr).get()
+
+
 def find_sstables():
     """A generator which yields pointers to all live sstable objects on current shard."""
     for sst in intrusive_list(gdb.parse_and_eval('sstables::tracker._sstables')):
@@ -2740,13 +2753,22 @@ class scylla_sstables(gdb.Command):
             )
 
     def invoke(self, arg, from_tty):
+        parser = argparse.ArgumentParser(description="scylla generate-object-graph")
+        parser.add_argument("-t", "--tables", action="store_true", help="Only consider sstables attached to tables")
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
         filter_type = gdb.lookup_type('utils::filter::murmur3_bloom_filter')
         cpu_id = current_shard()
         total_size = 0 # in memory
         total_on_disk_size = 0
         count = 0
 
-        for sst in find_sstables():
+        sstable_generator = find_sstables_attached_to_tables if args.tables else find_sstables
+
+        for sst in sstable_generator():
             if not sst['_open']:
                 continue
             count += 1
