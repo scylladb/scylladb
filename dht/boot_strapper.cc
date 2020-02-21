@@ -62,9 +62,7 @@ future<> boot_strapper::bootstrap() {
         return streamer->add_ranges(keyspace_name, ranges);
     }).then([this, streamer] {
         _abort_source.check();
-        return streamer->stream_async().then([streamer] () {
-            service::get_local_storage_service().finish_bootstrapping();
-        }).handle_exception([streamer] (std::exception_ptr eptr) {
+        return streamer->stream_async().handle_exception([streamer] (std::exception_ptr eptr) {
             blogger.warn("Error during bootstrap: {}", eptr);
             return make_exception_future<>(std::move(eptr));
         });
