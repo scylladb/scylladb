@@ -28,10 +28,12 @@
 #include <optional>
 #include <alternator/auth.hh>
 #include <utils/small_vector.hh>
+#include <seastar/core/units.hh>
 
 namespace alternator {
 
 class server {
+    static constexpr size_t content_length_limit = 16*MB;
     using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&, tracing::trace_state_ptr, std::unique_ptr<request>)>;
     using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback>;
 

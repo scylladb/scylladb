@@ -19,7 +19,7 @@
 
 import pytest
 import requests
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 def gen_json(n):
     return '{"":'*n + '{}' + '}'*n
@@ -78,3 +78,13 @@ def test_exceed_nested_level_a_little(dynamodb, test_table):
     with pytest.raises(ClientError, match='ValidationException.*nested'):
         test_table.put_item(Item={'p': p, 'c': c, 'nested': nested})
 
+
+def test_too_large_request(dynamodb, test_table):
+    p = 'abc'
+    c = 'def'
+    big = 'x' * (16 * 1024 * 1024 + 7)
+    # The exception type differs due to differences between HTTP servers
+    # in alternator and DynamoDB. The former returns 413, the latter
+    # a ClientError explaining that the element size was too large.
+    with pytest.raises(BotoCoreError):
+        test_table.put_item(Item={'p': p, 'c': c, 'big': big})

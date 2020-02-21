@@ -358,6 +358,9 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 _control.start().get();
                 _control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1)).get();
                 _control.listen(socket_address{addr, *port}).get();
+                _control.server().invoke_on_all([] (http_server& serv) {
+                    serv.set_content_length_limit(server::content_length_limit);
+                }).get();
                 _enabled_servers.push_back(std::ref(_control));
                 slogger.info("Alternator HTTP server listening on {} port {}", addr, *port);
             }
@@ -365,6 +368,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 _https_control.start().get();
                 _https_control.set_routes(std::bind(&server::set_routes, this, std::placeholders::_1)).get();
                 _https_control.server().invoke_on_all([creds] (http_server& serv) {
+                    serv.set_content_length_limit(server::content_length_limit);
                     return serv.set_tls_credentials(creds->build_server_credentials());
                 }).get();
 
