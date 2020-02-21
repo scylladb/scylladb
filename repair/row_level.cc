@@ -31,7 +31,6 @@
 #include "dht/i_partitioner.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
-#include "service/storage_service.hh"
 #include "service/priority_manager.hh"
 #include "db/view/view_update_checks.hh"
 #include "database.hh"
@@ -486,7 +485,7 @@ public:
         _partition_opened.resize(_nr_peer_nodes, false);
     }
 
-    void create_writer(unsigned node_idx) {
+    void create_writer(database& db, unsigned node_idx) {
         if (_writer_done[node_idx]) {
             return;
         }
@@ -494,12 +493,11 @@ public:
         auto get_next_mutation_fragment = [this, node_idx] () mutable {
             return _mq[node_idx]->pop_eventually();
         };
-        auto& db = service::get_local_storage_service().db();
-        table& t = db.local().find_column_family(_schema->id());
+        table& t = db.find_column_family(_schema->id());
         _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema,
                 make_generating_reader(_schema, std::move(get_next_mutation_fragment)),
                 [&db, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
-            auto& t = db.local().find_column_family(reader.schema());
+            auto& t = db.find_column_family(reader.schema());
             return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, streaming::stream_reason::repair).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
                 //FIXME: for better estimations this should be transmitted from remote
                 auto metadata = mutation_source_metadata{};
@@ -1193,7 +1191,7 @@ private:
             _peer_row_hash_sets[node_idx] = boost::copy_range<std::unordered_set<repair_hash>>(row_diff |
                     boost::adaptors::transformed([] (repair_row& r) { thread::maybe_yield(); return r.hash(); }));
         }
-        _repair_writer.create_writer(node_idx);
+        _repair_writer.create_writer(_db.local(), node_idx);
         for (auto& r : row_diff) {
             if (update_buf) {
                 _working_row_buf_combined_hash.add(r.hash());
@@ -1215,7 +1213,7 @@ private:
         return to_repair_rows_list(rows).then([this] (std::list<repair_row> row_diff) {
             return do_with(std::move(row_diff), [this] (std::list<repair_row>& row_diff) {
                 unsigned node_idx = 0;
-                _repair_writer.create_writer(node_idx);
+                _repair_writer.create_writer(_db.local(), node_idx);
                 return do_for_each(row_diff, [this, node_idx] (repair_row& r) {
                     // The repair_row here is supposed to have
                     // mutation_fragment attached because we have stored it in
@@ -2013,44 +2011,35 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
         ms.register_repair_get_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(),
-                    [&ms, src_cpu_id, from, repair_meta_id, source] () mutable {
-                auto sink = ms.make_sink_for_repair_get_row_diff_with_rpc_stream(source);
-                // Start a new fiber.
-                (void)repair_get_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
-                        [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
-                    rlogger.info("Failed to process get_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
-                });
-                return make_ready_future<rpc::sink<repair_row_on_wire_with_cmd>>(sink);
+            auto sink = ms.make_sink_for_repair_get_row_diff_with_rpc_stream(source);
+            // Start a new fiber.
+            (void)repair_get_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
+                    [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
+                rlogger.info("Failed to process get_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
             });
+            return make_ready_future<rpc::sink<repair_row_on_wire_with_cmd>>(sink);
         });
         ms.register_repair_put_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(),
-                    [&ms, src_cpu_id, from, repair_meta_id, source] () mutable {
-                auto sink = ms.make_sink_for_repair_put_row_diff_with_rpc_stream(source);
-                // Start a new fiber.
-                (void)repair_put_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
-                        [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
-                    rlogger.info("Failed to process put_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
-                });
-                return make_ready_future<rpc::sink<repair_stream_cmd>>(sink);
+            auto sink = ms.make_sink_for_repair_put_row_diff_with_rpc_stream(source);
+            // Start a new fiber.
+            (void)repair_put_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
+                    [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
+                rlogger.info("Failed to process put_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
             });
+            return make_ready_future<rpc::sink<repair_stream_cmd>>(sink);
         });
         ms.register_repair_get_full_row_hashes_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_stream_cmd> source) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(),
-                    [&ms, src_cpu_id, from, repair_meta_id, source] () mutable {
-                auto sink = ms.make_sink_for_repair_get_full_row_hashes_with_rpc_stream(source);
-                // Start a new fiber.
-                (void)repair_get_full_row_hashes_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
-                        [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
-                    rlogger.info("Failed to process get_full_row_hashes_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
-                });
-                return make_ready_future<rpc::sink<repair_hash_with_cmd>>(sink);
+            auto sink = ms.make_sink_for_repair_get_full_row_hashes_with_rpc_stream(source);
+            // Start a new fiber.
+            (void)repair_get_full_row_hashes_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
+                    [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
+                rlogger.info("Failed to process get_full_row_hashes_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
             });
+            return make_ready_future<rpc::sink<repair_hash_with_cmd>>(sink);
         });
         ms.register_repair_get_full_row_hashes([] (const rpc::client_info& cinfo, uint32_t repair_meta_id) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
