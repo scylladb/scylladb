@@ -380,9 +380,9 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"check if the auto compaction disabled",
+               "summary":"check if the auto compaction enabled",
                "type":"boolean",
-               "nickname":"is_auto_compaction_disabled",
+               "nickname":"get_auto_compaction",
                "produces":[
                   "application/json"
                ],
@@ -394,6 +394,33 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Enable or disable column family auto compaction",
+               "type":"boolean",
+               "nickname":"set_auto_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"enabled",
+                     "description":"Enable or disable auto compaction",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             }

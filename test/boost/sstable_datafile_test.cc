@@ -1035,6 +1035,66 @@ static flat_mutation_reader make_normalizing_sstable_reader(shared_sstable sst, 
     return make_normalizing_sstable_reader(sst, s, query::full_partition_range);
 }
 
+SEASTAR_TEST_CASE(autocompaction_control_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        storage_service_for_tests ssft;
+        BOOST_REQUIRE(smp::count == 1);
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family, {{"p1", utf8_type}}, {{"c1", utf8_type}}, {}, {}, utf8_type));
+
+        auto cm = make_lw_shared<compaction_manager>();
+        cm->start();
+
+        auto tmp = tmpdir();
+        column_family::config cfg = column_family_test_config();
+        cfg.datadir = tmp.path().string();
+        cfg.enable_commitlog = false;
+        cfg.enable_incremental_backups = false;
+        auto cl_stats = make_lw_shared<cell_locker_stats>();
+        auto tracker = make_lw_shared<cache_tracker>();
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+        cf->start();
+        cf->set_compaction_strategy(sstables::compaction_strategy_type::null);
+
+        // auto compaction is enabled by default
+        BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
+        // disable auto compaction by user
+        BOOST_REQUIRE(cf->set_auto_compaction(false));
+        // check it is disabled
+        BOOST_REQUIRE(cf->is_auto_compaction_disabled_by_user());
+        // can't disable whats been disabled
+        BOOST_REQUIRE(!cf->set_auto_compaction(false));
+        // check still disabled
+        BOOST_REQUIRE(cf->is_auto_compaction_disabled_by_user());
+        // enable auto compaction
+        BOOST_REQUIRE(cf->set_auto_compaction(true));
+        // check enabled
+        BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
+        // can't reenabled
+        BOOST_REQUIRE(!cf->set_auto_compaction(true));
+
+        // test control with temporary disable compaction
+        cf->run_with_compaction_disabled([&](){
+            // check auto compaction was not disabled by user 
+            BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
+            // disable auto compaction by user
+            BOOST_REQUIRE(cf->set_auto_compaction(false));
+            // check it is disabled
+            BOOST_REQUIRE(cf->is_auto_compaction_disabled_by_user());
+            
+            return make_ready_future<>();
+        }).wait();
+
+        // auto compaction must remain disabled after run_with_compaction_disabled
+        BOOST_REQUIRE(cf->is_auto_compaction_disabled_by_user());
+        // enable auto compaction
+        BOOST_REQUIRE(cf->set_auto_compaction(true));
+        // check enabled
+        BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
+
+        cm->stop().wait();
+    });
+}
+
 SEASTAR_TEST_CASE(compaction_manager_test) {
   return test_env::do_with_async([] (test_env& env) {
     storage_service_for_tests ssft;

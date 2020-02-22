@@ -502,6 +502,7 @@ private:
     compaction_manager& _compaction_manager;
     secondary_index::secondary_index_manager _index_manager;
     int _compaction_disabled = 0;
+    bool _compaction_disabled_by_user = false;
     utils::phased_barrier _flush_barrier;
     seastar::gate _streaming_flush_gate;
     std::vector<view_ptr> _views;
@@ -932,6 +933,11 @@ public:
     void drop_hit_rate(gms::inet_address addr);
 
     future<> run_with_compaction_disabled(std::function<future<> ()> func);
+
+    bool set_auto_compaction(bool enabled);
+    bool is_auto_compaction_disabled_by_user() const {
+      return _compaction_disabled_by_user;
+    }
 
     utils::phased_barrier::operation write_in_progress() {
         return _pending_writes_phaser.start();

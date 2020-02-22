@@ -1396,6 +1396,9 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     // now exception safe:
     _compaction_strategy = std::move(new_cs);
     _sstables = std::move(new_sstables);
+
+    // reset auto compaction to default state (enabled)
+    set_auto_compaction(true);
 }
 
 size_t table::sstables_count() const {
@@ -2444,6 +2447,30 @@ table::run_with_compaction_disabled(std::function<future<> ()> func) {
             do_trigger_compaction();
         }
     });
+}
+
+bool
+table::set_auto_compaction(bool enabled) {
+    if (enabled) {
+        if (_compaction_disabled_by_user) {
+            _compaction_disabled_by_user = false;
+            if (--_compaction_disabled == 0) {
+                // we're turning if on again, use function that does not increment
+                // the counter further.
+                do_trigger_compaction();
+            }
+            return true;
+        }
+    } else {
+        if (!_compaction_disabled_by_user) {
+            ++_compaction_disabled;
+            _compaction_disabled_by_user = true;
+            (void) _compaction_manager.remove(this);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 flat_mutation_reader
