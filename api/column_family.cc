@@ -839,11 +839,25 @@ void set_column_family(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(res);
     });
 
-    cf::is_auto_compaction_disabled.set(r, [] (const_req req) {
-        // FIXME
-        // currently auto compaction is disable
-        // it should be changed when it would have an API
-        return true;
+    cf::get_auto_compaction.set(r, [&ctx] (const_req req) {
+        const utils::UUID& uuid = get_uuid(req.param["name"], ctx.db.local());
+        column_family& cf = ctx.db.local().find_column_family(uuid);
+        return cf.schema()->compaction_enabled() && !cf.is_auto_compaction_disabled_by_user();
+    });
+
+    cf::set_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
+        bool enabled = boost::algorithm::iequals(req->param["enabled"], "true");
+        const utils::UUID &uuid = get_uuid(req->param["name"], ctx.db.local());
+        column_family &cf = ctx.db.local().find_column_family(uuid);
+        bool prev = !cf.is_auto_compaction_disabled_by_user();
+        if (!cf.schema()->compaction_enabled() || prev == enabled) {
+            return make_ready_future<json::json_return_type>(false);
+        }
+        return foreach_column_family(ctx, req->param["name"], [enabled](column_family &cf) {
+            cf.set_auto_compaction(enabled);
+        }).then([] {
+            return make_ready_future<json::json_return_type>(true);
+        });
     });
 
     cf::get_built_indexes.set(r, [&ctx](std::unique_ptr<request> req) {
