@@ -469,6 +469,7 @@ arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', def
                         help='path to antlr3 executable')
 arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', default='ragel',
         help='path to ragel executable')
+add_tristate(arg_parser, name='stack-guards', dest='stack_guards', help='Use stack guards')
 args = arg_parser.parse_args()
 
 defines = ['XXH_PRIVATE_API',
@@ -1165,6 +1166,11 @@ def configure_seastar(build_dir, mode):
         '-DSeastar_STD_OPTIONAL_VARIANT_STRINGVIEW=ON',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
     ]
+
+    if args.stack_guards is not None:
+        stack_guards = 'ON' if args.stack_guards else 'OFF'
+        seastar_cmake_args += ['-DSeastar_STACK_GUARDS={}'.format(stack_guards)]
+
     if args.dpdk:
         seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=wsm']
     if args.gcc6_concepts:
