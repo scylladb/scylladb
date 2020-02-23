@@ -15,6 +15,10 @@ Obsoletes:	scylla-server < 1.1
 %global __brp_python_bytecompile %{nil}
 %global __brp_mangle_shebangs %{nil}
 
+# Prevent find-debuginfo.sh from tempering with scylla's build-id (#5881)
+%undefine _unique_build_ids
+%global _no_recompute_build_ids 1
+
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
