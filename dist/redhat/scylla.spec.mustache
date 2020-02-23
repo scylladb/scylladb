@@ -17,6 +17,10 @@ Obsoletes:	scylla-server < 1.1
 
 %undefine _find_debuginfo_dwz_opts
 
+# Prevent find-debuginfo.sh from tempering with scylla's build-id (#5881)
+%undefine _unique_build_ids
+%global _no_recompute_build_ids 1
+
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
