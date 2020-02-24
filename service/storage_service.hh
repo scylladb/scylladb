@@ -74,10 +74,6 @@ class view_update_generator;
 }
 }
 
-namespace cql3 {
-class cql_config;
-}
-
 namespace cql_transport {
     class cql_server;
 }
@@ -157,7 +153,6 @@ private:
     distributed<database>& _db;
     gms::gossiper& _gossiper;
     sharded<auth::service>& _auth_service;
-    sharded<cql3::cql_config>& _cql_config;
     sharded<service::migration_notifier>& _mnotifier;
     // Note that this is obviously only valid for the current shard. Users of
     // this facility should elect a shard to be the coordinator based on any
@@ -187,7 +182,7 @@ private:
      */
     bool _for_testing;
 public:
-    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, /* only for tests */ bool for_testing = false);
+    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, /* only for tests */ bool for_testing = false);
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -927,7 +922,7 @@ public:
 };
 
 future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service,
-        sharded<cql3::cql_config>& cql_config, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
         storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm);
 future<> deinit_storage_service();
