@@ -1867,9 +1867,6 @@ future<> table::flush_streaming_mutations(utils::UUID plan_id, dht::partition_ra
             return _streaming_memtables->seal_active_memtable_delayed().then([this] {
                 return _streaming_flush_phaser.advance_and_await();
             }).then([this, sstables = std::move(sstables), ranges = std::move(ranges)] () mutable {
-                if (sstables.empty()) {
-                    return make_ready_future<>();
-                }
                 return _cache.invalidate([this, sstables = std::move(sstables)] () mutable noexcept {
                     // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
                     for (auto&& sst : sstables) {
