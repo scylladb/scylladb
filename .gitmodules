@@ -12,3 +12,6 @@
 [submodule "abseil"]
 	path = abseil
 	url = ../abseil-cpp
+[submodule "scylla-jmx"]
+	path = scylla-jmx
+	url = ../scylla-jmx
