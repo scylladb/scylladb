@@ -582,7 +582,15 @@
                   },
                   {
                      "name":"kn",
-                     "description":"Comma seperated keyspaces name to snapshot",
+                     "description":"Comma seperated keyspaces name that their snapshot will be deleted",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"an optional table name that its snapshot will be deleted",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",

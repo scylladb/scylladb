@@ -1862,17 +1862,29 @@ const sstring& database::get_snitch_name() const {
     return _cfg.endpoint_snitch();
 }
 
+/*!
+ * \brief a helper function that gets a table name and returns a prefix
+ * of the directory name of the table.
+ */
+static sstring get_snapshot_table_dir_prefix(const sstring& table_name) {
+    return table_name + "-";
+}
+
 // For the filesystem operations, this code will assume that all keyspaces are visible in all shards
 // (as we have been doing for a lot of the other operations, like the snapshot itself).
-future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
+future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name) {
     std::vector<sstring> data_dirs = _cfg.data_file_directories();
     lw_shared_ptr<lister::dir_entry_types> dirs_only_entries_ptr = make_lw_shared<lister::dir_entry_types>({ directory_entry_type::directory });
     lw_shared_ptr<sstring> tag_ptr = make_lw_shared<sstring>(std::move(tag));
     std::unordered_set<sstring> ks_names_set(keyspace_names.begin(), keyspace_names.end());
 
-    return parallel_for_each(data_dirs, [this, tag_ptr, ks_names_set = std::move(ks_names_set), dirs_only_entries_ptr] (const sstring& parent_dir) {
+    return parallel_for_each(data_dirs, [this, tag_ptr, ks_names_set = std::move(ks_names_set), dirs_only_entries_ptr, table_name = table_name] (const sstring& parent_dir) {
         std::unique_ptr<lister::filter_type> filter = std::make_unique<lister::filter_type>([] (const fs::path& parent_dir, const directory_entry& dir_entry) { return true; });
 
+        lister::filter_type table_filter = (table_name.empty()) ? lister::filter_type([] (const fs::path& parent_dir, const directory_entry& dir_entry) mutable { return true; }) :
+                lister::filter_type([table_name = get_snapshot_table_dir_prefix(table_name)] (const fs::path& parent_dir, const directory_entry& dir_entry) mutable {
+                    return dir_entry.name.find(table_name) == 0;
+                });
         // if specific keyspaces names were given - filter only these keyspaces directories
         if (!ks_names_set.empty()) {
             filter = std::make_unique<lister::filter_type>([ks_names_set = std::move(ks_names_set)] (const fs::path& parent_dir, const directory_entry& dir_entry) {
@@ -1898,7 +1910,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
         //  |- <keyspace name2>
         //  |- ...
         //
-        return lister::scan_dir(parent_dir, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (fs::path parent_dir, directory_entry de) {
+        return lister::scan_dir(parent_dir, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr, table_filter = std::move(table_filter)] (fs::path parent_dir, directory_entry de) mutable {
             // KS directory
             return lister::scan_dir(parent_dir / de.name, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (fs::path parent_dir, directory_entry de) mutable {
                 // CF directory
@@ -1917,7 +1929,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                         }, [tag_ptr] (const fs::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == *tag_ptr; });
                     }
                  }, [] (const fs::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == "snapshots"; });
-            });
+            }, table_filter);
         }, *filter);
     });
 }

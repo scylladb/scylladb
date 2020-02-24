@@ -438,7 +438,7 @@ SEASTAR_TEST_CASE(clear_snapshot) {
         }).get();
         BOOST_REQUIRE_GT(count, 1); // expect more than the manifest alone
 
-        e.local_db().clear_snapshot("test", {"ks"}).get();
+        e.local_db().clear_snapshot("test", {"ks"}, "").get();
         count = 0;
 
         BOOST_REQUIRE_EQUAL(fs::exists(fs::path(cf.dir()) / "snapshots" / "test"), false);
@@ -449,7 +449,7 @@ SEASTAR_TEST_CASE(clear_snapshot) {
 SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
     // no crashes, no exceptions
     return do_with_some_data([] (cql_test_env& e) {
-        e.local_db().clear_snapshot("test", {"ks"}).get();
+        e.local_db().clear_snapshot("test", {"ks"}, "").get();
         return make_ready_future<>();
     });
 }

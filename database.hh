@@ -1481,7 +1481,17 @@ public:
     future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
-    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);
+    /*!
+     * \brief clear snapshot based on a tag
+     * The clear_snapshot method deletes specific or multiple snapshots
+     * You can specify:
+     * tag - The snapshot tag (the one that was used when creating the snapshot) if not specified
+     *       All snapshot will be deleted
+     * keyspace_names - a vector of keyspace names that will be deleted, if empty all keyspaces
+     *                  will be deleted.
+     * table_name - A name of a specific table inside the keyspace, if empty all tables will be deleted.
+     */
+    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name);
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
     const std::unordered_map<sstring, keyspace>& get_keyspaces() const {

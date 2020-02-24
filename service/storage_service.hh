@@ -719,8 +719,9 @@ public:
     /**
      * Remove the snapshot with the given name from the given keyspaces.
      * If no tag is specified we will remove all snapshots.
+     * If a cf_name is specified, only that table will be deleted
      */
-    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);
+    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
 
     future<std::unordered_map<sstring, std::vector<snapshot_details>>> get_snapshot_details();
 

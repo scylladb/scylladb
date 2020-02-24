@@ -2092,9 +2092,9 @@ future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring c
     });
 }
 
-future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
-    return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names)] {
-        return _db.local().clear_snapshot(tag, keyspace_names);
+future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
+    return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] {
+        return _db.local().clear_snapshot(tag, keyspace_names, cf_name);
     });
 }
 
