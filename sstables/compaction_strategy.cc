@@ -790,6 +790,9 @@ date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<
     , _manifest(options)
     , _backlog_tracker(std::make_unique<unimplemented_backlog_tracker>())
 {
+    clogger.warn("DateTieredCompactionStrategy is deprecated. Usually cases for which it is used are better handled by TimeWindowCompactionStrategy."
+            " Please change your compaction strategy to TWCS as DTCS will be retired in the near future");
+
     // tombstone compaction is disabled by default because:
     // - deletion shouldn't be used with DTCS; rather data is deleted through TTL.
     // - with time series workloads, it's usually better to wait for whole sstable to be expired rather than
