@@ -2286,7 +2286,7 @@ future<> storage_service::start_native_transport() {
             cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
             cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
             seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
-            cserver->start(std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), std::ref(ss._cql_config), std::ref(ss._mnotifier), cql_server_config).get();
+            cserver->start(std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), std::ref(ss._mnotifier), cql_server_config).get();
             struct listen_cfg {
                 socket_address addr;
                 std::shared_ptr<seastar::tls::credentials_builder> cred;
