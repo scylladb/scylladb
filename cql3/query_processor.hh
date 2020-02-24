@@ -100,6 +100,8 @@ public:
     }
 };
 
+class cql_config;
+
 class query_processor {
 public:
     class migration_subscriber;
@@ -113,6 +115,7 @@ private:
     service::storage_proxy& _proxy;
     database& _db;
     service::migration_notifier& _mnotifier;
+    const cql_config& _cql_config;
 
     struct stats {
         uint64_t prepare_invocations = 0;
@@ -146,12 +149,16 @@ public:
 
     static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, memory_config mcfg);
+    query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg);
 
     ~query_processor();
 
     database& db() {
         return _db;
+    }
+
+    const cql_config& get_cql_config() const {
+        return _cql_config;
     }
 
     service::storage_proxy& proxy() {
