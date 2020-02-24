@@ -203,7 +203,6 @@ enum class query_order { no, yes };
 class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
-    const cql3::cql_config& _cql_config;
     service::client_state _client_state;
     service::query_state _query_state;
     ::timeout_config _timeout_config;
@@ -220,10 +219,9 @@ private:
         });
     }
 public:
-    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service, const cql3::cql_config& cql_config, ::timeout_config timeout_config)
+    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service, ::timeout_config timeout_config)
         : _db(db)
         , _query_processor(qp)
-        , _cql_config(cql_config)
         , _client_state(service::client_state::external_tag{}, auth_service, socket_address(), true)
         , _query_state(_client_state, /*FIXME: pass real permit*/empty_service_permit())
         , _timeout_config(timeout_config)
@@ -972,9 +970,10 @@ public:
             if (compression != Compression::type::NONE) {
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
             }
-            auto opts = std::make_unique<cql3::query_options>(_cql_config, cl_from_thrift(consistency), _timeout_config, std::nullopt, std::vector<cql3::raw_value_view>(),
+            auto& qp = _query_processor.local();
+            auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), _timeout_config, std::nullopt, std::vector<cql3::raw_value_view>(),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
-            auto f = _query_processor.local().execute_direct(query, _query_state, *opts);
+            auto f = qp.execute_direct(query, _query_state, *opts);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
                 cql3_result_visitor visitor;
                 ret->accept(visitor);
@@ -1051,9 +1050,10 @@ public:
             std::transform(values.begin(), values.end(), std::back_inserter(bytes_values), [](auto&& s) {
                 return cql3::raw_value::make_value(to_bytes(s));
             });
-            auto opts = std::make_unique<cql3::query_options>(_cql_config, cl_from_thrift(consistency), _timeout_config, std::nullopt, std::move(bytes_values),
+            auto& qp = _query_processor.local();
+            auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), _timeout_config, std::nullopt, std::move(bytes_values),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
-            auto f = _query_processor.local().execute_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization);
+            auto f = qp.execute_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
                 cql3_result_visitor visitor;
                 ret->accept(visitor);
@@ -1950,18 +1950,16 @@ class handler_factory : public CassandraCobSvIfFactory {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     auth::service& _auth_service;
-    const cql3::cql_config& _cql_config;
     timeout_config _timeout_config;
 public:
     explicit handler_factory(distributed<database>& db,
                              distributed<cql3::query_processor>& qp,
                              auth::service& auth_service,
-                             const cql3::cql_config& cql_config,
                              ::timeout_config timeout_config)
-        : _db(db), _query_processor(qp), _auth_service(auth_service), _cql_config(cql_config), _timeout_config(timeout_config) {}
+        : _db(db), _query_processor(qp), _auth_service(auth_service), _timeout_config(timeout_config) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new thrift_handler(_db, _query_processor, _auth_service, _cql_config, _timeout_config);
+        return new thrift_handler(_db, _query_processor, _auth_service, _timeout_config);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -1970,6 +1968,6 @@ public:
 
 std::unique_ptr<CassandraCobSvIfFactory>
 create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service,
-        const cql3::cql_config& cql_config, ::timeout_config timeout_config) {
-    return std::make_unique<handler_factory>(db, qp, auth_service, cql_config, timeout_config);
+        ::timeout_config timeout_config) {
+    return std::make_unique<handler_factory>(db, qp, auth_service, timeout_config);
 }
