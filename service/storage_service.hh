@@ -107,18 +107,39 @@ enum class disk_error { regular, commit };
 struct bind_messaging_port_tag {};
 using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 
+class format_selector;
+
 class feature_enabled_listener : public gms::feature::listener {
-    storage_service& _s;
-    seastar::named_semaphore& _sem;
+    format_selector& _selector;
     sstables::sstable_version_types _format;
-    future<> maybe_select_format(sstables::sstable_version_types new_format);
+
 public:
-    feature_enabled_listener(storage_service& s, seastar::named_semaphore& sem, sstables::sstable_version_types format)
-        : _s(s)
-        , _sem(sem)
+    feature_enabled_listener(format_selector& s, sstables::sstable_version_types format)
+        : _selector(s)
         , _format(format)
     { }
     void on_enabled() override;
+};
+
+class format_selector {
+    storage_service& _s;
+    gms::gossiper& _gossiper;
+    gms::feature_service& _features;
+    seastar::named_semaphore _sem = {1, named_semaphore_exception_factory{"feature listeners"}};
+
+    feature_enabled_listener _mc_feature_listener;
+
+    future<> select_format(sstables::sstable_version_types new_format);
+
+public:
+    format_selector(storage_service& ss, gms::gossiper& g, gms::feature_service& f, bool for_testing);
+
+    future<> read_sstables_format();
+    future<> maybe_select_format(sstables::sstable_version_types new_format);
+
+    void sync() {
+        get_units(_sem, 1).get0();
+    }
 };
 
 struct storage_service_config {
@@ -279,11 +300,14 @@ public:
         return _snapshot_ops.close();
     }
 
+    future<> read_sstables_format() {
+        return _sstables_format_selector.read_sstables_format();
+    }
+
 private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
-    friend future<> read_sstables_format(distributed<storage_service>&);
-    friend class feature_enabled_listener;
+    friend class format_selector;
     /* Used for tracking drain progress */
 public:
     struct drain_progress {
@@ -319,8 +343,7 @@ private:
     // if an sstable format was chosen earlier (and this choice was persisted
     // in the system table).
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::la;
-    seastar::named_semaphore _feature_listeners_sem = {1, named_semaphore_exception_factory{"feature listeners"}};
-    feature_enabled_listener _mc_feature_listener;
+    format_selector _sstables_format_selector;
 public:
     sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();
@@ -949,7 +972,5 @@ future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
         storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm);
 future<> deinit_storage_service();
-
-future<> read_sstables_format(distributed<storage_service>& ss);
 
 }

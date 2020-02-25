@@ -855,7 +855,7 @@ int main(int ac, char** av) {
             sstables::init_metrics().get();
 
             db::system_keyspace::minimal_setup(db, qp);
-            service::read_sstables_format(service::get_storage_service()).get();
+            service::get_local_storage_service().read_sstables_format().get();
 
             // schema migration, if needed, is also done on shard 0
             db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();

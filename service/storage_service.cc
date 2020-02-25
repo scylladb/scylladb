@@ -117,7 +117,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
         , _token_metadata(tm)
-        , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
+        , _sstables_format_selector(*this, gossiper, feature_service, for_testing)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks)
@@ -128,11 +128,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
     general_disk_error.connect([this] { isolate_on_error(); });
     commit_error.connect([this] { isolate_on_commit_error(); });
 
-    if (!for_testing) {
-        if (this_shard_id() == 0) {
-            _feature_service.cluster_supports_mc_sstable().when_enabled(_mc_feature_listener);
-        }
-    } else {
+    if (for_testing) {
         _sstables_format = sstables::sstable_version_types::mc;
         _feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
     }
@@ -438,7 +434,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
 void storage_service::wait_for_feature_listeners_to_finish() {
     // This makes sure that every feature listener that was started
     // finishes before we move forward.
-    get_units(_feature_listeners_sem, 1).get0();
+    _sstables_format_selector.sync();
 }
 
 static auth::permissions_cache_config permissions_cache_config_from_db_config(const db::config& dc) {
@@ -1718,9 +1714,7 @@ future<> storage_service::gossip_sharder() {
 }
 
 future<> storage_service::stop() {
-    return with_semaphore(_feature_listeners_sem, 1, [this] {
-        return uninit_messaging_service();
-    }).then([this] {
+    return uninit_messaging_service().then([this] {
         return _service_memory_limiter.wait(_service_memory_total); // make sure nobody uses the semaphore
     });
 }
@@ -3437,44 +3431,56 @@ void feature_enabled_listener::on_enabled() {
     if (!_started) {
         _started = true;
         // FIXME -- discarded future
-        (void)maybe_select_format(_format);
+        (void)_selector.maybe_select_format(_format);
     }
 }
 
-future<> feature_enabled_listener::maybe_select_format(sstables::sstable_version_types new_format) {
+format_selector::format_selector(storage_service& ss, gms::gossiper& g, gms::feature_service& f, bool for_testing)
+    : _s(ss)
+    , _gossiper(g)
+    , _features(f)
+    , _mc_feature_listener(*this, sstables::sstable_version_types::mc) {
+
+    if (!for_testing) {
+        if (this_shard_id() == 0) {
+            _features.cluster_supports_mc_sstable().when_enabled(_mc_feature_listener);
+        }
+    }
+}
+
+future<> format_selector::maybe_select_format(sstables::sstable_version_types new_format) {
     return with_semaphore(_sem, 1, [this, new_format] {
         if (!sstables::is_later(new_format, _s._sstables_format)) {
             return make_ready_future<bool>(false);
         }
-        return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format)).then([new_format] {
-            return get_storage_service().invoke_on_all([new_format] (storage_service& s) {
-                s._sstables_format = new_format;
-                if (sstables::is_later(new_format, sstables::sstable_version_types::la)) {
-                    s._feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
-                }
-            });
+        return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format)).then([this, new_format] {
+            return select_format(new_format);
         }).then([] { return true; });
     }).then([this] (bool update_features) {
         if (!update_features) {
             return make_ready_future<>();
         }
-        return gms::get_local_gossiper().add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
+        return _gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
                                                                      gms::versioned_value::supported_features(_s.get_config_supported_features()));
     });
 }
 
-future<> read_sstables_format(distributed<storage_service>& ss) {
-    return db::system_keyspace::get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME).then([&ss] (std::optional<sstring> format_opt) {
+future<> format_selector::read_sstables_format() {
+    return db::system_keyspace::get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME).then([this] (std::optional<sstring> format_opt) {
         if (format_opt) {
             sstables::sstable_version_types format = sstables::from_string(*format_opt);
-            return ss.invoke_on_all([format] (storage_service& s) {
-                s._sstables_format = format;
-                if (sstables::is_later(format, sstables::sstable_version_types::la)) {
-                    s._feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
-                }
-            });
+            return select_format(format);
         }
         return make_ready_future<>();
+    });
+}
+
+future<> format_selector::select_format(sstables::sstable_version_types format) {
+    return get_storage_service().invoke_on_all([format] (storage_service& s) {
+        s._sstables_format = format;
+        if (sstables::is_later(format, sstables::sstable_version_types::la)) {
+            s._feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
+        }
     });
 }
 
