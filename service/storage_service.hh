@@ -405,11 +405,9 @@ public:
      * completed
      * \see init_messaging_service_part
      */
-    future<> init_server_without_the_messaging_service_part(bind_messaging_port do_bind = bind_messaging_port::yes) {
-        return init_server(get_ring_delay().count(), do_bind);
-    }
+    future<> init_server(bind_messaging_port do_bind = bind_messaging_port::yes);
 
-    future<> init_server(int delay, bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> join_cluster();
 
     future<> drain_on_shutdown();
 

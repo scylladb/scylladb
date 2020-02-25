@@ -1006,7 +1006,12 @@ int main(int ac, char** av) {
                 gms::stop_gossiping().get();
             });
 
-            ss.init_server_without_the_messaging_service_part().get();
+            ss.init_server().get();
+            ss.join_cluster().get();
+
+            startlog.info("SSTable data integrity checker is {}.",
+                    cfg->enable_sstable_data_integrity_check() ? "enabled" : "disabled");
+
             api::set_server_snapshot(ctx).get();
             auto stop_snapshots = defer_verbose_shutdown("snapshots", [] {
                 service::get_storage_service().invoke_on_all(&service::storage_service::snapshots_close).get();

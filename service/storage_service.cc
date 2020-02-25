@@ -1613,8 +1613,8 @@ future<> storage_service::init_messaging_service_part() {
     return get_storage_service().invoke_on_all(&service::storage_service::init_messaging_service);
 }
 
-future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
-    return seastar::async([this, delay, do_bind] {
+future<> storage_service::init_server(bind_messaging_port do_bind) {
+    return seastar::async([this, do_bind] {
         _initialized = true;
 
         // Register storage_service to migration_notifier so we can update
@@ -1659,14 +1659,12 @@ future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
         }
 
         prepare_to_join(std::move(loaded_endpoints), loaded_peer_features, do_bind);
+    });
+}
 
-        join_token_ring(delay);
-
-        if (_db.local().get_config().enable_sstable_data_integrity_check()) {
-            slogger.info0("SSTable data integrity checker is enabled.");
-        } else {
-            slogger.info0("SSTable data integrity checker is disabled.");
-        }
+future<> storage_service::join_cluster() {
+    return seastar::async([this] {
+        join_token_ring(get_ring_delay().count());
     });
 }
 
