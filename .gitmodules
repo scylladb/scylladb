@@ -12,3 +12,6 @@
 [submodule "zstd"]
 	path = zstd
 	url = ../zstd
+[submodule "abseil"]
+	path = abseil
+	url = ../abseil-cpp
