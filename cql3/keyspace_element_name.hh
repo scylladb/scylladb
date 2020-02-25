@@ -84,7 +84,7 @@ protected:
      * @param keepCase <code>true</code> if the case must be kept, <code>false</code> otherwise.
      * @return the name used internally.
      */
-    static sstring to_internal_name(sstring name, bool keep_case);
+    static sstring to_internal_name(std::string_view name, bool keep_case);
 };
 
 }

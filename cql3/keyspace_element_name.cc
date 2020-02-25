@@ -58,8 +58,9 @@ const sstring& keyspace_element_name::get_keyspace() const
     return *_ks_name;
 }
 
-sstring keyspace_element_name::to_internal_name(sstring name, bool keep_case)
+sstring keyspace_element_name::to_internal_name(std::string_view view, bool keep_case)
 {
+    sstring name(view);
     if (!keep_case) {
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
     }
