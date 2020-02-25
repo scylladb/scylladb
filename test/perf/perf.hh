@@ -53,21 +53,6 @@ void time_it(Func func, int iterations = 5, int iterations_between_clock_reading
     }
 }
 
-template <typename Func>
-static
-future<> do_n_times(unsigned count, Func func) {
-    struct wrapper {
-        Func f;
-        unsigned c;
-    };
-
-    auto w = make_shared<wrapper>({std::move(func), count});
-    return do_until([w] { return w->c == 0; }, [w] {
-        --w->c;
-        return w->f();
-    });
-}
-
 // Drives concurrent and continuous execution of given asynchronous action
 // until a deadline. Counts invocations.
 template <typename Func>
@@ -120,27 +105,24 @@ public:
  */
 template <typename Func>
 static
-future<std::vector<double>> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
+std::vector<double> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
     using clk = std::chrono::steady_clock;
     if (operations_per_shard) {
         iterations = 1;
     }
-  return do_with(std::vector<double>{}, [&] (std::vector<double>& results) {
-    return do_n_times(iterations, [func, concurrency_per_core, operations_per_shard, &results] {
+    std::vector<double> results;
+    for (int i = 0; i < iterations; ++i) {
         auto start = clk::now();
         auto end_at = lowres_clock::now() + std::chrono::seconds(1);
-        auto exec = ::make_shared<distributed<executor<Func>>>();
-        return exec->start(concurrency_per_core, func, std::move(end_at), operations_per_shard).then([exec] {
-            return exec->map_reduce(adder<uint64_t>(), [] (auto& oc) { return oc.run(); });
-        }).then([start, &results] (auto total) {
-            auto end = clk::now();
-            auto duration = std::chrono::duration<double>(end - start).count();
-            auto result = static_cast<double>(total) / duration;
-            std::cout << format("{:.2f}", result) << " tps\n";
-            results.emplace_back(result);
-        }).then([exec] {
-            return exec->stop().finally([exec] {});
-        });
-    }).then([&results] { return std::move(results); });
-  });
+        distributed<executor<Func>> exec;
+        exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard).get();
+        auto total = exec.map_reduce(adder<uint64_t>(), [] (auto& oc) { return oc.run(); }).get0();
+        auto end = clk::now();
+        auto duration = std::chrono::duration<double>(end - start).count();
+        auto result = static_cast<double>(total) / duration;
+        std::cout << format("{:.2f}", result) << " tps\n";
+        results.emplace_back(result);
+        exec.stop().get();
+    }
+    return results;
 }

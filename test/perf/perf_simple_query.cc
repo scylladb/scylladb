@@ -39,24 +39,24 @@ static bytes make_key(uint64_t sequence) {
     return b;
 };
 
-static auto execute_update_for_key(cql_test_env& env, const bytes& key) {
-    return env.execute_cql(sprint("UPDATE cf SET "
+static void execute_update_for_key(cql_test_env& env, const bytes& key) {
+    env.execute_cql(sprint("UPDATE cf SET "
         "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
         "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
         "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
         "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
         "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
-        "WHERE \"KEY\"= 0x%s;", to_hex(key))).discard_result();
+        "WHERE \"KEY\"= 0x%s;", to_hex(key))).get();
 };
 
-static auto execute_counter_update_for_key(cql_test_env& env, const bytes& key) {
-    return env.execute_cql(sprint("UPDATE cf SET "
+static void execute_counter_update_for_key(cql_test_env& env, const bytes& key) {
+    env.execute_cql(sprint("UPDATE cf SET "
         "\"C0\" = \"C0\" + 1,"
         "\"C1\" = \"C1\" + 2,"
         "\"C2\" = \"C2\" + 3,"
         "\"C3\" = \"C3\" + 4,"
         "\"C4\" = \"C4\" + 5 "
-        "WHERE \"KEY\"= 0x%s;", to_hex(key))).discard_result();
+        "WHERE \"KEY\"= 0x%s;", to_hex(key))).get();
 };
 
 struct test_config {
@@ -89,69 +89,61 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << "}";
 }
 
-future<> create_partitions(cql_test_env& env, test_config& cfg) {
+static void create_partitions(cql_test_env& env, test_config& cfg) {
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
-    auto partitions = boost::irange(0, (int)cfg.partitions);
-    return do_for_each(partitions.begin(), partitions.end(), [&] (int sequence) {
+    for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
         if (cfg.counters) {
-            return execute_counter_update_for_key(env, make_key(sequence));
+            execute_counter_update_for_key(env, make_key(sequence));
+        } else {
+            execute_update_for_key(env, make_key(sequence));
         }
-        return execute_update_for_key(env, make_key(sequence));
-    });
+    }
 }
 
-future<std::vector<double>> test_read(cql_test_env& env, test_config& cfg) {
-    return create_partitions(env, cfg).then([&env] {
-        return env.prepare("select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?");
-    }).then([&env, &cfg](auto id) {
-        return time_parallel([&env, &cfg, id] {
+static std::vector<double> test_read(cql_test_env& env, test_config& cfg) {
+    create_partitions(env, cfg);
+    auto id = env.prepare("select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?").get0();
+    return time_parallel([&env, &cfg, id] {
             bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
-    });
 }
 
-future<std::vector<double>> test_write(cql_test_env& env, test_config& cfg) {
-    return env.prepare("UPDATE cf SET "
+static std::vector<double> test_write(cql_test_env& env, test_config& cfg) {
+    auto id = env.prepare("UPDATE cf SET "
                            "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
                            "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
                            "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
                            "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
                            "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
-                           "WHERE \"KEY\" = ?;")
-        .then([&env, &cfg](auto id) {
-            return time_parallel([&env, &cfg, id] {
-                bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
-                return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-            }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
-        });
-}
-
-future<std::vector<double>> test_delete(cql_test_env& env, test_config& cfg) {
-    return create_partitions(env, cfg).then([&env] {
-        return env.prepare("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf WHERE \"KEY\" = ?");
-    }).then([&env, &cfg](auto id) {
-        return time_parallel([&env, &cfg, id] {
+                           "WHERE \"KEY\" = ?;").get0();
+    return time_parallel([&env, &cfg, id] {
             bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
-    });
 }
 
-future<std::vector<double>> test_counter_update(cql_test_env& env, test_config& cfg) {
-    return env.prepare("UPDATE cf SET "
+static std::vector<double> test_delete(cql_test_env& env, test_config& cfg) {
+    create_partitions(env, cfg);
+    auto id = env.prepare("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf WHERE \"KEY\" = ?").get0();
+    return time_parallel([&env, &cfg, id] {
+            bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+}
+
+static std::vector<double> test_counter_update(cql_test_env& env, test_config& cfg) {
+    auto id = env.prepare("UPDATE cf SET "
                            "\"C0\" = \"C0\" + 1,"
                            "\"C1\" = \"C1\" + 2,"
                            "\"C2\" = \"C2\" + 3,"
                            "\"C3\" = \"C3\" + 4,"
                            "\"C4\" = \"C4\" + 5 "
-                           "WHERE \"KEY\" = ?;")
-        .then([&env, &cfg] (auto id) {
-            return time_parallel([&env, &cfg, id] {
-                bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
-                return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-            }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
-        });
+                           "WHERE \"KEY\" = ?;").get0();
+    return time_parallel([&env, &cfg, id] {
+            bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
 
 schema_ptr make_counter_schema(const sstring& ks_name) {
@@ -165,9 +157,9 @@ schema_ptr make_counter_schema(const sstring& ks_name) {
             .build();
 }
 
-future<std::vector<double>> do_test(cql_test_env& env, test_config& cfg) {
+static std::vector<double> do_test(cql_test_env& env, test_config& cfg) {
     std::cout << "Running test with config: " << cfg << std::endl;
-    return env.create_table([&cfg] (auto ks_name) {
+    env.create_table([&cfg] (auto ks_name) {
         if (cfg.counters) {
             return *make_counter_schema(ks_name);
         }
@@ -177,21 +169,21 @@ future<std::vector<double>> do_test(cql_test_env& env, test_config& cfg) {
                 {{"C0", bytes_type}, {"C1", bytes_type}, {"C2", bytes_type}, {"C3", bytes_type}, {"C4", bytes_type}},
                 {},
                 utf8_type);
-    }).then([&env, &cfg] {
-        switch (cfg.mode) {
-            case test_config::run_mode::read:
-                return test_read(env, cfg);
-            case test_config::run_mode::write:
-                if (cfg.counters) {
-                    return test_counter_update(env, cfg);
-                } else {
-                    return test_write(env, cfg);
-                }
-            case test_config::run_mode::del:
-                return test_delete(env, cfg);
-        };
-        abort();
-    });
+    }).get();
+
+    switch (cfg.mode) {
+    case test_config::run_mode::read:
+        return test_read(env, cfg);
+    case test_config::run_mode::write:
+        if (cfg.counters) {
+            return test_counter_update(env, cfg);
+        } else {
+            return test_write(env, cfg);
+        }
+    case test_config::run_mode::del:
+        return test_delete(env, cfg);
+    };
+    abort();
 }
 
 void write_json_result(std::string result_file, const test_config& cfg, double median, double mad, double max, double min) {
@@ -265,17 +257,14 @@ int main(int argc, char** argv) {
         ;
 
     return app.run(argc, argv, [&app] {
-        auto init = [&app] {
-            auto conf_seed = app.configuration()["random-seed"];
-            auto seed = conf_seed.empty() ? std::random_device()() : conf_seed.as<unsigned>();
-            std::cout << "random-seed=" << seed << '\n';
-            return smp::invoke_on_all([seed] {
-                seastar::testing::local_random_engine.seed(seed + engine().cpu_id());
-            });
-        };
+        auto conf_seed = app.configuration()["random-seed"];
+        auto seed = conf_seed.empty() ? std::random_device()() : conf_seed.as<unsigned>();
+        std::cout << "random-seed=" << seed << '\n';
+        smp::invoke_on_all([seed] {
+            seastar::testing::local_random_engine.seed(seed + engine().cpu_id());
+        }).get();
 
-        return init().then([&app] {
-          return do_with_cql_env([&app] (auto&& env) {
+        return do_with_cql_env_thread([&app] (auto&& env) {
             auto cfg = test_config();
             cfg.partitions = app.configuration()["partitions"].as<unsigned>();
             cfg.duration_in_seconds = app.configuration()["duration"].as<unsigned>();
@@ -292,7 +281,7 @@ int main(int argc, char** argv) {
             if (app.configuration().count("operations-per-shard")) {
                 cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
             }
-            auto results = do_test(env, cfg).get0();
+            auto results = do_test(env, cfg);
 
             std::sort(results.begin(), results.end());
             auto median = results[results.size() / 2];
@@ -308,8 +297,6 @@ int main(int argc, char** argv) {
             if (app.configuration().count("json-result")) {
                 write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, median, mad, max, min);
             }
-            return make_ready_future<>();
           });
-        });
     });
 }
