@@ -175,6 +175,8 @@ private:
     seastar::metrics::metric_groups _metrics;
     size_t _service_memory_total;
     semaphore _service_memory_limiter;
+    using client_shutdown_hook = noncopyable_function<void()>;
+    std::vector<std::pair<std::string, client_shutdown_hook>> _client_shutdown_hooks;
 
     /* For unit tests only.
      *
@@ -349,6 +351,16 @@ public:
 
     future<bool> is_native_transport_running();
 
+    void register_client_shutdown_hook(std::string name, client_shutdown_hook hook) {
+        _client_shutdown_hooks.push_back({std::move(name), std::move(hook)});
+    }
+    void unregister_client_shutdown_hook(std::string name) {
+        auto it = std::find_if(_client_shutdown_hooks.begin(), _client_shutdown_hooks.end(),
+                [&name] (const std::pair<std::string, client_shutdown_hook>& hook) { return hook.first == name; });
+        if (it != _client_shutdown_hooks.end()) {
+            _client_shutdown_hooks.erase(it);
+        }
+    }
 private:
     future<> do_stop_rpc_server();
     future<> do_stop_native_transport();

@@ -2997,6 +2997,17 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
 void storage_service::shutdown_client_servers() {
     do_stop_rpc_server().get();
     do_stop_native_transport().get();
+    for (auto& [name, hook] : _client_shutdown_hooks) {
+        slogger.info("Shutting down {}", name);
+        try {
+            hook();
+        } catch (...) {
+            slogger.error("Unexpected error shutting down {}: {}",
+                    name, std::current_exception());
+            throw;
+        }
+        slogger.info("Shutting down {} was successful", name);
+    }
 }
 
 std::unordered_multimap<inet_address, dht::token_range>
