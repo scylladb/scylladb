@@ -256,6 +256,8 @@ int main(int argc, char** argv) {
         ("json-result", bpo::value<std::string>(), "name of the json result file")
         ;
 
+    set_abort_on_internal_error(true);
+
     return app.run(argc, argv, [&app] {
         auto conf_seed = app.configuration()["random-seed"];
         auto seed = conf_seed.empty() ? std::random_device()() : conf_seed.as<unsigned>();
