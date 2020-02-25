@@ -64,7 +64,7 @@ public:
      * @param ks the keyspace name
      * @param keepCase <code>true</code> if the case must be kept, <code>false</code> otherwise.
      */
-    void set_keyspace(const sstring& ks, bool keep_case);
+    void set_keyspace(std::string_view ks, bool keep_case);
 
     /**
      * Checks if the keyspace is specified.

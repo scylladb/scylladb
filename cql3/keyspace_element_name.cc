@@ -43,7 +43,7 @@
 
 namespace cql3 {
 
-void keyspace_element_name::set_keyspace(const sstring& ks, bool keep_case)
+void keyspace_element_name::set_keyspace(std::string_view ks, bool keep_case)
 {
     _ks_name = to_internal_name(ks, keep_case);
 }
