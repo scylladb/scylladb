@@ -117,7 +117,7 @@ can fix it or report it. To enable this run:
 
 Often you find yourself debugging an executable, whose internal source
 paths don't match those where they can be found on your machine. There
- is an easy workaround for this:
+is an easy workaround for this:
 
     (gdb) set substitute-path /path/to/src/in/executable /path/to/src/on/your/machine
 
@@ -128,6 +128,14 @@ on your machine it is `/home/joe/work/scylla/database.hh`, you can make
 GDB find the sources on your machine via:
 
     (gdb) set substitute-path /opt/src/scylla /home/joe/work/scylla
+
+This method might not work if the sources do not have a prefix, e.g.
+they are relative to the source tree root directory. In this case you can use the
+`set directories` command to set the search path of sources for gdb:
+
+    (gdb) set directories /path/to/scylla/source/tree
+
+Multiple directories can be listed, separated with `:`.
 
 #### .gdbinit
 
