@@ -717,10 +717,23 @@ def test_update_expression_delete_sets(test_table_s):
         UpdateExpression='DELETE a :val1',
         ExpressionAttributeValues={':val1': set(['pig'])})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == set(['dog'])
+    # Deleting all the elements cannot leave an empty set (which isn't
+    # supported). Rather, it deletes the attribute altogether:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='DELETE a :val1',
+        ExpressionAttributeValues={':val1': set(['dog'])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 'hi'}
+    # Deleting elements from a non-existent attribute is allowed, and
+    # simply does nothing:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='DELETE a :val1',
+        ExpressionAttributeValues={':val1': set(['dog'])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 'hi'}
     # The value to be deleted must be a set of the same type - it can't
     # be a single element or anything else. If the value has the wrong type,
     # we get an error like "Invalid UpdateExpression: Incorrect operand type
     # for operator or function; operator: DELETE, operand type: STRING".
+    test_table_s.put_item(Item={'p': p, 'a': set(['dog', 'cat', 'mouse']), 'b': 'hi'})
     with pytest.raises(ClientError, match='ValidationException.*type'):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='DELETE a :val1',

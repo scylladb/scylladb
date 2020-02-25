@@ -1739,9 +1739,11 @@ static rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
     return ret;
 }
 
-// Take two JSON-encoded set values (e.g. {"SS": [...the actual list]}) and return the difference of s1 - s2,
-// again as a set value.
-static rjson::value set_diff(const rjson::value& v1, const rjson::value& v2) {
+// Take two JSON-encoded set values (e.g. {"SS": [...the actual list]}) and
+// return the difference of s1 - s2, again as a set value.
+// DynamoDB does not allow empty sets, so if resulting set is empty, return
+// an unset optional instead.
+static std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value& v2) {
     auto [set1_type, set1] = unwrap_set(v1);
     auto [set2_type, set2] = unwrap_set(v2);
     if (set1_type != set2_type) {
@@ -1756,6 +1758,9 @@ static rjson::value set_diff(const rjson::value& v1, const rjson::value& v2) {
     }
     for (const auto& a : set2->GetArray()) {
         set1_raw.erase(a);
+    }
+    if (set1_raw.empty()) {
+        return std::nullopt;
     }
     rjson::value ret = rjson::empty_object();
     rjson::set_with_string_name(ret, set1_type, rjson::empty_array());
@@ -2488,8 +2493,14 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     subset.set_valref(a._valref);
                     rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
                     rjson::value v2 = calculate_value(subset, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
-                    rjson::value result  = set_diff(v1, v2);
-                    do_update(to_bytes(column_name), result);
+                    if (!v1.IsNull()) {
+                        std::optional<rjson::value> result  = set_diff(v1, v2);
+                        if (result) {
+                            do_update(to_bytes(column_name), *result);
+                        } else {
+                            do_delete(to_bytes(column_name));
+                        }
+                    }
                 }
             }, action._action);
         }
