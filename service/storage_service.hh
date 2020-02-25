@@ -354,7 +354,8 @@ private:
     future<> do_stop_native_transport();
     future<> do_stop_ms();
     future<> do_stop_stream_manager();
-    future<> shutdown_client_servers();
+    // Runs in thread context
+    void shutdown_client_servers();
 
     // Tokens and the CDC streams timestamp of the replaced node.
     using replacement_info = std::pair<std::unordered_set<token>, std::optional<db_clock::time_point>>;
