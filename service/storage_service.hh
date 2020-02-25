@@ -111,6 +111,7 @@ class feature_enabled_listener : public gms::feature::listener {
     storage_service& _s;
     seastar::named_semaphore& _sem;
     sstables::sstable_version_types _format;
+    future<> maybe_select_format(sstables::sstable_version_types new_format);
 public:
     feature_enabled_listener(storage_service& s, seastar::named_semaphore& sem, sstables::sstable_version_types format)
         : _s(s)

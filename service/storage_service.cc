@@ -3434,19 +3434,22 @@ future<> deinit_storage_service() {
 }
 
 void feature_enabled_listener::on_enabled() {
-    if (_started) {
-        return;
+    if (!_started) {
+        _started = true;
+        // FIXME -- discarded future
+        (void)maybe_select_format(_format);
     }
-    _started = true;
-    //FIXME: discarded future.
-    (void)with_semaphore(_sem, 1, [this] {
-        if (!sstables::is_later(_format, _s._sstables_format)) {
+}
+
+future<> feature_enabled_listener::maybe_select_format(sstables::sstable_version_types new_format) {
+    return with_semaphore(_sem, 1, [this, new_format] {
+        if (!sstables::is_later(new_format, _s._sstables_format)) {
             return make_ready_future<bool>(false);
         }
-        return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(_format)).then([this] {
-            return get_storage_service().invoke_on_all([this] (storage_service& s) {
-                s._sstables_format = _format;
-                if (sstables::is_later(_format, sstables::sstable_version_types::la)) {
+        return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format)).then([new_format] {
+            return get_storage_service().invoke_on_all([new_format] (storage_service& s) {
+                s._sstables_format = new_format;
+                if (sstables::is_later(new_format, sstables::sstable_version_types::la)) {
                     s._feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
                 }
             });
