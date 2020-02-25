@@ -382,7 +382,13 @@ class std_list:
         self._dereference_node = std_list._make_dereference_func(self.ref.type.strip_typedefs().template_argument(0))
 
     def __len__(self):
-        return int(self.ref['_M_impl']['_M_node']['_M_size'])
+        try:
+            return int(self.ref['_M_impl']['_M_node']['_M_size'])
+        except gdb.error:
+            i = 0
+            for _ in self:
+                i += 1
+            return i
 
     def __nonzero__(self):
         return self.__len__() > 0
