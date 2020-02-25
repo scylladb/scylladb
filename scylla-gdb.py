@@ -268,6 +268,77 @@ class std_vector:
         return int(self.ref['_M_impl']['_M_end_of_storage']) - int(self.ref['_M_impl']['_M_start'])
 
 
+class std_deque:
+    # should reflect the value of _GLIBCXX_DEQUE_BUF_SIZE
+    DEQUE_BUF_SIZE = 512
+
+    class iterator:
+        def __init__(self, ref, buf_size):
+            self.cur = ref['_M_cur']
+            self.first = ref['_M_first']
+            self.last = ref['_M_last']
+            self.node = ref['_M_node']
+            self.buf_size = buf_size
+
+        def _set_node(self, node):
+            self.first = node.dereference()
+            self.last = self.first + self.buf_size
+            self.node = node
+
+        def __eq__(self, other):
+            return self.node == other.node and self.cur == other.cur
+
+        def __str__(self):
+            return "{{node=0x{:x}, first=0x{:x}, last=0x{:x}, cur=0x{:x}}}".format(
+                    int(self.node),
+                    int(self.first),
+                    int(self.last),
+                    int(self.cur))
+
+        def next(self):
+            self.cur += 1
+            if self.cur == self.last:
+                self._set_node(self.node + 1)
+                self.cur = self.first
+
+        def get(self):
+            return self.cur.dereference()
+
+
+    def __init__(self, ref):
+        self.ref = ref
+        self.value_type = self.ref.type.strip_typedefs().template_argument(0)
+        if self.value_type.sizeof < std_deque.DEQUE_BUF_SIZE:
+            self.buf_size = int(std_deque.DEQUE_BUF_SIZE / self.value_type.sizeof)
+        else:
+            self.buf_size = 1
+
+    def __len__(self):
+        start = self.ref['_M_impl']['_M_start']
+        finish = self.ref['_M_impl']['_M_finish']
+        return (self.buf_size * (max(1, finish['_M_node'] - start['_M_node']) - 1) +
+            start['_M_last'] - start['_M_cur'] +
+            finish['_M_cur'] - finish['_M_first'])
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__len__() > 0
+
+    def __iter__(self):
+        it = std_deque.iterator(self.ref['_M_impl']['_M_start'], self.buf_size)
+        finish = std_deque.iterator(self.ref['_M_impl']['_M_finish'], self.buf_size)
+
+        while it != finish:
+            yield it.get()
+            it.next()
+
+    def __str__(self):
+        items = [str(item) for item in self]
+        return "{{size={}, [{}]}}".format(len(self), ", ".join(items))
+
+
 class static_vector:
     def __init__(self, ref):
         self.ref = ref
