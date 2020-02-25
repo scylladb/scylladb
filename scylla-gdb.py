@@ -3169,15 +3169,23 @@ class scylla_smp_queues(gdb.Command):
         gdb.write('{}\n'.format(h))
 
 
-class scylla_gdb_func_dereference_lw_shared_ptr(gdb.Function):
-    """Dereference the pointer guarded by the `seastar::lw_shared_ptr` instance.
+class scylla_gdb_func_dereference_smart_ptr(gdb.Function):
+    """Dereference the pointer guarded by the smart pointer instance.
+
+    Supported smart pointers are:
+    * std::unique_ptr
+    * seastar::lw_shared_ptr
+    * seastar::foreign_ptr [1]
+
+    [1] Note that `seastar::foreign_ptr` wraps another smart pointer type which
+    is also dereferenced so its type has to be supported.
 
     Usage:
-    $dereference_lw_shared_ptr($ptr)
+    $dereference_smart_ptr($ptr)
 
     Where:
-    $lst - a convenience variable or any gdb expression that evaluates
-        to an `seastar::lw_shared_ptr` instance.
+    $ptr - a convenience variable or any gdb expression that evaluates
+        to a smart pointer instance of a supported type.
 
     Returns:
     The value pointed to by the guarded pointer.
@@ -3185,19 +3193,28 @@ class scylla_gdb_func_dereference_lw_shared_ptr(gdb.Function):
     Example:
     (gdb) p $1._read_context
     $2 = {_p = 0x60b00b068600}
-    (gdb) p $dereference_lw_shared_ptr($1._read_context)
+    (gdb) p $dereference_smart_ptr($1._read_context)
     $3 = {<seastar::enable_lw_shared_from_this<cache::read_context>> = {<seastar::lw_shared_ptr_counter_base> = {_count = 1}, ...
     """
 
     def __init__(self):
-        super(scylla_gdb_func_dereference_lw_shared_ptr, self).__init__('dereference_lw_shared_ptr')
+        super(scylla_gdb_func_dereference_smart_ptr, self).__init__('dereference_smart_ptr')
 
     def invoke(self, expr):
         if isinstance(expr, gdb.Value):
-            ptr = seastar_lw_shared_ptr(expr)
+            ptr = expr
         else:
-            ptr = seastar_lw_shared_ptr(gdb.parse_and_eval(expr))
-        return ptr.get().dereference()
+            ptr = gdb.parse_and_eval(expr)
+
+        typ = ptr.type.strip_typedefs()
+        if typ.name.startswith('seastar::lw_shared_ptr<'):
+            return seastar_lw_shared_ptr(ptr).get().dereference()
+        elif typ.name.startswith('seastar::foreign_ptr<'):
+            return self.invoke(ptr['_value'])
+        elif typ.name.startswith('std::unique_ptr<'):
+            return std_unique_ptr(ptr).get().dereference()
+
+        raise ValueError("Unsupported smart pointer type: {}".format(typ.name))
 
 
 class scylla_gdb_func_downcast_vptr(gdb.Function):
@@ -3340,5 +3357,5 @@ scylla_features()
 #
 # To get the usage of an individual function:
 #   (gdb) help function $function_name
-scylla_gdb_func_dereference_lw_shared_ptr()
+scylla_gdb_func_dereference_smart_ptr()
 scylla_gdb_func_downcast_vptr()
