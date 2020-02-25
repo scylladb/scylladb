@@ -108,8 +108,8 @@ rjson::value copy(const rjson::value& value) {
     return rjson::value(value, the_allocator);
 }
 
-rjson::value parse(const std::string& str) {
-    return parse_raw(str.c_str(), str.size());
+rjson::value parse(std::string_view str) {
+    return parse_raw(str.data(), str.size());
 }
 
 rjson::value parse_raw(const char* c_str, size_t size) {

@@ -118,7 +118,7 @@ rjson::value copy(const rjson::value& value);
 // The string/char array liveness does not need to be persisted,
 // as both parse() and parse_raw() will allocate member names and values.
 // Throws rjson::error if parsing failed.
-rjson::value parse(const std::string& str);
+rjson::value parse(std::string_view str);
 rjson::value parse_raw(const char* c_str, size_t size);
 
 // Creates a JSON value (of JSON string type) out of internal string representations.
