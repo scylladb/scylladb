@@ -3001,10 +3001,19 @@ data_value::operator=(data_value&& x) {
 data_value::data_value(bytes v) : data_value(make_new(bytes_type, v)) {
 }
 
-data_value::data_value(sstring v) : data_value(make_new(utf8_type, v)) {
+data_value::data_value(sstring&& v) : data_value(make_new(utf8_type, std::move(v))) {
 }
 
-data_value::data_value(const char* v) : data_value(make_new(utf8_type, sstring(v))) {
+data_value::data_value(const char* v) : data_value(std::string_view(v)) {
+}
+
+data_value::data_value(std::string_view v) : data_value(sstring(v)) {
+}
+
+data_value::data_value(const std::string& v) : data_value(std::string_view(v)) {
+}
+
+data_value::data_value(const sstring& v) : data_value(std::string_view(v)) {
 }
 
 data_value::data_value(ascii_native_type v) : data_value(make_new(ascii_type, v.string)) {
