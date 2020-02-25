@@ -201,7 +201,7 @@ public:
         return _authorizer->stop();
     }
 
-    virtual const sstring& qualified_java_name() const override {
+    virtual std::string_view qualified_java_name() const override {
         return transitional_authorizer_name();
     }
 
