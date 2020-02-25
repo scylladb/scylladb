@@ -752,7 +752,8 @@ public:
                 process_cells(r.row().cells(), column_kind::regular_column);
                 process_cells(p.static_row().get(), column_kind::static_column);
 
-                set_operation(log_ck, ts, operation::update, res);
+                const operation cdc_op = r.row().deleted_at() ? operation::row_delete : operation::update;
+                set_operation(log_ck, ts, cdc_op, res);
                 if (ttl) {
                     set_ttl(log_ck, ts, *ttl, res);
                 }
