@@ -94,6 +94,7 @@
 #include "utils/updateable_value.hh"
 #include "user_types_metadata.hh"
 #include "query_class_config.hh"
+#include "absl-flat_hash_map.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -1377,7 +1378,7 @@ private:
             db::timeout_clock::time_point,
             db::commitlog::force_sync> _apply_stage;
 
-    std::unordered_map<sstring, keyspace> _keyspaces;
+    flat_hash_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
@@ -1489,7 +1490,7 @@ public:
     /* below, find_keyspace throws no_such_<type> on fail */
     keyspace& find_keyspace(const sstring& name);
     const keyspace& find_keyspace(const sstring& name) const;
-    bool has_keyspace(const sstring& name) const;
+    bool has_keyspace(std::string_view name) const;
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
     future<> update_keyspace(const sstring& name);
@@ -1549,11 +1550,11 @@ public:
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name);
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
-    const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
+    const flat_hash_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
     }
 
-    std::unordered_map<sstring, keyspace>& get_keyspaces() {
+    flat_hash_map<sstring, keyspace>& get_keyspaces() {
         return _keyspaces;
     }
 

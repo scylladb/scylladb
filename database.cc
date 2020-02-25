@@ -798,7 +798,7 @@ const keyspace& database::find_keyspace(const sstring& name) const {
     }
 }
 
-bool database::has_keyspace(const sstring& name) const {
+bool database::has_keyspace(std::string_view name) const {
     return _keyspaces.count(name) != 0;
 }
 
