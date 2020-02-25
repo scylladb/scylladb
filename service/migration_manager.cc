@@ -70,6 +70,11 @@ migration_manager::migration_manager(migration_notifier& notifier) : _notifier(n
 future<> migration_manager::stop()
 {
     mlogger.info("stopping migration service");
+    _as.request_abort();
+    if (!_cluster_upgraded) {
+        _wait_cluster_upgraded.broken();
+    }
+
   return uninit_messaging_service().then([this] {
     return parallel_for_each(_schema_pulls.begin(), _schema_pulls.end(), [] (auto&& e) {
         serialized_action& sp = e.second;
@@ -97,6 +102,10 @@ void migration_manager::init_messaging_service()
         _feature_listeners.push_back(ss.cluster_supports_digest_insensitive_to_expiry().when_enabled(update_schema));
         _feature_listeners.push_back(ss.cluster_supports_cdc().when_enabled(update_schema));
     }
+    _feature_listeners.push_back(ss.cluster_supports_schema_tables_v3().when_enabled([this] {
+        _cluster_upgraded = true;
+        _wait_cluster_upgraded.broadcast();
+    }));
 
     auto& ms = netw::get_local_messaging_service();
     ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm, rpc::optional<std::vector<canonical_mutation>> cm) {
@@ -243,7 +252,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
 {
     auto& proxy = get_local_storage_proxy();
     auto& db = proxy.get_db().local();
-    auto& ss = get_storage_service().local();
+
     if (db.get_version() == their_version || !should_pull_schema_from(endpoint)) {
         mlogger.debug("Not pulling schema because versions match or shouldPullSchemaFrom returned false");
         return make_ready_future<>();
@@ -251,21 +260,23 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
 
     // Disable pulls during rolling upgrade from 1.7 to 2.0 to avoid
     // schema version inconsistency. See https://github.com/scylladb/scylla/issues/2802.
-    if (!ss.cluster_supports_schema_tables_v3()) {
+    if (!_cluster_upgraded) {
         mlogger.debug("Delaying pull with {} until cluster upgrade is complete", endpoint);
-        return ss.cluster_supports_schema_tables_v3().when_enabled().then([this, their_version, endpoint] {
+        return _wait_cluster_upgraded.wait().then([this, their_version, endpoint] {
             return maybe_schedule_schema_pull(their_version, endpoint);
-        });
+        }).finally([me = shared_from_this()] {});
     }
 
     if (db.get_version() == database::empty_version || runtime::get_uptime() < migration_delay) {
         // If we think we may be bootstrapping or have recently started, submit MigrationTask immediately
         mlogger.debug("Submitting migration task for {}", endpoint);
         return submit_migration_task(endpoint);
-    } else {
+    }
+
+    return with_gate(_background_tasks, [this, &db, endpoint] {
         // Include a delay to make sure we have a chance to apply any changes being
         // pushed out simultaneously. See CASSANDRA-5025
-        return sleep(migration_delay).then([this, &proxy, endpoint] {
+        return sleep_abortable(migration_delay, _as).then([this, &db, endpoint] {
             // grab the latest version of the schema since it may have changed again since the initial scheduling
             auto& gossiper = gms::get_local_gossiper();
             auto* ep_state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
@@ -279,7 +290,6 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
                 return make_ready_future<>();
             }
             utils::UUID current_version{value->value};
-            auto& db = proxy.get_db().local();
             if (db.get_version() == current_version) {
                 mlogger.debug("not submitting migration task for {} because our versions match", endpoint);
                 return make_ready_future<>();
@@ -287,7 +297,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
             mlogger.debug("submitting migration task for {}", endpoint);
             return submit_migration_task(endpoint);
         });
-    }
+    }).finally([me = shared_from_this()] {});
 }
 
 future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint)
