@@ -3314,6 +3314,35 @@ class scylla_features(gdb.Command):
             gdb.write('%s: %s\n' % (f['_name'], f['_enabled']))
 
 
+class scylla_gdb_func_collection_element(gdb.Function):
+    """Return the element at the specified index/key from the container.
+
+    Usage:
+    $collection_element($col, $key)
+
+    Where:
+    $col - a variable, or an expression that evaluates to a value of any
+    supported container type.
+    $key - a literal, or an expression that evaluates to an index/key type
+    appropriate for the container.
+
+    Supported container types are:
+    * std::vector<> - key must be integer
+    * std::list<> - key must be integer
+    """
+    def __init__(self):
+        super(scylla_gdb_func_collection_element, self).__init__('collection_element')
+
+    def invoke(self, collection, key):
+        typ = collection.type.strip_typedefs()
+        if typ.name.startswith('std::vector<'):
+            return std_vector(collection)[int(key)]
+        elif typ.name.startswith('std::__cxx11::list<'):
+            return std_list(collection)[int(key)]
+
+        raise ValueError("Unsupported container type: {}".format(typ.name))
+
+
 # Commands
 scylla()
 scylla_databases()
@@ -3359,3 +3388,4 @@ scylla_features()
 #   (gdb) help function $function_name
 scylla_gdb_func_dereference_smart_ptr()
 scylla_gdb_func_downcast_vptr()
+scylla_gdb_func_collection_element()
