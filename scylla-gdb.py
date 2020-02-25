@@ -562,10 +562,26 @@ def list_unordered_set(map, cache=True):
 
 
 def get_text_range():
+    try:
+        vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        reactor_backend = gdb.parse_and_eval('&seastar::local_engine->_backend')
+        known_vptr = int(reactor_backend.reinterpret_cast(vptr_type).dereference())
+    except Exception as e:
+        gdb.write("get_text_range(): Falling back to locating .rodata section because lookup to reactor backend to use as known vptr failed: {}\n".format(e))
+        known_vptr = None
+
     sections = gdb.execute('info files', False, True).split('\n')
     for line in sections:
+        if known_vptr:
+            if not " is ." in line:
+                continue
+            items = line.split()
+            start = int(items[0], 16)
+            end = int(items[2], 16)
+            if start <= known_vptr and known_vptr <= end:
+                return start, end
         # vptrs are in .rodata section
-        if line.endswith("is .rodata"):
+        elif line.endswith("is .rodata"):
             items = line.split()
             text_start = int(items[0], 16)
             text_end = int(items[2], 16)
