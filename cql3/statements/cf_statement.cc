@@ -63,7 +63,7 @@ void cf_statement::prepare_keyspace(const service::client_state& state)
     }
 }
 
-void cf_statement::prepare_keyspace(sstring keyspace)
+void cf_statement::prepare_keyspace(std::string_view keyspace)
 {
     if (!_cf_name->has_keyspace()) {
         _cf_name->set_keyspace(keyspace, true);
