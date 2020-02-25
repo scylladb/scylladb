@@ -729,6 +729,11 @@ def test_update_expression_delete_sets(test_table_s):
         UpdateExpression='DELETE a :val1',
         ExpressionAttributeValues={':val1': set(['dog'])})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': 'hi'}
+    # An empty set parameter is not allowed
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='DELETE a :val1',
+            ExpressionAttributeValues={':val1': set([])})
     # The value to be deleted must be a set of the same type - it can't
     # be a single element or anything else. If the value has the wrong type,
     # we get an error like "Invalid UpdateExpression: Incorrect operand type
@@ -865,3 +870,25 @@ def test_nested_attribute_update_bad_path_array(test_table_s):
     with pytest.raises(ClientError, match='ValidationException.*path'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[0] = :val1',
             ExpressionAttributeValues={':val1': 7})
+
+# DynamoDB Does not allow empty strings, empty byte arrays, or empty sets.
+# Trying to ask UpdateItem to put one of these in an attribute should be
+# forbidden. Empty lists and maps *are* allowed.
+# Note that in test_item.py::test_update_item_empty_attribute we checked
+# this with the AttributeUpdates syntax. Here we check the same with the
+# UpdateExpression syntax.
+def test_update_expression_empty_attribute(test_table_s):
+    p = random_string()
+    # Empty string, byte array and set are *not* allowed
+    for v in ['', bytearray('', 'utf-8'), set()]:
+        with pytest.raises(ClientError, match='ValidationException.*empty'):
+            test_table_s.update_item(Key={'p': p},
+                UpdateExpression='SET a = :v',
+                ExpressionAttributeValues={':v': v})
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # But empty lists and maps *are* allowed:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET d = :v1, e = :v2',
+        ExpressionAttributeValues={':v1': [], ':v2': {}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'd': [], 'e': {}}
+#

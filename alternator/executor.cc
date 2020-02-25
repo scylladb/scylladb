@@ -931,6 +931,35 @@ static void check_key(const rjson::value& key, const schema_ptr& schema) {
     }
 }
 
+// Verify that a value parsed from the user input is legal. In particular,
+// we check that the value is not an empty set, string or bytes - which is
+// (somewhat artificially) forbidden by DynamoDB.
+static void validate_value(const rjson::value& v, const char* caller) {
+    if (!v.IsObject() || v.MemberCount() != 1) {
+        throw api_error("ValidationException", format("{}: improperly formatted value '{}'", caller, v));
+    }
+    auto it = v.MemberBegin();
+    const std::string_view type = rjson::to_string_view(it->name);
+    if (type == "SS" || type == "BS" || type == "NS") {
+        if (!it->value.IsArray()) {
+            throw api_error("ValidationException", format("{}: improperly formatted set '{}'", caller, v));
+        }
+        if (it->value.Size() == 0) {
+            throw api_error("ValidationException", format("{}: empty set not allowed", caller));
+        }
+    } else if (type == "S" || type == "B") {
+        if (!it->value.IsString()) {
+            throw api_error("ValidationException", format("{}: improperly formatted value '{}'", caller, v));
+        }
+        if (it->value.GetStringLength() == 0) {
+            throw api_error("ValidationException", format("{}: empty string not allowed", caller));
+        }
+    } else if (type != "N" && type != "L" && type != "M" && type != "BOOL" && type != "NULL") {
+        // TODO: can do more sanity checks on the content of the above types.
+        throw api_error("ValidationException", format("{}: unknown type {} for value {}", caller, type, v));
+    }
+}
+
 // The put_or_delete_item class builds the mutations needed by the PutItem and
 // DeleteItem operations - either as stand-alone commands or part of a list
 // of commands in BatchWriteItems.
@@ -976,6 +1005,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
     _cells->reserve(item.MemberCount());
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
         bytes column_name = to_bytes(it->name.GetString());
+        validate_value(it->value, "PutItem");
         const column_definition* cdef = schema->get_column_definition(column_name);
         if (!cdef) {
             bytes value = serialize_item(it->value);
@@ -1868,6 +1898,7 @@ rjson::value calculate_value(const parsed::value& v,
                 throw api_error("ValidationException",
                         format("ExpressionAttributeValues missing entry '{}' required by {}", valref, caller));
             }
+            validate_value(value, "ExpressionAttributeValues");
             used_attribute_values.emplace(std::move(valref));
             return rjson::copy(value);
         },
@@ -2534,10 +2565,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 do_delete(std::move(column_name));
             } else if (action == "PUT") {
                 const rjson::value& value = (it->value)["Value"];
-                if (value.MemberCount() != 1) {
-                    throw api_error("ValidationException",
-                            format("Value field in AttributeUpdates must have just one item", it->name.GetString()));
-                }
+                validate_value(value, "AttributeUpdates");
                 do_update(std::move(column_name), value);
             } else {
                 // FIXME: need to support "ADD" as well.
