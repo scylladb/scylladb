@@ -433,7 +433,7 @@ server::json_parser::json_parser() : _run_parse_json_thread(async([this] {
                 return;
             }
             try {
-                _parsed_document = rjson::parse(_raw_document);
+                _parsed_document = rjson::parse_yieldable(_raw_document);
                 _current_exception = nullptr;
             } catch (...) {
                 _current_exception = std::current_exception();

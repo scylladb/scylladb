@@ -119,6 +119,8 @@ rjson::value copy(const rjson::value& value);
 // as parse() will allocate member names and values.
 // Throws rjson::error if parsing failed.
 rjson::value parse(std::string_view str);
+// Needs to be run in thread context
+rjson::value parse_yieldable(std::string_view str);
 
 // Creates a JSON value (of JSON string type) out of internal string representations.
 // The string value is copied, so str's liveness does not need to be persisted.
