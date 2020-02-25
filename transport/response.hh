@@ -76,7 +76,7 @@ public:
     placeholder<int32_t> write_int_placeholder();
     void write_long(int64_t n);
     void write_short(uint16_t n);
-    void write_string(const sstring& s);
+    void write_string(std::string_view s);
     void write_bytes_as_string(bytes_view s);
     void write_long_string(const sstring& s);
     void write_string_list(std::vector<sstring> string_list);
