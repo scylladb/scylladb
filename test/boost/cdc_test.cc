@@ -821,3 +821,31 @@ SEASTAR_THREAD_TEST_CASE(test_udt_logging) {
         });
     }, mk_cdc_test_config()).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_row_delete) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        const auto base_tbl_name = "tbl_rowdel";
+        const int pk = 1, ck = 11;
+        cquery_nofail(e, format("CREATE TABLE ks.{} (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {{'enabled':'true'}}", base_tbl_name));
+
+        cquery_nofail(e, format("UPDATE ks.{} set val=111 WHERE pk={} and ck={}", base_tbl_name, pk, ck)); // an update
+        cquery_nofail(e, format("DELETE val FROM ks.{} WHERE pk = {} AND ck = {}", base_tbl_name, pk, ck)); // also an update
+        cquery_nofail(e, format("DELETE FROM ks.{} WHERE pk = {} AND ck = {}", base_tbl_name, pk, ck)); // a row delete
+
+        const sstring query = format("SELECT operation FROM ks.{}", cdc::log_name(base_tbl_name));
+        auto msg = e.execute_cql(query).get0();
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        BOOST_REQUIRE(rows);
+        auto results = to_bytes(*rows);
+        BOOST_REQUIRE_EQUAL(results.size(), 3);  // 2 rows for update + 1 for delete
+
+        BOOST_REQUIRE_EQUAL(results[0].size(), 1);
+        BOOST_REQUIRE_EQUAL(*results[0].front(), data_value(cdc::operation::update).serialize_nonnull());
+
+        BOOST_REQUIRE_EQUAL(results[1].size(), 1);
+        BOOST_REQUIRE_EQUAL(*results[1].front(), data_value(cdc::operation::update).serialize_nonnull());
+
+        BOOST_REQUIRE_EQUAL(results[2].size(), 1);
+        BOOST_REQUIRE_EQUAL(*results[2].front(), data_value(cdc::operation::row_delete).serialize_nonnull());
+    }, mk_cdc_test_config()).get();
+}
