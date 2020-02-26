@@ -28,7 +28,7 @@ import json
 # data center. But this test framework cannot yet test that.
 def test_localnodes(scylla_only, dynamodb):
     url = dynamodb.meta.client._endpoint.host
-    response = requests.get(url + '/localnodes')
+    response = requests.get(url + '/localnodes', verify=False)
     assert response.ok
     j = json.loads(response.content.decode('utf-8'))
     assert isinstance(j, list)

@@ -22,7 +22,7 @@ import requests
 # Test that a health check can be performed with a GET packet
 def test_health_works(dynamodb):
     url = dynamodb.meta.client._endpoint.host
-    response = requests.get(url)
+    response = requests.get(url, verify=False)
     assert response.ok
     assert response.content.decode('utf-8').strip()  == 'healthy: {}'.format(url.replace('https://', '').replace('http://', ''))
 

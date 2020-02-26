@@ -53,7 +53,7 @@ def test_deeply_nested_put(dynamodb, test_table):
     # responded with a comprehensible message - it can be either
     # a success report or an error - both are acceptable as long as
     # the oversized message did not make the server crash.
-    response = requests.post(req.url, headers=req.headers, data=req.body)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
     print(response, response.text)
 
     # If the PutItem request above failed, the deeply nested item
