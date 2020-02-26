@@ -28,6 +28,7 @@
 
 #include "cdc/log.hh"
 #include "cdc/generation.hh"
+#include "cdc/split.hh"
 #include "bytes.hh"
 #include "database.hh"
 #include "db/config.hh"
@@ -925,7 +926,15 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             }
 
             return f.then([trans = std::move(trans), &mutations, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
-                mutations.push_back(trans.transform(mutations[idx], rs.get()));
+                auto& m = mutations[idx];
+                auto& s = m.schema();
+                if (should_split(m, *s)) {
+                    for (auto&& mm : split(m, s)) {
+                        mutations.push_back(trans.transform(mm, rs.get()));
+                    }
+                } else {
+                    mutations.push_back(trans.transform(m, rs.get()));
+                }
             });
         }).then([](std::vector<mutation> mutations) {
             return make_ready_future<std::tuple<std::vector<mutation>, cdc::result_callback>>(std::make_tuple(std::move(mutations), result_callback{}));
