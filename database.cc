@@ -979,7 +979,7 @@ no_such_column_family::no_such_column_family(const utils::UUID& uuid)
 {
 }
 
-no_such_column_family::no_such_column_family(const sstring& ks_name, const sstring& cf_name)
+no_such_column_family::no_such_column_family(std::string_view ks_name, std::string_view cf_name)
     : runtime_error{format("Can't find a column family {} in keyspace {}", cf_name, ks_name)}
 {
 }
