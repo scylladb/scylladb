@@ -30,8 +30,8 @@ public:
     using runtime_error::runtime_error;
 };
 
-inline bool is_class_name_qualified(const sstring& class_name) {
-    return class_name.find_last_of('.') != sstring::npos;
+inline bool is_class_name_qualified(std::string_view class_name) {
+    return class_name.find_last_of('.') != std::string_view::npos;
 }
 
 // BaseType is a base type of a type hierarchy that this registry will hold
