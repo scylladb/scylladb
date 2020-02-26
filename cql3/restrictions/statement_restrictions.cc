@@ -931,9 +931,10 @@ bool single_column_restriction::LIKE::init_matcher(const query_options& options)
     if (!pattern) {
         return false;
     }
-    if (!_matcher || pattern != _last_pattern) {
+    if (!_matcher) {
         _matcher.emplace(*pattern);
-        _last_pattern = std::move(pattern);
+    } else {
+        _matcher->reset(*pattern);
     }
     return true;
 }

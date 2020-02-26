@@ -391,7 +391,6 @@ private:
     /// constructor when the pattern is a bind marker.  Mutable because it is initialized on demand
     /// in is_satisfied_by().
     mutable std::optional<like_matcher> _matcher;
-    mutable bytes_opt _last_pattern; ///< Pattern from which _matcher was last initialized.
 public:
     LIKE(const column_definition& column_def, ::shared_ptr<term> value)
         : single_column_restriction(op::LIKE, column_def)
@@ -434,7 +433,7 @@ public:
     }
 
   private:
-    /// If necessary, reinitializes _matcher and _last_pattern.
+    /// If necessary, reinitializes _matcher.
     ///
     /// Invoked from is_satisfied_by(), so must be const.
     ///

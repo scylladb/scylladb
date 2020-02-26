@@ -91,18 +91,31 @@ wstring regex_from_pattern(bytes_view pattern) {
 } // anonymous namespace
 
 class like_matcher::impl {
+    bytes _pattern;
     boost::u32regex _re; // Performs pattern matching.
-public:
+  public:
     explicit impl(bytes_view pattern);
     bool operator()(bytes_view text) const;
+    void reset(bytes_view pattern);
+  private:
+    void init_re() {
+        _re = boost::make_u32regex(regex_from_pattern(_pattern), boost::u32regex::basic | boost::u32regex::optimize);
+    }
 };
 
-like_matcher::impl::impl(bytes_view pattern) :
-        _re(boost::make_u32regex(regex_from_pattern(pattern), boost::u32regex::basic | boost::u32regex::optimize)) {
+like_matcher::impl::impl(bytes_view pattern) : _pattern(pattern) {
+    init_re();
 }
 
 bool like_matcher::impl::operator()(bytes_view text) const {
     return boost::u32regex_match(text.begin(), text.end(), _re);
+}
+
+void like_matcher::impl::reset(bytes_view pattern) {
+    if (pattern != _pattern) {
+        _pattern = bytes(pattern);
+        init_re();
+    }
 }
 
 like_matcher::like_matcher(bytes_view pattern)
@@ -113,4 +126,8 @@ like_matcher::~like_matcher() = default;
 
 bool like_matcher::operator()(bytes_view text) const {
     return _impl->operator()(text);
+}
+
+void like_matcher::reset(bytes_view pattern) {
+    return _impl->reset(pattern);
 }
