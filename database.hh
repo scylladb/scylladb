@@ -1092,13 +1092,13 @@ class keyspace_metadata final {
     bool _durable_writes;
     user_types_metadata _user_types;
 public:
-    keyspace_metadata(sstring name,
-                 sstring strategy_name,
+    keyspace_metadata(std::string_view name,
+                 std::string_view strategy_name,
                  std::map<sstring, sstring> strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    keyspace_metadata(sstring name,
-                 sstring strategy_name,
+    keyspace_metadata(std::string_view name,
+                 std::string_view strategy_name,
                  std::map<sstring, sstring> strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs,
