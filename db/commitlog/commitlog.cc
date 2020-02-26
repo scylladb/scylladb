@@ -614,11 +614,17 @@ public:
     future<sseg_ptr> terminate() {
         assert(_closed);
         if (!std::exchange(_terminated, true)) {
-            clogger.trace("{} is closed but not terminated.", *this);
-            if (_buffer.empty()) {
-                new_buffer(0);
+            // write a terminating zero block iff we are ending (a reused)
+            // block before actual file end.
+            // we should only get here when all actual data is 
+            // already flushed (see below, close()).
+            if (size_on_disk() < _segment_manager->max_size) {
+                clogger.trace("{} is closed but not terminated.", *this);
+                if (_buffer.empty()) {
+                    new_buffer(0);
+                }
+                return cycle(true, true);
             }
-            return cycle(true, true);
         }
         return make_ready_future<sseg_ptr>(shared_from_this());
     }
