@@ -398,9 +398,8 @@ public:
     { }
 
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
-        std::vector<bytes_opt> v;
-        v.push_back(to_bytes_opt(_value->bind_and_get(options)));
-        return v;
+        // LIKE cannot provide the matching values without fetching the data first.
+        throw std::logic_error("LIKE::values() invoked");
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
