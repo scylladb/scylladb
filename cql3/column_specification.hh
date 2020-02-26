@@ -55,12 +55,7 @@ public:
     const ::shared_ptr<column_identifier> name;
     const data_type type;
 
-    column_specification(sstring ks_name_, sstring cf_name_, ::shared_ptr<column_identifier> name_, data_type type_)
-        : ks_name(std::move(ks_name_))
-        , cf_name(std::move(cf_name_))
-        , name(name_)
-        , type(type_)
-    { }
+    column_specification(std::string_view ks_name_, std::string_view cf_name_, ::shared_ptr<column_identifier> name_, data_type type_);
 
     /**
      * Returns a new <code>ColumnSpecification</code> for the same column but with the specified alias.
