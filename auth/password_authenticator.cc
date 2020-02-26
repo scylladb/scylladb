@@ -62,10 +62,7 @@
 
 namespace auth {
 
-const sstring& password_authenticator_name() {
-    static const sstring name = make_sstring(meta::AUTH_PACKAGE_NAME, "PasswordAuthenticator");
-    return name;
-}
+constexpr std::string_view password_authenticator_name("org.apache.cassandra.auth.PasswordAuthenticator");
 
 // name of the hash column.
 static const sstring SALTED_HASH = "salted_hash";
@@ -198,7 +195,7 @@ db::consistency_level password_authenticator::consistency_for_user(std::string_v
 }
 
 std::string_view password_authenticator::qualified_java_name() const {
-    return password_authenticator_name();
+    return password_authenticator_name;
 }
 
 bool password_authenticator::require_authentication() const {
