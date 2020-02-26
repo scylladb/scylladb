@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <vector>
 #include "schema_fwd.hh"
 
 class mutation;
@@ -28,5 +29,6 @@ class mutation;
 namespace cdc {
 
 bool should_split(const mutation& base_mutation, const schema& base_schema);
+std::vector<mutation> split(const mutation& base_mutation, const schema_ptr& base_schema);
 
 }
