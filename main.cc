@@ -1066,9 +1066,10 @@ int main(int ac, char** av) {
                 }).get();
             }
 
-            static sharded<alternator::executor> alternator_executor;
-            static alternator::server alternator_server(alternator_executor);
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
+                static sharded<alternator::executor> alternator_executor;
+                static alternator::server alternator_server(alternator_executor);
+
                 if (!cfg->check_experimental(db::experimental_features_t::LWT)) {
                     throw std::runtime_error("Alternator enabled, but needs experimental LWT feature which wasn't enabled");
                 }
