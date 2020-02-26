@@ -124,8 +124,8 @@ make_compaction_manager(const db::config& cfg, database_config& dbcfg) {
 }
 
 lw_shared_ptr<keyspace_metadata>
-keyspace_metadata::new_keyspace(sstring name,
-                                sstring strategy_name,
+keyspace_metadata::new_keyspace(std::string_view name,
+                                std::string_view strategy_name,
                                 std::map<sstring, sstring> options,
                                 bool durables_writes,
                                 std::vector<schema_ptr> cf_defs)

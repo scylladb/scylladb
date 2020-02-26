@@ -1104,8 +1104,8 @@ public:
                  std::vector<schema_ptr> cf_defs,
                  user_types_metadata user_types);
     static lw_shared_ptr<keyspace_metadata>
-    new_keyspace(sstring name,
-                 sstring strategy_name,
+    new_keyspace(std::string_view name,
+                 std::string_view strategy_name,
                  std::map<sstring, sstring> options,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
