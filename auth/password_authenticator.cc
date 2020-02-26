@@ -95,7 +95,7 @@ static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
 
 static const sstring& update_row_query() {
     static const sstring update_row_query = format("UPDATE {} SET {} = ? WHERE {} = ?",
-            meta::roles_table::qualified_name(),
+            meta::roles_table::qualified_name,
             SALTED_HASH,
             meta::roles_table::role_col_name);
     return update_row_query;
@@ -230,7 +230,7 @@ future<authenticated_user> password_authenticator::authenticate(
     return futurize_invoke([this, username, password] {
         static const sstring query = format("SELECT {} FROM {} WHERE {} = ?",
                 SALTED_HASH,
-                meta::roles_table::qualified_name(),
+                meta::roles_table::qualified_name,
                 meta::roles_table::role_col_name);
 
         return _qp.execute_internal(
@@ -280,7 +280,7 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
     }
 
     static const sstring query = format("UPDATE {} SET {} = ? WHERE {} = ?",
-            meta::roles_table::qualified_name(),
+            meta::roles_table::qualified_name,
             SALTED_HASH,
             meta::roles_table::role_col_name);
 
@@ -294,7 +294,7 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
 future<> password_authenticator::drop(std::string_view name) const {
     static const sstring query = format("DELETE {} FROM {} WHERE {} = ?",
             SALTED_HASH,
-            meta::roles_table::qualified_name(),
+            meta::roles_table::qualified_name,
             meta::roles_table::role_col_name);
 
     return _qp.execute_internal(
