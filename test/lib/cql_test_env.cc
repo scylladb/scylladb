@@ -222,7 +222,7 @@ public:
             .finally([qs, modif_stmt = std::move(modif_stmt)] {});
     }
 
-    virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) override {
+    virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) override {
         auto id = utils::UUID_gen::get_time_UUID();
         schema_builder builder(make_lw_shared(schema_maker(ks_name)));
         builder.set_uuid(id);

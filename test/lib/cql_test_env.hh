@@ -94,7 +94,7 @@ public:
 
     virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) = 0;
 
-    virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) = 0;
+    virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) = 0;
 
     virtual future<> require_keyspace_exists(const sstring& ks_name) = 0;
 
