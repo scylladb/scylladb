@@ -62,7 +62,7 @@ cql3::untyped_result_set_row::untyped_result_set_row(const std::vector<lw_shared
 }())
 {}
 
-bool cql3::untyped_result_set_row::has(const sstring& name) const {
+bool cql3::untyped_result_set_row::has(std::string_view name) const {
     auto i = _data.find(name);
     return i != _data.end() && i->second;
 }
