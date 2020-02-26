@@ -815,7 +815,7 @@ public:
             const mutation& m)
     {
         auto& p = m.partition();
-        if (p.partition_tombstone() || !p.row_tombstones().empty() || p.clustered_rows().empty()) {
+        if (p.clustered_rows().empty() && p.static_row().empty()) {
             return make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>();
         }
 
@@ -842,13 +842,18 @@ public:
 
         query::column_id_vector static_columns, regular_columns;
 
-        auto sk = column_kind::static_column;
-        auto rk = column_kind::regular_column;
         // TODO: this assumes all mutations touch the same set of columns. This might not be true, and we may need to do more horrible set operation here.
-        for (auto& [r, cids, kind] : { std::tie(p.static_row().get(), static_columns, sk), std::tie(p.clustered_rows().begin()->row().cells(), regular_columns, rk) }) {
-            r.for_each_cell([&](column_id id, const atomic_cell_or_collection&) {
-                auto& cdef =_schema->column_at(kind, id);
-                cids.emplace_back(id);
+        if (!p.static_row().empty()) {
+            p.static_row().get().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
+                auto& cdef =_schema->column_at(column_kind::static_column, id);
+                static_columns.emplace_back(id);
+                columns.emplace_back(&cdef);
+            });
+        }
+        if (!p.clustered_rows().empty()) {
+            p.clustered_rows().begin()->row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
+                auto& cdef =_schema->column_at(column_kind::regular_column, id);
+                regular_columns.emplace_back(id);
                 columns.emplace_back(&cdef);
             });
         }
