@@ -80,6 +80,7 @@
 #include "database.hh"
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
+#include "repair/repair.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -524,7 +525,8 @@ void storage_service::join_token_ring(int delay) {
         slogger.info("This node will not auto bootstrap because it is configured to be a seed node.");
     }
     if (should_bootstrap()) {
-        if (db::system_keyspace::bootstrap_in_progress()) {
+        bool resume_bootstrap = db::system_keyspace::bootstrap_in_progress();
+        if (resume_bootstrap) {
             slogger.warn("Detected previous bootstrap failure; retrying");
         } else {
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
@@ -577,7 +579,18 @@ void storage_service::join_token_ring(int delay) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
             set_mode(mode::JOINING, "getting bootstrap token", true);
-            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
+            if (resume_bootstrap) {
+                _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
+                if (!_bootstrap_tokens.empty()) {
+                    slogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
+                } else {
+                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
+                    slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+                }
+            } else {
+                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
+                slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
+            }
         } else {
             auto replace_addr = db().local().get_replace_address();
             if (replace_addr && *replace_addr != get_broadcast_address()) {
@@ -940,9 +953,17 @@ void storage_service::bootstrap() {
     _gossiper.check_seen_seeds();
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, _token_metadata);
-    // Does the actual streaming of newly replicated token ranges.
-    bs.bootstrap().get();
+    if (is_repair_based_node_ops_enabled()) {
+        if (db().local().is_replacing()) {
+            replace_with_repair(_db, _token_metadata).get();
+        } else {
+            bootstrap_with_repair(_db, _token_metadata, _bootstrap_tokens).get();
+        }
+    } else {
+        dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, _token_metadata);
+        // Does the actual streaming of newly replicated token ranges.
+        bs.bootstrap().get();
+    }
     slogger.info("Bootstrap completed! for the tokens {}", _bootstrap_tokens);
 }
 
@@ -2579,24 +2600,28 @@ future<> storage_service::drain() {
 future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-        auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss._abort_source,
-                ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
-        streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
-        if (source_dc != "") {
-            streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
-        }
-        auto keyspaces = make_lw_shared<std::vector<sstring>>(ss._db.local().get_non_system_keyspaces());
-        return do_for_each(*keyspaces, [keyspaces, streamer, &ss] (sstring& keyspace_name) {
-            return streamer->add_ranges(keyspace_name, ss.get_local_ranges(keyspace_name));
-        }).then([streamer] {
-            return streamer->stream_async().then([streamer] {
-                slogger.info("Streaming for rebuild successful");
-            }).handle_exception([] (auto ep) {
-                // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-                slogger.warn("Error while rebuilding node: {}", std::current_exception());
-                return make_exception_future<>(std::move(ep));
+        if (ss.is_repair_based_node_ops_enabled()) {
+            return rebuild_with_repair(ss._db, ss._token_metadata, std::move(source_dc));
+        } else {
+            auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss._abort_source,
+                    ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
+            streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
+            if (source_dc != "") {
+                streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+            }
+            auto keyspaces = make_lw_shared<std::vector<sstring>>(ss._db.local().get_non_system_keyspaces());
+            return do_for_each(*keyspaces, [keyspaces, streamer, &ss] (sstring& keyspace_name) {
+                return streamer->add_ranges(keyspace_name, ss.get_local_ranges(keyspace_name));
+            }).then([streamer] {
+                return streamer->stream_async().then([streamer] {
+                    slogger.info("Streaming for rebuild successful");
+                }).handle_exception([] (auto ep) {
+                    // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+                    slogger.warn("Error while rebuilding node: {}", std::current_exception());
+                    return make_exception_future<>(std::move(ep));
+                });
             });
-        });
+        }
     });
 }
 
@@ -2684,44 +2709,54 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 
 // Runs inside seastar::async context
 void storage_service::unbootstrap() {
-    std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
-
-    auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-    for (const auto& keyspace_name : non_system_keyspaces) {
-        auto ranges_mm = get_changed_ranges_for_leaving(keyspace_name, get_broadcast_address());
-        if (slogger.is_enabled(logging::log_level::debug)) {
-            std::vector<range<token>> ranges;
-            for (auto& x : ranges_mm) {
-                ranges.push_back(x.first);
-            }
-            slogger.debug("Ranges needing transfer for keyspace={} are [{}]", keyspace_name, ranges);
-        }
-        ranges_to_stream.emplace(keyspace_name, std::move(ranges_mm));
-    }
-
-    set_mode(mode::LEAVING, "replaying batch log and streaming data to other nodes", true);
-
-    auto stream_success = stream_ranges(ranges_to_stream);
-    // Wait for batch log to complete before streaming hints.
-    slogger.debug("waiting for batch log processing.");
-    // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
     db::get_local_batchlog_manager().do_batch_log_replay().get();
+    if (is_repair_based_node_ops_enabled()) {
+        decommission_with_repair(_db, _token_metadata).get();
+    } else {
+        std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
-    set_mode(mode::LEAVING, "streaming hints to other nodes", true);
+        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+        for (const auto& keyspace_name : non_system_keyspaces) {
+            auto ranges_mm = get_changed_ranges_for_leaving(keyspace_name, get_broadcast_address());
+            if (slogger.is_enabled(logging::log_level::debug)) {
+                std::vector<range<token>> ranges;
+                for (auto& x : ranges_mm) {
+                    ranges.push_back(x.first);
+                }
+                slogger.debug("Ranges needing transfer for keyspace={} are [{}]", keyspace_name, ranges);
+            }
+            ranges_to_stream.emplace(keyspace_name, std::move(ranges_mm));
+        }
 
-    // wait for the transfer runnables to signal the latch.
-    slogger.debug("waiting for stream acks.");
-    try {
-        stream_success.get();
-    } catch (...) {
-        slogger.warn("unbootstrap fails to stream : {}", std::current_exception());
-        throw;
+        set_mode(mode::LEAVING, "replaying batch log and streaming data to other nodes", true);
+
+        auto stream_success = stream_ranges(ranges_to_stream);
+        // Wait for batch log to complete before streaming hints.
+        slogger.debug("waiting for batch log processing.");
+        // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
+        db::get_local_batchlog_manager().do_batch_log_replay().get();
+
+        set_mode(mode::LEAVING, "streaming hints to other nodes", true);
+
+        // wait for the transfer runnables to signal the latch.
+        slogger.debug("waiting for stream acks.");
+        try {
+            stream_success.get();
+        } catch (...) {
+            slogger.warn("unbootstrap fails to stream : {}", std::current_exception());
+            throw;
+        }
+        slogger.debug("stream acks all received.");
     }
-    slogger.debug("stream acks all received.");
     leave_ring();
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
+    if (is_repair_based_node_ops_enabled()) {
+        return removenode_with_repair(_db, _token_metadata, endpoint).finally([this, notify_endpoint] () {
+            return send_replication_notification(notify_endpoint);
+        });
+    }
   return seastar::async([this, endpoint, notify_endpoint] {
     auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     auto my_address = get_broadcast_address();
@@ -3490,6 +3525,10 @@ future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
                 keyspace, is_bootstrap_mode, pending_ranges);
         return !is_bootstrap_mode && pending_ranges == 0;
     });
+}
+
+bool storage_service::is_repair_based_node_ops_enabled() {
+    return _db.local().get_config().enable_repair_based_node_ops();
 }
 
 } // namespace service
