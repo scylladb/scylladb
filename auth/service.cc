@@ -379,7 +379,7 @@ bool is_enforcing(const service& ser)  {
     const bool enforcing_authorizer = ser.underlying_authorizer().qualified_java_name() != allow_all_authorizer_name();
 
     const bool enforcing_authenticator = ser.underlying_authenticator().qualified_java_name()
-            != allow_all_authenticator_name();
+            != allow_all_authenticator_name;
 
     return enforcing_authorizer || enforcing_authenticator;
 }

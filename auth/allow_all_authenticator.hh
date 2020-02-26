@@ -37,7 +37,7 @@ class migration_manager;
 
 namespace auth {
 
-const sstring& allow_all_authenticator_name();
+extern const std::string_view allow_all_authenticator_name;
 
 class allow_all_authenticator final : public authenticator {
 public:
@@ -53,7 +53,7 @@ public:
     }
 
     virtual std::string_view qualified_java_name() const override {
-        return allow_all_authenticator_name();
+        return allow_all_authenticator_name;
     }
 
     virtual bool require_authentication() const override {
