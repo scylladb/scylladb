@@ -146,7 +146,7 @@ static std::vector<double> test_counter_update(cql_test_env& env, test_config& c
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
 
-schema_ptr make_counter_schema(const sstring& ks_name) {
+static schema_ptr make_counter_schema(std::string_view ks_name) {
     return schema_builder(ks_name, "cf")
             .with_column("KEY", bytes_type, column_kind::partition_key)
             .with_column("C0", counter_type)
