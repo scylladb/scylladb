@@ -839,12 +839,12 @@ bool thrift_schema::is_dynamic() const {
     return _is_dynamic;
 }
 
-schema_builder::schema_builder(const sstring& ks_name, const sstring& cf_name,
+schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
         std::optional<utils::UUID> id, data_type rct)
         : _raw(id ? *id : utils::UUID_gen::get_time_UUID())
 {
-    _raw._ks_name = ks_name;
-    _raw._cf_name = cf_name;
+    _raw._ks_name = sstring(ks_name);
+    _raw._cf_name = sstring(cf_name);
     _raw._regular_column_name_type = rct;
 }
 

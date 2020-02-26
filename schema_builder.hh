@@ -35,7 +35,7 @@ private:
     std::optional<raw_view_info> _view_info;
     schema_builder(const schema::raw_schema&);
 public:
-    schema_builder(const sstring& ks_name, const sstring& cf_name,
+    schema_builder(std::string_view ks_name, std::string_view cf_name,
             std::optional<utils::UUID> = { },
             data_type regular_column_name_type = utf8_type);
     schema_builder(const schema_ptr);
