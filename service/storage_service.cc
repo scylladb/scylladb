@@ -1497,7 +1497,7 @@ future<> storage_service::stop_transport() {
         return seastar::async([&ss] {
             slogger.info("Stop transport: starts");
 
-            ss.shutdown_client_servers().get();
+            ss.shutdown_client_servers();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
             gms::stop_gossiping().get();
@@ -2379,7 +2379,7 @@ future<> storage_service::decommission() {
             ss.unbootstrap();
             slogger.info("DECOMMISSIONING: unbootstrap done");
 
-            ss.shutdown_client_servers().get();
+            ss.shutdown_client_servers();
             slogger.info("DECOMMISSIONING: shutdown rpc and cql server done");
 
             db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
@@ -2545,7 +2545,7 @@ future<> storage_service::drain() {
             drain_in_progress = p.get_future();
 
             ss.set_mode(mode::DRAINING, "starting drain process", true);
-            ss.shutdown_client_servers().get();
+            ss.shutdown_client_servers();
             gms::stop_gossiping().get();
 
             ss.set_mode(mode::DRAINING, "shutting down messaging_service", false);
@@ -2994,8 +2994,20 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
     });
 }
 
-future<> storage_service::shutdown_client_servers() {
-    return do_stop_rpc_server().then([this] { return do_stop_native_transport(); });
+void storage_service::shutdown_client_servers() {
+    do_stop_rpc_server().get();
+    do_stop_native_transport().get();
+    for (auto& [name, hook] : _client_shutdown_hooks) {
+        slogger.info("Shutting down {}", name);
+        try {
+            hook();
+        } catch (...) {
+            slogger.error("Unexpected error shutting down {}: {}",
+                    name, std::current_exception());
+            throw;
+        }
+        slogger.info("Shutting down {} was successful", name);
+    }
 }
 
 std::unordered_multimap<inet_address, dht::token_range>
