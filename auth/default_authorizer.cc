@@ -66,7 +66,7 @@ extern "C" {
 namespace auth {
 
 const sstring& default_authorizer_name() {
-    static const sstring name = meta::AUTH_PACKAGE_NAME + "CassandraAuthorizer";
+    static const sstring name = make_sstring(meta::AUTH_PACKAGE_NAME, "CassandraAuthorizer");
     return name;
 }
 

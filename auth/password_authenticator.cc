@@ -63,14 +63,14 @@
 namespace auth {
 
 const sstring& password_authenticator_name() {
-    static const sstring name = meta::AUTH_PACKAGE_NAME + "PasswordAuthenticator";
+    static const sstring name = make_sstring(meta::AUTH_PACKAGE_NAME, "PasswordAuthenticator");
     return name;
 }
 
 // name of the hash column.
 static const sstring SALTED_HASH = "salted_hash";
-static const sstring DEFAULT_USER_NAME = meta::DEFAULT_SUPERUSER_NAME;
-static const sstring DEFAULT_USER_PASSWORD = meta::DEFAULT_SUPERUSER_NAME;
+static const sstring DEFAULT_USER_NAME = sstring(meta::DEFAULT_SUPERUSER_NAME);
+static const sstring DEFAULT_USER_PASSWORD = sstring(meta::DEFAULT_SUPERUSER_NAME);
 
 static logging::logger plogger("password_authenticator");
 
