@@ -65,9 +65,8 @@ extern "C" {
 
 namespace auth {
 
-const sstring& default_authorizer_name() {
-    static const sstring name = make_sstring(meta::AUTH_PACKAGE_NAME, "CassandraAuthorizer");
-    return name;
+std::string_view default_authorizer::qualified_java_name() const {
+    return "org.apache.cassandra.auth.CassandraAuthorizer";
 }
 
 static constexpr std::string_view ROLE_NAME = "role";
