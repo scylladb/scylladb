@@ -857,7 +857,7 @@ int main(int ac, char** av) {
 
             db::system_keyspace::minimal_setup(db, qp);
 
-            db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service);
+            db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
 
             sst_format_selector.start().get();
             auto stop_format_selector = defer_verbose_shutdown("sstables format selector", [&sst_format_selector] {

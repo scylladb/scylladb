@@ -124,15 +124,10 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
     commit_error.connect([this] { isolate_on_commit_error(); });
-
-    if (for_testing) {
-        _sstables_format = sstables::sstable_version_types::mc;
-        _feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
-    }
 }
 
 void storage_service::enable_all_features() {
-    auto features = get_config_supported_features_set();
+    auto features = get_known_features_set();
     _feature_service.enable(features);
 }
 

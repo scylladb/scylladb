@@ -533,6 +533,11 @@ database::setup_metrics() {
     }
 }
 
+void database::set_format(sstables::sstable_version_types format) {
+    get_user_sstables_manager().set_format(format);
+    get_system_sstables_manager().set_format(format);
+}
+
 database::~database() {
     _read_concurrency_sem.clear_inactive_reads();
     _streaming_concurrency_sem.clear_inactive_reads();

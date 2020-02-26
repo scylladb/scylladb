@@ -1581,6 +1581,8 @@ public:
         return *_system_sstables_manager;
     }
 
+    void set_format(sstables::sstable_version_types format);
+
     future<> flush_all_memtables();
 
     // See #937. Truncation now requires a callback to get a time stamp

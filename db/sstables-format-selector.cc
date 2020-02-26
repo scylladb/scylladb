@@ -21,7 +21,7 @@
  */
 
 #include "sstables-format-selector.hh"
-#include "service/storage_service.hh"
+#include "database.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "gms/versioned_value.hh"
@@ -39,9 +39,10 @@ void feature_enabled_listener::on_enabled() {
     }
 }
 
-sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f)
+sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<database>& db)
     : _gossiper(g)
     , _features(f)
+    , _db(db)
     , _mc_feature_listener(*this, sstables::sstable_version_types::mc) {
 }
 
@@ -92,10 +93,10 @@ future<> sstables_format_selector::read_sstables_format() {
 
 future<> sstables_format_selector::select_format(sstables::sstable_version_types format) {
     _selected_format = format;
-    return service::get_storage_service().invoke_on_all([format] (service::storage_service& s) {
-        s._sstables_format = format;
-        if (sstables::is_later(format, sstables::sstable_version_types::la)) {
-            s._feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
+    return _db.invoke_on_all([this] (database& db) {
+        db.set_format(_selected_format);
+        if (sstables::is_later(_selected_format, sstables::sstable_version_types::la)) {
+            _features.local().support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
         }
     });
 }

@@ -63,7 +63,6 @@
 #include "gms/feature_service.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
-#include "db/sstables-format-selector.hh"
 #include "sstables/version.hh"
 #include "cdc/metadata.hh"
 
@@ -268,7 +267,6 @@ public:
 private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
-    friend class db::sstables_format_selector;
     /* Used for tracking drain progress */
 public:
     struct drain_progress {
@@ -297,15 +295,7 @@ private:
      */
     std::optional<db_clock::time_point> _cdc_streams_ts;
 
-    // _sstables_format is the format used for writing new sstables.
-    // Here we set its default value, but if we discover that all the nodes
-    // in the cluster support a newer format, _sstables_format will be set to
-    // that format. read_sstables_format() also overwrites _sstables_format
-    // if an sstable format was chosen earlier (and this choice was persisted
-    // in the system table).
-    sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::la;
 public:
-    sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();
 
     /* Broadcasts the chosen tokens through gossip,
