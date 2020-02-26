@@ -237,6 +237,7 @@ using operation_native_type = std::underlying_type_t<operation>;
 using column_op_native_type = std::underlying_type_t<column_op>;
 
 static const sstring cdc_log_suffix = "_scylla_cdc_log";
+static const sstring cdc_meta_column_prefix = "cdc$";
 
 static bool is_log_name(const std::string_view& table_name) {
     return boost::ends_with(table_name, cdc_log_suffix);
@@ -255,15 +256,31 @@ sstring log_name(const sstring& table_name) {
     return table_name + cdc_log_suffix;
 }
 
+sstring log_data_column_name(std::string_view column_name) {
+    return sstring(column_name);
+}
+
+seastar::sstring log_meta_column_name(std::string_view column_name) {
+    return cdc_meta_column_prefix + sstring(column_name);
+}
+
+bytes log_data_column_name_bytes(const bytes& column_name) {
+    return column_name;
+}
+
+bytes log_meta_column_name_bytes(const bytes& column_name) {
+    return to_bytes(cdc_meta_column_prefix) + column_name;
+}
+
 static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> uuid) {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.set_comment(sprint("CDC log for %s.%s", s.ks_name(), s.cf_name()));
-    b.with_column("stream_id_1", long_type, column_kind::partition_key);
-    b.with_column("stream_id_2", long_type, column_kind::partition_key);
-    b.with_column("time", timeuuid_type, column_kind::clustering_key);
-    b.with_column("batch_seq_no", int32_type, column_kind::clustering_key);
-    b.with_column("operation", data_type_for<operation_native_type>());
-    b.with_column("ttl", long_type);
+    b.with_column(log_meta_column_name_bytes("stream_id_1"), long_type, column_kind::partition_key);
+    b.with_column(log_meta_column_name_bytes("stream_id_2"), long_type, column_kind::partition_key);
+    b.with_column(log_meta_column_name_bytes("time"), timeuuid_type, column_kind::clustering_key);
+    b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
+    b.with_column(log_meta_column_name_bytes("operation"), data_type_for<operation_native_type>());
+    b.with_column(log_meta_column_name_bytes("ttl"), long_type);
     auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
         for (const auto& column : columns) {
             auto type = column.type;
@@ -292,7 +309,7 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
 
                 type = tuple_type_impl::get_instance({ /* op */ data_type_for<column_op_native_type>(), /* value */ type->freeze()});
             }
-            b.with_column("_" + column.name(), type);
+            b.with_column(log_data_column_name_bytes(column.name()), type);
         }
     };
     add_columns(s.partition_key_columns());
@@ -457,7 +474,7 @@ private:
         size_t pos = 0;
         for (const auto& column : _schema->partition_key_columns()) {
             assert (pos < pk_value.size());
-            auto cdef = m.schema()->get_column_definition(to_bytes("_" + column.name()));
+            auto cdef = m.schema()->get_column_definition(log_data_column_name_bytes(column.name()));
             auto value = atomic_cell::make_live(*column.type,
                                                 ts,
                                                 bytes_view(pk_value[pos]),
@@ -481,8 +498,8 @@ public:
         : _ctx(ctx)
         , _schema(std::move(s))
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
-        , _op_col(*_log_schema->get_column_definition(to_bytes("operation")))
-        , _ttl_col(*_log_schema->get_column_definition(to_bytes("ttl")))
+        , _op_col(*_log_schema->get_column_definition(log_meta_column_name_bytes("operation")))
+        , _ttl_col(*_log_schema->get_column_definition(log_meta_column_name_bytes("ttl")))
     {
         if (_schema->cdc_options().ttl()) {
             _cdc_ttl_opt = std::chrono::seconds(_schema->cdc_options().ttl());
@@ -513,7 +530,7 @@ public:
                         if (pos >= exploded.size()) {
                             break;
                         }
-                        auto cdef = _log_schema->get_column_definition(to_bytes("_" + column.name()));
+                        auto cdef = _log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
                         auto value = atomic_cell::make_live(*column.type,
                                                             ts,
                                                             bytes_view(exploded[pos]),
@@ -576,7 +593,7 @@ public:
                 size_t pos = 0;
                 for (const auto& column : _schema->clustering_key_columns()) {
                     assert (pos < ck_value.size());
-                    auto cdef = _log_schema->get_column_definition(to_bytes("_" + column.name()));
+                    auto cdef = _log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
                     res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
 
                     if (pirow) {
@@ -593,7 +610,7 @@ public:
                 auto process_cells = [&](const row& r, column_kind ckind) {
                     r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
                         auto& cdef = _schema->column_at(ckind, id);
-                        auto* dst = _log_schema->get_column_definition(to_bytes("_" + cdef.name()));
+                        auto* dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
                         auto has_pirow = pirow && pirow->has(cdef.name_as_text());
                         auto op = column_op::del;
 

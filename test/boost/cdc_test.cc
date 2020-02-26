@@ -225,14 +225,27 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
         e.require_table_exists("ks", "tbl").get();
 
         // Allow MODIFY, SELECT, ALTER
-        e.execute_cql("INSERT INTO ks.tbl_scylla_cdc_log (stream_id_1, stream_id_2, time, batch_seq_no) VALUES (0, 0, now(), 0)").get();
-        e.execute_cql("UPDATE ks.tbl_scylla_cdc_log SET ttl = 100 WHERE stream_id_1 = 0 AND stream_id_2 = 0 AND time = now() AND batch_seq_no = 0").get();
-        e.execute_cql("DELETE FROM ks.tbl_scylla_cdc_log WHERE stream_id_1 = 0 AND stream_id_2 = 0 AND time = now() AND batch_seq_no = 0").get();
-        e.execute_cql("SELECT * FROM ks.tbl_scylla_cdc_log").get();
-        e.execute_cql("ALTER TABLE ks.tbl_scylla_cdc_log ALTER ttl TYPE blob").get();
+        auto log_table = "ks." + cdc::log_name("tbl");
+        auto stream_id_1 = cdc::log_meta_column_name("stream_id_1");
+        auto stream_id_2 = cdc::log_meta_column_name("stream_id_2");
+        auto time = cdc::log_meta_column_name("time");
+        auto batch_seq_no = cdc::log_meta_column_name("batch_seq_no");
+        auto ttl = cdc::log_meta_column_name("ttl");
+
+        e.execute_cql(format("INSERT INTO {} (\"{}\", \"{}\", \"{}\", \"{}\") VALUES (0, 0, now(), 0)",
+            log_table, stream_id_1, stream_id_2, time, batch_seq_no        
+        )).get();
+        e.execute_cql(format("UPDATE {} SET \"{}\"= 100 WHERE \"{}\" = 0 AND \"{}\" = 0 AND \"{}\" = now() AND \"{}\" = 0",
+            log_table, ttl, stream_id_1, stream_id_2, time, batch_seq_no
+        )).get();
+        e.execute_cql(format("DELETE FROM {} WHERE \"{}\" = 0 AND \"{}\" = 0 AND \"{}\" = now() AND \"{}\" = 0",
+            log_table, stream_id_1, stream_id_2, time, batch_seq_no
+        )).get();
+        e.execute_cql("SELECT * FROM " + log_table).get();
+        e.execute_cql("ALTER TABLE " + log_table + " ALTER \"" + ttl + "\" TYPE blob").get();
 
         // Disallow DROP
-        assert_unauthorized("DROP TABLE ks.tbl_scylla_cdc_log");
+        assert_unauthorized("DROP TABLE " + log_table);
     }, mk_cdc_test_config()).get();
 }
 
@@ -299,7 +312,7 @@ static std::vector<std::vector<bytes_opt>> to_bytes_filtered(const cql_transport
     const auto op_type = data_type_for<std::underlying_type_t<cdc::operation>>();
 
     auto results = to_bytes(rows);
-    auto op_index = column_index(rows, "operation");
+    auto op_index = column_index(rows, cdc::log_meta_column_name("operation"));
     auto op_bytes = op_type->decompose(std::underlying_type_t<cdc::operation>(op));
 
     results.erase(std::remove_if(results.begin(), results.end(), [&](const std::vector<bytes_opt>& bo) {
@@ -310,7 +323,7 @@ static std::vector<std::vector<bytes_opt>> to_bytes_filtered(const cql_transport
 }
 
 static void sort_by_time(const cql_transport::messages::result_message::rows& rows, std::vector<std::vector<bytes_opt>>& results) {
-    auto time_index = column_index(rows, "time");
+    auto time_index = column_index(rows, cdc::log_meta_column_name("time"));
     std::sort(results.begin(), results.end(),
             [time_index] (const std::vector<bytes_opt>& a, const std::vector<bytes_opt>& b) {
                 return timeuuid_type->as_less_comparator()(*a[time_index], *b[time_index]);
@@ -339,7 +352,15 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         cquery_nofail(e, "UPDATE ks.tbl SET val = 555 WHERE pk = 2 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
         cquery_nofail(e, "UPDATE ks.tbl USING TTL 3600 SET val = 444 WHERE pk = 3 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11");
-        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_pk2\", \"_ck\", \"_ck2\", operation, ttl FROM ks.{}", cdc::log_name("tbl"))).get0();
+        auto msg = e.execute_cql(format("SELECT \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\" FROM ks.{}",
+            cdc::log_meta_column_name("time"),
+            cdc::log_data_column_name("pk"),
+            cdc::log_data_column_name("pk2"),
+            cdc::log_data_column_name("ck"),
+            cdc::log_data_column_name("ck2"),
+            cdc::log_meta_column_name("operation"),
+            cdc::log_meta_column_name("ttl"),
+            cdc::log_name("tbl"))).get0();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
 
@@ -414,9 +435,9 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
 
             auto first = to_bytes_filtered(*rows, cdc::operation::update);
 
-            auto ck2_index = column_index(*rows, "_ck2");
-            auto val_index = column_index(*rows, "_val");
-            auto ttl_index = column_index(*rows, "ttl");
+            auto ck2_index = column_index(*rows, cdc::log_data_column_name("ck2"));
+            auto val_index = column_index(*rows, cdc::log_data_column_name("val"));
+            auto ttl_index = column_index(*rows, cdc::log_meta_column_name("ttl"));
 
             auto val_type = tuple_type_impl::get_instance({ data_type_for<std::underlying_type_t<cdc::column_op>>(), int32_type, long_type});
             auto val = *first[0][val_index];
@@ -473,16 +494,21 @@ SEASTAR_THREAD_TEST_CASE(test_range_deletion) {
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 123 AND ck > 1 AND ck < 23");
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 123 AND ck >= 4 AND ck <= 56");
 
-        auto msg = e.execute_cql(format("SELECT time, \"_pk\", \"_ck\", operation FROM ks.{}", cdc::log_name("tbl"))).get0();
+        auto msg = e.execute_cql(format("SELECT \"{}\", \"{}\", \"{}\", \"{}\" FROM ks.{}", 
+            cdc::log_meta_column_name("time"),
+            cdc::log_data_column_name("pk"),
+            cdc::log_data_column_name("ck"),
+            cdc::log_meta_column_name("operation"),
+            cdc::log_name("tbl"))).get0();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
 
         auto results = to_bytes(*rows);
         sort_by_time(*rows, results);
 
-        auto ck_index = column_index(*rows, "_ck");
+        auto ck_index = column_index(*rows, cdc::log_data_column_name("ck"));
         auto ck_type = int32_type;
-        auto op_index = column_index(*rows, "operation");
+        auto op_index = column_index(*rows, cdc::log_meta_column_name("operation"));
         auto op_type = data_type_for<std::underlying_type_t<cdc::operation>>();
 
         size_t row_idx = 0;
@@ -522,7 +548,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
         auto inserts = to_bytes_filtered(*rows, cdc::operation::insert);
         sort_by_time(*rows, inserts);
 
-        auto kokos_index = column_index(*rows, "_kokos");
+        auto kokos_index = column_index(*rows, cdc::log_data_column_name("kokos"));
         auto kokos_type = tuple_type_impl::get_instance({ data_type_for<std::underlying_type_t<cdc::column_op>>(), utf8_type, long_type});
         auto kokos = *inserts.back()[kokos_index];
 
@@ -638,7 +664,7 @@ static void test_collection(cql_test_env& e, data_type val_type, std::vector<col
         sort_by_time(*rows, updates);
         sort_by_time(*rows, pre_image);
 
-        auto val_index = column_index(*rows, "_val");
+        auto val_index = column_index(*rows, cdc::log_data_column_name("val"));
 
         if (t.prev.is_null()) {
             BOOST_REQUIRE(pre_image.empty());
