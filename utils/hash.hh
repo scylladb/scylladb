@@ -57,6 +57,9 @@ private:
         }
     };
 public:
+    // All the operator() implementations are templates, so this is transparent.
+    using is_transparent = void;
+
     template<typename T1, typename T2>
     size_t operator()(const std::pair<T1, T2>& p) const {
         return hash_combine(hash(p.first), hash(p.second));
