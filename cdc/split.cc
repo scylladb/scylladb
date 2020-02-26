@@ -24,6 +24,205 @@
 
 #include "split.hh"
 
+struct atomic_column_update {
+    column_id id;
+    atomic_cell cell;
+};
+
+// see the comment inside `clustered_row_insert` for motivation for separating
+// nonatomic deletions from nonatomic updates
+struct nonatomic_column_deletion {
+    column_id id;
+    tombstone t;
+};
+
+struct nonatomic_column_update {
+    column_id id;
+    utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
+};
+
+struct static_row_update {
+    gc_clock::duration ttl;
+    std::vector<atomic_column_update> atomic_entries;
+    std::vector<nonatomic_column_deletion> nonatomic_deletions;
+    std::vector<nonatomic_column_update> nonatomic_updates;
+};
+
+struct clustered_row_insert {
+    gc_clock::duration ttl;
+    clustering_key key;
+    row_marker marker;
+    std::vector<atomic_column_update> atomic_entries;
+    std::vector<nonatomic_column_deletion> nonatomic_deletions;
+    // INSERTs can't express updates of individual cells inside a non-atomic
+    // (without deleting the entire field first), so no `nonatomic_updates` field
+    // overwriting a nonatomic column inside an INSERT will be split into two changes:
+    // one with a nonatomic deletion, and one with a nonatomic update
+};
+
+struct clustered_row_update {
+    gc_clock::duration ttl;
+    clustering_key key;
+    std::vector<atomic_column_update> atomic_entries;
+    std::vector<nonatomic_column_deletion> nonatomic_deletions;
+    std::vector<nonatomic_column_update> nonatomic_updates;
+};
+
+struct clustered_row_deletion {
+    clustering_key key;
+    tombstone t;
+};
+
+struct clustered_range_deletion {
+    range_tombstone rt;
+};
+
+struct partition_deletion {
+    tombstone t;
+};
+
+struct batch {
+    std::vector<static_row_update> static_updates;
+    std::vector<clustered_row_insert> clustered_inserts;
+    std::vector<clustered_row_update> clustered_updates;
+    std::vector<clustered_row_deletion> clustered_row_deletions;
+    std::vector<clustered_range_deletion> clustered_range_deletions;
+    std::optional<partition_deletion> partition_deletions;
+};
+
+using set_of_changes = std::map<api::timestamp_type, batch>;
+
+struct row_update {
+    std::vector<atomic_column_update> atomic_entries;
+    std::vector<nonatomic_column_deletion> nonatomic_deletions;
+    std::vector<nonatomic_column_update> nonatomic_updates;
+};
+
+static
+std::map<std::pair<api::timestamp_type, gc_clock::duration>, row_update>
+extract_row_updates(const row& r, column_kind ckind, const schema& schema) {
+    std::map<std::pair<api::timestamp_type, gc_clock::duration>, row_update> result;
+    r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        auto& cdef = schema.column_at(ckind, id);
+        if (cdef.is_atomic()) {
+            auto view = cell.as_atomic_cell(cdef);
+            auto timestamp_and_ttl = std::pair(
+                    view.timestamp(),
+                    view.is_live_and_has_ttl() ? view.ttl() : gc_clock::duration(0)
+                );
+            result[timestamp_and_ttl].atomic_entries.push_back({id, atomic_cell(*cdef.type, view)});
+            return;
+        }
+
+        cell.as_collection_mutation().with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
+            auto desc = mview.materialize(*cdef.type);
+            for (auto& [k, v]: desc.cells) {
+                auto timestamp_and_ttl = std::pair(
+                        v.timestamp(),
+                        v.is_live_and_has_ttl() ? v.ttl() : gc_clock::duration(0)
+                    );
+                auto& updates = result[timestamp_and_ttl].nonatomic_updates;
+                if (updates.empty() || updates.back().id != id) {
+                    updates.push_back({id, {}});
+                }
+                updates.back().cells.push_back({std::move(k), std::move(v)});
+            }
+
+            if (desc.tomb) {
+                auto timestamp_and_ttl = std::pair(desc.tomb.timestamp, gc_clock::duration(0));
+                result[timestamp_and_ttl].nonatomic_deletions.push_back({id, desc.tomb});
+            }
+        });
+    });
+    return result;
+};
+
+set_of_changes extract_changes(const mutation& base_mutation, const schema& base_schema) {
+    set_of_changes res;
+    auto& p = base_mutation.partition();
+
+    auto sr_updates = extract_row_updates(p.static_row().get(), column_kind::static_column, base_schema);
+    for (auto& [k, up]: sr_updates) {
+        auto [timestamp, ttl] = k;
+        res[timestamp].static_updates.push_back({
+                ttl,
+                std::move(up.atomic_entries),
+                std::move(up.nonatomic_deletions),
+                std::move(up.nonatomic_updates)
+            });
+    }
+
+    for (const rows_entry& cr : p.clustered_rows()) {
+        auto cr_updates = extract_row_updates(cr.row().cells(), column_kind::regular_column, base_schema);
+
+        const auto& marker = cr.row().marker();
+        auto marker_timestamp = marker.timestamp();
+        auto marker_ttl = marker.is_expiring() ? marker.ttl() : gc_clock::duration(0);
+        if (marker.is_live()) {
+            // make sure that an entry corresponding to the row marker's timestamp and ttl is in the map
+            (void)cr_updates[std::pair(marker_timestamp, marker_ttl)];
+        }
+
+        auto is_insert = [&] (api::timestamp_type timestamp, gc_clock::duration ttl) {
+            if (!marker.is_live()) {
+                return false;
+            }
+
+            return timestamp == marker_timestamp && ttl == marker_ttl;
+        };
+
+        for (auto& [k, up]: cr_updates) {
+            auto [timestamp, ttl] = k;
+
+            if (is_insert(timestamp, ttl)) {
+                res[timestamp].clustered_inserts.push_back({
+                        ttl,
+                        cr.key(),
+                        marker,
+                        std::move(up.atomic_entries),
+                        std::move(up.nonatomic_deletions)
+                    });
+                if (!up.nonatomic_updates.empty()) {
+                    // nonatomic updates cannot be expressed with an INSERT.
+                    res[timestamp].clustered_updates.push_back({
+                            ttl,
+                            cr.key(),
+                            {},
+                            {},
+                            std::move(up.nonatomic_updates)
+                        });
+                }
+            } else {
+                res[timestamp].clustered_updates.push_back({
+                        ttl,
+                        cr.key(),
+                        std::move(up.atomic_entries),
+                        std::move(up.nonatomic_deletions),
+                        std::move(up.nonatomic_updates)
+                    });
+            }
+        }
+
+        auto row_tomb = cr.row().deleted_at().regular();
+        if (row_tomb) {
+            res[row_tomb.timestamp].clustered_row_deletions.push_back({cr.key(), row_tomb});
+        }
+    }
+
+    for (const auto& rt: p.row_tombstones()) {
+        if (rt.tomb.timestamp != api::missing_timestamp) {
+            res[rt.tomb.timestamp].clustered_range_deletions.push_back({rt});
+        }
+    }
+
+    auto partition_tomb_timestamp = p.partition_tombstone().timestamp;
+    if (partition_tomb_timestamp != api::missing_timestamp) {
+        res[partition_tomb_timestamp].partition_deletions = {p.partition_tombstone()};
+    }
+
+    return res;
+}
+
 namespace cdc {
 
 bool should_split(const mutation& base_mutation, const schema& base_schema) {
