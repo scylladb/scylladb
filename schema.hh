@@ -686,14 +686,14 @@ private:
 public:
     // deprecated, use schema_builder.
     schema(std::optional<utils::UUID> id,
-        sstring ks_name,
-        sstring cf_name,
+        std::string_view ks_name,
+        std::string_view cf_name,
         std::vector<column> partition_key,
         std::vector<column> clustering_key,
         std::vector<column> regular_columns,
         std::vector<column> static_columns,
         data_type regular_column_name_type,
-        sstring comment = {});
+        std::string_view comment = {});
     schema(const schema&);
     ~schema();
     table_schema_version version() const {

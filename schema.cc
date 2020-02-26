@@ -349,20 +349,20 @@ schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info
 }
 
 schema::schema(std::optional<utils::UUID> id,
-    sstring ks_name,
-    sstring cf_name,
+    std::string_view ks_name,
+    std::string_view cf_name,
     std::vector<column> partition_key,
     std::vector<column> clustering_key,
     std::vector<column> regular_columns,
     std::vector<column> static_columns,
     data_type regular_column_name_type,
-    sstring comment)
+    std::string_view comment)
     : schema([&] {
         raw_schema raw(id ? *id : utils::UUID_gen::get_time_UUID());
 
-        raw._comment = std::move(comment);
-        raw._ks_name = std::move(ks_name);
-        raw._cf_name = std::move(cf_name);
+        raw._comment = sstring(comment);
+        raw._ks_name = sstring(ks_name);
+        raw._cf_name = sstring(cf_name);
         raw._regular_column_name_type = regular_column_name_type;
 
         auto build_columns = [&raw](std::vector<column>& columns, column_kind kind) {
