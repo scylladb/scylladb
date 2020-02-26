@@ -338,7 +338,7 @@ public:
         return _core_local.stop();
     }
 
-    future<> create_keyspace(sstring name) {
+    future<> create_keyspace(std::string_view name) {
         auto query = format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 }};", name);
         return execute_cql(query).discard_result();
     }
