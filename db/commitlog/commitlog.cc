@@ -1305,31 +1305,43 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         // instead of just truncate/fallocate. Otherwise we get crappy
         // behaviour.
         if ((flags & open_flags::dsync) != open_flags{}) {
-            clogger.trace("Pre-writing {}KB to segment {}", max_size/1024, filename);
+            auto fsiz = (flags & open_flags::create) == open_flags{}
+                ? f.size()
+                : make_ready_future<uint64_t>(0)
+                ;
+
             // would be super nice if we just could mmap(/dev/zero) and do sendto
             // instead of this, but for now we must do explicit buffer writes.
-            fut = f.allocate(0, max_size).then([f, this]() mutable {
-                static constexpr size_t buf_size = 4 * segment::alignment;
-                return do_with(allocate_single_buffer(buf_size), max_size, [this, f](temporary_buffer<char>& buf, uint64_t& rem) mutable {
-                    std::fill(buf.get_write(), buf.get_write() + buf.size(), 0);
-                    return repeat([this, f, &rem, &buf]() mutable {
-                        if (rem == 0) {
-                            return make_ready_future<stop_iteration>(stop_iteration::yes);
-                        }
-                        static constexpr size_t max_write = 128 * 1024;
-                        auto n = std::min(max_write / buf_size, 1 + rem / buf_size);
+            fut = fsiz.then([f, this, filename](uint64_t existing_size) mutable {
+                // if recycled (or from last run), we might have either truncated smaller or written it 
+                // (slighty) larger due to final zeroing of file
+                if (existing_size >= max_size) {
+                    return f.truncate(max_size);
+                }
+                clogger.trace("Pre-writing {} of {} KB to segment {}", (max_size - existing_size)/1024, max_size/1024, filename);
+                return f.allocate(existing_size, max_size - existing_size).then([this, existing_size, f]() mutable {
+                    static constexpr size_t buf_size = 4 * segment::alignment;
+                    return do_with(allocate_single_buffer(buf_size), max_size - existing_size, [this, f](temporary_buffer<char>& buf, uint64_t& rem) mutable {
+                        std::fill(buf.get_write(), buf.get_write() + buf.size(), 0);
+                        return repeat([this, f, &rem, &buf]() mutable {
+                            if (rem == 0) {
+                                return make_ready_future<stop_iteration>(stop_iteration::yes);
+                            }
+                            static constexpr size_t max_write = 128 * 1024;
+                            auto n = std::min(max_write / buf_size, 1 + rem / buf_size);
 
-                        std::vector<iovec> v;
-                        v.reserve(n);
-                        size_t m = 0;
-                        while (m < rem && n--) {
-                            auto s = std::min(rem - m, buf_size);
-                            v.emplace_back(iovec{ buf.get_write(), s});
-                            m += s;
-                        }
-                        return f.dma_write(max_size - rem, std::move(v), service::get_local_commitlog_priority()).then([&rem](size_t s) {
-                            rem -= s;
-                            return stop_iteration::no;
+                            std::vector<iovec> v;
+                            v.reserve(n);
+                            size_t m = 0;
+                            while (m < rem && n--) {
+                                auto s = std::min(rem - m, buf_size);
+                                v.emplace_back(iovec{ buf.get_write(), s});
+                                m += s;
+                            }
+                            return f.dma_write(max_size - rem, std::move(v), service::get_local_commitlog_priority()).then([&rem](size_t s) {
+                                rem -= s;
+                                return stop_iteration::no;
+                            });
                         });
                     });
                 });
