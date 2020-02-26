@@ -95,7 +95,7 @@ public:
         return _classes;
     }
 
-    sstring to_qualified_class_name(sstring class_name) const;
+    sstring to_qualified_class_name(std::string_view class_name) const;
 };
 
 template<typename BaseType, typename... Args>
@@ -110,7 +110,8 @@ void nonstatic_class_registry<BaseType, Args...>::register_class(sstring name) {
 }
 
 template<typename BaseType, typename... Args>
-sstring nonstatic_class_registry<BaseType, Args...>::to_qualified_class_name(sstring class_name) const {
+sstring nonstatic_class_registry<BaseType, Args...>::to_qualified_class_name(std::string_view view) const {
+    sstring class_name(view);
     if (is_class_name_qualified(class_name)) {
         return class_name;
     } else {
@@ -154,8 +155,8 @@ public:
         return registry().classes();
     }
 
-    static sstring to_qualified_class_name(sstring class_name) {
-        return registry().to_qualified_class_name(std::move(class_name));
+    static sstring to_qualified_class_name(std::string_view class_name) {
+        return registry().to_qualified_class_name(class_name);
     }
 };
 
