@@ -786,7 +786,7 @@ public:
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         uint64_t max_result_size,
-        db::timeout_clock::time_point timeout = db::no_timeout,
+        db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx = { });
 
     void start();
