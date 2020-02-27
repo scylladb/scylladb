@@ -49,11 +49,7 @@ namespace meta {
 namespace role_members_table {
 
 constexpr std::string_view name{"role_members" , 12};
-
-static std::string_view qualified_name() noexcept {
-    static const sstring instance = make_sstring(meta::AUTH_KS, ".", name);
-    return instance;
-}
+constexpr std::string_view qualified_name("system_auth.role_members");
 
 }
 
@@ -148,7 +144,7 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
             "  member text,"
             "  PRIMARY KEY (role, member)"
             ")",
-            meta::role_members_table::qualified_name());
+            meta::role_members_table::qualified_name);
 
 
     return when_all_succeed(
@@ -319,7 +315,7 @@ future<> standard_role_manager::drop(std::string_view role_name) const {
         // First, revoke this role from all roles that are members of it.
         const auto revoke_from_members = [this, role_name] {
             static const sstring query = format("SELECT member FROM {} WHERE role = ?",
-                    meta::role_members_table::qualified_name());
+                    meta::role_members_table::qualified_name);
 
             return _qp.execute_internal(
                     query,
@@ -399,7 +395,7 @@ standard_role_manager::modify_membership(
             case membership_change::add:
                 return _qp.execute_internal(
                         format("INSERT INTO {} (role, member) VALUES (?, ?)",
-                                meta::role_members_table::qualified_name()),
+                                meta::role_members_table::qualified_name),
                         consistency_for_role(role_name),
                         internal_distributed_timeout_config(),
                         {sstring(role_name), sstring(grantee_name)}).discard_result();
@@ -407,7 +403,7 @@ standard_role_manager::modify_membership(
             case membership_change::remove:
                 return _qp.execute_internal(
                         format("DELETE FROM {} WHERE role = ? AND member = ?",
-                                meta::role_members_table::qualified_name()),
+                                meta::role_members_table::qualified_name),
                         consistency_for_role(role_name),
                         internal_distributed_timeout_config(),
                         {sstring(role_name), sstring(grantee_name)}).discard_result();
