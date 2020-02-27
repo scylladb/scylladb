@@ -71,21 +71,6 @@ bool should_stop_on_system_error(const std::system_error& e) {
     return true;
 }
 
-std::atomic<bool> abort_on_internal_error{false};
-
-void set_abort_on_internal_error(bool do_abort) {
-    abort_on_internal_error.store(do_abort);
-}
-
-void on_internal_error(seastar::logger& logger, const seastar::sstring& msg) {
-    if (abort_on_internal_error.load()) {
-        logger.error("{}, at: {}", msg.c_str(), seastar::current_backtrace());
-        abort();
-    } else {
-        seastar::throw_with_backtrace<std::runtime_error>(msg.c_str());
-    }
-}
-
 bool is_timeout_exception(std::exception_ptr e) {
     try {
         std::rethrow_exception(e);

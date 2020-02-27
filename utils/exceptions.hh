@@ -22,6 +22,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include <functional>
 #include <system_error>
@@ -50,10 +51,3 @@ public:
 
     const std::error_code& code() const { return _code; }
 };
-
-// Controls whether on_internal_error() aborts or throws.
-void set_abort_on_internal_error(bool do_abort);
-
-// Handles reporting of violation of internal invariants.
-// Callers can assume that it does not return. May throw.
-[[noreturn]] void on_internal_error(seastar::logger&, const seastar::sstring& reason);
