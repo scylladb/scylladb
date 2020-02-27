@@ -108,7 +108,7 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
                 const auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), query::max_rows);
                 const auto range = dht::partition_range::make_singular(pkey);
                 return make_foreign(std::make_unique<reconcilable_result>(
-                    db.query_mutations(std::move(s), cmd, range, std::move(accounter), nullptr).get0()));
+                    db.query_mutations(std::move(s), cmd, range, std::move(accounter), nullptr, db::no_timeout).get0()));
             });
         }).get0();
 
