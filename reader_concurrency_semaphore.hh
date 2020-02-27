@@ -199,7 +199,7 @@ public:
         return _inactive_read_stats;
     }
 
-    future<reader_permit> wait_admission(size_t memory, db::timeout_clock::time_point timeout = db::no_timeout);
+    future<reader_permit> wait_admission(size_t memory, db::timeout_clock::time_point timeout);
 
     /// Consume the specific amount of resources without waiting.
     reader_permit consume_resources(resources r);

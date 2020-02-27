@@ -187,7 +187,7 @@ void execute_reads(reader_concurrency_semaphore& sem, unsigned reads, unsigned c
 
         if (sem.waiters()) {
             testlog.trace("Waiting for queue to drain");
-            sem.wait_admission(1).get();
+            sem.wait_admission(1, db::no_timeout).get();
         }
     }
 
