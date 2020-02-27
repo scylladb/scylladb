@@ -835,8 +835,14 @@ public:
         auto&& cc = _schema->clustering_key_columns();
 
         std::vector<query::clustering_range> bounds;
-        if (cc.empty()) {
+        uint32_t row_limit = query::max_rows;
+
+        const bool has_only_static_row = !p.static_row().empty() && p.clustered_rows().empty();
+        if (cc.empty() || has_only_static_row) {
             bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+            if (has_only_static_row) {
+                row_limit = 1;
+            }
         } else {
             for (const rows_entry& r : p.clustered_rows()) {
                 auto& ck = r.key();
@@ -874,7 +880,7 @@ public:
         opts.set(query::partition_slice::option::collections_as_maps);
 
         auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), std::move(opts));
-        auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, query::max_partitions);
+        auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, row_limit);
 
         return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
                 [s = _schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
