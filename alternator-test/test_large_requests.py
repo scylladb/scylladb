@@ -75,7 +75,7 @@ def test_exceed_nested_level_a_little(dynamodb, test_table):
     for i in range(50):
         nested_it['a'] = dict()
         nested_it = nested_it['a']
-    with pytest.raises(ClientError, match='ValidationException.*nested'):
+    with pytest.raises(ClientError, match='.*Exception.*nested'):
         test_table.put_item(Item={'p': p, 'c': c, 'nested': nested})
 
 
