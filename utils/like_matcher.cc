@@ -124,6 +124,8 @@ like_matcher::like_matcher(bytes_view pattern)
 
 like_matcher::~like_matcher() = default;
 
+like_matcher::like_matcher(like_matcher&& that) noexcept = default;
+
 bool like_matcher::operator()(bytes_view text) const {
     return _impl->operator()(text);
 }

@@ -386,15 +386,15 @@ public:
 
 class single_column_restriction::LIKE final : public single_column_restriction {
 private:
-    ::shared_ptr<term> _value;
-    /// Matches cell value against LIKE pattern.  Optional because it cannot be initialized in the
-    /// constructor when the pattern is a bind marker.  Mutable because it is initialized on demand
+    /// Represents `col LIKE val1 AND col LIKE val2 AND ... col LIKE valN`.
+    std::vector<::shared_ptr<term>> _values;
+    /// Each element matches a cell value against a LIKE pattern.  Mutable because it is initialized on demand
     /// in is_satisfied_by().
-    mutable std::optional<like_matcher> _matcher;
+    mutable std::vector<like_matcher> _matchers;
 public:
     LIKE(const column_definition& column_def, ::shared_ptr<term> value)
         : single_column_restriction(op::LIKE, column_def)
-        , _value(value)
+        , _values{value}
     { }
 
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
@@ -410,15 +410,9 @@ public:
         return index.supports_expression(_column_def, cql3::operator_type::LIKE);
     }
 
-    virtual sstring to_string() const override {
-        return format("LIKE({})", _value->to_string());
-    }
+    virtual sstring to_string() const override;
 
-    virtual void merge_with(::shared_ptr<restriction> other) {
-        throw exceptions::invalid_request_exception(
-            format("{} cannot be restricted by more than one relation if it includes a LIKE",
-                   _column_def.name_as_text()));
-    }
+    virtual void merge_with(::shared_ptr<restriction> other);
 
     virtual bool is_satisfied_by(const schema& schema,
                                  const partition_key& key,
@@ -426,18 +420,18 @@ public:
                                  const row& cells,
                                  const query_options& options,
                                  gc_clock::time_point now) const override;
+
     virtual bool is_satisfied_by(bytes_view data, const query_options& options) const override;
-    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
-        return ::make_shared<LIKE>(cdef, _value);
-    }
+
+    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override;
 
   private:
-    /// If necessary, reinitializes _matcher.
+    /// If necessary, reinitializes _matchers.
     ///
     /// Invoked from is_satisfied_by(), so must be const.
     ///
-    /// @return true iff _value was successfully translated to LIKE pattern (regardless of initialization)
-    bool init_matcher(const query_options& options) const;
+    /// @return true iff _values were successfully translated to LIKE patterns (regardless of initialization)
+    bool init_matchers(const query_options& options) const;
 };
 
 // This holds CONTAINS, CONTAINS_KEY, and map[key] = value restrictions because we might want to have any combination of them.
