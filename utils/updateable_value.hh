@@ -61,6 +61,7 @@ public:
     updateable_value_base& operator=(const updateable_value_base&);
     updateable_value_base(updateable_value_base&&) noexcept;
     updateable_value_base& operator=(updateable_value_base&&) noexcept;
+    updateable_value_base& operator=(nullptr_t);
 
     friend class updateable_value_source_base;
 };
@@ -78,6 +79,7 @@ public:
     explicit updateable_value(T value) : _value(std::move(value)) {}
     explicit updateable_value(const updateable_value_source<T>& source);
     updateable_value(const updateable_value& v);
+    updateable_value& operator=(T value);
     updateable_value& operator=(const updateable_value&);
     updateable_value(updateable_value&&) noexcept;
     updateable_value& operator=(updateable_value&&) noexcept;
@@ -168,6 +170,13 @@ updateable_value<T>::updateable_value(const updateable_value_source<T>& source)
 
 template <typename T>
 updateable_value<T>::updateable_value(const updateable_value& v) : updateable_value_base(v), _value(v._value) {
+}
+
+template <typename T>
+updateable_value<T>& updateable_value<T>::operator=(T value) {
+    updateable_value_base::operator=(nullptr);
+    _value = std::move(value);
+    return *this;
 }
 
 template <typename T>
