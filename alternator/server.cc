@@ -289,8 +289,9 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
                     [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
                 tracing::trace_state_ptr trace_state = executor::maybe_trace_query(*client_state, op, req->content);
                 tracing::trace(trace_state, op);
-                rjson::value json_request = rjson::parse(req->content);
-                return callback_it->second(_executor, *client_state, trace_state, std::move(json_request), std::move(req)).finally([trace_state] {});
+                return _json_parser.parse(req->content).then([this, callback_it = std::move(callback_it), &client_state, trace_state, req = std::move(req)] (rjson::value json_request) mutable {
+                    return callback_it->second(_executor, *client_state, trace_state, std::move(json_request), std::move(req)).finally([trace_state] {});
+                });
             });
         });
     });
@@ -420,8 +421,49 @@ future<> server::stop() {
         return server.stop();
     }).then([this] {
         return _pending_requests.close();
+    }).then([this] {
+        return _json_parser.stop();
     });
+}
 
+server::json_parser::json_parser() : _run_parse_json_thread(async([this] {
+        while (true) {
+            _document_waiting.wait().get();
+            if (_as.abort_requested()) {
+                return;
+            }
+            try {
+                _parsed_document = rjson::parse(_raw_document);
+                _current_exception = nullptr;
+            } catch (...) {
+                _current_exception = std::current_exception();
+            }
+            _document_parsed.signal();
+        }
+    })) {
+}
+
+future<rjson::value> server::json_parser::parse(std::string_view content) {
+    if (content.size() < yieldable_parsing_threshold) {
+        return make_ready_future<rjson::value>(rjson::parse(content));
+    }
+    return with_semaphore(_parsing_sem, 1, [this, content] {
+        _raw_document = content;
+        _document_waiting.signal();
+        return _document_parsed.wait().then([this] {
+            if (_current_exception) {
+                return make_exception_future<rjson::value>(_current_exception);
+            }
+            return make_ready_future<rjson::value>(std::move(_parsed_document));
+        });
+    });
+}
+
+future<> server::json_parser::stop() {
+    _as.request_abort();
+    _document_waiting.signal();
+    _document_parsed.broken();
+    return std::move(_run_parse_json_thread);
 }
 
 }

@@ -46,6 +46,24 @@ class server {
     utils::small_vector<std::reference_wrapper<seastar::httpd::http_server>, 2> _enabled_servers;
     gate _pending_requests;
     alternator_callbacks_map _callbacks;
+
+    class json_parser {
+        static constexpr size_t yieldable_parsing_threshold = 16*KB;
+        std::string_view _raw_document;
+        rjson::value _parsed_document;
+        std::exception_ptr _current_exception;
+        semaphore _parsing_sem{1};
+        condition_variable _document_waiting;
+        condition_variable _document_parsed;
+        abort_source _as;
+        future<> _run_parse_json_thread;
+    public:
+        json_parser();
+        future<rjson::value> parse(std::string_view content);
+        future<> stop();
+    };
+    json_parser _json_parser;
+
 public:
     server(executor& executor);
 
