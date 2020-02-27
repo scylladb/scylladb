@@ -1603,7 +1603,7 @@ future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, c
             auto uuid = m.column_family_id();
             auto& cf = find_column_family(uuid);
             cf.apply_streaming_mutation(s, plan_id, std::move(m), fragmented);
-        });
+        }, db::no_timeout);
     });
 }
 

@@ -649,11 +649,11 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         //
         // The allocation of the first element won't change the memory usage inside
         // the group and we'll be okay to do that a second time.
-        auto fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); });
+        auto fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); }, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), true);
         BOOST_REQUIRE_EQUAL(simple.memory_used(), logalloc::segment_size);
 
-        fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); });
+        fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); }, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), true);
         BOOST_REQUIRE_EQUAL(simple.memory_used(), logalloc::segment_size);
 
@@ -663,7 +663,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
 
         // We should not be permitted to go forward with a new allocation now...
         BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
-        fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); });
+        fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); }, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), false);
         BOOST_REQUIRE_GT(simple.memory_used(), logalloc::segment_size);
 
@@ -705,7 +705,7 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_child_alloc) {
         child_region->alloc();
         BOOST_REQUIRE_GE(parent.memory_used(), logalloc::segment_size);
 
-        auto fut = parent.run_when_memory_available([&parent_region] { parent_region->alloc_small(); });
+        auto fut = parent.run_when_memory_available([&parent_region] { parent_region->alloc_small(); }, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), true);
         BOOST_REQUIRE_GE(parent.memory_used(), 2 * logalloc::segment_size);
 
@@ -714,7 +714,7 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_child_alloc) {
         child_region->alloc();
         BOOST_REQUIRE_GE(child.memory_used(), 2 * logalloc::segment_size);
 
-        fut = parent.run_when_memory_available([&parent_region] { parent_region->alloc_small(); });
+        fut = parent.run_when_memory_available([&parent_region] { parent_region->alloc_small(); }, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), false);
         BOOST_REQUIRE_GE(parent.memory_used(), 2 * logalloc::segment_size);
 
@@ -735,7 +735,7 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_parent_alloc) {
         parent_region->alloc();
         BOOST_REQUIRE_GE(parent.memory_used(), logalloc::segment_size);
 
-        auto fut = child.run_when_memory_available([] {});
+        auto fut = child.run_when_memory_available([] {}, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), false);
 
         parent_region.reset();
@@ -762,7 +762,7 @@ SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
         for (auto index = 0; index < 100; ++index) {
             auto fut = rg.run_when_memory_available([exec_cnt, index] {
                 BOOST_REQUIRE_EQUAL(index, (*exec_cnt)++);
-            });
+            }, db::no_timeout);
             BOOST_REQUIRE_EQUAL(fut.available(), false);
             executions.push_back(std::move(fut));
         }
@@ -794,7 +794,7 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_moving_restrict
         });
         BOOST_REQUIRE_GE(inner.memory_used(), logalloc::segment_size);
 
-        auto fut = child.run_when_memory_available([] {});
+        auto fut = child.run_when_memory_available([] {}, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), false);
 
         // Now fill the root...
@@ -846,7 +846,7 @@ SEASTAR_TEST_CASE(test_region_groups_tree_hierarchy_throttling_leaf_alloc) {
             future<> try_alloc(size_t size) {
                 return _rg.run_when_memory_available([this, size] {
                     alloc(size);
-                });
+                }, db::no_timeout);
             }
             void reset() {
                 _region.reset(new test_region(_rg));
@@ -981,7 +981,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_simple_active_reclaim) {
         (void)simple.unleash(make_ready_future<>());
 
         // Can't run this function until we have reclaimed something
-        auto fut = simple.rg().run_when_memory_available([] {});
+        auto fut = simple.rg().run_when_memory_available([] {}, db::no_timeout);
 
         // Initially not available
         BOOST_REQUIRE_EQUAL(fut.available(), false);
@@ -1009,7 +1009,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_worst_offen
         // Can't run this function until we have reclaimed
         auto fut = simple.rg().run_when_memory_available([&simple] {
             BOOST_REQUIRE_EQUAL(simple.reclaim_sizes().size(), 3);
-        });
+        }, db::no_timeout);
 
         // Initially not available
         BOOST_REQUIRE_EQUAL(fut.available(), false);
@@ -1043,7 +1043,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_leaf_offend
         // that the leaves are forced correctly.
         auto fut = root.rg().run_when_memory_available([&root] {
             BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 3);
-        });
+        }, db::no_timeout);
 
         // Initially not available
         BOOST_REQUIRE_EQUAL(fut.available(), false);
@@ -1072,7 +1072,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_ancestor_bl
         // that the root reclaims
         auto fut = leaf.rg().run_when_memory_available([&root] {
             BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
-        });
+        }, db::no_timeout);
 
         // Initially not available
         BOOST_REQUIRE_EQUAL(fut.available(), false);
@@ -1098,7 +1098,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_big_region_
 
         auto fut = root.rg().run_when_memory_available([&root] {
             BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 3);
-        });
+        }, db::no_timeout);
 
         // Initially not available
         BOOST_REQUIRE_EQUAL(fut.available(), false);
@@ -1127,11 +1127,11 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_no_double_r
 
         auto fut_root = root.rg().run_when_memory_available([&root] {
             BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
-        });
+        }, db::no_timeout);
 
         auto fut_leaf = leaf.rg().run_when_memory_available([&root] {
             BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
-        });
+        }, db::no_timeout);
 
         // Initially not available
         BOOST_REQUIRE_EQUAL(fut_root.available(), false);
@@ -1185,7 +1185,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
                     // Trigger group size change (Refs issue #2021)
                     gr.update(-10);
                     gr.update(+10);
-                });
+                }, db::no_timeout);
                 BOOST_REQUIRE(!f.available());
             }
 
