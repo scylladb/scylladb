@@ -1677,15 +1677,18 @@ static std::string resolve_update_path(const parsed::path& p,
     }
     auto column_name = p.root();
     if (column_name.size() > 0 && column_name[0] == '#') {
-        const rjson::value& expression_attribute_names = rjson::get(update_info, "ExpressionAttributeNames");
-        const rjson::value& value = rjson::get(expression_attribute_names, rjson::string_ref_type(column_name.c_str()));
-        if (!value.IsString()) {
+        const rjson::value* expression_attribute_names = rjson::find(update_info, "ExpressionAttributeNames");
+        if (!expression_attribute_names) {
+            throw api_error("ValidationException", "ExpressionAttributeNames are required by UpdateExpression");
+        }
+        const rjson::value* value = rjson::find(*expression_attribute_names, rjson::string_ref_type(column_name.c_str()));
+        if (!value || !value->IsString()) {
             throw api_error("ValidationException",
                     format("ExpressionAttributeNames missing entry '{}' required by UpdateExpression",
                             column_name));
         }
         used_attribute_names.emplace(std::move(column_name));
-        column_name = value.GetString();
+        column_name = value->GetString();
     }
     const column_definition* cdef = schema->get_column_definition(to_bytes(column_name));
     if (!allow_key_columns && cdef && cdef->is_primary_key()) {
@@ -1884,14 +1887,14 @@ rjson::value calculate_value(const parsed::value& v,
                 throw api_error("ValidationException",
                         format("ExpressionAttributeValues missing, entry '{}' required by {}", valref, caller));
             }
-            const rjson::value& value = rjson::get(*expression_attribute_values, rjson::string_ref_type(valref.c_str()));
-            if (value.IsNull()) {
+            const rjson::value* value = rjson::find(*expression_attribute_values, rjson::string_ref_type(valref.c_str()));
+            if (!value || value->IsNull()) {
                 throw api_error("ValidationException",
                         format("ExpressionAttributeValues missing entry '{}' required by {}", valref, caller));
             }
-            validate_value(value, "ExpressionAttributeValues");
+            validate_value(*value, "ExpressionAttributeValues");
             used_attribute_values.emplace(std::move(valref));
-            return rjson::copy(value);
+            return rjson::copy(*value);
         },
         [&] (const parsed::value::function_call& f) -> rjson::value {
             // TODO: use a lookup table here - for each function name a
@@ -2111,13 +2114,13 @@ static std::string resolve_projection_path(const parsed::path& p,
         if (!expression_attribute_names) {
             throw api_error("ValidationException", "ExpressionAttributeNames parameter not found");
         }
-        const rjson::value& value = rjson::get(*expression_attribute_names, rjson::string_ref_type(column_name.c_str()));
-        if (!value.IsString()) {
+        const rjson::value* value = rjson::find(*expression_attribute_names, rjson::string_ref_type(column_name.c_str()));
+        if (!value || !value->IsString()) {
             throw api_error("ValidationException",
                 format("ExpressionAttributeNames missing entry '{}' required by ProjectionExpression", column_name));
         }
         used_attribute_names.emplace(std::move(column_name));
-        column_name = value.GetString();
+        column_name = value->GetString();
     }
     // FIXME: this check will need to change when we support non-toplevel attributes
     if (!seen_column_names.insert(column_name).second) {
