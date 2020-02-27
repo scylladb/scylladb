@@ -1160,6 +1160,7 @@ def configure_seastar(build_dir, mode):
         '-DCMAKE_BUILD_TYPE={}'.format(MODE_TO_CMAKE_BUILD_TYPE[mode]),
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
+        '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
         '-DSeastar_CXX_FLAGS={}'.format((seastar_cflags + ' ' + modes[mode]['cxx_ld_flags']).replace(' ', ';')),
         '-DSeastar_LD_FLAGS={}'.format(seastar_ldflags),
         '-DSeastar_CXX_DIALECT=gnu++17',
