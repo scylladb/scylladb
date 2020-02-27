@@ -248,7 +248,7 @@ def find_headers(repodir, excluded_dirs):
 
 modes = {
     'debug': {
-        'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION',
+        'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
         'cxx_ld_flags': '',
     },
     'release': {
@@ -256,11 +256,11 @@ modes = {
         'cxx_ld_flags': '-O3',
     },
     'dev': {
-        'cxxflags': '-DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION',
+        'cxxflags': '-DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
         'cxx_ld_flags': '-O1',
     },
     'sanitize': {
-        'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER',
+        'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
         'cxx_ld_flags': '-Os',
     }
 }
@@ -304,6 +304,7 @@ scylla_tests = set([
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
     'test/boost/extensions_test',
+    'test/boost/error_injection_test',
     'test/boost/filtering_test',
     'test/boost/flat_mutation_reader_test',
     'test/boost/flush_queue_test',
@@ -773,6 +774,7 @@ scylla_core = (['database.cc',
                 'utils/utf8.cc',
                 'utils/ascii.cc',
                 'utils/like_matcher.cc',
+                'utils/error_injection.cc',
                 'mutation_writer/timestamp_based_splitting_writer.cc',
                 'lua.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')]
