@@ -38,7 +38,6 @@ def get_signed_request(dynamodb, target, payload):
     req = Request()
     signer = dynamodb.meta.client._request_signer
     signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
-    print(signer.signing_name, signer.region_name)
     return req
 
 # Test that deeply nested objects (e.g. with depth of 200k) are parsed correctly,
@@ -92,3 +91,23 @@ def test_too_large_request(dynamodb, test_table):
     # a ClientError explaining that the element size was too large.
     with pytest.raises(BotoCoreError):
         test_table.put_item(Item={'p': p, 'c': c, 'big': big})
+
+def test_incorrect_json(dynamodb, test_table):
+    correct_req = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
+
+    # Check all non-full prefixes of a correct JSON - none of them are valid JSON's themselves
+    # NOTE: DynamoDB returns two kinds of errors on incorrect input - SerializationException
+    # or "Page Not Found"
+    for i in range(len(correct_req)):
+        req = get_signed_request(dynamodb, 'PutItem', correct_req[:i])
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        assert "SerializationException" in response.text or "Page Not Found" in response.text
+
+    incorrect_reqs = [
+        '}}}', '}{', 'habababa', '7', '124463gwe', '><#', '????', '"""', '{"""}', '{""}', '{7}',
+        '{3: }}', '{"2":{}', ',', '{,}', '{{}}', '"a": "b"', '{{{', '{'*10000 + '}'*9999, '{'*10000 + '}'*10007
+    ]
+    for incorrect_req in incorrect_reqs:
+        req = get_signed_request(dynamodb, 'PutItem', incorrect_req)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        assert "SerializationException" in response.text or "Page Not Found" in response.text
