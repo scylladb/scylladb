@@ -175,8 +175,8 @@ future<> data_query(
     uint32_t partition_limit,
     gc_clock::time_point query_time,
     query::result::builder& builder,
+    db::timeout_clock::time_point timeout,
     tracing::trace_state_ptr trace_ptr = nullptr,
-    db::timeout_clock::time_point timeout = db::no_timeout,
     query::querier_cache_context cache_ctx = { });
 
 

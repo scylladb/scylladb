@@ -2168,8 +2168,8 @@ future<> data_query(
         uint32_t partition_limit,
         gc_clock::time_point query_time,
         query::result::builder& builder,
-        tracing::trace_state_ptr trace_ptr,
         db::timeout_clock::time_point timeout,
+        tracing::trace_state_ptr trace_ptr,
         query::querier_cache_context cache_ctx)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
