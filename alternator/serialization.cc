@@ -136,7 +136,7 @@ rjson::value deserialize_item(bytes_view bv) {
 
     if (atype == alternator_type::NOT_SUPPORTED_YET) {
         slogger.trace("Non-optimal deserialization of alternator type {}", int8_t(atype));
-        return rjson::parse_raw(reinterpret_cast<const char *>(bv.data()), bv.size());
+        return rjson::parse(std::string_view(reinterpret_cast<const char *>(bv.data()), bv.size()));
     }
     type_representation type_representation = represent_type(atype);
     visit(*type_representation.dtype, to_json_visitor{deserialized, type_representation.ident, bv});
@@ -160,8 +160,11 @@ std::string type_to_string(data_type type) {
 
 bytes get_key_column_value(const rjson::value& item, const column_definition& column) {
     std::string column_name = column.name_as_text();
-    const rjson::value& key_typed_value = rjson::get(item, rjson::value::StringRefType(column_name.c_str()));
-    return get_key_from_typed_value(key_typed_value, column);
+    const rjson::value* key_typed_value = rjson::find(item, rjson::value::StringRefType(column_name.c_str()));
+    if (!key_typed_value) {
+        throw api_error("ValidationException", format("Key column {} not found", column_name));
+    }
+    return get_key_from_typed_value(*key_typed_value, column);
 }
 
 // Parses the JSON encoding for a key value, which is a map with a single
