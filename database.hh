@@ -389,6 +389,7 @@ public:
         db::timeout_semaphore* view_update_concurrency_semaphore;
         size_t view_update_concurrency_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
+        utils::updateable_value<uint64_t> max_memory_for_unlimited_query;
     };
     struct no_commitlog {};
 
@@ -913,6 +914,10 @@ public:
 
     ::cf_stats* cf_stats() {
         return _config.cf_stats;
+    }
+
+    const config& get_config() const {
+        return _config;
     }
 
     compaction_manager& get_compaction_manager() const {

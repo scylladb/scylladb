@@ -84,7 +84,8 @@ auto consume_page(flat_mutation_reader& reader,
         uint32_t row_limit,
         uint32_t partition_limit,
         gc_clock::time_point query_time,
-        db::timeout_clock::time_point timeout) {
+        db::timeout_clock::time_point timeout,
+        size_t reverse_read_max_memory) {
     // FIXME: #3158
     // consumer cannot be moved after consume_new_partition() is called
     // on it because it stores references to some of it's own members.
@@ -95,15 +96,22 @@ auto consume_page(flat_mutation_reader& reader,
         const auto next_fragment_kind = next_fragment ? next_fragment->mutation_fragment_kind() : mutation_fragment::kind::partition_end;
         compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_kind, *consumer);
 
-        const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(
-                slice.options.contains(query::partition_slice::option::reversed));
-
         auto last_ckey = make_lw_shared<std::optional<clustering_key_prefix>>();
         auto reader_consumer = make_stable_flattened_mutations_consumer<compact_for_query<OnlyLive, clustering_position_tracker<Consumer>>>(
                 compaction_state,
                 clustering_position_tracker(std::move(consumer), last_ckey));
 
-        return reader.consume(std::move(reader_consumer), timeout, is_reversed).then([last_ckey] (auto&&... results) mutable {
+        auto consume = [&reader, &slice, reader_consumer = std::move(reader_consumer), timeout, reverse_read_max_memory] () mutable {
+            if (slice.options.contains(query::partition_slice::option::reversed)) {
+                return do_with(make_reversing_reader(reader, reverse_read_max_memory),
+                        [reader_consumer = std::move(reader_consumer), timeout] (flat_mutation_reader& reversing_reader) mutable {
+                    return reversing_reader.consume(std::move(reader_consumer), timeout);
+                });
+            }
+            return reader.consume(std::move(reader_consumer), timeout);
+        };
+
+        return consume().then([last_ckey] (auto&&... results) mutable {
             static_assert(sizeof...(results) <= 1);
             return make_ready_future<std::tuple<std::optional<clustering_key_prefix>, std::decay_t<decltype(results)>...>>(std::tuple(std::move(*last_ckey), std::move(results)...));
         });
@@ -176,9 +184,10 @@ public:
             uint32_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
-            db::timeout_clock::time_point timeout) {
+            db::timeout_clock::time_point timeout,
+            size_t reverse_read_max_memory) {
         return ::query::consume_page(_reader, _compaction_state, *_slice, std::move(consumer), row_limit, partition_limit, query_time,
-                timeout).then([this] (auto&& results) {
+                timeout, reverse_read_max_memory).then([this] (auto&& results) {
             _last_ckey = std::get<std::optional<clustering_key>>(std::move(results));
             constexpr auto size = std::tuple_size<std::decay_t<decltype(results)>>::value;
             static_assert(size <= 2);

@@ -76,6 +76,7 @@ static query::partition_slice make_full_slice(const schema& s) {
 }
 
 static auto inf32 = std::numeric_limits<unsigned>::max();
+static const uint64_t max_memory_for_reverse_query = 1 << 20;
 
 query::result_set to_result_set(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice) {
     return query::result_set::from_raw_result(s, slice, to_data_query_result(r, s, slice, inf32, inf32));
@@ -100,7 +101,7 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
             auto slice = make_full_slice(*s);
 
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, 2, query::max_partitions, now).get0();
+                query::full_partition_range, slice, 2, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
             // FIXME: use mutation assertions
             assert_that(to_result_set(result, s, slice))
@@ -123,7 +124,7 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
                 .build();
 
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, query::max_rows, query::max_partitions, now).get0();
+                query::full_partition_range, slice, query::max_rows, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_only(a_row()
@@ -159,7 +160,7 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
             auto slice = make_full_slice(*s);
 
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, 1, query::max_partitions, now).get0();
+                query::full_partition_range, slice, 1, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_only(a_row()
@@ -173,7 +174,7 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
             auto slice = make_full_slice(*s);
 
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, 1, query::max_partitions, now + 2s).get0();
+                query::full_partition_range, slice, 1, query::max_partitions, now + 2s, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_only(a_row()
@@ -206,7 +207,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
                 .build();
 
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, 3, query::max_partitions, now).get0();
+                query::full_partition_range, slice, 3, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_size(3)
@@ -236,7 +237,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
                 .build();
 
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, 3, query::max_partitions, now).get0();
+                query::full_partition_range, slice, 3, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_size(3)
@@ -264,7 +265,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
             {
                 reconcilable_result result = mutation_query(s, src,
-                    query::full_partition_range, slice, 10, query::max_partitions, now).get0();
+                    query::full_partition_range, slice, 10, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
                 assert_that(to_result_set(result, s, slice))
                     .has_size(3)
@@ -284,7 +285,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
             {
                 reconcilable_result result = mutation_query(s, src,
-                    query::full_partition_range, slice, 1, query::max_partitions, now).get0();
+                    query::full_partition_range, slice, 1, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
                 assert_that(to_result_set(result, s, slice))
                     .has_size(1)
@@ -296,7 +297,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
             {
                 reconcilable_result result = mutation_query(s, src,
-                    query::full_partition_range, slice, 2, query::max_partitions, now).get0();
+                    query::full_partition_range, slice, 2, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
                 assert_that(to_result_set(result, s, slice))
                     .has_size(2)
@@ -323,7 +324,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
                 .build();
 
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, 2, query::max_partitions, now).get0();
+                query::full_partition_range, slice, 2, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_size(2)
@@ -347,7 +348,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
                 .build();
 
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, 3, query::max_partitions, now).get0();
+                query::full_partition_range, slice, 3, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_size(2)
@@ -369,7 +370,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
                 .build();
 
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, 3, query::max_partitions, now).get0();
+                query::full_partition_range, slice, 3, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_only(a_row()
@@ -395,7 +396,7 @@ SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
         auto slice = make_full_slice(*s);
 
         reconcilable_result result = mutation_query(s, src,
-            query::full_partition_range, slice, query::max_rows, query::max_partitions, now).get0();
+            query::full_partition_range, slice, query::max_rows, query::max_partitions, now, max_memory_for_reverse_query).get0();
 
         assert_that(to_result_set(result, s, slice))
             .is_empty();
@@ -445,7 +446,8 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
 
         auto query_time = now + std::chrono::seconds(1);
 
-        reconcilable_result result = mutation_query(s, src, query::full_partition_range, slice, query::max_rows, query::max_partitions, query_time).get0();
+        reconcilable_result result = mutation_query(s, src, query::full_partition_range, slice, query::max_rows, query::max_partitions, query_time,
+                max_memory_for_reverse_query).get0();
 
         BOOST_REQUIRE_EQUAL(result.partitions().size(), 2);
         BOOST_REQUIRE_EQUAL(result.row_count(), 2);
@@ -463,24 +465,29 @@ SEASTAR_TEST_CASE(test_result_row_count) {
 
             auto src = make_source({m1});
 
-            auto r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now).get0(), s, slice, inf32, inf32);
+            auto r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now,
+                        max_memory_for_reverse_query).get0(), s, slice, inf32, inf32);
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 0);
 
             m1.set_static_cell("s1", data_value(bytes("S_v1")), 1);
-            r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now).get0(), s, slice, inf32, inf32);
+            r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now,
+                        max_memory_for_reverse_query).get0(), s, slice, inf32, inf32);
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
 
             m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A_v1")), 1);
-            r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now).get0(), s, slice, inf32, inf32);
+            r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now,
+                        max_memory_for_reverse_query).get0(), s, slice, inf32, inf32);
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
 
             m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B_v1")), 1);
-            r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now).get0(), s, slice, inf32, inf32);
+            r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now,
+                        max_memory_for_reverse_query).get0(), s, slice, inf32, inf32);
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 2);
 
             mutation m2(s, partition_key::from_single_value(*s, "key2"));
             m2.set_static_cell("s1", data_value(bytes("S_v1")), 1);
-            r = to_data_query_result(mutation_query(s, make_source({m1, m2}), query::full_partition_range, slice, 10000, query::max_partitions, now).get0(), s, slice, inf32, inf32);
+            r = to_data_query_result(mutation_query(s, make_source({m1, m2}), query::full_partition_range, slice, 10000, query::max_partitions, now,
+                        max_memory_for_reverse_query).get0(), s, slice, inf32, inf32);
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 3);
     });
 }
@@ -503,7 +510,7 @@ SEASTAR_TEST_CASE(test_partition_limit) {
 
         {
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, query::max_rows, 10, now).get0();
+                query::full_partition_range, slice, query::max_rows, 10, now, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_size(2)
@@ -519,7 +526,7 @@ SEASTAR_TEST_CASE(test_partition_limit) {
 
         {
             reconcilable_result result = mutation_query(s, src,
-                query::full_partition_range, slice, query::max_rows, 1, now).get0();
+                query::full_partition_range, slice, query::max_rows, 1, now, max_memory_for_reverse_query).get0();
 
             assert_that(to_result_set(result, s, slice))
                 .has_size(1)
@@ -541,10 +548,12 @@ SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     slice.options.set<query::partition_slice::option::allow_short_read>();
 
     query::result::builder digest_only_builder(slice, query::result_options{query::result_request::only_digest, query::digest_algorithm::xxHash}, l.new_digest_read(query::result_memory_limiter::maximum_result_size).get0());
-    data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now(), digest_only_builder).get0();
+    data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(),
+            gc_clock::now(), digest_only_builder, max_memory_for_reverse_query).get0();
 
     query::result::builder result_and_digest_builder(slice, query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash}, l.new_data_read(query::result_memory_limiter::maximum_result_size).get0());
-    data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now(), result_and_digest_builder).get0();
+    data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(),
+            gc_clock::now(), result_and_digest_builder, max_memory_for_reverse_query).get0();
 
     BOOST_REQUIRE_EQUAL(digest_only_builder.memory_accounter().used_memory(), result_and_digest_builder.memory_accounter().used_memory());
 }

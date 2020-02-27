@@ -161,6 +161,7 @@ future<reconcilable_result> mutation_query(
     uint32_t row_limit,
     uint32_t partition_limit,
     gc_clock::time_point query_time,
+    uint64_t max_memory_reverse_query,
     query::result_memory_accounter&& accounter = { },
     tracing::trace_state_ptr trace_ptr = nullptr,
     db::timeout_clock::time_point timeout = db::no_timeout,
@@ -175,6 +176,7 @@ future<> data_query(
     uint32_t partition_limit,
     gc_clock::time_point query_time,
     query::result::builder& builder,
+    uint64_t max_memory_reverse_query,
     tracing::trace_state_ptr trace_ptr = nullptr,
     db::timeout_clock::time_point timeout = db::no_timeout,
     query::querier_cache_context cache_ctx = { });
@@ -189,6 +191,7 @@ class mutation_query_stage {
         uint32_t,
         uint32_t,
         gc_clock::time_point,
+        uint64_t,
         query::result_memory_accounter&&,
         tracing::trace_state_ptr,
         db::timeout_clock::time_point,

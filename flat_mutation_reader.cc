@@ -59,14 +59,14 @@ void flat_mutation_reader::impl::clear_buffer_to_next_partition() {
     _buffer_size = compute_buffer_size(*_schema, _buffer);
 }
 
-flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutation_reader::impl& original) {
-    // FIXME: #1413 Full partitions get accumulated in memory.
-
+flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, size_t max_memory_consumption) {
     class partition_reversing_mutation_reader final : public flat_mutation_reader::impl {
-        flat_mutation_reader::impl* _source;
+        flat_mutation_reader* _source;
         range_tombstone_list _range_tombstones;
         std::stack<mutation_fragment> _mutation_fragments;
         mutation_fragment_opt _partition_end;
+        size_t _stack_size = 0;
+        const size_t _max_stack_size;
     private:
         stop_iteration emit_partition() {
             auto emit_range_tombstone = [&] {
@@ -76,12 +76,13 @@ flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutatio
                 auto rt_owner = alloc_strategy_unique_ptr<range_tombstone>(&rt);
                 push_mutation_fragment(mutation_fragment(std::move(rt)));
             };
-            position_in_partition::less_compare cmp(*_source->_schema);
+            position_in_partition::less_compare cmp(*_schema);
             while (!_mutation_fragments.empty() && !is_buffer_full()) {
                 auto& mf = _mutation_fragments.top();
                 if (!_range_tombstones.empty() && !cmp(_range_tombstones.tombstones().rbegin()->end_position(), mf.position())) {
                     emit_range_tombstone();
                 } else {
+                    _stack_size -= mf.memory_usage(*_schema);
                     push_mutation_fragment(std::move(mf));
                     _mutation_fragments.pop();
                 }
@@ -113,18 +114,35 @@ flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutatio
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
                 } else if (mf.is_range_tombstone()) {
-                    _range_tombstones.apply(*_source->_schema, std::move(mf.as_range_tombstone()));
+                    _range_tombstones.apply(*_schema, std::move(mf.as_range_tombstone()));
                 } else {
                     _mutation_fragments.emplace(std::move(mf));
+                    _stack_size += _mutation_fragments.top().memory_usage(*_schema);
+                    if (_stack_size >= _max_stack_size) {
+                        const partition_key* key = nullptr;
+                        auto it = buffer().end();
+                        --it;
+                        if (it->is_partition_start()) {
+                            key = &it->as_partition_start().key().key();
+                        } else {
+                            --it;
+                            key = &it->as_partition_start().key().key();
+                        }
+                        throw std::runtime_error(fmt::format(
+                                "Aborting reverse partition read because partition {} is larger than the maximum safe size of {} for reversible partitions.",
+                                key->with_schema(*_schema),
+                                _max_stack_size));
+                    }
                 }
             }
             return make_ready_future<stop_iteration>(is_buffer_full());
         }
     public:
-        explicit partition_reversing_mutation_reader(flat_mutation_reader::impl& mr)
-            : flat_mutation_reader::impl(mr._schema)
+        explicit partition_reversing_mutation_reader(flat_mutation_reader& mr, size_t max_stack_size)
+            : flat_mutation_reader::impl(mr.schema())
             , _source(&mr)
-            , _range_tombstones(*mr._schema)
+            , _range_tombstones(*_schema)
+            , _max_stack_size(max_stack_size)
         { }
 
         virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
@@ -145,6 +163,7 @@ flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutatio
             clear_buffer_to_next_partition();
             if (is_buffer_empty() && !is_end_of_stream()) {
                 while (!_mutation_fragments.empty()) {
+                    _stack_size -= _mutation_fragments.top().memory_usage(*_schema);
                     _mutation_fragments.pop();
                 }
                 _range_tombstones.clear();
@@ -165,7 +184,7 @@ flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutatio
         }
     };
 
-    return make_flat_mutation_reader<partition_reversing_mutation_reader>(original);
+    return make_flat_mutation_reader<partition_reversing_mutation_reader>(original, max_memory_consumption);
 }
 
 template<typename Source>

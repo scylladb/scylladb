@@ -2168,6 +2168,7 @@ future<> data_query(
         uint32_t partition_limit,
         gc_clock::time_point query_time,
         query::result::builder& builder,
+        uint64_t max_memory_reverse_query,
         tracing::trace_state_ptr trace_ptr,
         db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx)
@@ -2181,9 +2182,10 @@ future<> data_query(
             ? std::move(*querier_opt)
             : query::data_querier(source, s, range, slice, service::get_local_sstable_query_read_priority(), trace_ptr);
 
-    return do_with(std::move(q), [=, &builder, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (query::data_querier& q) mutable {
+    return do_with(std::move(q), [=, &builder, trace_ptr = std::move(trace_ptr),
+            cache_ctx = std::move(cache_ctx)] (query::data_querier& q) mutable {
         auto qrb = query_result_builder(*s, builder);
-        return q.consume_page(std::move(qrb), row_limit, partition_limit, query_time, timeout).then(
+        return q.consume_page(std::move(qrb), row_limit, partition_limit, query_time, timeout, max_memory_reverse_query).then(
                 [=, &builder, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] () mutable {
             if (q.are_limits_reached() || builder.is_short_read()) {
                 cache_ctx.insert(std::move(q), std::move(trace_ptr));
@@ -2261,6 +2263,7 @@ static do_mutation_query(schema_ptr s,
                uint32_t row_limit,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
+               uint64_t max_memory_reverse_query,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
                db::timeout_clock::time_point timeout,
@@ -2278,7 +2281,7 @@ static do_mutation_query(schema_ptr s,
     return do_with(std::move(q), [=, &slice, accounter = std::move(accounter), trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (
                 query::mutation_querier& q) mutable {
         auto rrb = reconcilable_result_builder(*s, slice, std::move(accounter));
-        return q.consume_page(std::move(rrb), row_limit, partition_limit, query_time, timeout).then(
+        return q.consume_page(std::move(rrb), row_limit, partition_limit, query_time, timeout, max_memory_reverse_query).then(
                 [=, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (reconcilable_result r) mutable {
             if (q.are_limits_reached() || r.is_short_read()) {
                 cache_ctx.insert(std::move(q), std::move(trace_ptr));
@@ -2300,13 +2303,14 @@ mutation_query(schema_ptr s,
                uint32_t row_limit,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
+               uint64_t max_memory_reverse_query,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
                db::timeout_clock::time_point timeout,
                query::querier_cache_context cache_ctx)
 {
     return do_mutation_query(std::move(s), std::move(source), seastar::cref(range), seastar::cref(slice),
-            row_limit, partition_limit, query_time, std::move(accounter), std::move(trace_ptr), timeout, std::move(cache_ctx));
+            row_limit, partition_limit, query_time, max_memory_reverse_query, std::move(accounter), std::move(trace_ptr), timeout, std::move(cache_ctx));
 }
 
 deletable_row::deletable_row(clustering_row&& cr)
@@ -2528,7 +2532,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
     auto cwqrb = counter_write_query_result_builder(*s);
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, counter_write_query_result_builder>>(
             *s, gc_clock::now(), slice, query::max_rows, query::max_rows, std::move(cwqrb));
-    auto f = r_a_r->reader.consume(std::move(cfq), db::no_timeout, flat_mutation_reader::consume_reversed_partitions::no);
+    auto f = r_a_r->reader.consume(std::move(cfq), db::no_timeout);
     return f.finally([r_a_r = std::move(r_a_r)] { });
 }
 

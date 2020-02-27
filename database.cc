@@ -929,8 +929,10 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     // avoid self-reporting
     if (is_system_table(s)) {
         cfg.sstables_manager = &db.get_system_sstables_manager();
+        cfg.max_memory_for_unlimited_query = std::numeric_limits<uint64_t>::max();
     } else {
         cfg.sstables_manager = &db.get_user_sstables_manager();
+        cfg.max_memory_for_unlimited_query = db_config.max_memory_for_unlimited_query();
     }
 
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
@@ -1206,6 +1208,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             cmd.row_limit,
             cmd.partition_limit,
             cmd.timestamp,
+            cf.get_config().max_memory_for_unlimited_query,
             std::move(accounter),
             std::move(trace_state),
             timeout,

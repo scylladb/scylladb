@@ -82,6 +82,15 @@ updateable_value_base::operator=(updateable_value_base&& v) noexcept {
     return *this;
 }
 
+updateable_value_base&
+updateable_value_base::updateable_value_base::operator=(nullptr_t) {
+    if (_source) {
+        _source->del_ref(this);
+        _source = nullptr;
+    }
+    return *this;
+}
+
 void
 updateable_value_source_base::for_each_ref(std::function<void (updateable_value_base* ref)> func) {
     for (auto ref : _refs) {
