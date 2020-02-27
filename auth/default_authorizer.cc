@@ -70,10 +70,10 @@ const sstring& default_authorizer_name() {
     return name;
 }
 
-static const sstring ROLE_NAME = "role";
-static const sstring RESOURCE_NAME = "resource";
-static const sstring PERMISSIONS_NAME = "permissions";
-static const sstring PERMISSIONS_CF = "role_permissions";
+static constexpr std::string_view ROLE_NAME = "role";
+static constexpr std::string_view RESOURCE_NAME = "resource";
+static constexpr std::string_view PERMISSIONS_NAME = "permissions";
+static constexpr std::string_view PERMISSIONS_CF = "role_permissions";
 
 static logging::logger alogger("default_authorizer");
 
