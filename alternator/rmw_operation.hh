@@ -99,6 +99,7 @@ public:
     virtual ~rmw_operation() = default;
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }
+    rjson::value&& move_request() && { return std::move(_request); }
     future<executor::request_return_type> execute(service::storage_proxy& proxy,
             service::client_state& client_state,
             tracing::trace_state_ptr trace_state,
