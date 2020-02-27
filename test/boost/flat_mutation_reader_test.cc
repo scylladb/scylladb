@@ -589,8 +589,11 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             assert(bool(!reversed));
             return fmr.consume_in_thread(std::move(fsc), db::no_timeout);
         } else {
-            auto reversed_flag = flat_mutation_reader::consume_reversed_partitions(bool(reversed));
-            return fmr.consume(std::move(fsc), db::no_timeout, reversed_flag).get0();
+            if (reversed) {
+                auto reverse_reader = make_reversing_reader(fmr);
+                return reverse_reader.consume(std::move(fsc), db::no_timeout).get0();
+            }
+            return fmr.consume(std::move(fsc), db::no_timeout).get0();
         }
     };
 

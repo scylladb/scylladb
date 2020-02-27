@@ -79,15 +79,6 @@ GCC6_CONCEPT(
  */
 class flat_mutation_reader final {
 public:
-    // Causes a stream of reversed mutations to be emitted.
-    // 1. Static row is still emitted first.
-    // 2. Range tombstones are ordered by their end position.
-    // 3. Clustered rows and range tombstones are emitted in descending order.
-    // Because of 2 and 3 the guarantee that a range tombstone is emitted before
-    // any mutation fragment affected by it still holds.
-    // Ordering of partitions themselves remains unchanged.
-    using consume_reversed_partitions = seastar::bool_class<class consume_reversed_partitions_tag>;
-
     class impl {
     private:
         circular_buffer<mutation_fragment> _buffer;
@@ -122,8 +113,6 @@ public:
         const circular_buffer<mutation_fragment>& buffer() const {
             return _buffer;
         }
-    private:
-        static flat_mutation_reader reverse_partitions(flat_mutation_reader::impl&);
     public:
         impl(schema_ptr s) : _schema(std::move(s)) { }
         virtual ~impl() {}
@@ -353,14 +342,7 @@ public:
     GCC6_CONCEPT(
         requires FlattenedConsumer<Consumer>()
     )
-    auto consume(Consumer consumer,
-            db::timeout_clock::time_point timeout,
-            consume_reversed_partitions reversed = consume_reversed_partitions::no) {
-        if (reversed) {
-            return do_with(impl::reverse_partitions(*_impl), [&] (auto& reversed_partition_stream) {
-                return reversed_partition_stream._impl->consume(std::move(consumer), timeout);
-            });
-        }
+    auto consume(Consumer consumer, db::timeout_clock::time_point timeout) {
         return _impl->consume(std::move(consumer), timeout);
     }
 
@@ -746,6 +728,22 @@ future<> consume_partitions(flat_mutation_reader& reader, Consumer consumer, db:
 
 flat_mutation_reader
 make_generating_reader(schema_ptr s, std::function<future<mutation_fragment_opt> ()> get_next_fragment);
+
+/// A reader that emits partitions in reverse.
+///
+/// 1. Static row is still emitted first.
+/// 2. Range tombstones are ordered by their end position.
+/// 3. Clustered rows and range tombstones are emitted in descending order.
+/// Because of 2 and 3 the guarantee that a range tombstone is emitted before
+/// any mutation fragment affected by it still holds.
+/// Ordering of partitions themselves remains unchanged.
+///
+/// \param original the reader to be reversed, has to be kept alive while the
+///     reversing reader is in use.
+///
+/// FIXME: reversing should be done in the sstable layer, see #1413.
+flat_mutation_reader
+make_reversing_reader(flat_mutation_reader& original);
 
 /// Low level fragment stream validator.
 ///

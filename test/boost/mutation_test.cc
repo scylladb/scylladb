@@ -2928,7 +2928,7 @@ void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_
             survived_compacted_fragments_consumer(schema, query_time, get_max_purgeable),
             purged_compacted_fragments_consumer(schema, query_time, get_max_purgeable));
 
-    auto [survived_partitions, purged_partitions] = reader.consume(std::move(consumer), db::no_timeout, flat_mutation_reader::consume_reversed_partitions::no).get0();
+    auto [survived_partitions, purged_partitions] = reader.consume(std::move(consumer), db::no_timeout).get0();
 
     tlog.info("Survived data: {}", create_stats(survived_partitions));
     tlog.info("Purged data:   {}", create_stats(purged_partitions));

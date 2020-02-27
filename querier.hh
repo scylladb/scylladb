@@ -95,15 +95,22 @@ auto consume_page(flat_mutation_reader& reader,
         const auto next_fragment_kind = next_fragment ? next_fragment->mutation_fragment_kind() : mutation_fragment::kind::partition_end;
         compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_kind, *consumer);
 
-        const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(
-                slice.options.contains(query::partition_slice::option::reversed));
-
         auto last_ckey = make_lw_shared<std::optional<clustering_key_prefix>>();
         auto reader_consumer = make_stable_flattened_mutations_consumer<compact_for_query<OnlyLive, clustering_position_tracker<Consumer>>>(
                 compaction_state,
                 clustering_position_tracker(std::move(consumer), last_ckey));
 
-        return reader.consume(std::move(reader_consumer), timeout, is_reversed).then([last_ckey] (auto&&... results) mutable {
+        auto consume = [&reader, &slice, reader_consumer = std::move(reader_consumer), timeout] () mutable {
+            if (slice.options.contains(query::partition_slice::option::reversed)) {
+                return do_with(make_reversing_reader(reader),
+                        [reader_consumer = std::move(reader_consumer), timeout] (flat_mutation_reader& reversing_reader) mutable {
+                    return reversing_reader.consume(std::move(reader_consumer), timeout);
+                });
+            }
+            return reader.consume(std::move(reader_consumer), timeout);
+        };
+
+        return consume().then([last_ckey] (auto&&... results) mutable {
             static_assert(sizeof...(results) <= 1);
             return make_ready_future<std::tuple<std::optional<clustering_key_prefix>, std::decay_t<decltype(results)>...>>(std::tuple(std::move(*last_ckey), std::move(results)...));
         });
