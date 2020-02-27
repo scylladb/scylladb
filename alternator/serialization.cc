@@ -136,7 +136,7 @@ rjson::value deserialize_item(bytes_view bv) {
 
     if (atype == alternator_type::NOT_SUPPORTED_YET) {
         slogger.trace("Non-optimal deserialization of alternator type {}", int8_t(atype));
-        return rjson::parse_raw(reinterpret_cast<const char *>(bv.data()), bv.size());
+        return rjson::parse(std::string_view(reinterpret_cast<const char *>(bv.data()), bv.size()));
     }
     type_representation type_representation = represent_type(atype);
     visit(*type_representation.dtype, to_json_visitor{deserialized, type_representation.ident, bv});

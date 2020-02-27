@@ -109,12 +109,8 @@ rjson::value copy(const rjson::value& value) {
 }
 
 rjson::value parse(std::string_view str) {
-    return parse_raw(str.data(), str.size());
-}
-
-rjson::value parse_raw(const char* c_str, size_t size) {
     guarded_json_handler<document> d(39);
-    d.Parse(c_str, size);
+    d.Parse(str.data(), str.size());
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
     }
