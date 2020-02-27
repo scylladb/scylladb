@@ -1206,9 +1206,9 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             cmd.row_limit,
             cmd.partition_limit,
             cmd.timestamp,
+            timeout,
             std::move(accounter),
             std::move(trace_state),
-            timeout,
             std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
