@@ -50,6 +50,7 @@
 #include "hashing.hh"
 #include <boost/multiprecision/cpp_int.hpp>  // FIXME: remove somehow
 #include "utils/fragmented_temporary_buffer.hh"
+#include "utils/exceptions.hh"
 
 class tuple_type_impl;
 class big_decimal;
@@ -227,6 +228,8 @@ public:
         return "Unexpected empty value";
     }
 };
+
+[[noreturn]] void on_types_internal_error(const sstring& reason);
 
 // Cassandra has a notion of empty values even for scalars (i.e. int).  This is
 // distinct from NULL which means deleted or never set.  It is serialized
@@ -687,7 +690,11 @@ bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
 
 static inline
 int tri_compare(data_type t, bytes_view e1, bytes_view e2) {
-    return t->compare(e1, e2);
+    try {
+        return t->compare(e1, e2);
+    } catch (const marshal_exception& e) {
+        on_types_internal_error(e.what());
+    }
 }
 
 inline

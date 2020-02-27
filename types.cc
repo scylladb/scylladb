@@ -63,6 +63,12 @@
 #include "types/set.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
 
+static logging::logger tlogger("types");
+
+void on_types_internal_error(const sstring& reason) {
+    on_internal_error(tlogger, reason);
+}
+
 template<typename T>
 sstring time_point_to_string(const T& tp)
 {
@@ -2712,9 +2718,8 @@ bytes_opt data_value::serialize() const {
 }
 
 bytes data_value::serialize_nonnull() const {
-    static logging::logger logger("types");
     if (!_value) {
-        on_internal_error(logger, "serialize_nonnull called on null");
+        on_internal_error(tlogger, "serialize_nonnull called on null");
     }
     return std::move(*serialize());
 }
