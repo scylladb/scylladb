@@ -15,7 +15,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-# Tests for large requests
+# Tests for manual requests - not necessarily generated
+# by boto3, in order to allow non-validated input to get through
 
 import pytest
 import requests
