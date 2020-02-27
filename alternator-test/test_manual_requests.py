@@ -25,6 +25,22 @@ from botocore.exceptions import BotoCoreError, ClientError
 def gen_json(n):
     return '{"":'*n + '{}' + '}'*n
 
+def get_signed_request(dynamodb, target, payload):
+    # NOTE: Signing routines use boto3 implementation details and may be prone
+    # to unexpected changes
+    class Request:
+        url=dynamodb.meta.client._endpoint.host
+        headers={'X-Amz-Target': 'DynamoDB_20120810.' + target}
+        body=payload.encode(encoding='UTF-8')
+        method='POST'
+        context={}
+        params={}
+    req = Request()
+    signer = dynamodb.meta.client._request_signer
+    signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
+    print(signer.signing_name, signer.region_name)
+    return req
+
 # Test that deeply nested objects (e.g. with depth of 200k) are parsed correctly,
 # i.e. do not cause stack overflows for the server. It's totally fine for the
 # server to refuse these packets with an error message though.
@@ -36,20 +52,7 @@ def test_deeply_nested_put(dynamodb, test_table):
     big_json = gen_json(200000)
     payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}, "attribute":' + big_json + '}}'
 
-    # NOTE: Signing routines use boto3 implementation details and may be prone
-    # to unexpected changes
-    class Request:
-        url=dynamodb.meta.client._endpoint.host
-        headers={'X-Amz-Target': 'DynamoDB_20120810.PutItem'}
-        body=payload.encode(encoding='UTF-8')
-        method='POST'
-        context={}
-        params={}
-    req = Request()
-    signer = dynamodb.meta.client._request_signer
-    signer.get_auth(signer.signing_name, signer.region_name).add_auth(request=req)
-    print(signer.signing_name, signer.region_name)
-
+    req = get_signed_request(dynamodb, 'PutItem', payload)
     # Check that the request delivery succeeded and the server
     # responded with a comprehensible message - it can be either
     # a success report or an error - both are acceptable as long as
