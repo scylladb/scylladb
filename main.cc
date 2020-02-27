@@ -1068,7 +1068,7 @@ int main(int ac, char** av) {
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 static sharded<alternator::executor> alternator_executor;
-                static alternator::server alternator_server(alternator_executor);
+                static sharded<alternator::server> alternator_server;
 
                 if (!cfg->check_experimental(db::experimental_features_t::LWT)) {
                     throw std::runtime_error("Alternator enabled, but needs experimental LWT feature which wasn't enabled");
@@ -1080,6 +1080,7 @@ int main(int ac, char** av) {
                     std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve alternator_address {}", cfg->alternator_address())));
                 }
                 alternator_executor.start(std::ref(proxy), std::ref(mm)).get();
+                alternator_server.start(std::ref(alternator_executor)).get();
                 std::optional<uint16_t> alternator_port;
                 if (cfg->alternator_port()) {
                     alternator_port = cfg->alternator_port();
@@ -1105,8 +1106,12 @@ int main(int ac, char** av) {
                     }
                 }
                 bool alternator_enforce_authorization = cfg->alternator_enforce_authorization();
-                with_scheduling_group(dbcfg.statement_scheduling_group, [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization] {
-                    return alternator_server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization);
+                with_scheduling_group(dbcfg.statement_scheduling_group,
+                        [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization] () mutable {
+                    return alternator_server.invoke_on_all(
+                            [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization] (alternator::server& server) mutable {
+                        return server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization);
+                    });
                 }).get();
                 auto stop_alternator = [] {
                     alternator_server.stop().get();
