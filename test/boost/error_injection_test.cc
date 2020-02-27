@@ -24,6 +24,8 @@
 #include <seastar/testing/test_case.hh>
 #include "utils/error_injection.hh"
 #include "db/timeout_clock.hh"
+#include "test/lib/cql_assertions.hh"
+#include "types/list.hh"
 #include "log.hh"
 #include <chrono>
 
@@ -195,4 +197,73 @@ SEASTAR_TEST_CASE(test_inject_once) {
     BOOST_REQUIRE_NO_THROW(errinj.inject("first", [] { throw std::runtime_error("test"); }));
 
     return make_ready_future<>();
+}
+
+// Test error injection CQL API
+// NOTE: currently since functions can't get terminals an auxiliary table
+//       with error injection names and one shot parameters
+SEASTAR_TEST_CASE(test_inject_cql) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&e] {
+            // Type of returned list of error injections cql3/functions/error_injcetion_fcts.cc
+            const auto my_list_type = list_type_impl::get_instance(ascii_type, false);
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+            auto row_empty = my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{}}));
+            auto row_test1 = my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{"test1"}}));
+            auto row_test2 = my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{"test2"}}));
+#else
+            auto row_empty = my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{}}));
+            auto row_test1 = row_empty;
+            auto row_test2 = row_empty;
+#endif
+
+            // Auxiliary table with terminals
+            cquery_nofail(e, "create table error_name (name ascii primary key, one_shot ascii)");
+
+            // Enable (test1,one_shot=true)
+            cquery_nofail(e, "insert into  error_name (name, one_shot) values ('test1', 'true')");
+
+            // Check no error injections before injecting
+            auto ret0 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            assert_that(ret0).is_rows().with_rows({
+                {row_empty}
+            });
+
+            cquery_nofail(e, "select enable_injection(name, one_shot)  from error_name where name = 'test1'");
+            // enabled_injections() returns a list all injections in one call, so limit 1
+            auto ret1 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            assert_that(ret1).is_rows().with_rows({
+                {row_test1}
+            });
+            utils::get_local_injector().inject("test1", [] {}); // Noop one-shot injection
+            auto ret2 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            assert_that(ret2).is_rows().with_rows({
+                // Empty list after one shot executed
+                {row_empty}
+            });
+
+            // Again (test1,one_shot=true) but disable with CQL API
+            cquery_nofail(e, "select enable_injection(name, one_shot)  from error_name where name = 'test1'");
+            // enabled_injections() returns a list all injections in one call, so limit 1
+            auto ret3 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            assert_that(ret3).is_rows().with_rows({
+                {row_test1}
+            });
+            // Disable
+            cquery_nofail(e, "select disable_injection(name) from error_name where name = 'test1'");
+            auto ret4 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            assert_that(ret4).is_rows().with_rows({
+                // Empty list after one shot disabled
+                {row_empty}
+            });
+
+            cquery_nofail(e, "insert into  error_name (name, one_shot) values ('test2', 'false')");
+            cquery_nofail(e, "select enable_injection(name, one_shot)  from error_name where name = 'test2'");
+            utils::get_local_injector().inject("test2", [] {}); // Noop injection, doesn't disable
+            auto ret5 = e.execute_cql("select enabled_injections() from error_name limit 1").get0();
+            assert_that(ret5).is_rows().with_rows({
+                {row_test2}
+            });
+        });
+    });
 }

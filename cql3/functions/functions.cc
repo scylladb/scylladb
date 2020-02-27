@@ -37,6 +37,8 @@
 #include "concrete_types.hh"
 #include "as_json_function.hh"
 
+#include "error_injection_fcts.hh"
+
 namespace std {
 std::ostream& operator<<(std::ostream& os, const std::vector<data_type>& arg_types) {
     for (size_t i = 0; i < arg_types.size(); ++i) {
@@ -106,6 +108,10 @@ functions::init() {
     declare(make_varchar_as_blob_fct());
     declare(make_blob_as_varchar_fct());
     add_agg_functions(ret);
+
+    declare(error_injection::make_enable_injection_function());
+    declare(error_injection::make_disable_injection_function());
+    declare(error_injection::make_enabled_injections_function());
 
     // also needed for smp:
 #if 0
