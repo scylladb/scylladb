@@ -2326,7 +2326,7 @@ def get_local_tasks(tq_id = None):
 
     for tq in tqs:
         for t in circular_buffer(tq['_q']):
-            yield std_unique_ptr(t).get()
+            yield t
 
 
 class scylla_task_stats(gdb.Command):
