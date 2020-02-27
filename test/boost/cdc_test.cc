@@ -339,13 +339,14 @@ static auto select_log(cql_test_env& e, const sstring& table_name) {
 
 SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
+        cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, s int STATIC, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true'}");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 22, 222, 2222, 22222)");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 33, 333, 3333, 33333)");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 44, 444, 4444, 44444)");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(2, 11, 111, 1111, 11111)");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(3, 11, 111, 1111, 11111) USING TTL 600");
+        cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, s) VALUES (4, 11, 111)");
         cquery_nofail(e, "DELETE val FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111");
         cquery_nofail(e, "DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck > 222 AND ck <= 444");
@@ -405,6 +406,8 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
         assert_row(2, 11, 111, 1111);
         // INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(3, 11, 111, 1111, 11111) WITH TTL 600
         assert_row(3, 11, 111, 1111, 600);
+        // INSERT INTO ks.tbl(pk, pk2, s) VALUES (4, 11, 111)
+        assert_row(4, 11, -1, -1);
         // DELETE val FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
         assert_row(1, 11, 111, 1111);
         // DELETE FROM ks.tbl WHERE pk = 1 AND pk2 = 11 AND ck = 111 AND ck2 = 1111
@@ -480,6 +483,68 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
                 last_ttl = new_ttl;
             }
             e.execute_cql("DROP TABLE ks.tbl").get();
+        };
+        test(true, true);
+        test(true, false);
+        test(false, true);
+        test(false, false);
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_pre_image_logging_static_row) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        auto test = [&e] (bool enabled, bool with_ttl) {
+            cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, s int STATIC, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true', 'preimage':'"s + (enabled ? "true" : "false") + "'}");
+            cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, s) VALUES(1, 11, 111)"s + (with_ttl ? " USING TTL 654" : ""));
+
+            auto rows = select_log(e, "tbl");
+
+            BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
+
+            auto first = to_bytes_filtered(*rows, cdc::operation::update);
+
+            auto s_index = column_index(*rows, cdc::log_data_column_name("s"));
+            auto ttl_index = column_index(*rows, cdc::log_meta_column_name("ttl"));
+
+            auto s_type = int32_type;
+            auto s = *first[0][s_index];
+
+            BOOST_REQUIRE_EQUAL(data_value(111), s_type->deserialize(bytes_view(s)));
+
+            auto last = 111;
+            int64_t last_ttl = 654;
+            for (auto i = 0u; i < 10; ++i) {
+                auto nv = last + 1;
+                const int64_t new_ttl = 100 * (i + 1);
+                cquery_nofail(e, "UPDATE ks.tbl" + (with_ttl ? format(" USING TTL {}", new_ttl) : "") + " SET s=" + std::to_string(nv) +" where pk=1 AND pk2=11");
+
+                rows = select_log(e, "tbl");
+
+                auto pre_image = to_bytes_filtered(*rows, cdc::operation::pre_image);
+                auto second = to_bytes_filtered(*rows, cdc::operation::update);
+
+                if (!enabled) {
+                    BOOST_REQUIRE(pre_image.empty());
+                } else {
+                    sort_by_time(*rows, second);
+                    BOOST_REQUIRE_EQUAL(pre_image.size(), i + 1);
+
+                    s = *pre_image.back()[s_index];
+                    BOOST_REQUIRE_EQUAL(data_value(last), s_type->deserialize(bytes_view(s)));
+                    BOOST_REQUIRE_EQUAL(bytes_opt(), pre_image.back()[ttl_index]);
+
+                    const auto& ttl_cell = second[second.size() - 2][ttl_index];
+                    if (with_ttl) {
+                        BOOST_REQUIRE_EQUAL(long_type->decompose(last_ttl), ttl_cell);
+                    } else {
+                        BOOST_REQUIRE(!ttl_cell);
+                    }
+                }
+
+                last = nv;
+                last_ttl = new_ttl;
+            }
+            cquery_nofail(e, "DROP TABLE ks.tbl");
         };
         test(true, true);
         test(true, false);
@@ -1064,28 +1129,28 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
             return res;
         };
 
-        // TODO: add a static column when static row handling is fixed
-
-        cquery_nofail(e, "create table ks.t (pk int, ck int, v1 int, v2 int, m map<int, int>, primary key (pk, ck)) with cdc = {'enabled':true}");
+        cquery_nofail(e, "create table ks.t (pk int, ck int, s int static, v1 int, v2 int, m map<int, int>, primary key (pk, ck)) with cdc = {'enabled':true}");
 
         auto now = api::new_timestamp();
 
         cquery_nofail(e, format(
             "begin unlogged batch"
+            " update ks.t using timestamp {} set s = -1 where pk = 0;"
             " update ks.t using timestamp {} set v1 = 1 where pk = 0 and ck = 0;"
             " update ks.t using timestamp {} set v2 = 2 where pk = 0 and ck = 0;"
             " apply batch;",
-            now, now + 1));
+            now, now + 1, now + 2));
 
         {
             auto result = get_result(
-                {int32_type, int32_type, int32_type},
-                "select \"cdc$batch_seq_no\", v1, v2 from ks.t_scylla_cdc_log where pk = 0 and ck = 0 allow filtering");
-            BOOST_REQUIRE_EQUAL(result.size(), 2);
+                {int32_type, int32_type, int32_type, int32_type},
+                "select \"cdc$batch_seq_no\", s, v1, v2 from ks.t_scylla_cdc_log where pk = 0 allow filtering");
+            BOOST_REQUIRE_EQUAL(result.size(), 3);
 
             std::vector<std::vector<data_value>> expected = {
-                { int32_t(0), int32_t(1), int_null},
-                { int32_t(0), int_null, int32_t(2)}
+                { int32_t(0), int32_t(-1), int_null, int_null},
+                { int32_t(0), int_null, int32_t(1), int_null},
+                { int32_t(0), int_null, int_null, int32_t(2)}
             };
 
             BOOST_REQUIRE_EQUAL(expected, result);
