@@ -1208,6 +1208,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             cmd.row_limit,
             cmd.partition_limit,
             cmd.timestamp,
+            cf.get_config().max_memory_for_unlimited_query,
             std::move(accounter),
             std::move(trace_state),
             timeout,

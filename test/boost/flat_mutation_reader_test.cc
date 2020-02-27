@@ -590,7 +590,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             return fmr.consume_in_thread(std::move(fsc), db::no_timeout);
         } else {
             if (reversed) {
-                auto reverse_reader = make_reversing_reader(fmr);
+                auto reverse_reader = make_reversing_reader(fmr, size_t(1) << 20);
                 return reverse_reader.consume(std::move(fsc), db::no_timeout).get0();
             }
             return fmr.consume(std::move(fsc), db::no_timeout).get0();
@@ -786,4 +786,50 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_as_mutation_source)
         });
     };
     run_mutation_source_tests(populate);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
+    simple_schema schema;
+
+    struct phony_consumer {
+        void consume_new_partition(const dht::decorated_key&) { }
+        void consume(tombstone) { }
+        stop_iteration consume(static_row&&) { return stop_iteration::no; }
+        stop_iteration consume(clustering_row&&) { return stop_iteration::no; }
+        stop_iteration consume(range_tombstone&&) { return stop_iteration::no; }
+        stop_iteration consume_end_of_partition() { return stop_iteration::no; }
+        void consume_end_of_stream() { }
+    };
+
+    auto test_with_partition = [&] (bool with_static_row) {
+        BOOST_TEST_MESSAGE(fmt::format("Testing with_static_row={}", with_static_row));
+        auto mut = schema.new_mutation("pk1");
+        const size_t desired_mut_size = 1 * 1024 * 1024;
+        const size_t row_size = 10 * 1024;
+
+        if (with_static_row) {
+            schema.add_static_row(mut, "s1");
+        }
+
+        for (size_t i = 0; i < desired_mut_size / row_size; ++i) {
+            schema.add_row(mut, schema.make_ckey(++i), sstring(row_size, '0'));
+        }
+
+        auto reader = flat_mutation_reader_from_mutations({mut});
+        auto reverse_reader = make_reversing_reader(reader, size_t(1) << 10);
+
+        try {
+            reverse_reader.consume(phony_consumer{}, db::no_timeout).get();
+            BOOST_FAIL("No exception thrown for reversing overly big partition");
+        } catch (const std::runtime_error& e) {
+            BOOST_TEST_MESSAGE(fmt::format("Got exception with message: {}", e.what()));
+            auto str = sstring(e.what());
+            BOOST_REQUIRE_EQUAL(str.find("Aborting reverse partition read because partition pk1"), 0);
+        } catch (...) {
+            throw;
+        }
+    };
+
+    test_with_partition(true);
+    test_with_partition(false);
 }

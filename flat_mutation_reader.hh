@@ -740,10 +740,15 @@ make_generating_reader(schema_ptr s, std::function<future<mutation_fragment_opt>
 ///
 /// \param original the reader to be reversed, has to be kept alive while the
 ///     reversing reader is in use.
+/// \param max_memory_consumption the maximum amount of memory the reader is
+///     allowed to use for reversing. The reverse reader reads entire partitions
+///     into memory, before reversing them. Since partitions can be larger than
+///     the available memory, we need to enforce a limit on memory consumption.
+///     If the read uses more memory then this limit, the read is aborted.
 ///
 /// FIXME: reversing should be done in the sstable layer, see #1413.
 flat_mutation_reader
-make_reversing_reader(flat_mutation_reader& original);
+make_reversing_reader(flat_mutation_reader& original, size_t max_memory_consumption);
 
 /// Low level fragment stream validator.
 ///

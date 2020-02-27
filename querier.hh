@@ -84,7 +84,8 @@ auto consume_page(flat_mutation_reader& reader,
         uint32_t row_limit,
         uint32_t partition_limit,
         gc_clock::time_point query_time,
-        db::timeout_clock::time_point timeout) {
+        db::timeout_clock::time_point timeout,
+        size_t reverse_read_max_memory) {
     // FIXME: #3158
     // consumer cannot be moved after consume_new_partition() is called
     // on it because it stores references to some of it's own members.
@@ -100,9 +101,9 @@ auto consume_page(flat_mutation_reader& reader,
                 compaction_state,
                 clustering_position_tracker(std::move(consumer), last_ckey));
 
-        auto consume = [&reader, &slice, reader_consumer = std::move(reader_consumer), timeout] () mutable {
+        auto consume = [&reader, &slice, reader_consumer = std::move(reader_consumer), timeout, reverse_read_max_memory] () mutable {
             if (slice.options.contains(query::partition_slice::option::reversed)) {
-                return do_with(make_reversing_reader(reader),
+                return do_with(make_reversing_reader(reader, reverse_read_max_memory),
                         [reader_consumer = std::move(reader_consumer), timeout] (flat_mutation_reader& reversing_reader) mutable {
                     return reversing_reader.consume(std::move(reader_consumer), timeout);
                 });
@@ -183,9 +184,10 @@ public:
             uint32_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
-            db::timeout_clock::time_point timeout) {
+            db::timeout_clock::time_point timeout,
+            size_t reverse_read_max_memory) {
         return ::query::consume_page(_reader, _compaction_state, *_slice, std::move(consumer), row_limit, partition_limit, query_time,
-                timeout).then([this] (auto&& results) {
+                timeout, reverse_read_max_memory).then([this] (auto&& results) {
             _last_ckey = std::get<std::optional<clustering_key>>(std::move(results));
             constexpr auto size = std::tuple_size<std::decay_t<decltype(results)>>::value;
             static_assert(size <= 2);

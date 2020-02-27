@@ -23,6 +23,7 @@
 #include "service/priority_manager.hh"
 #include "multishard_mutation_query.hh"
 #include "database.hh"
+#include "db/config.hh"
 
 #include <boost/range/adaptor/reversed.hpp>
 
@@ -219,6 +220,10 @@ public:
 
     read_context& operator=(read_context&&) = delete;
     read_context& operator=(const read_context&) = delete;
+
+    distributed<database>& db() {
+        return _db;
+    }
 
     virtual flat_mutation_reader create_reader(
             schema_ptr schema,
@@ -604,8 +609,9 @@ static future<reconcilable_result> do_query_mutations(
             return do_with(std::move(reader), std::move(compaction_state), [&, accounter = std::move(accounter), timeout] (
                         flat_mutation_reader& reader, lw_shared_ptr<compact_for_mutation_query_state>& compaction_state) mutable {
                 auto rrb = reconcilable_result_builder(*reader.schema(), cmd.slice, std::move(accounter));
+                auto& table = ctx->db().local().find_column_family(reader.schema());
                 return query::consume_page(reader, compaction_state, cmd.slice, std::move(rrb), cmd.row_limit, cmd.partition_limit, cmd.timestamp,
-                        timeout).then([&] (consume_result&& result) mutable {
+                        timeout, table.get_config().max_memory_for_unlimited_query).then([&] (consume_result&& result) mutable {
                     return make_ready_future<page_consume_result>(page_consume_result(std::move(result), reader.detach_buffer(), std::move(compaction_state)));
                 });
             }).then_wrapped([&ctx] (future<page_consume_result>&& result_fut) {
