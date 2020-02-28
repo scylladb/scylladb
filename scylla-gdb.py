@@ -1026,6 +1026,10 @@ def has_enable_lw_shared_from_this(type):
             return True
     return False
 
+def remove_prefix(s, prefix):
+    if s.startswith(prefix):
+        return s[len(prefix):]
+    return s
 
 class seastar_lw_shared_ptr():
     def __init__(self, ref):
@@ -1036,7 +1040,7 @@ class seastar_lw_shared_ptr():
         if has_enable_lw_shared_from_this(self.elem_type):
             return self.ref['_p'].cast(self.elem_type.pointer())
         else:
-            type = gdb.lookup_type('seastar::shared_ptr_no_esft<%s>' % str(self.elem_type.unqualified())).pointer()
+            type = gdb.lookup_type('seastar::shared_ptr_no_esft<%s>' % remove_prefix(str(self.elem_type.unqualified()), 'class ')).pointer()
             return self.ref['_p'].cast(type)['_value'].address
 
 
