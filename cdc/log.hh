@@ -40,6 +40,7 @@
 
 #include "exceptions/exceptions.hh"
 #include "timestamp.hh"
+#include "tracing/trace_state.hh"
 #include "cdc_options.hh"
 #include "utils/UUID.hh"
 
@@ -93,7 +94,8 @@ public:
     // returned to be invoked post the mutation query.
     future<std::tuple<std::vector<mutation>, result_callback>> augment_mutation_call(
         lowres_clock::time_point timeout,
-        std::vector<mutation>&& mutations
+        std::vector<mutation>&& mutations,
+        tracing::trace_state_ptr tr_state
         );
     bool needs_cdc_augmentation(const std::vector<mutation>&) const;
 };
