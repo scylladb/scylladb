@@ -3242,6 +3242,58 @@ class scylla_gdb_func_downcast_vptr(gdb.Function):
         return ptr.reinterpret_cast(actual_type)
 
 
+class reference_wrapper:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def get(self):
+        return self.ref['_M_data']
+
+
+class scylla_features(gdb.Command):
+    """Prints state of Scylla gossiper features on current shard.
+
+    Example:
+    (gdb) scylla features
+    "LWT": false
+    "HINTED_HANDOFF_SEPARATE_CONNECTION": true
+    "NONFROZEN_UDTS": true
+    "XXHASH": true
+    "CORRECT_COUNTER_ORDER": true
+    "WRITE_FAILURE_REPLY": true
+    "CDC": false
+    "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES": true
+    "RANGE_TOMBSTONES": true
+    "VIEW_VIRTUAL_COLUMNS": true
+    "SCHEMA_TABLES_V3": true
+    "LARGE_PARTITIONS": true
+    "UDF": false
+    "INDEXES": true
+    "MATERIALIZED_VIEWS": true
+    "DIGEST_MULTIPARTITION_READ": true
+    "COUNTERS": true
+    "UNBOUNDED_RANGE_TOMBSTONES": true
+    "ROLES": true
+    "LA_SSTABLE_FORMAT": true
+    "MC_SSTABLE_FORMAT": true
+    "STREAM_WITH_RPC_STREAM": true
+    "ROW_LEVEL_REPAIR": true
+    "TRUNCATION_TABLE": true
+    "CORRECT_STATIC_COMPACT_IN_MC": true
+    "DIGEST_INSENSITIVE_TO_EXPIRY": true
+    "COMPUTED_COLUMNS": true
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla features', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    def invoke(self, arg, for_tty):
+        gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
+        for (name, f) in list_unordered_map(gossiper['_feature_service']['_registered_features']):
+            f = reference_wrapper(f).get()
+            gdb.write('%s: %s\n' % (f['_name'], f['_enabled']))
+
+
 # Commands
 scylla()
 scylla_databases()
@@ -3275,6 +3327,7 @@ scylla_sstables()
 scylla_memtables()
 scylla_generate_object_graph()
 scylla_smp_queues()
+scylla_features()
 
 
 # Convenience functions
