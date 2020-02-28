@@ -1017,3 +1017,170 @@ SEASTAR_THREAD_TEST_CASE(test_update_insert_delete_distinction) {
         BOOST_REQUIRE_EQUAL(*results[3].front(), data_value(cdc::operation::row_delete).serialize_nonnull()); // log entry from (3)
     }, mk_cdc_test_config()).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        using oper_ut = std::underlying_type_t<cdc::operation>;
+
+        auto oper_type = data_type_for<oper_ut>();
+        auto m_type = map_type_impl::get_instance(int32_type, int32_type, false);
+        auto keys_type = set_type_impl::get_instance(int32_type, false);
+
+        auto int_null = data_value::make_null(int32_type);
+        auto map_null = data_value::make_null(m_type);
+        auto keys_null = data_value::make_null(keys_type);
+        auto long_null = data_value::make_null(long_type);
+        auto bool_null = data_value::make_null(boolean_type);
+
+        auto vmap = [&] (std::vector<std::pair<data_value, data_value>> m) {
+            return make_map_value(m_type, std::move(m));
+        };
+
+        auto vkeys = [&] (std::vector<data_value> s) {
+            return make_set_value(keys_type, std::move(s));
+        };
+
+        auto deser = [] (const data_type& t, const bytes_opt& b) -> data_value {
+            if (!b) {
+                return data_value::make_null(t);
+            }
+            return t->deserialize(*b);
+        };
+
+        auto get_result = [&] (const std::vector<data_type>& col_types, const sstring& s) -> std::vector<std::vector<data_value>> {
+            auto msg = e.execute_cql(s).get0();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(rows);
+
+            std::vector<std::vector<data_value>> res;
+            for (auto&& r: to_bytes(*rows)) {
+                BOOST_REQUIRE_LE(col_types.size(), r.size());
+                std::vector<data_value> res_r;
+                for (size_t i = 0; i < col_types.size(); ++i) {
+                    res_r.push_back(deser(col_types[i], r[i]));
+                }
+                res.push_back(std::move(res_r));
+            }
+            return res;
+        };
+
+        // TODO: add a static column when static row handling is fixed
+
+        cquery_nofail(e, "create table ks.t (pk int, ck int, v1 int, v2 int, m map<int, int>, primary key (pk, ck)) with cdc = {'enabled':true}");
+
+        auto now = api::new_timestamp();
+
+        cquery_nofail(e, format(
+            "begin unlogged batch"
+            " update ks.t using timestamp {} set v1 = 1 where pk = 0 and ck = 0;"
+            " update ks.t using timestamp {} set v2 = 2 where pk = 0 and ck = 0;"
+            " apply batch;",
+            now, now + 1));
+
+        {
+            auto result = get_result(
+                {int32_type, int32_type, int32_type},
+                "select \"cdc$batch_seq_no\", v1, v2 from ks.t_scylla_cdc_log where pk = 0 and ck = 0 allow filtering");
+            BOOST_REQUIRE_EQUAL(result.size(), 2);
+
+            std::vector<std::vector<data_value>> expected = {
+                { int32_t(0), int32_t(1), int_null},
+                { int32_t(0), int_null, int32_t(2)}
+            };
+
+            BOOST_REQUIRE_EQUAL(expected, result);
+        }
+
+        cquery_nofail(e, format(
+            "begin unlogged batch"
+            " update ks.t using timestamp {} and ttl 5 set v1 = 5, v2 = null where pk = 0 and ck = 1;"
+            " update ks.t using timestamp {} and ttl 6 set m = m + {{0:6, 1:6}} where pk = 0 and ck = 1;"
+            " update ks.t using timestamp {} and ttl 7 set m[2] = 7, m[3] = null where pk = 0 and ck = 1;"
+            " update ks.t using timestamp {} set m[4] = 0 where pk = 0 and ck = 1;"
+            " apply batch;",
+            now, now, now, now));
+
+        {
+            auto result = get_result(
+                {int32_type, int32_type, int32_type, boolean_type, m_type, keys_type, long_type},
+                "select \"cdc$batch_seq_no\", v1, v2, \"cdc$deleted_v2\", m, \"cdc$deleted_elements_m\", \"cdc$ttl\""
+                " from ks.t_scylla_cdc_log where pk = 0 and ck = 1 allow filtering");
+            BOOST_REQUIRE_EQUAL(result.size(), 4);
+
+            std::vector<std::vector<data_value>> expected = {
+                // The following represents the "v1 = 5" change. The "v2 = null" change gets merged with a different change, see below
+                {int32_t(0), int32_t(5), int_null, bool_null, map_null, keys_null, int64_t(5)},
+                {int32_t(0), int_null, int_null, bool_null, vmap({{0,6},{1,6}}), keys_null, long_null /*FIXME: ttl = 6*/},
+                // The following represents the "m[2] = 7" change. The "m[3] = null" change gets merged with a different change, see below
+                {int32_t(0), int_null, int_null, bool_null, vmap({{2,7}}), keys_null, long_null /*FIXME: ttl = 7*/},
+                // The "v2 = null" and "v[3] = null" changes get merged with the "m[4] = 0" change, because dead cells
+                // don't have a "ttl" concept; thus we put them together with alive cells which don't have a ttl (so ttl column = null).
+                {int32_t(0), int_null, int_null, true, vmap({{4,0}}), vkeys({3}), long_null},
+            };
+
+            // These changes have the same timestamp, so their relative order in CDC log is arbitrary
+            for (auto& er: expected) {
+                BOOST_REQUIRE(std::find_if(result.begin(), result.end(), [&] (const std::vector<data_value>& r) {
+                    return er == r;
+                }) != result.end());
+            }
+        }
+
+        cquery_nofail(e, format(
+            "begin unlogged batch"
+            " delete from ks.t using timestamp {} where pk = 1;"
+            " delete from ks.t using timestamp {} where pk = 1 and ck >= 0 and ck < 3;"
+            " delete from ks.t using timestamp {} where pk = 1 and ck = 0;"
+            " insert into ks.t (pk,ck,v1) values (1,0,1) using timestamp {};"
+            " update ks.t using timestamp {} set v2 = 2 where pk = 1 and ck = 0;"
+            " insert into ks.t (pk,ck,m) values (1,0,{{3:3}}) using timestamp {};"
+
+            " apply batch;",
+            now, now + 1, now + 2, now + 3, now + 3, now + 4));
+
+        {
+            auto result = get_result(
+                {int32_type, int32_type, m_type, boolean_type, oper_type},
+                "select v1, v2, m, \"cdc$deleted_m\", \"cdc$operation\""
+                " from ks.t_scylla_cdc_log where pk = 1 allow filtering");
+            BOOST_REQUIRE_EQUAL(result.size(), 7);
+
+            std::vector<std::vector<data_value>> expected = {
+                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::partition_delete)},
+                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::range_delete_start_inclusive)},
+                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::range_delete_end_exclusive)},
+                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::row_delete)},
+
+                // The following sequence of operations:
+                //     insert into ks.t (pk,ck,v1) values (1,0,1) using timestamp T;
+                //     update ks.t using timestamp T set v2 = 2 where pk = 1 and ck = 0;
+                //     insert into ks.t (pk,ck,m) values (1,0,{{3:3}}) using timestamp T + 1;"
+                // is equivalent to the following sequence of operations:
+                //     update ks.t using timestamp T set v1 = 1, v2 = 2, m = null where pk = 1 and ck = 0;
+                //     insert into ks.t (pk,ck) values (1,0) using timestamp T + 1;
+                //     update ks.t using timestamp T + 1 set m = m + {3:3} where pk = 1 and ck = 0;
+                // Explanation:
+                //     1. there are two row markers from the two inserts, but the one with T + 1 timestamp wins;
+                //        therefore we end up with a single T + 1 insert
+                //     2. the second insert (which changes the `m` column) generates a tombstone with timestamp T
+                //        and a {3:3} cell with timestamp T + 1. Thus we merge the tombstone into the T update,
+                //        and we add a T + 1 update to express the addition of the {3:3} cell.
+                //
+                {int32_t(1), int32_t(2), map_null, true, oper_ut(cdc::operation::update)},
+                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::insert)},
+                {int_null, int_null, vmap({{3,3}}), bool_null, oper_ut(cdc::operation::update)},
+            };
+
+            // The first 5 changes have different timestamps, so we can compare the order.
+            BOOST_REQUIRE(std::equal(expected.begin(), expected.begin() + 5, result.begin()));
+
+            // The last 2 changes have a higher timestamp than the other 5, but between the two the timestamp is the same.
+            // Thus their relative order in the CDC log is arbitrary.
+            for (auto it = expected.begin() + 5; it != expected.end(); ++it) {
+                BOOST_REQUIRE(std::find_if(result.begin() + 5, result.end(), [&] (const std::vector<data_value>& r) {
+                    return *it == r;
+                }) != result.end());
+            }
+        }
+    }, mk_cdc_test_config()).get();
+}
