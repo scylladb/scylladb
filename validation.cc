@@ -100,17 +100,9 @@ void validate_keyspace(database& db, const sstring& keyspace_name) {
         throw exceptions::invalid_request_exception("Keyspace not set");
     }
 
-    try {
-        db.find_keyspace(keyspace_name);
-    } catch (...) {
+    if (!db.has_keyspace(keyspace_name)) {
         throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace_name));
     }
 }
-
-void validate_keyspace(const sstring& keyspace_name) {
-    validate_keyspace(service::get_local_storage_proxy().get_db().local(),
-                    keyspace_name);
-}
-
 
 }
