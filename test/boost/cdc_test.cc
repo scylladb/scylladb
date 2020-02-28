@@ -406,7 +406,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_image_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
         auto test = [&e] (bool enabled, bool with_ttl) {
             cquery_nofail(e, "CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, PRIMARY KEY((pk, pk2), ck, ck2)) WITH cdc = {'enabled':'true', 'preimage':'"s + (enabled ? "true" : "false") + "'}");
-            cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val) VALUES(1, 11, 111, 1111, 11111)"s + (with_ttl ? " USING TTL 654" : ""));
+            cquery_nofail(e, "UPDATE ks.tbl"s + (with_ttl ? " USING TTL 654" : "") + " SET val = 11111 WHERE pk=1 AND pk2=11 AND ck=111 AND ck2=1111");
 
             auto rows = select_log(e, "tbl");
 
@@ -513,18 +513,18 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
 
         auto rows = select_log(e, "tbl");
 
-        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::update).empty());
+        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::insert).empty());
 
         cquery_nofail(e, "ALTER TABLE ks.tbl ADD kokos text");
         cquery_nofail(e, "INSERT INTO ks.tbl(pk, pk2, ck, ck2, val, kokos) VALUES(1, 11, 111, 1111, 11111, 'kaka')");
 
         rows = select_log(e, "tbl");
-        auto updates = to_bytes_filtered(*rows, cdc::operation::update);
-        sort_by_time(*rows, updates);
+        auto inserts = to_bytes_filtered(*rows, cdc::operation::insert);
+        sort_by_time(*rows, inserts);
 
         auto kokos_index = column_index(*rows, "_kokos");
         auto kokos_type = tuple_type_impl::get_instance({ data_type_for<std::underlying_type_t<cdc::column_op>>(), utf8_type, long_type});
-        auto kokos = *updates.back()[kokos_index];
+        auto kokos = *inserts.back()[kokos_index];
 
         BOOST_REQUIRE_EQUAL(data_value("kaka"), value_cast<tuple_type_impl::native_type>(kokos_type->deserialize(bytes_view(kokos))).at(1));
     }, mk_cdc_test_config()).get();
@@ -548,7 +548,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_across_shards) {
 
         auto rows = select_log(e, "tbl");
 
-        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::update).empty());
+        BOOST_REQUIRE(!to_bytes_filtered(*rows, cdc::operation::insert).empty());
     }, mk_cdc_test_config()).get();
 }
 
@@ -822,30 +822,34 @@ SEASTAR_THREAD_TEST_CASE(test_udt_logging) {
     }, mk_cdc_test_config()).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_row_delete) {
+SEASTAR_THREAD_TEST_CASE(test_update_insert_delete_distinction) {
     do_with_cql_env_thread([](cql_test_env& e) {
         const auto base_tbl_name = "tbl_rowdel";
         const int pk = 1, ck = 11;
         cquery_nofail(e, format("CREATE TABLE ks.{} (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {{'enabled':'true'}}", base_tbl_name));
 
-        cquery_nofail(e, format("UPDATE ks.{} set val=111 WHERE pk={} and ck={}", base_tbl_name, pk, ck)); // an update
-        cquery_nofail(e, format("DELETE val FROM ks.{} WHERE pk = {} AND ck = {}", base_tbl_name, pk, ck)); // also an update
-        cquery_nofail(e, format("DELETE FROM ks.{} WHERE pk = {} AND ck = {}", base_tbl_name, pk, ck)); // a row delete
+        cquery_nofail(e, format("INSERT INTO ks.{} (pk, ck, val) VALUES ({}, {}, 222)", base_tbl_name, pk, ck)); // (0) an insert
+        cquery_nofail(e, format("UPDATE ks.{} set val=111 WHERE pk={} and ck={}", base_tbl_name, pk, ck));       // (1) an update
+        cquery_nofail(e, format("DELETE val FROM ks.{} WHERE pk = {} AND ck = {}", base_tbl_name, pk, ck));      // (2) also an update
+        cquery_nofail(e, format("DELETE FROM ks.{} WHERE pk = {} AND ck = {}", base_tbl_name, pk, ck));          // (3) a row delete
 
         const sstring query = format("SELECT operation FROM ks.{}", cdc::log_name(base_tbl_name));
         auto msg = e.execute_cql(query).get0();
         auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
         BOOST_REQUIRE(rows);
         auto results = to_bytes(*rows);
-        BOOST_REQUIRE_EQUAL(results.size(), 3);  // 2 rows for update + 1 for delete
+        BOOST_REQUIRE_EQUAL(results.size(), 4);  // 1 insert + 2 updates + 1 row delete == 4
 
         BOOST_REQUIRE_EQUAL(results[0].size(), 1);
-        BOOST_REQUIRE_EQUAL(*results[0].front(), data_value(cdc::operation::update).serialize_nonnull());
+        BOOST_REQUIRE_EQUAL(*results[0].front(), data_value(cdc::operation::insert).serialize_nonnull()); // log entry from (0)
 
         BOOST_REQUIRE_EQUAL(results[1].size(), 1);
-        BOOST_REQUIRE_EQUAL(*results[1].front(), data_value(cdc::operation::update).serialize_nonnull());
+        BOOST_REQUIRE_EQUAL(*results[1].front(), data_value(cdc::operation::update).serialize_nonnull()); // log entry from (1)
 
         BOOST_REQUIRE_EQUAL(results[2].size(), 1);
-        BOOST_REQUIRE_EQUAL(*results[2].front(), data_value(cdc::operation::row_delete).serialize_nonnull());
+        BOOST_REQUIRE_EQUAL(*results[2].front(), data_value(cdc::operation::update).serialize_nonnull()); // log entry from (2)
+
+        BOOST_REQUIRE_EQUAL(results[3].size(), 1);
+        BOOST_REQUIRE_EQUAL(*results[3].front(), data_value(cdc::operation::row_delete).serialize_nonnull()); // log entry from (3)
     }, mk_cdc_test_config()).get();
 }
