@@ -132,17 +132,14 @@ if __name__ == '__main__':
 
     makedirs(mount_at)
     run('mount -t xfs -o noatime {raid} "{mount_at}"'.format(raid=fsdev, mount_at=mount_at))
-
-    makedirs('{}/data'.format(root))
-    makedirs('{}/commitlog'.format(root))
-    makedirs('{}/coredump'.format(root))
-
     uid = pwd.getpwnam('scylla').pw_uid
     gid = grp.getgrnam('scylla').gr_gid
     os.chown(root, uid, gid)
-    os.chown('{}/data'.format(root), uid, gid)
-    os.chown('{}/commitlog'.format(root), uid, gid)
-    os.chown('{}/coredump'.format(root), uid, gid)
+
+    for d in ['coredump', 'data', 'commitlog', 'hints', 'view_hints', 'saved_caches']:
+        dpath = '{}/{}'.format(root, d)
+        makedirs(dpath)
+        os.chown(dpath, uid, gid)
 
     if args.update_fstab:
         res = out('blkid {}'.format(fsdev))
