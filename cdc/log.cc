@@ -530,7 +530,7 @@ public:
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
     // more details like tombstones/ttl? Probably not but keep in mind.
-    mutation transform(const mutation& m, const cql3::untyped_result_set* rs = nullptr) const {
+    mutation transform(const mutation& m, const cql3::untyped_result_set* rs) const {
         auto ts = find_timestamp(*_schema, m);
         auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token());
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
@@ -916,15 +916,14 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
 
             transformer trans(_ctxt, s);
 
-            if (!s->cdc_options().preimage()) {
-                mutations.emplace_back(trans.transform(m));
-                return make_ready_future<>();
+            auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
+            if (s->cdc_options().preimage()) {
+                // Note: further improvement here would be to coalesce the pre-image selects into one
+                // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
+                // so this is premature.
+                f = trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m);
             }
 
-            // Note: further improvement here would be to coalesce the pre-image selects into one
-            // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
-            // so this is premature.
-            auto f = trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m);
             return f.then([trans = std::move(trans), &mutations, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
                 mutations.push_back(trans.transform(mutations[idx], rs.get()));
             });
