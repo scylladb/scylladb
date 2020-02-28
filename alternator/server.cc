@@ -81,7 +81,7 @@ public:
                  } catch (api_error &ae) {
                      ret = ae;
                  } catch (rjson::error & re) {
-                     ret = api_error("SerializationException", re.what());
+                     ret = api_error("ValidationException", re.what());
                  } catch (...) {
                      ret = api_error(
                              "Internal Server Error",

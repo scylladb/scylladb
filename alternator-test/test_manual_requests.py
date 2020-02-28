@@ -97,11 +97,12 @@ def test_incorrect_json(dynamodb, test_table):
 
     # Check all non-full prefixes of a correct JSON - none of them are valid JSON's themselves
     # NOTE: DynamoDB returns two kinds of errors on incorrect input - SerializationException
-    # or "Page Not Found"
+    # or "Page Not Found". Alternator returns "ValidationExeption" for simplicity.
+    validate_resp = lambda t: "SerializationException" in t or "ValidationException" in t or "Page Not Found" in t
     for i in range(len(correct_req)):
         req = get_signed_request(dynamodb, 'PutItem', correct_req[:i])
         response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
-        assert "SerializationException" in response.text or "Page Not Found" in response.text
+        assert validate_resp(response.text)
 
     incorrect_reqs = [
         '}}}', '}{', 'habababa', '7', '124463gwe', '><#', '????', '"""', '{"""}', '{""}', '{7}',
@@ -110,4 +111,4 @@ def test_incorrect_json(dynamodb, test_table):
     for incorrect_req in incorrect_reqs:
         req = get_signed_request(dynamodb, 'PutItem', incorrect_req)
         response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
-        assert "SerializationException" in response.text or "Page Not Found" in response.text
+        assert validate_resp(response.text)
