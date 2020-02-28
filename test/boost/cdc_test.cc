@@ -1182,5 +1182,17 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
                 }) != result.end());
             }
         }
+
+        cquery_nofail(e, "delete from ks.t where pk = 2 and ck < 1 and ck > 2;");
+
+        {
+            auto result = get_result(
+                {int32_type, int32_type, m_type, boolean_type, oper_type},
+                "select v1, v2, m, \"cdc$deleted_m\", \"cdc$operation\""
+                " from ks.t_scylla_cdc_log where pk = 2 allow filtering");
+
+            // A delete from a degenerate row range should produce no rows in CDC log
+            BOOST_REQUIRE_EQUAL(result.size(), 0);
+        }
     }, mk_cdc_test_config()).get();
 }

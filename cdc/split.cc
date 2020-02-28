@@ -372,7 +372,8 @@ bool should_split(const mutation& base_mutation, const schema& base_schema) {
         return true;
     }
 
-    return false;
+    // A mutation with no timestamp will be split into 0 mutations
+    return found_ts == api::missing_timestamp;
 }
 
 std::vector<mutation> split(const mutation& base_mutation, const schema_ptr& base_schema) {
