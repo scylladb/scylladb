@@ -2689,12 +2689,10 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                 schema_ptr s,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class&,
+                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) mutable {
             auto& table = db->local().find_column_family(s);
-            //TODO need a way to transport io_priority_calls across shards
-            auto& pc = service::get_local_sstable_query_read_priority();
             return table.as_mutation_source().make_reader(std::move(s), no_reader_permit(), range, slice, pc, std::move(trace_state),
                     streamed_mutation::forwarding::no, fwd_mr);
         };
