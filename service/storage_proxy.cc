@@ -1177,10 +1177,40 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
 future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool allow_hints) {
     tracing::trace(tr_state, "learn_decision: committing {} with cl={}", decision, _cl_for_learn);
     paxos::paxos_state::logger.trace("CAS[{}] learn_decision: committing {} with cl={}", _id, decision, _cl_for_learn);
-    std::array<std::tuple<paxos::proposal, schema_ptr, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, _key.token())};
     // FIXME: allow_hints is ignored. Consider if we should follow it and remove if not.
     // Right now we do not store hints for when committing decisions.
-    return _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout);
+    auto update_mut = decision.update.unfreeze(_schema);
+    std::vector update_mut_vec = {update_mut};
+
+    future<> f_cdc = make_ready_future<>();
+    if (_proxy->get_cdc_service() && _proxy->get_cdc_service()->needs_cdc_augmentation(update_mut_vec)) {
+        // CDC mutations are sent down another route
+        f_cdc = _proxy->get_cdc_service()->augment_mutation_call(_timeout, std::move(update_mut_vec))
+                .then([this, base_tbl_id = update_mut.column_family_id()] (std::tuple<std::vector<mutation>, cdc::result_callback>&& t) {
+            auto mutations = std::move(std::get<0>(t));
+            auto end_func = std::move(std::get<1>(t));
+            
+            // Pick only the CDC ("augmenting") mutations
+            mutations.erase(std::remove_if(mutations.begin(), mutations.end(), [base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
+                return v.schema()->id() == base_tbl_id;
+            }), mutations.end());
+            if (mutations.empty()) {
+                return make_ready_future<>();
+            }
+
+            auto f = _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout);
+            if (end_func) {
+                f = f.then(std::move(end_func));
+            }
+            return f;
+        });
+    }
+
+    // Path for the "base" mutations
+    std::array<std::tuple<paxos::proposal, schema_ptr, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, _key.token())};
+    future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout);
+
+    return when_all_succeed(std::move(f_cdc), std::move(f_lwt));
 }
 
 static std::vector<gms::inet_address>
