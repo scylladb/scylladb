@@ -595,7 +595,6 @@ prepared_cache_key_type query_processor::compute_id(
 prepared_cache_key_type query_processor::compute_thrift_id(
         const std::string_view& query_string,
         const sstring& keyspace) {
-    auto target = hash_target(query_string, keyspace);
     uint32_t h = 0;
     for (auto&& c : hash_target(query_string, keyspace)) {
         h = 31*h + c;
