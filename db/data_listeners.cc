@@ -123,12 +123,13 @@ toppartitions_data_listener::localize(const global_top_k::results& r) {
 
 toppartitions_query::toppartitions_query(distributed<database>& xdb, sstring ks, sstring cf,
         std::chrono::milliseconds duration, size_t list_size, size_t capacity)
-        : _xdb(xdb), _ks(ks), _cf(cf), _duration(duration), _list_size(list_size), _capacity(capacity) {
+        : _xdb(xdb), _ks(ks), _cf(cf), _duration(duration), _list_size(list_size), _capacity(capacity),
+          _query(std::make_unique<sharded<toppartitions_data_listener>>()) {
     dblog.debug("toppartitions_query on {}.{}", _ks, _cf);
 }
 
 future<> toppartitions_query::scatter() {
-    return _query.start(std::ref(_xdb), _ks, _cf);
+    return _query->start(std::ref(_xdb), _ks, _cf);
 }
 
 using top_t = toppartitions_data_listener::global_top_k::results;
@@ -147,13 +148,13 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
         res.write.append(toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
         return std::move(res);
     };
-    return _query.map_reduce0(map, results{res_size}, reduce)
+    return _query->map_reduce0(map, results{res_size}, reduce)
         .handle_exception([] (auto ep) {
             dblog.error("toppartitions_query::gather: {}", ep);
             return make_exception_future<results>(ep);
         }).finally([this] () {
             dblog.debug("toppartitions_query::gather: stopping query");
-            return _query.stop().then([this] {
+            return _query->stop().then([this] {
                 dblog.debug("toppartitions_query::gather: query stopped");
             });
         });

@@ -2195,7 +2195,7 @@ future<> storage_service::start_rpc_server() {
             return make_ready_future<>();
         }
 
-        ss._thrift_server = distributed<thrift_server>();
+        ss._thrift_server = std::make_unique<distributed<thrift_server>>();
         auto tserver = &*ss._thrift_server;
 
         auto& cfg = ss._db.local().get_config();
@@ -2222,8 +2222,7 @@ future<> storage_service::start_rpc_server() {
 }
 
 future<> storage_service::do_stop_rpc_server() {
-    return do_with(std::move(_thrift_server), [this] (std::optional<distributed<thrift_server>>& tserver) {
-        _thrift_server = std::nullopt;
+    return do_with(std::move(_thrift_server), [this] (std::unique_ptr<distributed<thrift_server>>& tserver) {
         if (tserver) {
             return tserver->stop().then([] {
                 slogger.info("Thrift server stopped");
@@ -2251,7 +2250,7 @@ future<> storage_service::start_native_transport() {
             return make_ready_future<>();
         }
         return seastar::async([&ss] {
-            ss._cql_server = distributed<cql_transport::cql_server>();
+            ss._cql_server = std::make_unique<distributed<cql_transport::cql_server>>();
             auto cserver = &*ss._cql_server;
 
             auto& cfg = ss._db.local().get_config();
@@ -2322,8 +2321,7 @@ future<> storage_service::start_native_transport() {
 }
 
 future<> storage_service::do_stop_native_transport() {
-    return do_with(std::move(_cql_server), [this] (std::optional<distributed<cql_transport::cql_server>>& cserver) {
-        _cql_server = std::nullopt;
+    return do_with(std::move(_cql_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
         if (cserver) {
             // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
             return set_cql_ready(false).then([&cserver] {

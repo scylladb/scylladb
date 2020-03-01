@@ -160,7 +160,7 @@ class toppartitions_query {
     std::chrono::milliseconds _duration;
     size_t _list_size;
     size_t _capacity;
-    sharded<toppartitions_data_listener> _query;
+    std::unique_ptr<sharded<toppartitions_data_listener>> _query;
 
 public:
     toppartitions_query(seastar::distributed<database>& xdb, sstring ks, sstring cf,
