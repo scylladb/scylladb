@@ -187,7 +187,7 @@ void execute_reads(reader_concurrency_semaphore& sem, unsigned reads, unsigned c
 
         if (sem.waiters()) {
             testlog.trace("Waiting for queue to drain");
-            sem.wait_admission(1).get();
+            sem.wait_admission(1, db::no_timeout).get();
         }
     }
 
@@ -282,7 +282,7 @@ int main(int argc, char** argv) {
             uint64_t i = 0;
             while (i < sstables) {
                 auto m = gen();
-                env.local_db().apply(s, freeze(m), db::commitlog::force_sync::no).get();
+                env.local_db().apply(s, freeze(m), db::commitlog::force_sync::no, db::no_timeout).get();
                 if (tab.active_memtable().occupancy().used_space() > sstable_size) {
                     tab.flush().get();
                     ++i;

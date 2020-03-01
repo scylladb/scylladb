@@ -1083,7 +1083,7 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
     return async([&] {
         reader_concurrency_semaphore semaphore(100, 4 * 1024, get_name());
         // Testing the tracker here, no need to have a base cost.
-        auto permit = semaphore.wait_admission(0).get0();
+        auto permit = semaphore.wait_admission(0, db::no_timeout).get0();
 
         {
             auto tracked_file = make_tracked_file(file(shared_ptr<file_impl>(make_shared<dummy_file_impl>())), permit);
@@ -2063,7 +2063,7 @@ public:
                  // Add a waiter, so that all registered inactive reads are
                  // immediately evicted.
                  // We don't care about the returned future.
-                (void)_contexts[shard].semaphore->wait_admission(1);
+                (void)_contexts[shard].semaphore->wait_admission(1, db::no_timeout);
             } else {
                 _contexts[shard].semaphore = make_foreign(std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}));
             }

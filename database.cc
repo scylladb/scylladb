@@ -1208,10 +1208,10 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             cmd.row_limit,
             cmd.partition_limit,
             cmd.timestamp,
+            timeout,
             cf.get_config().max_memory_for_unlimited_query,
             std::move(accounter),
             std::move(trace_state),
-            timeout,
             std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
@@ -1606,7 +1606,7 @@ future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, c
             auto uuid = m.column_family_id();
             auto& cf = find_column_family(uuid);
             cf.apply_streaming_mutation(s, plan_id, std::move(m), fragmented);
-        });
+        }, db::no_timeout);
     });
 }
 

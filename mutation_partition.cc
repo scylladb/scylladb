@@ -2168,9 +2168,9 @@ future<> data_query(
         uint32_t partition_limit,
         gc_clock::time_point query_time,
         query::result::builder& builder,
+        db::timeout_clock::time_point timeout,
         uint64_t max_memory_reverse_query,
         tracing::trace_state_ptr trace_ptr,
-        db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
@@ -2263,10 +2263,10 @@ static do_mutation_query(schema_ptr s,
                uint32_t row_limit,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
+               db::timeout_clock::time_point timeout,
                uint64_t max_memory_reverse_query,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
-               db::timeout_clock::time_point timeout,
                query::querier_cache_context cache_ctx)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
@@ -2303,14 +2303,14 @@ mutation_query(schema_ptr s,
                uint32_t row_limit,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
+               db::timeout_clock::time_point timeout,
                uint64_t max_memory_reverse_query,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
-               db::timeout_clock::time_point timeout,
                query::querier_cache_context cache_ctx)
 {
     return do_mutation_query(std::move(s), std::move(source), seastar::cref(range), seastar::cref(slice),
-            row_limit, partition_limit, query_time, max_memory_reverse_query, std::move(accounter), std::move(trace_ptr), timeout, std::move(cache_ctx));
+            row_limit, partition_limit, query_time, timeout, max_memory_reverse_query, std::move(accounter), std::move(trace_ptr), std::move(cache_ctx));
 }
 
 deletable_row::deletable_row(clustering_row&& cr)

@@ -2397,7 +2397,7 @@ table::query(schema_ptr s,
         return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state), timeout, cache_ctx = std::move(cache_ctx)] {
             auto&& range = *qs.current_partition_range++;
             return data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.remaining_rows(),
-                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, _config.max_memory_for_unlimited_query, trace_state, timeout, cache_ctx);
+                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, timeout, _config.max_memory_for_unlimited_query, trace_state, cache_ctx);
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));

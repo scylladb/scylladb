@@ -787,7 +787,7 @@ public:
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         uint64_t max_result_size,
-        db::timeout_clock::time_point timeout = db::no_timeout,
+        db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx = { });
 
     void start();
@@ -1474,14 +1474,14 @@ public:
     unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>, cache_temperature> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
-                                                                  uint64_t max_result_size, db::timeout_clock::time_point timeout = db::no_timeout);
+                                                                  uint64_t max_result_size, db::timeout_clock::time_point timeout);
     future<reconcilable_result, cache_temperature> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
                                                 query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state,
-                                                db::timeout_clock::time_point timeout = db::no_timeout);
+                                                db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
-    future<> apply(schema_ptr, const frozen_mutation&, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout = db::no_timeout);
-    future<> apply_hint(schema_ptr, const frozen_mutation&, db::timeout_clock::time_point timeout = db::no_timeout);
+    future<> apply(schema_ptr, const frozen_mutation&, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout);
+    future<> apply_hint(schema_ptr, const frozen_mutation&, db::timeout_clock::time_point timeout);
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
     future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
