@@ -26,6 +26,14 @@ import pytest
 import boto3
 from util import create_test_table
 
+# When tests are run with HTTPS, the server often won't have its SSL
+# certificate signed by a known authority. So we will disable certificate
+# verification with the "verify=False" request option. However, once we do
+# that, we start getting scary-looking warning messages, saying that this
+# makes HTTPS insecure. The following silences those warnings:
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # Test that the Boto libraries are new enough. These tests want to test a
 # large variety of DynamoDB API features, and to do this we need a new-enough
 # version of the the Boto libraries (boto3 and botocore) so that they can
@@ -65,10 +73,6 @@ def dynamodb(request):
         local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
         verify = not request.config.getoption('https')
-        # Silencing the 'Unverified HTTPS request warning'
-        if request.config.getoption('https'):
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         return boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
             config=botocore.client.Config(retries={"max_attempts": 3}))
