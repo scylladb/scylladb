@@ -218,7 +218,7 @@ private:
         std::unique_ptr<cql_server::response> make_topology_change_event(const cql_transport::event::topology_change& event) const;
         std::unique_ptr<cql_server::response> make_status_change_event(const cql_transport::event::status_change& event) const;
         std::unique_ptr<cql_server::response> make_schema_change_event(const cql_transport::event::schema_change& event) const;
-        std::unique_ptr<cql_server::response> make_autheticate(int16_t, const sstring&, const tracing::trace_state_ptr& tr_state) const;
+        std::unique_ptr<cql_server::response> make_autheticate(int16_t, std::string_view, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state) const;
 

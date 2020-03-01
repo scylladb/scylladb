@@ -197,7 +197,7 @@ db::consistency_level password_authenticator::consistency_for_user(std::string_v
     return db::consistency_level::LOCAL_ONE;
 }
 
-const sstring& password_authenticator::qualified_java_name() const {
+std::string_view password_authenticator::qualified_java_name() const {
     return password_authenticator_name();
 }
 

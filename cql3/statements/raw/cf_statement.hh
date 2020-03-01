@@ -67,7 +67,7 @@ public:
     virtual void prepare_keyspace(const service::client_state& state);
 
     // Only for internal calls, use the version with ClientState for user queries
-    virtual void prepare_keyspace(sstring keyspace);
+    void prepare_keyspace(std::string_view keyspace);
 
     virtual const sstring& keyspace() const;
 

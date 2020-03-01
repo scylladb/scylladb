@@ -222,7 +222,7 @@ public:
             .finally([qs, modif_stmt = std::move(modif_stmt)] {});
     }
 
-    virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) override {
+    virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) override {
         auto id = utils::UUID_gen::get_time_UUID();
         schema_builder builder(make_lw_shared(schema_maker(ks_name)));
         builder.set_uuid(id);
@@ -338,7 +338,7 @@ public:
         return _core_local.stop();
     }
 
-    future<> create_keyspace(sstring name) {
+    future<> create_keyspace(std::string_view name) {
         auto query = format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 }};", name);
         return execute_cql(query).discard_result();
     }

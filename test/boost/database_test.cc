@@ -339,7 +339,7 @@ future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func) {
         auto db_cfg_ptr = make_shared<db::config>();
         db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir().path().string() }));
         do_with_cql_env_thread([func = std::move(func)] (cql_test_env& e) {
-            e.create_table([](sstring ks_name) {
+            e.create_table([](std::string_view ks_name) {
                 return schema({}, ks_name, "cf",
                               {{"p1", utf8_type}},
                               {{"c1", int32_type}, {"c2", int32_type}},

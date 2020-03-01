@@ -137,8 +137,8 @@ public:
     static const sstring CQL_VERSION;
 
     static prepared_cache_key_type compute_id(
-            const std::string_view& query_string,
-            const sstring& keyspace);
+            std::string_view query_string,
+            std::string_view keyspace);
 
     static prepared_cache_key_type compute_thrift_id(
             const std::string_view& query_string,

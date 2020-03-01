@@ -1092,20 +1092,20 @@ class keyspace_metadata final {
     bool _durable_writes;
     user_types_metadata _user_types;
 public:
-    keyspace_metadata(sstring name,
-                 sstring strategy_name,
+    keyspace_metadata(std::string_view name,
+                 std::string_view strategy_name,
                  std::map<sstring, sstring> strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    keyspace_metadata(sstring name,
-                 sstring strategy_name,
+    keyspace_metadata(std::string_view name,
+                 std::string_view strategy_name,
                  std::map<sstring, sstring> strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs,
                  user_types_metadata user_types);
     static lw_shared_ptr<keyspace_metadata>
-    new_keyspace(sstring name,
-                 sstring strategy_name,
+    new_keyspace(std::string_view name,
+                 std::string_view strategy_name,
                  std::map<sstring, sstring> options,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
@@ -1232,7 +1232,7 @@ public:
 class no_such_column_family : public std::runtime_error {
 public:
     no_such_column_family(const utils::UUID& uuid);
-    no_such_column_family(const sstring& ks_name, const sstring& cf_name);
+    no_such_column_family(std::string_view ks_name, std::string_view cf_name);
 };
 
 

@@ -365,8 +365,16 @@ public:
     // common conversions from C++ types to database types
     // note: somewhat dangerous, consider a factory function instead
     explicit data_value(bytes);
-    data_value(sstring);
+
+    data_value(sstring&&);
+    data_value(std::string_view);
+    // We need the following overloads just to avoid ambiguity because
+    // seastar::net::inet_address is implicitly constructible from a
+    // const sstring&.
     data_value(const char*);
+    data_value(const std::string&);
+    data_value(const sstring&);
+
     data_value(ascii_native_type);
     data_value(bool);
     data_value(int8_t);

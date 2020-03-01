@@ -96,7 +96,7 @@ public:
     ///
     /// A fully-qualified (class with package) Java-like name for this implementation.
     ///
-    virtual const sstring& qualified_java_name() const = 0;
+    virtual std::string_view qualified_java_name() const = 0;
 
     virtual bool require_authentication() const = 0;
 

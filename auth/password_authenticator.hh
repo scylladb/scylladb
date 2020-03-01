@@ -71,7 +71,7 @@ public:
 
     virtual future<> stop() override;
 
-    virtual const sstring& qualified_java_name() const override;
+    virtual std::string_view qualified_java_name() const override;
 
     virtual bool require_authentication() const override;
 

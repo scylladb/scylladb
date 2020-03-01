@@ -582,20 +582,21 @@ query_processor::get_stored_prepared_statement(
     }
 }
 
-static sstring hash_target(const std::string_view& query_string, const sstring& keyspace) {
-    return keyspace + std::string(query_string);
+static std::string hash_target(std::string_view query_string, std::string_view keyspace) {
+    std::string ret(keyspace);
+    ret += query_string;
+    return ret;
 }
 
 prepared_cache_key_type query_processor::compute_id(
-        const std::string_view& query_string,
-        const sstring& keyspace) {
+        std::string_view query_string,
+        std::string_view keyspace) {
     return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace)));
 }
 
 prepared_cache_key_type query_processor::compute_thrift_id(
         const std::string_view& query_string,
         const sstring& keyspace) {
-    auto target = hash_target(query_string, keyspace);
     uint32_t h = 0;
     for (auto&& c : hash_target(query_string, keyspace)) {
         h = 31*h + c;

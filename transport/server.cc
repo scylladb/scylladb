@@ -1171,7 +1171,7 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_ready(int16_t
     return std::make_unique<cql_server::response>(stream, cql_binary_opcode::READY, tr_state);
 }
 
-std::unique_ptr<cql_server::response> cql_server::connection::make_autheticate(int16_t stream, const sstring& clz, const tracing::trace_state_ptr& tr_state) const
+std::unique_ptr<cql_server::response> cql_server::connection::make_autheticate(int16_t stream, std::string_view clz, const tracing::trace_state_ptr& tr_state) const
 {
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::AUTHENTICATE, tr_state);
     response->write_string(clz);
@@ -1493,7 +1493,7 @@ T cast_if_fits(size_t v) {
     return static_cast<T>(v);
 }
 
-void cql_server::response::write_string(const sstring& s)
+void cql_server::response::write_string(std::string_view s)
 {
     write_short(cast_if_fits<uint16_t>(s.size()));
     _body.write(bytes_view(reinterpret_cast<const int8_t*>(s.data()), s.size()));
