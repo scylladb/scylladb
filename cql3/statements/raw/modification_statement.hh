@@ -72,13 +72,13 @@ class modification_statement : public cf_statement {
 public:
     using conditions_vector = std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>>;
 protected:
-    const ::shared_ptr<attributes::raw> _attrs;
+    const std::unique_ptr<attributes::raw> _attrs;
     const std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>> _conditions;
 private:
     const bool _if_not_exists;
     const bool _if_exists;
 protected:
-    modification_statement(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists);
+    modification_statement(::shared_ptr<cf_name> name, std::unique_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists);
 
 public:
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;

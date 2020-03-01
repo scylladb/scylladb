@@ -71,16 +71,16 @@ public:
 
     void collect_marker_specification(variable_specifications& bound_names) const;
 
-    class raw {
+    class raw final {
     public:
         ::shared_ptr<term::raw> timestamp;
         ::shared_ptr<term::raw> time_to_live;
 
-        std::unique_ptr<attributes> prepare(database& db, const sstring& ks_name, const sstring& cf_name);
+        std::unique_ptr<attributes> prepare(database& db, const sstring& ks_name, const sstring& cf_name) const;
     private:
-        ::shared_ptr<column_specification> timestamp_receiver(const sstring& ks_name, const sstring& cf_name);
+        ::shared_ptr<column_specification> timestamp_receiver(const sstring& ks_name, const sstring& cf_name) const;
 
-        ::shared_ptr<column_specification> time_to_live_receiver(const sstring& ks_name, const sstring& cf_name);
+        ::shared_ptr<column_specification> time_to_live_receiver(const sstring& ks_name, const sstring& cf_name) const;
     };
 };
 

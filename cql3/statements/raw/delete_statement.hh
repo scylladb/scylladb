@@ -59,7 +59,7 @@ private:
     std::vector<::shared_ptr<relation>> _where_clause;
 public:
     delete_statement(::shared_ptr<cf_name> name,
-           ::shared_ptr<attributes::raw> attrs,
+           std::unique_ptr<attributes::raw> attrs,
            std::vector<::shared_ptr<operation::raw_deletion>> deletions,
            std::vector<::shared_ptr<relation>> where_clause,
            conditions_vector conditions,

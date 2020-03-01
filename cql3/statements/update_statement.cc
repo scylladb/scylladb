@@ -295,11 +295,11 @@ void insert_prepared_json_statement::execute_operations_for_key(mutation& m, con
 
 namespace raw {
 
-insert_statement::insert_statement(            ::shared_ptr<cf_name> name,
-                                               ::shared_ptr<attributes::raw> attrs,
-                                               std::vector<::shared_ptr<column_identifier::raw>> column_names,
-                                               std::vector<::shared_ptr<term::raw>> column_values,
-                                               bool if_not_exists)
+insert_statement::insert_statement(::shared_ptr<cf_name> name,
+                                   std::unique_ptr<attributes::raw> attrs,
+                                   std::vector<::shared_ptr<column_identifier::raw>> column_names,
+                                   std::vector<::shared_ptr<term::raw>> column_values,
+                                   bool if_not_exists)
     : raw::modification_statement{std::move(name), std::move(attrs), conditions_vector{}, if_not_exists, false}
     , _column_names{std::move(column_names)}
     , _column_values{std::move(column_values)}
@@ -353,14 +353,13 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
     return stmt;
 }
 
-insert_json_statement::insert_json_statement(  ::shared_ptr<cf_name> name,
-                                               ::shared_ptr<attributes::raw> attrs,
-                                               ::shared_ptr<term::raw> json_value,
-                                               bool if_not_exists,
-                                               bool default_unset)
-    : raw::modification_statement{name, attrs, conditions_vector{}, if_not_exists, false}
+insert_json_statement::insert_json_statement(::shared_ptr<cf_name> name,
+                                             std::unique_ptr<attributes::raw> attrs,
+                                             ::shared_ptr<term::raw> json_value,
+                                             bool if_not_exists,
+                                             bool default_unset)
+    : raw::modification_statement{name, std::move(attrs), conditions_vector{}, if_not_exists, false}
     , _name(name)
-    , _attrs(attrs)
     , _json_value(json_value)
     , _if_not_exists(if_not_exists)
     , _default_unset(default_unset) { }
@@ -378,11 +377,11 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
     return stmt;
 }
 
-update_statement::update_statement(            ::shared_ptr<cf_name> name,
-                                               ::shared_ptr<attributes::raw> attrs,
-                                               std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
-                                               std::vector<relation_ptr> where_clause,
-                                               conditions_vector conditions, bool if_exists)
+update_statement::update_statement(::shared_ptr<cf_name> name,
+                                   std::unique_ptr<attributes::raw> attrs,
+                                   std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
+                                   std::vector<relation_ptr> where_clause,
+                                   conditions_vector conditions, bool if_exists)
     : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
     , _updates(std::move(updates))
     , _where_clause(std::move(where_clause))

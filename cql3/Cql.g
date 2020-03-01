@@ -478,7 +478,7 @@ jsonValue returns [::shared_ptr<cql3::term::raw> value]
  */
 insertStatement returns [::shared_ptr<raw::modification_statement> expr]
     @init {
-        auto attrs = ::make_shared<cql3::attributes::raw>();
+        auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<::shared_ptr<cql3::column_identifier::raw>> column_names;
         std::vector<::shared_ptr<cql3::term::raw>> values;
         bool if_not_exists = false;
@@ -513,11 +513,11 @@ insertStatement returns [::shared_ptr<raw::modification_statement> expr]
         )
     ;
 
-usingClause[::shared_ptr<cql3::attributes::raw> attrs]
+usingClause[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_USING usingClauseObjective[attrs] ( K_AND usingClauseObjective[attrs] )*
     ;
 
-usingClauseObjective[::shared_ptr<cql3::attributes::raw> attrs]
+usingClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
     | K_TTL t=intValue { attrs->time_to_live = t; }
     ;
@@ -531,7 +531,7 @@ usingClauseObjective[::shared_ptr<cql3::attributes::raw> attrs]
 updateStatement returns [::shared_ptr<raw::update_statement> expr]
     @init {
         bool if_exists = false;
-        auto attrs = ::make_shared<cql3::attributes::raw>();
+        auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, ::shared_ptr<cql3::operation::raw_update>>> operations;
     }
     : K_UPDATE cf=columnFamilyName
@@ -562,7 +562,7 @@ updateConditions returns [conditions_type conditions]
  */
 deleteStatement returns [::shared_ptr<raw::delete_statement> expr]
     @init {
-        auto attrs = ::make_shared<cql3::attributes::raw>();
+        auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<::shared_ptr<cql3::operation::raw_deletion>> column_deletions;
         bool if_exists = false;
     }
@@ -592,7 +592,7 @@ deleteOp returns [::shared_ptr<cql3::operation::raw_deletion> op]
     | c=cident '.' field=ident { $op = ::make_shared<cql3::operation::field_deletion>(std::move(c), std::move(field)); }
     ;
 
-usingClauseDelete[::shared_ptr<cql3::attributes::raw> attrs]
+usingClauseDelete[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_USING K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
     ;
 
@@ -625,7 +625,7 @@ batchStatement returns [shared_ptr<cql3::statements::raw::batch_statement> expr]
         using btype = cql3::statements::raw::batch_statement::type; 
         btype type = btype::LOGGED;
         std::vector<shared_ptr<cql3::statements::raw::modification_statement>> statements;
-        auto attrs = make_shared<cql3::attributes::raw>();
+        auto attrs = std::make_unique<cql3::attributes::raw>();
     }
     : K_BEGIN
       ( K_UNLOGGED { type = btype::UNLOGGED; } | K_COUNTER { type = btype::COUNTER; } )?
