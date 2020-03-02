@@ -403,9 +403,9 @@ public:
                 create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
             }
 
-            auto token_metadata = ::make_shared<sharded<locator::token_metadata>>();
-            token_metadata->start().get();
-            auto stop_token_metadata = defer([token_metadata] { token_metadata->stop().get(); });
+            sharded<locator::token_metadata> token_metadata;
+            token_metadata.start().get();
+            auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });
 
             sharded<service::migration_notifier> mm_notif;
             mm_notif.start().get();
@@ -435,7 +435,7 @@ public:
             auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
             // FIXME: split
-            tst_init_ms_fd_gossiper(feature_service, *token_metadata, *cfg, db::config::seed_provider_type(), abort_sources).get();
+            tst_init_ms_fd_gossiper(feature_service, token_metadata, *cfg, db::config::seed_provider_type(), abort_sources).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
@@ -449,12 +449,12 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(*token_metadata), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
             dbcfg.available_memory = memory::stats().total_memory();
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(*token_metadata)).get();
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata)).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
             });
@@ -476,7 +476,7 @@ public:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(*token_metadata)).get();
+            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
             mm.start(std::ref(mm_notif), std::ref(feature_service)).get();
