@@ -119,7 +119,7 @@ private:
     sharded<auth::service>& _auth_service;
     sharded<db::view::view_builder>& _view_builder;
     sharded<db::view::view_update_generator>& _view_update_generator;
-    ::shared_ptr<sharded<service::migration_notifier>> _mnotifier;
+    sharded<service::migration_notifier>& _mnotifier;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -149,13 +149,13 @@ public:
             sharded<auth::service>& auth_service,
             sharded<db::view::view_builder>& view_builder,
             sharded<db::view::view_update_generator>& view_update_generator,
-            ::shared_ptr<sharded<service::migration_notifier>> mnotifier)
+            sharded<service::migration_notifier>& mnotifier)
             : _feature_service(feature_service)
             , _db(db)
             , _auth_service(auth_service)
             , _view_builder(view_builder)
             , _view_update_generator(view_update_generator)
-            , _mnotifier(std::move(mnotifier))
+            , _mnotifier(mnotifier)
     { }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) override {
@@ -327,7 +327,7 @@ public:
     }
 
     virtual service::migration_notifier& local_mnotifier() override {
-        return _mnotifier->local();
+        return _mnotifier.local();
     }
 
     future<> start() {
@@ -407,9 +407,9 @@ public:
             token_metadata->start().get();
             auto stop_token_metadata = defer([token_metadata] { token_metadata->stop().get(); });
 
-            auto mm_notif = ::make_shared<sharded<service::migration_notifier>>();
-            mm_notif->start().get();
-            auto stop_mm_notify = defer([mm_notif] { mm_notif->stop().get(); });
+            sharded<service::migration_notifier> mm_notif;
+            mm_notif.start().get();
+            auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
 
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
@@ -449,12 +449,12 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(*mm_notif), std::ref(*token_metadata), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(*token_metadata), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
             dbcfg.available_memory = memory::stats().total_memory();
-            db.start(std::ref(*cfg), dbcfg, std::ref(*mm_notif), std::ref(feature_service), std::ref(*token_metadata)).get();
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(*token_metadata)).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
             });
@@ -479,12 +479,12 @@ public:
             proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(*token_metadata)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
-            mm.start(std::ref(*mm_notif), std::ref(feature_service)).get();
+            mm.start(std::ref(mm_notif), std::ref(feature_service)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             auto& qp = cql3::get_query_processor();
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            qp.start(std::ref(proxy), std::ref(db), std::ref(*mm_notif), qp_mcfg).get();
+            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), qp_mcfg).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             db::batchlog_manager_config bmcfg;
@@ -536,7 +536,7 @@ public:
             });
 
             sharded<db::view::view_builder> view_builder;
-            view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(*mm_notif)).get();
+            view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm_notif)).get();
             view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) {
                 return vb.start(mm.local());
             }).get();
