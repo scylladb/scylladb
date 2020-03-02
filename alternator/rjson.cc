@@ -55,6 +55,9 @@ public:
         rapidjson::EncodedInputStream<encoding, rapidjson::MemoryStream> is(ms);
         rapidjson::GenericReader<encoding, encoding, allocator> reader(&the_allocator);
         reader.Parse(is, *this);
+        if (reader.HasParseError()) {
+            throw rjson::error(format("Parsing JSON failed: {}", rapidjson::GetParseError_En(reader.GetParseErrorCode())));
+        }
         //NOTICE: The handler has parsed the string, but in case of rapidjson::GenericDocument
         // the data now resides in an internal stack_ variable, which is private instead of
         // protected... which means we cannot simply access its data. Fortunately, another
