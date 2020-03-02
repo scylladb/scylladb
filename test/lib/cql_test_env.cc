@@ -118,7 +118,7 @@ private:
     sharded<database>& _db;
     sharded<auth::service>& _auth_service;
     sharded<db::view::view_builder>& _view_builder;
-    ::shared_ptr<sharded<db::view::view_update_generator>> _view_update_generator;
+    sharded<db::view::view_update_generator>& _view_update_generator;
     ::shared_ptr<sharded<service::migration_notifier>> _mnotifier;
 private:
     struct core_local_state {
@@ -148,13 +148,13 @@ public:
             sharded<database>& db,
             sharded<auth::service>& auth_service,
             sharded<db::view::view_builder>& view_builder,
-            ::shared_ptr<sharded<db::view::view_update_generator>> view_update_generator,
+            sharded<db::view::view_update_generator>& view_update_generator,
             ::shared_ptr<sharded<service::migration_notifier>> mnotifier)
             : _feature_service(feature_service)
             , _db(db)
             , _auth_service(auth_service)
             , _view_builder(view_builder)
-            , _view_update_generator(std::move(view_update_generator))
+            , _view_update_generator(view_update_generator)
             , _mnotifier(std::move(mnotifier))
     { }
 
@@ -323,7 +323,7 @@ public:
     }
 
     virtual db::view::view_update_generator& local_view_update_generator() override {
-        return _view_update_generator->local();
+        return _view_update_generator.local();
     }
 
     virtual service::migration_notifier& local_mnotifier() override {
@@ -444,12 +444,12 @@ public:
             cql_config.start().get();
             auto stop_cql_config = defer([&] { cql_config.stop().get(); });
 
-            auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_generator>>();
+            sharded<db::view::view_update_generator> view_update_generator;
 
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(feature_service), sscfg, std::ref(*mm_notif), std::ref(*token_metadata), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(*mm_notif), std::ref(*token_metadata), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
@@ -493,10 +493,10 @@ public:
             bm.start(std::ref(qp), bmcfg).get();
             auto stop_bm = defer([&bm] { bm.stop().get(); });
 
-            view_update_generator->start(std::ref(db)).get();
-            view_update_generator->invoke_on_all(&db::view::view_update_generator::start).get();
-            auto stop_view_update_generator = defer([view_update_generator] {
-                view_update_generator->stop().get();
+            view_update_generator.start(std::ref(db)).get();
+            view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
+            auto stop_view_update_generator = defer([&view_update_generator] {
+                view_update_generator.stop().get();
             });
 
             distributed_loader::init_system_keyspace(db).get();
