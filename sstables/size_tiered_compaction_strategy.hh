@@ -131,7 +131,6 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
         uint64_t n = 0;
 
         for (auto const& sstable : sstables) {
-            // FIXME: Switch to sstable->bytes_on_disk() afterwards. That's what C* uses.
             n += sstable->data_size();
         }
 
