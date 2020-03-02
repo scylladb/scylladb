@@ -4762,6 +4762,9 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             cfg.datadir = tmp.path().string();
             auto table = make_lw_shared<column_family>(schema, cfg, column_family::no_commitlog(),
                 db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
+            auto stop_table = defer([table] {
+                table->stop().get();
+            });
             table->mark_ready_for_writes();
             table->start();
 
