@@ -1196,7 +1196,7 @@ set_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
 
 bytes
 set_type_impl::serialize_partially_deserialized_form(
-        const std::vector<bytes_view>& v, cql_serialization_format sf) const {
+        const std::vector<bytes_view>& v, cql_serialization_format sf) {
     return pack(v.begin(), v.end(), v.size(), sf);
 }
 
