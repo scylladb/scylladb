@@ -117,7 +117,7 @@ private:
     sharded<gms::feature_service>& _feature_service;
     sharded<database>& _db;
     sharded<auth::service>& _auth_service;
-    ::shared_ptr<sharded<db::view::view_builder>> _view_builder;
+    sharded<db::view::view_builder>& _view_builder;
     ::shared_ptr<sharded<db::view::view_update_generator>> _view_update_generator;
     ::shared_ptr<sharded<service::migration_notifier>> _mnotifier;
 private:
@@ -147,13 +147,13 @@ public:
             sharded<gms::feature_service>& feature_service,
             sharded<database>& db,
             sharded<auth::service>& auth_service,
-            ::shared_ptr<sharded<db::view::view_builder>> view_builder,
+            sharded<db::view::view_builder>& view_builder,
             ::shared_ptr<sharded<db::view::view_update_generator>> view_update_generator,
             ::shared_ptr<sharded<service::migration_notifier>> mnotifier)
             : _feature_service(feature_service)
             , _db(db)
             , _auth_service(auth_service)
-            , _view_builder(std::move(view_builder))
+            , _view_builder(view_builder)
             , _view_update_generator(std::move(view_update_generator))
             , _mnotifier(std::move(mnotifier))
     { }
@@ -319,7 +319,7 @@ public:
     }
 
     virtual db::view::view_builder& local_view_builder() override {
-        return _view_builder->local();
+        return _view_builder.local();
     }
 
     virtual db::view::view_update_generator& local_view_update_generator() override {
@@ -535,13 +535,13 @@ public:
                 auth_service.stop().get();
             });
 
-            auto view_builder = ::make_shared<seastar::sharded<db::view::view_builder>>();
-            view_builder->start(std::ref(db), std::ref(sys_dist_ks), std::ref(*mm_notif)).get();
-            view_builder->invoke_on_all([&mm] (db::view::view_builder& vb) {
+            sharded<db::view::view_builder> view_builder;
+            view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(*mm_notif)).get();
+            view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) {
                 return vb.start(mm.local());
             }).get();
-            auto stop_view_builder = defer([view_builder] {
-                view_builder->stop().get();
+            auto stop_view_builder = defer([&view_builder] {
+                view_builder.stop().get();
             });
 
             // Create the testing user.
