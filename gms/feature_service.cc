@@ -160,9 +160,6 @@ feature::feature(feature_service& service, sstring name, bool enabled)
         , _name(name)
         , _enabled(enabled) {
     _service->register_feature(*this);
-    if (_enabled) {
-        _pr.set_value();
-    }
 }
 
 feature::~feature() {
@@ -176,7 +173,6 @@ feature& feature::operator=(feature&& other) {
     _service = std::exchange(other._service, nullptr);
     _name = other._name;
     _enabled = other._enabled;
-    _pr = std::move(other._pr);
     _s = std::move(other._s);
     _service->register_feature(*this);
     return *this;
@@ -188,7 +184,6 @@ void feature::enable() {
             logger.info("Feature {} is enabled", name());
         }
         _enabled = true;
-        _pr.set_value();
         _s();
     }
 }
