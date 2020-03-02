@@ -3948,6 +3948,8 @@ void require_rows(cql_test_env& e,
     }
 }
 
+auto B(bool x) { return boolean_type->decompose(x); }
+
 auto I(int32_t x) { return int32_type->decompose(x); }
 
 auto L(int64_t x) { return long_type->decompose(x); }
@@ -5062,5 +5064,68 @@ SEASTAR_TEST_CASE(test_null_value_tuple_floating_types_and_uuids) {
         test_for_single_type(float_type, 1.0f);
         test_for_single_type(uuid_type, utils::make_random_uuid());
         test_for_single_type(timeuuid_type, utils::UUID("00000000-0000-1000-0000-000000000000"));
+    });
+}
+
+static std::unique_ptr<cql3::query_options> q_serial_opts() {
+    const auto& so = cql3::query_options::specific_options::DEFAULT;
+    auto qo = std::make_unique<cql3::query_options>(
+            db::consistency_level::ONE,
+            infinite_timeout_config,
+            std::vector<cql3::raw_value>{},
+            // Ensure (optional) serial consistency is always specified.
+            cql3::query_options::specific_options{
+                so.page_size,
+                so.state,
+                db::consistency_level::SERIAL,
+                so.timestamp,
+            }
+    );
+    return qo;
+}
+
+// Run parametrized query on the appropriate shard
+static void prepared_on_shard(cql_test_env& e, const sstring& query,
+            std::vector<bytes> params,
+            std::vector<std::vector<bytes_opt>> expected_rows) {
+    auto execute = [&] () mutable {
+        return seastar::async([&] () mutable {
+            auto id = e.prepare(query).get0();
+
+            std::vector<cql3::raw_value> raw_values;
+            for (auto& param : params) {
+                raw_values.emplace_back(cql3::raw_value::make_value(param));
+            }
+
+            auto qo = q_serial_opts();
+            auto msg = e.execute_prepared(id, raw_values).get0();
+            if (!msg->move_to_shard()) {
+                assert_that(msg).is_rows().with_rows_ignore_order(expected_rows);
+            }
+            return make_foreign(msg);
+        });
+    };
+
+    auto msg = execute().get0();
+    if (msg->move_to_shard()) {
+        unsigned shard = *msg->move_to_shard();
+        smp::submit_to(shard, std::move(execute)).get();
+    }
+}
+
+SEASTAR_TEST_CASE(test_like_parameter_marker) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, col text)").get();
+        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (1, 'aaa')").get();
+        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (2, 'bbb')").get();
+        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (3, 'ccc')").get();
+
+        const sstring query("UPDATE t SET col = ? WHERE pk = ? IF col LIKE ?");
+        prepared_on_shard(e, query, {T("err"), I(9), T("e%")}, {{B(false), {}}});
+        prepared_on_shard(e, query, {T("err"), I(9), T("e%")}, {{B(false), {}}});
+        prepared_on_shard(e, query, {T("chg"), I(1), T("a%")}, {{B(true),  "aaa"}});
+        prepared_on_shard(e, query, {T("err"), I(1), T("a%")}, {{B(false), "chg"}});
+        prepared_on_shard(e, query, {T("chg"), I(2), T("b%")}, {{B(true),  "bbb"}});
+        prepared_on_shard(e, query, {T("err"), I(1), T("a%")}, {{B(false), "chg"}});
     });
 }

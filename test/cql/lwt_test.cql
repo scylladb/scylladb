@@ -74,7 +74,6 @@ insert into lwt (a, b, c) values (1, {1:1, 2:2}, 3);
 -- LWT restrictions are a superposition of modification statement
 -- restrictions
 update lwt set c=3 where a=1 and b contains 1 if c=1;
-update lwt set c=3 where a=1 if c like 'asd';
 
 drop table lwt;
 
