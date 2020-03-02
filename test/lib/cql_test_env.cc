@@ -116,7 +116,7 @@ public:
 private:
     shared_ptr<sharded<gms::feature_service>> _feature_service;
     ::shared_ptr<distributed<database>> _db;
-    ::shared_ptr<sharded<auth::service>> _auth_service;
+    sharded<auth::service>& _auth_service;
     ::shared_ptr<sharded<db::view::view_builder>> _view_builder;
     ::shared_ptr<sharded<db::view::view_update_generator>> _view_update_generator;
     ::shared_ptr<sharded<service::migration_notifier>> _mnotifier;
@@ -146,13 +146,13 @@ public:
     single_node_cql_env(
             shared_ptr<sharded<gms::feature_service>> feature_service,
             ::shared_ptr<distributed<database>> db,
-            ::shared_ptr<sharded<auth::service>> auth_service,
+            sharded<auth::service>& auth_service,
             ::shared_ptr<sharded<db::view::view_builder>> view_builder,
             ::shared_ptr<sharded<db::view::view_update_generator>> view_update_generator,
             ::shared_ptr<sharded<service::migration_notifier>> mnotifier)
             : _feature_service(std::move(feature_service))
             , _db(db)
-            , _auth_service(std::move(auth_service))
+            , _auth_service(auth_service)
             , _view_builder(std::move(view_builder))
             , _view_update_generator(std::move(view_update_generator))
             , _mnotifier(std::move(mnotifier))
@@ -315,7 +315,7 @@ public:
     }
 
     auth::service& local_auth_service() override {
-        return _auth_service->local();
+        return _auth_service.local();
     }
 
     virtual db::view::view_builder& local_view_builder() override {
@@ -331,7 +331,7 @@ public:
     }
 
     future<> start() {
-        return _core_local.start(std::ref(*_auth_service));
+        return _core_local.start(std::ref(_auth_service));
     }
 
     future<> stop() {
@@ -418,7 +418,7 @@ public:
             ms.start(listen, std::move(7000), false).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
-            auto auth_service = ::make_shared<sharded<auth::service>>();
+            sharded<auth::service> auth_service;
             auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
@@ -449,7 +449,7 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, std::ref(*mm_notif), std::ref(*token_metadata), true).get();
+            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, std::ref(*mm_notif), std::ref(*token_metadata), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
@@ -530,9 +530,9 @@ public:
 
             service::get_local_storage_service().init_messaging_service_part().get();
             service::get_local_storage_service().init_server_without_the_messaging_service_part(service::bind_messaging_port(false)).get();
-            auto deinit_storage_service_server = defer([auth_service] {
+            auto deinit_storage_service_server = defer([&auth_service] {
                 gms::stop_gossiping().get();
-                auth_service->stop().get();
+                auth_service.stop().get();
             });
 
             auto view_builder = ::make_shared<seastar::sharded<db::view::view_builder>>();
@@ -551,7 +551,7 @@ public:
                 config.can_login = true;
 
                 auth::create_role(
-                        auth_service->local(),
+                        auth_service.local(),
                         testing_superuser,
                         config,
                         auth::authentication_options()).get0();
