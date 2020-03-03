@@ -1184,7 +1184,7 @@ int main(int ac, char** av) {
             startlog.info("Signal received; shutting down");
 	    // At this point, all objects destructors and all shutdown hooks registered with defer() are executed
           } catch (...) {
-            startlog.info("Startup failed: {}", std::current_exception());
+            startlog.error("Startup failed: {}", std::current_exception());
             // We should be returning 1 here, but the system is not yet prepared for orderly rollback of main() objects
             // and thread_local variables.
             _exit(1);
