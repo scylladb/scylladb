@@ -981,13 +981,13 @@ void set_storage_service(http_context& ctx, routes& r) {
 
 void set_snapshot(http_context& ctx, routes& r) {
     ss::get_snapshot_details.set(r, [](std::unique_ptr<request> req) {
-        std::function<future<>(output_stream<char>&&)> f = [](output_stream<char>&& s) {
-            return do_with(output_stream<char>(std::move(s)), true, [] (output_stream<char>& s, bool& first){
-                return s.write("[").then([&s, &first] {
-                    return service::get_local_storage_service().get_snapshot_details().then([&s, &first] (std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>&& result) {
-                        return do_with(std::move(result), [&s, &first](const std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>& result) {
-                            return do_for_each(result, [&s, &result,&first](std::tuple<sstring, std::vector<service::storage_service::snapshot_details>>&& map){
-                                return do_with(ss::snapshots(), [&s, &first, &result, &map](ss::snapshots& all_snapshots) {
+        return service::get_local_storage_service().get_snapshot_details().then([] (std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>&& result) {
+            return do_with(std::move(result), [](const std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>& result) {
+                std::function<future<>(output_stream<char>&&)> f = [&result](output_stream<char>&& s) {
+                    return do_with(output_stream<char>(std::move(s)), true, [&result] (output_stream<char>& s, bool& first){
+                        return s.write("[").then([&s, &first, &result] {
+                            return do_for_each(result, [&s, &result, &first](std::tuple<sstring, std::vector<service::storage_service::snapshot_details>>&& map){
+                                return do_with(ss::snapshots(), [&s, &first, &map](ss::snapshots& all_snapshots) {
                                     all_snapshots.key = std::get<0>(map);
                                     future<> f = first ? make_ready_future<>() : s.write(", ");
                                     first = false;
@@ -1006,16 +1006,17 @@ void set_snapshot(http_context& ctx, routes& r) {
                                     });
                                 });
                             });
-                        });
-                    }).then([&s] {
-                        return s.write("]").then([&s] {
-                            return s.close();
+                        }).then([&s] {
+                            return s.write("]").then([&s] {
+                                return s.close();
+                            });
                         });
                     });
-                });
+                };
+
+                return make_ready_future<json::json_return_type>(std::move(f));
             });
-        };
-        return make_ready_future<json::json_return_type>(std::move(f));
+        });
     });
 
     ss::take_snapshot.set(r, [](std::unique_ptr<request> req) {
