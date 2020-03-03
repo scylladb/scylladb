@@ -41,9 +41,11 @@
 
 #pragma once
 
-#include "database_fwd.hh"
-#include "schema.hh"
 #include <seastar/core/sstring.hh>
+#include "database_fwd.hh"
+#include "schema_fwd.hh"
+
+using namespace seastar;
 
 namespace validation {
 

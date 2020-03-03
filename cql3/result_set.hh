@@ -45,7 +45,6 @@
 #include <vector>
 #include "enum_set.hh"
 #include "service/pager/paging_state.hh"
-#include "schema.hh"
 
 #include "query-result-reader.hh"
 

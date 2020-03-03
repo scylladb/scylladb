@@ -22,7 +22,7 @@
 #pragma once
 
 #include "bytes.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "service/migration_manager.hh"
 #include "utils/UUID.hh"
 

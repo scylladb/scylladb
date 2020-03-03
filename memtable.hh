@@ -26,7 +26,7 @@
 #include <iosfwd>
 #include "database_fwd.hh"
 #include "dht/i_partitioner.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "encoding_stats.hh"
 #include "mutation_reader.hh"
 #include "db/commitlog/replay_position.hh"

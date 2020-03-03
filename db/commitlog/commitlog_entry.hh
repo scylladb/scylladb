@@ -24,7 +24,7 @@
 #include <optional>
 
 #include "frozen_mutation.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 
 class commitlog_entry {
     std::optional<column_mapping> _mapping;

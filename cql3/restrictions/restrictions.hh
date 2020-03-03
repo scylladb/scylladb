@@ -46,7 +46,7 @@
 
 #include "cql3/query_options.hh"
 #include "types.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "index/secondary_index_manager.hh"
 #include "restriction.hh"
 

@@ -43,7 +43,7 @@
 
 #include "gc_clock.hh"
 #include "timestamp.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "atomic_cell.hh"
 #include "tombstone.hh"
 #include "exceptions/exceptions.hh"

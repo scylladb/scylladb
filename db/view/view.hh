@@ -25,7 +25,7 @@
 #include "dht/i_partitioner.hh"
 #include "gc_clock.hh"
 #include "query-request.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "mutation_fragment.hh"
 #include "flat_mutation_reader.hh"
 

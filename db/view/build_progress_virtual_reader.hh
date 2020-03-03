@@ -27,7 +27,7 @@
 #include "mutation_fragment.hh"
 #include "mutation_reader.hh"
 #include "query-request.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "tracing/tracing.hh"
 
 #include <boost/range/iterator_range.hpp>

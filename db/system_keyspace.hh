@@ -44,7 +44,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "query-result-set.hh"

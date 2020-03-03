@@ -23,7 +23,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "query-request.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 
 namespace cql3::statements {
 class select_statement;

@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "position_in_partition.hh"
 #include <boost/icl/interval_set.hpp>
 

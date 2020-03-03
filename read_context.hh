@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "query-request.hh"
 #include "mutation_fragment.hh"
 #include "partition_version.hh"

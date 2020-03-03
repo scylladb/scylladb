@@ -42,7 +42,7 @@
 #pragma once
 
 #include "bytes.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "query-result-reader.hh"
 #include "cql3/column_specification.hh"
 #include "exceptions/exceptions.hh"

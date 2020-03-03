@@ -48,7 +48,7 @@
 #include "cql3/cql3_type.hh"
 
 #include "service/migration_manager.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 
 #include <seastar/core/shared_ptr.hh>
 

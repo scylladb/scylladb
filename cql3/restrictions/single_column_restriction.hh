@@ -48,7 +48,7 @@
 #include "cql3/term.hh"
 #include "cql3/abstract_marker.hh"
 #include <seastar/core/shared_ptr.hh>
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "to_string.hh"
 #include "exceptions/exceptions.hh"
 #include "keys.hh"

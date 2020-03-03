@@ -28,7 +28,7 @@
 #include "timestamp.hh"
 #include "gc_clock.hh"
 #include "mutation_fragment.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "row.hh"
 #include "clustering_ranges_walker.hh"
 #include "utils/data_input.hh"

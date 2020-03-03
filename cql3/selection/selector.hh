@@ -44,7 +44,7 @@
 #include <vector>
 #include "cql3/assignment_testable.hh"
 #include "types.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "counters.hh"
 
 namespace cql3 {

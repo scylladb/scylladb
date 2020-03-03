@@ -22,7 +22,7 @@
 #pragma once
 
 #include <cstdint>
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "system_keyspace.hh"
 
 namespace sstables {

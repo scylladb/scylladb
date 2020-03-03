@@ -25,7 +25,7 @@
 #include <vector>
 
 #include "query-request.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 
 //
 // Fluent builder for query::partition_slice.

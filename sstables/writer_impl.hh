@@ -22,7 +22,7 @@
 #pragma once
 
 #include "sstables.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "mutation_fragment.hh"
 
 namespace sstables {

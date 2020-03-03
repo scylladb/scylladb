@@ -39,7 +39,7 @@
 #include <seastar/core/enum.hh>
 #include "compress.hh"
 #include "dht/i_partitioner.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "mutation.hh"
 #include "utils/i_filter.hh"
 #include <seastar/core/stream.hh>

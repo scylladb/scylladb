@@ -25,7 +25,7 @@
 
 #include "mutation_partition.hh"
 #include "keys.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "dht/i_partitioner.hh"
 #include "hashing.hh"
 #include "mutation_fragment.hh"

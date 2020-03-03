@@ -32,7 +32,7 @@
 #include <seastar/core/bitset-iter.hh>
 #include <seastar/util/optimized_optional.hh>
 
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "tombstone.hh"
 #include "keys.hh"
 #include "position_in_partition.hh"

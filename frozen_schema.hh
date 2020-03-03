@@ -22,7 +22,7 @@
 #pragma once
 
 #include "query-result.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "frozen_mutation.hh"
 
 namespace db {

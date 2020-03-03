@@ -39,7 +39,7 @@
 #include <seastar/core/future.hh>
 
 #include "db/timeout_clock.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "dht/i_partitioner.hh"
 #include "query-request.hh"
 #include "utils/estimated_histogram.hh"

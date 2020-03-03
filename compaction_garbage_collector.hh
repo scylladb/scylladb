@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include "schema.hh"
 #include "collection_mutation.hh"
 
 class atomic_cell;

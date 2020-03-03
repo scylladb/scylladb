@@ -42,7 +42,7 @@
 #pragma once
 
 #include <vector>
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "cartesian_product.hh"
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"

@@ -26,7 +26,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/weak_ptr.hh>
 
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"
 #include "frozen_mutation.hh"

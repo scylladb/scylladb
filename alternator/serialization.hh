@@ -24,7 +24,7 @@
 #include <string>
 #include <string_view>
 #include "types.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "keys.hh"
 #include "rjson.hh"
 #include "utils/big_decimal.hh"

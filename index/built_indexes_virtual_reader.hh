@@ -19,14 +19,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "database_fwd.hh"
+#include "database.hh"
 #include "db/system_keyspace.hh"
 #include "db/timeout_clock.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_fragment.hh"
 #include "mutation_reader.hh"
 #include "query-request.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "secondary_index_manager.hh"
 #include "tracing/tracing.hh"
 #include "view_info.hh"

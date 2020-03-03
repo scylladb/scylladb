@@ -24,7 +24,7 @@
 
 #include <functional>
 #include "keys.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "range.hh"
 
 /**

@@ -43,7 +43,7 @@
 #include "service/storage_proxy.hh"
 #include "mutation.hh"
 #include "cql3/functions/user_function.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "schema_features.hh"
 #include "hashing.hh"
 #include "schema_mutations.hh"

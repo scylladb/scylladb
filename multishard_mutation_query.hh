@@ -22,7 +22,7 @@
 #pragma once
 
 #include "database_fwd.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "mutation_query.hh"
 #include "cache_temperature.hh"
 

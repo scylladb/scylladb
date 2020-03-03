@@ -22,7 +22,7 @@
 #pragma once
 
 #include "dht/i_partitioner.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "mutation_fragment.hh"
 #include "sstables/shared_sstable.hh"
 #include "database.hh"

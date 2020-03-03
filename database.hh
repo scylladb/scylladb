@@ -54,7 +54,7 @@
 #include "db/commitlog/replay_position.hh"
 #include <limits>
 #include <cstddef>
-#include "schema.hh"
+#include "schema_fwd.hh"
 #include "db/schema_features.hh"
 #include "gms/feature.hh"
 #include "timestamp.hh"
