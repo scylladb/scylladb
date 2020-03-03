@@ -1562,12 +1562,12 @@ SEASTAR_TEST_CASE(test_aggregate_functions) {
             .test_avg(int64_t(2));
 
         aggregate_function_test(e, varint_type,
-            boost::multiprecision::cpp_int(1),
-            boost::multiprecision::cpp_int(2),
-            boost::multiprecision::cpp_int(3)
+            utils::multiprecision_int(1),
+            utils::multiprecision_int(2),
+            utils::multiprecision_int(3)
         ).test_min_max_count()
-            .test_sum(boost::multiprecision::cpp_int(6))
-            .test_avg(boost::multiprecision::cpp_int(2));
+            .test_sum(utils::multiprecision_int(6))
+            .test_avg(utils::multiprecision_int(2));
 
         aggregate_function_test(e, decimal_type,
             big_decimal("1.0"),
@@ -2212,8 +2212,8 @@ SEASTAR_TEST_CASE(test_types) {
                     timestamp_type->decompose(tp),
                     timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
                     uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
-                    utf8_type->decompose(sstring("varchar")), varint_type->decompose(boost::multiprecision::cpp_int(123)),
-                    decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(123) }),
+                    utf8_type->decompose(sstring("varchar")), varint_type->decompose(utils::multiprecision_int(123)),
+                    decimal_type->decompose(big_decimal { 2, utils::multiprecision_int(123) }),
                     byte_type->decompose(int8_t(3)),
                     short_type->decompose(int16_t(3)),
                     serialized(simple_date_native_type{0x80000001}),
@@ -2266,7 +2266,7 @@ SEASTAR_TEST_CASE(test_types) {
                     timestamp_type->decompose(tp),
                     timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
                     uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
-                    utf8_type->decompose(sstring("varchar")), varint_type->decompose(boost::multiprecision::cpp_int(123)),
+                    utf8_type->decompose(sstring("varchar")), varint_type->decompose(utils::multiprecision_int(123)),
                     decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(123) }),
                     byte_type->decompose(int8_t(3)),
                     short_type->decompose(int16_t(3)),

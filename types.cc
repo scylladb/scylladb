@@ -1517,7 +1517,7 @@ static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::na
     }
 }
 
-static size_t concrete_serialized_size(const boost::multiprecision::cpp_int& num);
+static size_t concrete_serialized_size(const utils::multiprecision_int& num);
 
 static void serialize_varint_aux(bytes::iterator& out, const boost::multiprecision::cpp_int& num, uint8_t mask) {
     struct inserter_with_prefix {
@@ -1552,6 +1552,10 @@ static void serialize_varint(bytes::iterator& out, const boost::multiprecision::
     } else {
         serialize_varint_aux(out, num, 0);
     }
+}
+
+static void serialize_varint(bytes::iterator& out, const utils::multiprecision_int& num) {
+    serialize_varint(out, static_cast<const boost::multiprecision::cpp_int&>(num));
 }
 
 static void serialize(const abstract_type& t, const void* value, bytes::iterator& out);
@@ -1724,9 +1728,9 @@ static data_value deserialize_aux(const tuple_type_impl& t, bytes_view v) {
     return data_value::make(t.shared_from_this(), std::make_unique<tuple_type_impl::native_type>(std::move(ret)));
 }
 
-static boost::multiprecision::cpp_int deserialize_value(const varint_type_impl&, bytes_view v) {
+static utils::multiprecision_int deserialize_value(const varint_type_impl&, bytes_view v) {
     auto negative = v.front() < 0;
-    boost::multiprecision::cpp_int num;
+    utils::multiprecision_int num;
     for (uint8_t b : v) {
         if (negative) {
             b = ~b;
@@ -2173,12 +2177,16 @@ static size_t concrete_serialized_size(const boost::multiprecision::cpp_int& num
     return concrete_serialized_size_aux(num);
 }
 
+static size_t concrete_serialized_size(const utils::multiprecision_int& num) {
+    return concrete_serialized_size(static_cast<const boost::multiprecision::cpp_int&>(num));
+}
+
 static size_t concrete_serialized_size(const varint_type_impl::native_type& v) {
     return concrete_serialized_size(v.get());
 }
 
 static size_t concrete_serialized_size(const decimal_type_impl::native_type& v) {
-    const varint_type_impl::native_type& uv = v.get().unscaled_value();
+    const boost::multiprecision::cpp_int& uv = v.get().unscaled_value();
     return sizeof(int32_t) + concrete_serialized_size(uv);
 }
 
@@ -2483,7 +2491,7 @@ struct to_string_impl_visitor {
         return format_if_not_empty(u, v, [] (const utils::UUID& v) { return v.to_sstring(); });
     }
     sstring operator()(const varint_type_impl& t, const varint_type_impl::native_type* v) {
-        return format_if_not_empty(t, v, [] (const boost::multiprecision::cpp_int& v) { return v.str(); });
+        return format_if_not_empty(t, v, [] (const utils::multiprecision_int& v) { return v.str(); });
     }
 };
 }
@@ -3066,7 +3074,7 @@ data_value::data_value(timeuuid_native_type v) : data_value(make_new(timeuuid_ty
 data_value::data_value(date_type_native_type v) : data_value(make_new(date_type, v.tp)) {
 }
 
-data_value::data_value(boost::multiprecision::cpp_int v) : data_value(make_new(varint_type, v)) {
+data_value::data_value(utils::multiprecision_int v) : data_value(make_new(varint_type, v)) {
 }
 
 data_value::data_value(big_decimal v) : data_value(make_new(decimal_type, v)) {

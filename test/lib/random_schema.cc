@@ -221,24 +221,24 @@ std::vector<unsigned> random_subset(unsigned n, unsigned m, std::mt19937& engine
     return {the_set.begin(), the_set.begin() + m};
 }
 
-boost::multiprecision::cpp_int generate_multiprecision_integer_value(std::mt19937& engine, size_t max_size_in_bytes) {
-    using boost::multiprecision::cpp_int;
+utils::multiprecision_int generate_multiprecision_integer_value(std::mt19937& engine, size_t max_size_in_bytes) {
+    using utils::multiprecision_int;
 
     const auto max_bytes = std::min(size_t(16), std::max(size_t(2), max_size_in_bytes) - 1);
     const auto generate_int = [] (std::mt19937& engine, size_t max_bytes) {
         if (max_bytes == 8) {
-            return cpp_int(random::get_int<uint64_t>(engine));
+            return multiprecision_int(random::get_int<uint64_t>(engine));
         } else { // max_bytes < 8
-            return cpp_int(random::get_int<uint64_t>(0, (uint64_t(1) << (max_bytes * 8)) - uint64_t(1), engine));
+            return multiprecision_int(random::get_int<uint64_t>(0, (uint64_t(1) << (max_bytes * 8)) - uint64_t(1), engine));
         }
     };
 
     if (max_bytes <= 8) {
         return generate_int(engine, max_bytes);
     } else { // max_bytes > 8
-        auto ls = cpp_int(generate_int(engine, 8));
-        auto ms = cpp_int(generate_int(engine, max_bytes - 8));
-        return cpp_int(ls) + (cpp_int(ms) << 64);
+        auto ls = multiprecision_int(generate_int(engine, 8));
+        auto ms = multiprecision_int(generate_int(engine, max_bytes - 8));
+        return multiprecision_int(ls) + (multiprecision_int(ms) << 64);
     }
 }
 

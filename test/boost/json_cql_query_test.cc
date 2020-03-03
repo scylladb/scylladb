@@ -282,8 +282,8 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
                 timestamp_type->decompose(tp),
                 timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
                 uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
-                utf8_type->decompose(sstring("varchar")), varint_type->decompose(boost::multiprecision::cpp_int(123)),
-                decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(123) }),
+                utf8_type->decompose(sstring("varchar")), varint_type->decompose(utils::multiprecision_int(123)),
+                decimal_type->decompose(big_decimal { 2, utils::multiprecision_int(123) }),
                 byte_type->decompose(int8_t(3)),
                 short_type->decompose(int16_t(3)),
                 serialized(simple_date_native_type{0x80000001}),
@@ -303,8 +303,8 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
                 ascii_type->decompose(sstring("ascii")),
                 long_type->decompose(42l),
                 utf8_type->decompose(sstring("zażółć gęślą jaźń")),
-                varint_type->decompose(boost::multiprecision::cpp_int(2147483648)),
-                decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(345) }),
+                varint_type->decompose(utils::multiprecision_int(2147483648)),
+                decimal_type->decompose(big_decimal { 2, utils::multiprecision_int(345) }),
             }
         });
 
@@ -642,8 +642,8 @@ SEASTAR_TEST_CASE(test_unpack_decimal){
                 {to_bytes("d1"), to_bytes("d2"), to_bytes("d3")},
                 {decimal_type, varint_type, int32_type}, false);
         auto ut_val = make_user_value(ut,
-                user_type_impl::native_type({big_decimal{0, boost::multiprecision::cpp_int(1)},
-                boost::multiprecision::cpp_int(2),
+                user_type_impl::native_type({big_decimal{0, utils::multiprecision_int(1)},
+                utils::multiprecision_int(2),
                 3}));
 
         auto lt = list_type_impl::get_instance(ut, true);

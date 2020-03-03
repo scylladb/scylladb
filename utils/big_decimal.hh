@@ -21,12 +21,13 @@
 
 #pragma once
 
+#include "multiprecision_int.hh"
 #include <boost/multiprecision/cpp_int.hpp>
 #include <ostream>
 
 #include "bytes.hh"
 
-uint64_t from_varint_to_integer(const boost::multiprecision::cpp_int& varint);
+uint64_t from_varint_to_integer(const utils::multiprecision_int& varint);
 
 class big_decimal {
 private:

@@ -48,7 +48,7 @@
 #include <seastar/net/inet_address.hh>
 #include <seastar/util/backtrace.hh>
 #include "hashing.hh"
-#include <boost/multiprecision/cpp_int.hpp>  // FIXME: remove somehow
+#include "utils/multiprecision_int.hh"       // FIXME: remove somehow
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/exceptions.hh"
 
@@ -392,7 +392,7 @@ public:
     data_value(time_native_type);
     data_value(timeuuid_native_type);
     data_value(date_type_native_type);
-    data_value(boost::multiprecision::cpp_int);
+    data_value(utils::multiprecision_int);
     data_value(big_decimal);
     data_value(cql_duration);
     explicit data_value(std::optional<bytes>);
@@ -981,7 +981,7 @@ shared_ptr<const abstract_type> data_type_for<double>() {
 
 template <>
 inline
-shared_ptr<const abstract_type> data_type_for<boost::multiprecision::cpp_int>() {
+shared_ptr<const abstract_type> data_type_for<utils::multiprecision_int>() {
     return varint_type;
 }
 

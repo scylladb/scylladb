@@ -482,9 +482,9 @@ void cql3::functions::add_agg_functions(declared_t& funcs) {
     declare(make_max_function<int64_t>());
     declare(make_min_function<int64_t>());
 
-    declare(make_count_function<boost::multiprecision::cpp_int>());
-    declare(make_max_function<boost::multiprecision::cpp_int>());
-    declare(make_min_function<boost::multiprecision::cpp_int>());
+    declare(make_count_function<utils::multiprecision_int>());
+    declare(make_max_function<utils::multiprecision_int>());
+    declare(make_min_function<utils::multiprecision_int>());
 
     declare(make_count_function<big_decimal>());
     declare(make_max_function<big_decimal>());
@@ -546,7 +546,7 @@ void cql3::functions::add_agg_functions(declared_t& funcs) {
     declare(make_sum_function<int64_t>());
     declare(make_sum_function<float>());
     declare(make_sum_function<double>());
-    declare(make_sum_function<boost::multiprecision::cpp_int>());
+    declare(make_sum_function<utils::multiprecision_int>());
     declare(make_sum_function<big_decimal>());
     declare(make_avg_function<int8_t>());
     declare(make_avg_function<int16_t>());
@@ -554,6 +554,6 @@ void cql3::functions::add_agg_functions(declared_t& funcs) {
     declare(make_avg_function<int64_t>());
     declare(make_avg_function<float>());
     declare(make_avg_function<double>());
-    declare(make_avg_function<boost::multiprecision::cpp_int>());
+    declare(make_avg_function<utils::multiprecision_int>());
     declare(make_avg_function<big_decimal>());
 }

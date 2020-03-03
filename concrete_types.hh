@@ -135,7 +135,7 @@ struct timeuuid_type_impl final : public concrete_type<utils::UUID> {
     static utils::UUID from_sstring(sstring_view s);
 };
 
-struct varint_type_impl final : public concrete_type<boost::multiprecision::cpp_int> {
+struct varint_type_impl final : public concrete_type<utils::multiprecision_int> {
     varint_type_impl();
 };
 
