@@ -32,6 +32,7 @@
 #include "repair/range_split.hh"
 
 #include "test/lib/simple_schema.hh"
+#include "test/lib/log.hh"
 #include "test/boost/total_order_check.hh"
 
 template <typename... Args>
@@ -133,7 +134,7 @@ SEASTAR_THREAD_TEST_CASE(test_ring_position_ordering) {
     keys[2]._token = keys[3]._token = keys[4]._token;
     std::sort(keys.begin() + 2, keys.begin() + 5, dht::ring_position_less_comparator(*table.schema()));
 
-    BOOST_TEST_MESSAGE(format("Keys: {}", keys));
+    testlog.info("Keys: {}", keys);
 
     auto positions = boost::copy_range<std::vector<dht::ring_position>>(keys);
     auto ext_positions = boost::copy_range<std::vector<dht::ring_position_ext>>(keys);

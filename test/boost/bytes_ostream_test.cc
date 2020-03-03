@@ -30,6 +30,7 @@
 #include "serializer_impl.hh"
 
 #include "test/lib/random_utils.hh"
+#include "test/lib/log.hh"
 
 void append_sequence(bytes_ostream& buf, int count) {
     for (int i = 0; i < count; i++) {
@@ -284,7 +285,7 @@ BOOST_AUTO_TEST_CASE(test_append_big_and_small_chunks) {
 
 BOOST_AUTO_TEST_CASE(test_remove_suffix) {
     auto test = [] (size_t length, size_t suffix) {
-        BOOST_TEST_MESSAGE("Testing buffer size " << length << " and suffix size " << suffix);
+        testlog.info("Testing buffer size {}  and suffix size {}", length, suffix);
 
         auto data = tests::random::get_bytes(length);
         bytes_view view = data;

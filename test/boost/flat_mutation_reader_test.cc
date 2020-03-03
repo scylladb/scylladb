@@ -38,6 +38,7 @@
 #include "test/lib/test_services.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/log.hh"
 
 struct mock_consumer {
     struct result {
@@ -439,14 +440,14 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
 
         // Generator ranges are single pass, so we need a new range each time they are used.
         auto run_test = [&] (auto make_empty_ranges, auto make_single_ranges, auto make_multiple_ranges) {
-            BOOST_TEST_MESSAGE("empty ranges");
+            testlog.info("empty ranges");
             assert_that(make_flat_multi_range_reader(s.schema(), source, make_empty_ranges(), s.schema()->full_slice()))
                     .produces_end_of_stream()
                     .fast_forward_to(fft_range)
                     .produces(ms[9])
                     .produces_end_of_stream();
 
-            BOOST_TEST_MESSAGE("single range");
+            testlog.info("single range");
             assert_that(make_flat_multi_range_reader(s.schema(), source, make_single_ranges(), s.schema()->full_slice()))
                     .produces(ms[1])
                     .produces(ms[2])
@@ -455,7 +456,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                     .produces(ms[9])
                     .produces_end_of_stream();
 
-            BOOST_TEST_MESSAGE("read full partitions and fast forward");
+            testlog.info("read full partitions and fast forward");
             assert_that(make_flat_multi_range_reader(s.schema(), source, make_multiple_ranges(), s.schema()->full_slice()))
                     .produces(ms[1])
                     .produces(ms[2])
@@ -465,7 +466,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                     .produces(ms[9])
                     .produces_end_of_stream();
 
-            BOOST_TEST_MESSAGE("read, skip partitions and fast forward");
+            testlog.info("read, skip partitions and fast forward");
             assert_that(make_flat_multi_range_reader(s.schema(), source, make_multiple_ranges(), s.schema()->full_slice()))
                     .produces_partition_start(keys[1])
                     .next_partition()
@@ -484,13 +485,13 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                     .produces_end_of_stream();
         };
 
-        BOOST_TEST_MESSAGE("vector version");
+        testlog.info("vector version");
         run_test(
                 [&] { return empty_ranges; },
                 [&] { return single_ranges; },
                 [&] { return multiple_ranges; });
 
-        BOOST_TEST_MESSAGE("generator version");
+        testlog.info("generator version");
         run_test(
                 [&] { return empty_generator; },
                 [&] { return single_generator; },
@@ -597,12 +598,12 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
         }
     };
 
-    BOOST_TEST_MESSAGE(format("Consume all{}", reversed_msg));
+    testlog.info("Consume all{}", reversed_msg);
     auto fmr = flat_mutation_reader_from_mutations(muts);
     auto muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed));
     BOOST_REQUIRE_EQUAL(muts, muts2);
 
-    BOOST_TEST_MESSAGE(format("Consume first fragment from partition{}", reversed_msg));
+    testlog.info("Consume first fragment from partition{}", reversed_msg);
     fmr = flat_mutation_reader_from_mutations(muts);
     muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::yes));
     BOOST_REQUIRE_EQUAL(muts.size(), muts2.size());
@@ -615,7 +616,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
         BOOST_REQUIRE_EQUAL(m, muts[j]);
     }
 
-    BOOST_TEST_MESSAGE(format("Consume first partition{}", reversed_msg));
+    testlog.info("Consume first partition{}", reversed_msg);
     fmr = flat_mutation_reader_from_mutations(muts);
     muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::no,
                                              skip_after_first_partition::yes));
@@ -631,7 +632,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             }
             return true;
         });
-        BOOST_TEST_MESSAGE("Consume all, filtered");
+        testlog.info("Consume all, filtered");
         fmr = flat_mutation_reader_from_mutations(muts);
         muts2 = fmr.consume_in_thread(flat_stream_consumer(s, reversed), std::move(filter), db::no_timeout);
         BOOST_REQUIRE_EQUAL(muts.size() / 2, muts2.size());
@@ -802,7 +803,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
     };
 
     auto test_with_partition = [&] (bool with_static_row) {
-        BOOST_TEST_MESSAGE(fmt::format("Testing with_static_row={}", with_static_row));
+        testlog.info("Testing with_static_row={}", with_static_row);
         auto mut = schema.new_mutation("pk1");
         const size_t desired_mut_size = 1 * 1024 * 1024;
         const size_t row_size = 10 * 1024;
@@ -822,7 +823,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
             reverse_reader.consume(phony_consumer{}, db::no_timeout).get();
             BOOST_FAIL("No exception thrown for reversing overly big partition");
         } catch (const std::runtime_error& e) {
-            BOOST_TEST_MESSAGE(fmt::format("Got exception with message: {}", e.what()));
+            testlog.info("Got exception with message: {}", e.what());
             auto str = sstring(e.what());
             BOOST_REQUIRE_EQUAL(str.find("Aborting reverse partition read because partition pk1"), 0);
         } catch (...) {

@@ -3697,7 +3697,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
             auto ck1 = table.make_ckey(1);
             auto ck2 = table.make_ckey((1 + i) / 2);
             auto ck3 = table.make_ckey(i);
-            BOOST_TEST_MESSAGE(format("checking {} {}", ck2, ck3));
+            testlog.info("checking {} {}", ck2, ck3);
             auto slice = partition_slice_builder(*table.schema())
                 .with_range(query::clustering_range::make_singular(ck1))
                 .with_range(query::clustering_range::make_singular(ck2))
@@ -4666,7 +4666,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             std::vector<mutation_fragment> scrubbed_fragments;
             auto sst = sst_gen();
 
-            BOOST_TEST_MESSAGE(fmt::format("Writing sstable {}", sst->get_filename()));
+            testlog.info("Writing sstable {}", sst->get_filename());
 
             {
                 auto& partitioner = dht::global_partitioner();
@@ -4697,7 +4697,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                     auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
                     auto dkey = partitioner.decorate_key(*schema, pkey);
 
-                    BOOST_TEST_MESSAGE(fmt::format("Writing partition {}", pkey.with_schema(*schema)));
+                    testlog.trace("Writing partition {}", pkey.with_schema(*schema));
 
                     if (write_to_scrubbed) {
                         scrubbed_fragments.emplace_back(partition_start(dkey, {}));
@@ -4708,7 +4708,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                     {
                         auto sr = make_static_row();
 
-                        BOOST_TEST_MESSAGE(fmt::format("Writing row {}", sr.position()));
+                        testlog.trace("Writing row {}", sr.position());
 
                         if (write_to_scrubbed) {
                             scrubbed_fragments.emplace_back(static_row(*schema, sr));
@@ -4721,7 +4721,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                     for (unsigned i = 0; i < rows_count; ++i) {
                         auto cr = make_clustering_row(i);
 
-                        BOOST_TEST_MESSAGE(fmt::format("Writing row {}", cr.position()));
+                        testlog.trace("Writing row {}", cr.position());
 
                         if (write_to_scrubbed) {
                             scrubbed_fragments.emplace_back(clustering_row(*schema, cr));
@@ -4732,13 +4732,13 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                         // write row twice
                         if (i == (rows_count / 2)) {
                             auto bad_cr = make_clustering_row(i - 2);
-                            BOOST_TEST_MESSAGE(fmt::format("Writing out-of-order row {}", bad_cr.position()));
+                            testlog.trace("Writing out-of-order row {}", bad_cr.position());
                             corrupt_fragments.emplace_back(clustering_row(*schema, bad_cr));
                             writer.consume(std::move(bad_cr));
                         }
                     }
 
-                    BOOST_TEST_MESSAGE("Writing partition_end");
+                    testlog.trace("Writing partition_end");
 
                     if (write_to_scrubbed) {
                         scrubbed_fragments.emplace_back(partition_end{});
@@ -4751,12 +4751,12 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                 write_partition(0, false);
                 write_partition(2, true);
 
-                BOOST_TEST_MESSAGE("Writing done");
+                testlog.info("Writing done");
                 writer.consume_end_of_stream();
             }
             sst->load().get();
 
-            BOOST_TEST_MESSAGE(fmt::format("Loaded sstable {}", sst->get_filename()));
+            testlog.info("Loaded sstable {}", sst->get_filename());
 
             auto cfg = column_family_test_config();
             cfg.datadir = tmp.path().string();
@@ -4776,18 +4776,18 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment>& mfs) {
                 auto r = assert_that(sst->as_mutation_source().make_reader(schema));
                 for (const auto& mf : mfs) {
-                   BOOST_TEST_MESSAGE(fmt::format("Expecting {}", mutation_fragment::printer(*schema, mf)));
+                   testlog.trace("Expecting {}", mutation_fragment::printer(*schema, mf));
                    r.produces(*schema, mf);
                 }
                 r.produces_end_of_stream();
             };
 
-            BOOST_TEST_MESSAGE("Verifying written data...");
+            testlog.info("Verifying written data...");
 
             // Make sure we wrote what we though we wrote.
             verify_fragments(sst, corrupt_fragments);
 
-            BOOST_TEST_MESSAGE("Scrub with --skip-corrupted=false");
+            testlog.info("Scrub with --skip-corrupted=false");
 
             // We expect the scrub with skip_corrupted=false to stop on the first invalid fragment.
             compaction_manager.perform_sstable_scrub(table.get(), false).get();
@@ -4795,7 +4795,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             BOOST_REQUIRE(table->candidates_for_compaction().size() == 1);
             verify_fragments(sst, corrupt_fragments);
 
-            BOOST_TEST_MESSAGE("Scrub with --skip-corrupted=true");
+            testlog.info("Scrub with --skip-corrupted=true");
 
             // We expect the scrub with skip_corrupted=true to get rid of all invalid data.
             compaction_manager.perform_sstable_scrub(table.get(), true).get();
@@ -4886,7 +4886,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
 
     auto r = assert_that(make_scrubbing_reader(make_flat_mutation_reader_from_fragments(schema, std::move(corrupt_fragments)), true));
     for (const auto& mf : scrubbed_fragments) {
-       BOOST_TEST_MESSAGE(fmt::format("Expecting {}", mutation_fragment::printer(*schema, mf)));
+       testlog.info("Expecting {}", mutation_fragment::printer(*schema, mf));
        r.produces(*schema, mf);
     }
     r.produces_end_of_stream();
@@ -5072,11 +5072,11 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             do_replace(old_sstables, new_sstables);
 
             observer = old_sstables.front()->add_on_closed_handler([&] (sstable& sst) {
-                BOOST_TEST_MESSAGE(sprint("Closing sstable of generation %d", sst.generation()));
+                testlog.info("Closing sstable of generation {}", sst.generation());
                 closed_sstables_tracker++;
             });
 
-            BOOST_TEST_MESSAGE(sprint("Removing sstable of generation %d, refcnt: %d", old_sstables.front()->generation(), old_sstables.front().use_count()));
+            testlog.info("Removing sstable of generation {}, refcnt: {}", old_sstables.front()->generation(), old_sstables.front().use_count());
         };
 
         auto do_compaction = [&] (size_t expected_input, size_t expected_output) -> std::vector<shared_sstable> {

@@ -58,6 +58,7 @@
 #include "service/storage_proxy.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/log.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
@@ -683,11 +684,11 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
 
     auto assert_order = [] (atomic_cell_view first, atomic_cell_view second) {
         if (compare_atomic_cell_for_merge(first, second) >= 0) {
-            BOOST_TEST_MESSAGE(format("Expected {} < {}", first, second));
+            testlog.trace("Expected {} < {}", first, second);
             abort();
         }
         if (compare_atomic_cell_for_merge(second, first) <= 0) {
-            BOOST_TEST_MESSAGE(format("Expected {} < {}", second, first));
+            testlog.trace("Expected {} < {}", second, first);
             abort();
         }
     };
@@ -1259,7 +1260,7 @@ SEASTAR_TEST_CASE(test_query_digest) {
                 check_digests_equal(compacted(m1), m2);
                 check_digests_equal(m1, compacted(m2));
             } else {
-                BOOST_TEST_MESSAGE("If not equal, they should become so after applying diffs mutually");
+                testlog.info("If not equal, they should become so after applying diffs mutually");
 
                 mutation_application_stats app_stats;
                 schema_ptr s = m1.schema();
@@ -1428,14 +1429,14 @@ SEASTAR_THREAD_TEST_CASE(test_row_marker_expiry) {
     can_gc_fn never_gc = [] (tombstone) { return false; };
 
     auto must_be_alive = [&] (row_marker mark, gc_clock::time_point t) {
-        BOOST_TEST_MESSAGE(format("must_be_alive({}, {})", mark, t));
+        testlog.trace("must_be_alive({}, {})", mark, t);
         BOOST_REQUIRE(mark.is_live(tombstone(), t));
         BOOST_REQUIRE(mark.is_missing() || !mark.is_dead(t));
         BOOST_REQUIRE(mark.compact_and_expire(tombstone(), t, never_gc, gc_clock::time_point()));
     };
 
     auto must_be_dead = [&] (row_marker mark, gc_clock::time_point t) {
-        BOOST_TEST_MESSAGE(format("must_be_dead({}, {})", mark, t));
+        testlog.trace("must_be_dead({}, {})", mark, t);
         BOOST_REQUIRE(!mark.is_live(tombstone(), t));
         BOOST_REQUIRE(mark.is_missing() || mark.is_dead(t));
         BOOST_REQUIRE(!mark.compact_and_expire(tombstone(), t, never_gc, gc_clock::time_point()));

@@ -37,6 +37,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/failure_injecting_allocation_strategy.hh"
+#include "test/lib/log.hh"
 #include "test/boost/range_tombstone_list_assertions.hh"
 #include "real_dirty_memory_accounter.hh"
 
@@ -349,7 +350,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
         auto ck1 = table.make_ckey(1);
         auto ck2 = table.make_ckey(2);
 
-        BOOST_TEST_MESSAGE("Check that insert falling into discontinuous range is dropped");
+        testlog.info("Check that insert falling into discontinuous range is dropped");
         {
             auto e = ms.make_evictable(mutation_partition::make_incomplete(s));
             auto m = new_mutation();
@@ -358,7 +359,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
             assert_that(table.schema(), e.squashed()).is_equal_to(mutation_partition::make_incomplete(s));
         }
 
-        BOOST_TEST_MESSAGE("Check that continuity is a union");
+        testlog.info("Check that continuity is a union");
         {
             auto m1 = mutation_with_row(ck2);
             auto e = ms.make_evictable(m1.partition());

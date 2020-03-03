@@ -38,10 +38,9 @@
 #include "memtable.hh"
 #include "partition_slice_builder.hh"
 #include "test/lib/memtable_snapshot_source.hh"
+#include "test/lib/log.hh"
 
 using namespace std::chrono_literals;
-
-static seastar::logger test_log("test");
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -1036,7 +1035,7 @@ SEASTAR_TEST_CASE(test_update) {
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker, is_continuous::yes);
 
-        BOOST_TEST_MESSAGE("Check cache miss with populate");
+        testlog.info("Check cache miss with populate");
 
         int partition_count = 1000;
 
@@ -1070,7 +1069,7 @@ SEASTAR_TEST_CASE(test_update) {
         std::copy(keys_not_in_cache.begin(), keys_not_in_cache.end(), std::back_inserter(keys_in_cache));
         keys_not_in_cache.clear();
 
-        BOOST_TEST_MESSAGE("Check cache miss with drop");
+        testlog.info("Check cache miss with drop");
 
         auto mt2 = make_lw_shared<memtable>(s);
 
@@ -1088,7 +1087,7 @@ SEASTAR_TEST_CASE(test_update) {
             verify_does_not_have(cache, key);
         }
 
-        BOOST_TEST_MESSAGE("Check cache hit with merge");
+        testlog.info("Check cache hit with merge");
 
         auto mt3 = make_lw_shared<memtable>(s);
 
@@ -2753,7 +2752,7 @@ SEASTAR_TEST_CASE(test_no_misses_when_read_is_repeated) {
 
         for (auto n_ranges : {1, 2, 4}) {
             auto ranges = gen.make_random_ranges(n_ranges);
-            BOOST_TEST_MESSAGE(format("Reading {{}}", ranges));
+            testlog.info("Reading {{}}", ranges);
 
             populate_range(cache, pr, ranges);
             check_continuous(cache, pr, ranges);

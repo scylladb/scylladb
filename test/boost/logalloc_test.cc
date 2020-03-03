@@ -39,6 +39,7 @@
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
 #include "utils/managed_bytes.hh"
+#include "test/lib/log.hh"
 #include "log.hh"
 
 [[gnu::unused]]
@@ -662,32 +663,32 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         big_region->alloc();
 
         // We should not be permitted to go forward with a new allocation now...
-        BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
+        testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
         fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); }, db::no_timeout);
         BOOST_REQUIRE_EQUAL(fut.available(), false);
         BOOST_REQUIRE_GT(simple.memory_used(), logalloc::segment_size);
 
-        BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
-        BOOST_TEST_MESSAGE(format("used = {}", simple.memory_used()));
+        testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
+        testlog.info("used = {}", simple.memory_used());
 
-        BOOST_TEST_MESSAGE("Resetting");
+        testlog.info("Resetting");
 
         // But when we remove the big bytes allocator from the region, then we should.
         // Internally, we can't guarantee that just freeing the object will give the segment back,
         // that's up to the internal policies. So to make sure we need to remove the whole region.
         big_region.reset();
 
-        BOOST_TEST_MESSAGE(format("used = {}", simple.memory_used()));
-        BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
+        testlog.info("used = {}", simple.memory_used());
+        testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
         try {
             quiesce(std::move(fut));
         } catch (...) {
-            BOOST_TEST_MESSAGE(format("Aborting: {}", std::current_exception()));
-            BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
-            BOOST_TEST_MESSAGE(format("used = %d", simple.memory_used()));
+            testlog.info("Aborting: {}", std::current_exception());
+            testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
+            testlog.info("used = {}", simple.memory_used());
             abort();
         }
-        BOOST_TEST_MESSAGE(format("now = {}", lowres_clock::now().time_since_epoch().count()));
+        testlog.info("now = {}", lowres_clock::now().time_since_epoch().count());
     });
 }
 
@@ -1272,22 +1273,22 @@ SEASTAR_TEST_CASE(test_zone_reclaiming_preserves_free_size) {
                 objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), 1024));
             }
 
-            BOOST_TEST_MESSAGE(logalloc::shard_tracker().non_lsa_used_space());
-            BOOST_TEST_MESSAGE(logalloc::shard_tracker().region_occupancy());
+            testlog.info("non_lsa_used_space = {}", logalloc::shard_tracker().non_lsa_used_space());
+            testlog.info("region_occupancy = {}", logalloc::shard_tracker().region_occupancy());
 
             while (logalloc::shard_tracker().region_occupancy().used_space() >= logalloc::segment_size * 2) {
                 objs.pop_front();
             }
 
-            BOOST_TEST_MESSAGE(logalloc::shard_tracker().non_lsa_used_space());
-            BOOST_TEST_MESSAGE(logalloc::shard_tracker().region_occupancy());
+            testlog.info("non_lsa_used_space = {}", logalloc::shard_tracker().non_lsa_used_space());
+            testlog.info("region_occupancy = {}", logalloc::shard_tracker().region_occupancy());
 
             auto before = logalloc::shard_tracker().non_lsa_used_space();
             logalloc::shard_tracker().reclaim(logalloc::segment_size);
             auto after = logalloc::shard_tracker().non_lsa_used_space();
 
-            BOOST_TEST_MESSAGE(logalloc::shard_tracker().non_lsa_used_space());
-            BOOST_TEST_MESSAGE(logalloc::shard_tracker().region_occupancy());
+            testlog.info("non_lsa_used_space = {}", logalloc::shard_tracker().non_lsa_used_space());
+            testlog.info("region_occupancy = {}", logalloc::shard_tracker().region_occupancy());
 
             BOOST_REQUIRE(after <= before);
         });

@@ -25,6 +25,7 @@
 #include <boost/test/unit_test.hpp>
 #include <seastar/util/variant_utils.hh>
 #include <variant>
+#include "test/lib/log.hh"
 
 template<typename Comparator, typename... T>
 class total_order_check {
@@ -42,7 +43,7 @@ private:
             for (const element& right_e : right) {
                 seastar::visit(left_e, [&] (auto&& a) {
                     seastar::visit(right_e, [&] (auto&& b) {
-                        BOOST_TEST_MESSAGE(format("cmp({}, {}) == {:d}", a, b, order));
+                        testlog.trace("cmp({}, {}) == {:d}", a, b, order);
                         auto r = _cmp(a, b);
                         auto actual = this->sgn(r);
                         if (actual != order) {

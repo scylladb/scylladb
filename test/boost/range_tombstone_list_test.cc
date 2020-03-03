@@ -28,6 +28,7 @@
 #include "schema_builder.hh"
 #include "range_tombstone_list.hh"
 #include "test/boost/range_tombstone_list_assertions.hh"
+#include "test/lib/log.hh"
 
 static thread_local schema_ptr s = schema_builder("ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -869,7 +870,7 @@ BOOST_AUTO_TEST_CASE(test_accumulator) {
     auto ts1 = 1;
     auto ts2 = 2;
 
-    BOOST_TEST_MESSAGE("Forward");
+    testlog.info("Forward");
     auto acc = range_tombstone_accumulator(*s, false);
     acc.apply(rtie(0, 4, ts1));
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 0 })), tombstone(ts1, gc_now));
@@ -890,7 +891,7 @@ BOOST_AUTO_TEST_CASE(test_accumulator) {
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 14 })), tombstone());
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 15 })), tombstone());
 
-    BOOST_TEST_MESSAGE("Reversed");
+    testlog.info("Reversed");
     acc = range_tombstone_accumulator(*s, true);
 
     BOOST_REQUIRE_EQUAL(acc.tombstone_for_row(key({ 15 })), tombstone());

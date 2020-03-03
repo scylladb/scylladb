@@ -24,14 +24,13 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/log.hh"
 #include "cql3/query_processor.hh"
 
 #include "db/data_listeners.hh"
 
 using namespace std;
 using namespace std::chrono_literals;
-
-logging::logger testlog("test");
 
 class table_listener : public db::data_listener {
     sstring _cf_name;

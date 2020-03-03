@@ -34,6 +34,7 @@
 #include "cql3/cql3_type.hh"
 #include "test/lib/make_random_string.hh"
 #include "test/lib/data_model.hh"
+#include "test/lib/log.hh"
 #include <boost/algorithm/string/join.hpp>
 #include "types/user.hh"
 #include "types/map.hh"
@@ -83,7 +84,7 @@ public:
 }
 
 static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     simple_schema s;
 
@@ -170,10 +171,10 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
                     ? query::clustering_range::make_singular(s.make_ckey(start))
                     : query::clustering_range::make({s.make_ckey(start)}, {s.make_ckey(start + range_size), false});
 
-                BOOST_TEST_MESSAGE(format("Clustering key range {}", range));
+                testlog.info("Clustering key range {}", range);
 
                 auto test_common = [&] (const query::partition_slice& slice) {
-                    BOOST_TEST_MESSAGE("Read whole partitions at once");
+                    testlog.info("Read whole partitions at once");
                     auto pranges_walker = partition_range_walker(pranges);
                     auto mr = ms.make_reader(s.schema(), no_reader_permit(), pranges_walker.initial_range(), slice,
                                              default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
@@ -199,7 +200,7 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
                     }
                     actual.produces_end_of_stream();
 
-                    BOOST_TEST_MESSAGE("Read partitions with fast-forwarding to each individual row");
+                    testlog.info("Read partitions with fast-forwarding to each individual row");
                     pranges_walker = partition_range_walker(pranges);
                     mr = ms.make_reader(s.schema(), no_reader_permit(), pranges_walker.initial_range(), slice,
                                         default_priority_class(), nullptr, streamed_mutation::forwarding::yes, fwd_mr);
@@ -229,20 +230,20 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
                     actual.produces_end_of_stream();
                 };
 
-                BOOST_TEST_MESSAGE("Single-range slice");
+                testlog.info("Single-range slice");
                 auto slice = partition_slice_builder(*s.schema())
                     .with_range(range)
                     .build();
 
                 test_common(slice);
 
-                BOOST_TEST_MESSAGE("Test monotonic positions");
+                testlog.info("Test monotonic positions");
                 auto mr = ms.make_reader(s.schema(), no_reader_permit(), query::full_partition_range, slice,
                                             default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
                 assert_that(std::move(mr)).has_monotonic_positions();
 
                 if (range_size != 1) {
-                    BOOST_TEST_MESSAGE("Read partitions fast-forwarded to the range of interest");
+                    testlog.info("Read partitions fast-forwarded to the range of interest");
                     auto pranges_walker = partition_range_walker(pranges);
                     mr = ms.make_reader(s.schema(), no_reader_permit(), pranges_walker.initial_range(), slice,
                                         default_priority_class(), nullptr, streamed_mutation::forwarding::yes, fwd_mr);
@@ -277,12 +278,12 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
                     actual.produces_end_of_stream();
                 }
 
-                BOOST_TEST_MESSAGE("Slice with not clustering ranges");
+                testlog.info("Slice with not clustering ranges");
                 slice = partition_slice_builder(*s.schema())
                     .with_ranges({})
                     .build();
 
-                BOOST_TEST_MESSAGE("Read partitions with just static rows");
+                testlog.info("Read partitions with just static rows");
                 auto pranges_walker = partition_range_walker(pranges);
                 mr = ms.make_reader(s.schema(), no_reader_permit(), pranges_walker.initial_range(), slice,
                                     default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
@@ -299,7 +300,7 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
                 actual.produces_end_of_stream();
 
                 if (range_size != 1) {
-                    BOOST_TEST_MESSAGE("Slice with single-row ranges");
+                    testlog.info("Slice with single-row ranges");
                     std::vector<query::clustering_range> ranges;
                     for (auto i = start; i < start + range_size; i++) {
                         ranges.emplace_back(query::clustering_range::make_singular(s.make_ckey(i)));
@@ -310,7 +311,7 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
 
                     test_common(slice);
 
-                    BOOST_TEST_MESSAGE("Test monotonic positions");
+                    testlog.info("Test monotonic positions");
                     auto mr = ms.make_reader(s.schema(), no_reader_permit(), query::full_partition_range, slice,
                                                 default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
                     assert_that(std::move(mr)).has_monotonic_positions();
@@ -360,7 +361,7 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
 }
 
 static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     // Generates few random mutations and row slices and verifies that using
     // fast_forward_to() over the slices gives the same mutations as using those
@@ -378,7 +379,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
             .with_ranges(ranges)
             .build();
 
-        BOOST_TEST_MESSAGE(format("ranges: {}", ranges));
+        testlog.info("ranges: {}", ranges);
 
         mutation_source ms = populate(m.schema(), {m}, gc_clock::now());
 
@@ -431,7 +432,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
         fwd_reader.consume(consumer(m.schema(), builder), db::no_timeout).get0();
         BOOST_REQUIRE(bool(builder));
         for (auto&& range : ranges) {
-            BOOST_TEST_MESSAGE(format("fwd {}", range));
+            testlog.trace("fwd {}", range);
             fwd_reader.fast_forward_to(position_range(range), db::no_timeout).get();
             fwd_reader.consume(consumer(m.schema(), builder), db::no_timeout).get0();
         }
@@ -445,7 +446,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
 }
 
 static void test_streamed_mutation_forwarding_guarantees(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     simple_schema table;
     schema_ptr s = table.schema();
@@ -472,7 +473,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn_ex populate
     mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
 
     auto new_stream = [&ms, s, &m] () -> flat_reader_assertions {
-        BOOST_TEST_MESSAGE("Creating new streamed_mutation");
+        testlog.info("Creating new streamed_mutation");
         auto res = assert_that(ms.make_reader(s,
             no_reader_permit(),
             query::full_partition_range,
@@ -489,7 +490,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn_ex populate
 
         for (; start < end; ++start) {
             if (!contains_key(start)) {
-                BOOST_TEST_MESSAGE(format("skip {:d}", start));
+                testlog.trace("skip {:d}", start);
                 continue;
             }
             sm.produces_row_with_key(keys[start]);
@@ -578,7 +579,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn_ex populate
 
 // Reproduces https://github.com/scylladb/scylla/issues/2733
 static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     simple_schema table;
     schema_ptr s = table.schema();
@@ -652,7 +653,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn_ex
 }
 
 static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     simple_schema table;
     schema_ptr s = table.schema();
@@ -743,7 +744,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
 }
 
 static void test_streamed_mutation_forwarding_across_range_tombstones(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     simple_schema table;
     schema_ptr s = table.schema();
@@ -834,7 +835,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(populate_f
 }
 
 static void test_range_queries(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE("Testing range queries");
+    testlog.info("Testing range queries");
 
     auto s = schema_builder("ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
@@ -869,7 +870,7 @@ static void test_range_queries(populate_fn_ex populate) {
     auto ds = populate(s, partitions, gc_clock::now());
 
     auto test_slice = [&] (dht::partition_range r) {
-        BOOST_TEST_MESSAGE(format("Testing range {}", r));
+        testlog.info("Testing range {}", r);
         assert_that(ds.make_reader(s, no_reader_permit(), r))
             .produces(slice(partitions, r))
             .produces_end_of_stream();
@@ -966,7 +967,7 @@ static void test_range_queries(populate_fn_ex populate) {
 }
 
 void test_all_data_is_read_back(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     const auto query_time = gc_clock::now();
 
@@ -979,7 +980,7 @@ void test_all_data_is_read_back(populate_fn_ex populate) {
 }
 
 void test_mutation_reader_fragments_have_monotonic_positions(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     for_each_mutation([] (const mutation& m) {
         auto rd = flat_mutation_reader_from_mutations({m});
@@ -988,7 +989,7 @@ void test_mutation_reader_fragments_have_monotonic_positions(populate_fn_ex popu
 }
 
 static void test_date_tiered_clustering_slicing(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
 
     simple_schema ss;
 
@@ -1028,7 +1029,7 @@ static void test_date_tiered_clustering_slicing(populate_fn_ex populate) {
 }
 
 static void test_clustering_slices(populate_fn_ex populate) {
-    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    testlog.info(__PRETTY_FUNCTION__);
     auto s = schema_builder("ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
         .with_column("c1", int32_type, column_kind::clustering_key)
@@ -2184,13 +2185,13 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     auto test_mutated_schemas = [&] {
         auto& [ base_change_log, base_schema, base_mutations ] = base;
         for (auto&& [ mutated_change_log, mutated_schema, mutated_mutations ] : schemas) {
-            BOOST_TEST_MESSAGE(format("\nSchema change from:\n\n{}\n\nto:\n\n{}\n", base_change_log, mutated_change_log));
+            testlog.info("\nSchema change from:\n\n{}\n\nto:\n\n{}\n", base_change_log, mutated_change_log);
             fn(base_schema, base_mutations, mutated_schema, mutated_mutations);
         }
         for (auto i = 2u; i < schemas.size(); i++) {
             auto& [ base_change_log, base_schema, base_mutations ] = schemas[i - 1];
             auto& [ mutated_change_log, mutated_schema, mutated_mutations ] = schemas[i];
-            BOOST_TEST_MESSAGE(format("\nSchema change from:\n\n{}\n\nto:\n\n{}\n", base_change_log, mutated_change_log));
+            testlog.info("\nSchema change from:\n\n{}\n\nto:\n\n{}\n", base_change_log, mutated_change_log);
             fn(base_schema, base_mutations, mutated_schema, mutated_mutations);
         }
         schemas.clear();
