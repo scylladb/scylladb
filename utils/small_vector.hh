@@ -28,6 +28,7 @@
 #include <utility>
 #include <algorithm>
 #include <initializer_list>
+#include <memory>
 #include <stdexcept>
 
 namespace utils {
