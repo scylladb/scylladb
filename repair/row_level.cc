@@ -47,7 +47,6 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
 #include "repair/row_level.hh"
-#include "service/storage_service.hh"
 #include "mutation_source_metadata.hh"
 
 extern logging::logger rlogger;
@@ -487,7 +486,7 @@ public:
         _partition_opened.resize(_nr_peer_nodes, false);
     }
 
-    void create_writer(unsigned node_idx) {
+    void create_writer(sharded<database>& db, unsigned node_idx) {
         if (_writer_done[node_idx]) {
             return;
         }
@@ -495,7 +494,6 @@ public:
         auto get_next_mutation_fragment = [this, node_idx] () mutable {
             return _mq[node_idx]->pop_eventually();
         };
-        auto& db = service::get_local_storage_service().db();
         table& t = db.local().find_column_family(_schema->id());
         _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema,
                 make_generating_reader(_schema, std::move(get_next_mutation_fragment)),
@@ -1195,7 +1193,7 @@ private:
             _peer_row_hash_sets[node_idx] = boost::copy_range<std::unordered_set<repair_hash>>(row_diff |
                     boost::adaptors::transformed([] (repair_row& r) { thread::maybe_yield(); return r.hash(); }));
         }
-        _repair_writer.create_writer(node_idx);
+        _repair_writer.create_writer(_db, node_idx);
         for (auto& r : row_diff) {
             if (update_buf) {
                 _working_row_buf_combined_hash.add(r.hash());
@@ -1217,7 +1215,7 @@ private:
         return to_repair_rows_list(rows).then([this] (std::list<repair_row> row_diff) {
             return do_with(std::move(row_diff), [this] (std::list<repair_row>& row_diff) {
                 unsigned node_idx = 0;
-                _repair_writer.create_writer(node_idx);
+                _repair_writer.create_writer(_db, node_idx);
                 return do_for_each(row_diff, [this, node_idx] (repair_row& r) {
                     // The repair_row here is supposed to have
                     // mutation_fragment attached because we have stored it in
