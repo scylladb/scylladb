@@ -186,13 +186,17 @@ rjson::value from_string(std::string_view view) {
     return rjson::value(view.data(), view.size(), the_allocator);
 }
 
-const rjson::value* find(const rjson::value& value, string_ref_type name) {
-    auto member_it = value.FindMember(name);
+const rjson::value* find(const rjson::value& value, std::string_view name) {
+    // Although FindMember() has a variant taking a StringRef, it ignores the
+    // given length (see https://github.com/Tencent/rapidjson/issues/1649).
+    // Luckily, the variant taking a GenericValue doesn't share this bug,
+    // and we can create a string GenericValue without copying the string.
+    auto member_it = value.FindMember(rjson::value(name.data(), name.size()));
     return member_it != value.MemberEnd() ? &member_it->value : nullptr;
 }
 
-rjson::value* find(rjson::value& value, string_ref_type name) {
-    auto member_it = value.FindMember(name);
+rjson::value* find(rjson::value& value, std::string_view name) {
+    auto member_it = value.FindMember(rjson::value(name.data(), name.size()));
     return member_it != value.MemberEnd() ? &member_it->value : nullptr;
 }
 

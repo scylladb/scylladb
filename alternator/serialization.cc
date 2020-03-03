@@ -160,7 +160,7 @@ std::string type_to_string(data_type type) {
 
 bytes get_key_column_value(const rjson::value& item, const column_definition& column) {
     std::string column_name = column.name_as_text();
-    const rjson::value* key_typed_value = rjson::find(item, rjson::value::StringRefType(column_name.c_str()));
+    const rjson::value* key_typed_value = rjson::find(item, column_name);
     if (!key_typed_value) {
         throw api_error("ValidationException", format("Key column {} not found", column_name));
     }

@@ -130,8 +130,8 @@ rjson::value from_string(const char* str, size_t size);
 rjson::value from_string(std::string_view view);
 
 // Returns a pointer to JSON member if it exists, nullptr otherwise
-rjson::value* find(rjson::value& value, rjson::string_ref_type name);
-const rjson::value* find(const rjson::value& value, rjson::string_ref_type name);
+rjson::value* find(rjson::value& value, std::string_view name);
+const rjson::value* find(const rjson::value& value, std::string_view name);
 
 // Returns a reference to JSON member if it exists, throws otherwise
 rjson::value& get(rjson::value& value, rjson::string_ref_type name);

@@ -556,7 +556,7 @@ bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value
     for (auto it = expected->MemberBegin(); it != expected->MemberEnd(); ++it) {
         const rjson::value* got = nullptr;
         if (previous_item && previous_item->IsObject() && previous_item->HasMember("Item")) {
-            got = rjson::find((*previous_item)["Item"], rjson::string_ref_type(it->name.GetString()));
+            got = rjson::find((*previous_item)["Item"], rjson::to_string_view(it->name));
         }
         bool success = verify_expected_one(it->value, got);
         if (success && !require_all) {

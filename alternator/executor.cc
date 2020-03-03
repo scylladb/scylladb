@@ -235,7 +235,7 @@ static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::
 // Convenience function for getting the value of a string attribute, or a
 // default value if it is missing. If the attribute exists, but is not a
 // string, a descriptive api_error is thrown.
-static std::string get_string_attribute(const rjson::value& value, rjson::string_ref_type attribute_name, const char* default_return) {
+static std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, const char* default_return) {
     const rjson::value* attribute_value = rjson::find(value, attribute_name);
     if (!attribute_value)
         return default_return;
@@ -249,7 +249,7 @@ static std::string get_string_attribute(const rjson::value& value, rjson::string
 // Convenience function for getting the value of a boolean attribute, or a
 // default value if it is missing. If the attribute exists, but is not a
 // bool, a descriptive api_error is thrown.
-static bool get_bool_attribute(const rjson::value& value, rjson::string_ref_type attribute_name, bool default_return) {
+static bool get_bool_attribute(const rjson::value& value, std::string_view attribute_name, bool default_return) {
     const rjson::value* attribute_value = rjson::find(value, attribute_name);
     if (!attribute_value) {
         return default_return;
@@ -264,7 +264,7 @@ static bool get_bool_attribute(const rjson::value& value, rjson::string_ref_type
 // Convenience function for getting the value of an integer attribute, or
 // an empty optional if it is missing. If the attribute exists, but is not
 // an integer, a descriptive api_error is thrown.
-static std::optional<int> get_int_attribute(const rjson::value& value, rjson::string_ref_type attribute_name) {
+static std::optional<int> get_int_attribute(const rjson::value& value, std::string_view attribute_name) {
     const rjson::value* attribute_value = rjson::find(value, attribute_name);
     if (!attribute_value)
         return {};
@@ -1290,7 +1290,7 @@ static bool check_needs_read_before_write(const parsed::condition_expression& co
 // test_condition_expression.py::test_update_condition_unused_entries_failed.
 static void verify_all_are_used(const rjson::value& req, const char* field,
         const std::unordered_set<std::string>& used, const char* operation) {
-    const rjson::value* attribute_names = rjson::find(req, rjson::string_ref_type(field));
+    const rjson::value* attribute_names = rjson::find(req, field);
     if (!attribute_names) {
         return;
     }
@@ -1681,7 +1681,7 @@ static std::string resolve_update_path(const parsed::path& p,
         if (!expression_attribute_names) {
             throw api_error("ValidationException", "ExpressionAttributeNames are required by UpdateExpression");
         }
-        const rjson::value* value = rjson::find(*expression_attribute_names, rjson::string_ref_type(column_name.c_str()));
+        const rjson::value* value = rjson::find(*expression_attribute_names, column_name);
         if (!value || !value->IsString()) {
             throw api_error("ValidationException",
                     format("ExpressionAttributeNames missing entry '{}' required by UpdateExpression",
@@ -1887,7 +1887,7 @@ rjson::value calculate_value(const parsed::value& v,
                 throw api_error("ValidationException",
                         format("ExpressionAttributeValues missing, entry '{}' required by {}", valref, caller));
             }
-            const rjson::value* value = rjson::find(*expression_attribute_values, rjson::string_ref_type(valref.c_str()));
+            const rjson::value* value = rjson::find(*expression_attribute_values, valref);
             if (!value || value->IsNull()) {
                 throw api_error("ValidationException",
                         format("ExpressionAttributeValues missing entry '{}' required by {}", valref, caller));
@@ -2068,7 +2068,7 @@ rjson::value calculate_value(const parsed::value& v,
                 return rjson::null_value();
             }
             std::string update_path = resolve_update_path(p, update_info, schema, used_attribute_names, allow_key_columns::yes);
-            rjson::value* previous_value = rjson::find((*previous_item)["Item"], rjson::string_ref_type(update_path.c_str()));
+            rjson::value* previous_value = rjson::find((*previous_item)["Item"], update_path);
             return previous_value ? rjson::copy(*previous_value) : rjson::null_value();
         }
     }, v._value);
@@ -2114,7 +2114,7 @@ static std::string resolve_projection_path(const parsed::path& p,
         if (!expression_attribute_names) {
             throw api_error("ValidationException", "ExpressionAttributeNames parameter not found");
         }
-        const rjson::value* value = rjson::find(*expression_attribute_names, rjson::string_ref_type(column_name.c_str()));
+        const rjson::value* value = rjson::find(*expression_attribute_names, column_name);
         if (!value || !value->IsString()) {
             throw api_error("ValidationException",
                 format("ExpressionAttributeNames missing entry '{}' required by ProjectionExpression", column_name));
@@ -2397,14 +2397,8 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             rjson::set_with_string_name(_return_attributes,
                     to_sstring_view(column_name), rjson::copy(json_value));
         } else if (_returnvalues == returnvalues::UPDATED_OLD && item) {
-            // NOTE: Unfortunately, FindMember (rjson::find) here and
-            // RemoveMember below have a bug where although they can take a
-            // rjson::string_ref_type(data, len), they actually need this data
-            // to be null-terminated, and in "bytes" we don't have this null
-            // termination. So we need to copy column_name to a new string.
-            // Would be nice to avoid this eventually.
-            std::string cn = std::string(to_sstring_view(column_name));
-            rjson::value* col = rjson::find(*item, rjson::string_ref_type(cn.data(), cn.size()));
+            std::string_view cn =  to_sstring_view(column_name);
+            rjson::value* col = rjson::find(*item, cn);
             if (col) {
                 rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
@@ -2421,14 +2415,10 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     auto do_delete = [&] (bytes&& column_name) {
         any_deletes = true;
         if (_returnvalues == returnvalues::ALL_NEW) {
-            // NOTE: see comment above about why we need this copy, because
-            // of the null termination problem.
             _return_attributes.RemoveMember(rjson::from_string(to_sstring_view(column_name)));
         } else if (_returnvalues == returnvalues::UPDATED_OLD && item) {
-            // NOTE: see comment above about why we need this copy, because
-            // of the null termination problem.
-            std::string cn = std::string(to_sstring_view(column_name));
-            rjson::value* col = rjson::find(*item, rjson::string_ref_type(cn.data(), cn.size()));
+            std::string_view cn =  to_sstring_view(column_name);
+            rjson::value* col = rjson::find(*item, cn);
             if (col) {
                 rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
@@ -3110,8 +3100,7 @@ static std::string_view get_toplevel(const parsed::value& v,
                     format("ExpressionAttributeNames missing, entry '{}' required by KeyConditionExpression",
                             column_name));
         }
-        const rjson::value* value = rjson::find(*expression_attribute_names,
-                rjson::string_ref_type(column_name.data(), column_name.size()));
+        const rjson::value* value = rjson::find(*expression_attribute_names, column_name);
         if (!value || !value->IsString()) {
             throw api_error("ValidationException",
                     format("ExpressionAttributeNames missing entry '{}' required by KeyConditionExpression",
@@ -3138,8 +3127,7 @@ static bytes get_valref_value(const parsed::value& v,
         throw api_error("ValidationException",
                 format("ExpressionAttributeValues missing, entry '{}' required by KeyConditionExpression", valref));
     }
-    const rjson::value* value = rjson::find(*expression_attribute_values,
-            rjson::string_ref_type(valref.c_str()));
+    const rjson::value* value = rjson::find(*expression_attribute_values, valref);
     if (!value) {
         throw api_error("ValidationException",
                 format("ExpressionAttributeValues missing entry '{}' required by KeyConditionExpression", valref));
