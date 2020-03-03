@@ -84,6 +84,7 @@ class sstable_writer;
 class sstable_writer_k_l;
 struct foreign_sstable_open_info;
 struct sstable_open_info;
+class sstables_manager;
 
 GCC6_CONCEPT(
 template<typename T>
@@ -109,19 +110,24 @@ class data_consume_context;
 
 class index_reader;
 
-bool supports_correct_non_compound_range_tombstones();
-bool supports_correct_static_compact_in_mc();
+extern size_t summary_byte_cost(double summary_ratio);
 
 struct sstable_writer_config {
-    std::optional<size_t> promoted_index_block_size;
+    size_t promoted_index_block_size;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
     bool backup = false;
     bool leave_unsealed = false;
+    bool validate_keys;
     std::optional<db::replay_position> replay_position;
     write_monitor* monitor = &default_write_monitor();
-    bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
-    bool correctly_serialize_static_compact_in_mc = supports_correct_static_compact_in_mc();
+    bool correctly_serialize_non_compound_range_tombstones;
+    bool correctly_serialize_static_compact_in_mc;
     utils::UUID run_identifier = utils::make_random_uuid();
+    size_t summary_byte_cost;
+
+private:
+    explicit sstable_writer_config() {}
+    friend class sstables_manager;
 };
 
 class sstable_tracker;
@@ -140,6 +146,7 @@ public:
             version_types v,
             format_types f,
             db::large_data_handler& large_data_handler,
+            sstables_manager& manager,
             gc_clock::time_point now,
             io_error_handler_gen error_handler_gen,
             size_t buffer_size);
@@ -544,6 +551,7 @@ private:
     io_error_handler _write_error_handler;
 
     db::large_data_handler& _large_data_handler;
+    sstables_manager& _manager;
 
     sstables_stats _stats;
     tracker_link_type _tracker_link;

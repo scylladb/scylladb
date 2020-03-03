@@ -30,11 +30,10 @@
 namespace sstables {
 
 class test_env {
-    sstables_manager _mgr;
+    sstables_manager& _mgr;
 public:
-    explicit test_env(db::large_data_handler* large_data_handler = &nop_lp_handler)
-        : _mgr(*large_data_handler)
-    { }
+    explicit test_env() : _mgr(test_sstables_manager) { }
+    explicit test_env(sstables_manager& mgr) : _mgr(mgr) { }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, unsigned long generation,
             sstable::version_types v, sstable::format_types f = sstable::format_types::big,

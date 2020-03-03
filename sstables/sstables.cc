@@ -67,13 +67,13 @@
 
 #include "checked-file-impl.hh"
 #include "integrity_checked_file_impl.hh"
-#include "service/storage_service.hh"
 #include "db/extensions.hh"
 #include "unimplemented.hh"
 #include "vint-serialization.hh"
 #include "db/large_data_handler.hh"
 #include "db/config.hh"
 #include "sstables/random_access_reader.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/UUID_gen.hh"
 #include "database.hh"
 #include <boost/algorithm/string/predicate.hpp>
@@ -117,8 +117,9 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-static future<file> open_sstable_component_file_non_checked(const sstring& name, open_flags flags, file_open_options options) {
-    if (flags != open_flags::ro && get_config().enable_sstable_data_integrity_check()) {
+static future<file> open_sstable_component_file_non_checked(const sstring& name, open_flags flags, file_open_options options,
+        bool check_integrity) {
+    if (flags != open_flags::ro && check_integrity) {
         return open_integrity_checked_file_dma(name, flags, options);
     }
     return open_file_dma(name, flags, options);
@@ -138,10 +139,11 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
     auto readonly = (flags & create_flags) != create_flags;
     auto name = !readonly && _temp_dir ? temp_filename(type) : filename(type);
 
-    auto f = open_sstable_component_file_non_checked(name, flags, options);
+    auto f = open_sstable_component_file_non_checked(name, flags, options,
+                    _manager.config().enable_sstable_data_integrity_check());
 
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto * ext : get_config().extensions().sstable_file_io_extensions()) {
+        for (auto * ext : _manager.config().extensions().sstable_file_io_extensions()) {
             f = f.then([ext, this, type, flags](file f) {
                return ext->wrap_file(*this, type, f, flags).then([f](file nf) mutable {
                    return nf ? nf : std::move(f);
@@ -1999,22 +2001,9 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
     return file_writer(std::move(sst._index_file), std::move(options));
 }
 
-// Get the currently loaded configuration, or the default configuration in
-// case none has been loaded (this happens, for example, in unit tests).
-const db::config& get_config() {
-    if (service::get_storage_service().local_is_initialized() &&
-            service::get_local_storage_service().db().local_is_initialized()) {
-        return service::get_local_storage_service().db().local().get_config();
-    } else {
-        static db::config default_config;
-        return default_config;
-    }
-}
-
 // Returns the cost for writing a byte to summary such that the ratio of summary
 // to data will be 1 to cost by the time sstable is sealed.
-size_t summary_byte_cost() {
-    auto summary_ratio = get_config().sstable_summary_ratio();
+size_t summary_byte_cost(double summary_ratio) {
     return summary_ratio ? (1 / summary_ratio) : components_writer::default_summary_byte_cost;
 }
 
@@ -2032,9 +2021,9 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _range_tombstones(s)
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::k_l_format);
-    _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
+    _sst._pi_write.desired_block_size = cfg.promoted_index_block_size;
     _sst._correctly_serialize_non_compound_range_tombstones = cfg.correctly_serialize_non_compound_range_tombstones;
-    _index_sampling_state.summary_byte_cost = summary_byte_cost();
+    _index_sampling_state.summary_byte_cost = cfg.summary_byte_cost;
 
     prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
 
@@ -2475,7 +2464,7 @@ future<> sstable::write_components(
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
         auto validator = mutation_fragment_stream_validating_filter(format("sstable writer {}", get_filename()), *schema,
-                get_config().enable_sstable_key_validation());
+                cfg.validate_keys);
         mr.consume_in_thread(std::move(wr), std::move(validator), db::no_timeout);
     }).finally([this] {
         assert_large_data_handler_is_running();
@@ -2495,8 +2484,8 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     public:
         std::optional<key> first_key, last_key;
 
-        summary_generator(const dht::i_partitioner& p, summary& s) : _partitioner(p), _summary(s) {
-            _state.summary_byte_cost = summary_byte_cost();
+        summary_generator(const dht::i_partitioner& p, summary& s, double summary_ratio) : _partitioner(p), _summary(s) {
+            _state.summary_byte_cost = summary_byte_cost(summary_ratio);
         }
         bool should_continue() {
             return true;
@@ -2525,7 +2514,8 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 file_input_stream_options options;
                 options.buffer_size = sstable_buffer_size;
                 options.io_priority_class = pc;
-                return do_with(summary_generator(_schema->get_partitioner(), _components->summary),
+                return do_with(summary_generator(_schema->get_partitioner(), _components->summary,
+                                _manager.config().sstable_summary_ratio()),
                         [this, &pc, options = std::move(options), index_file, index_size] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                             no_reader_permit(), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
@@ -3459,6 +3449,7 @@ sstable::sstable(schema_ptr schema,
         version_types v,
         format_types f,
         db::large_data_handler& large_data_handler,
+        sstables_manager& manager,
         gc_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size)
@@ -3472,16 +3463,9 @@ sstable::sstable(schema_ptr schema,
     , _read_error_handler(error_handler_gen(sstable_read_error))
     , _write_error_handler(error_handler_gen(sstable_write_error))
     , _large_data_handler(large_data_handler)
+    , _manager(manager)
 {
     tracker.add(*this);
-}
-
-bool supports_correct_non_compound_range_tombstones() {
-    return service::get_local_storage_service().features().cluster_supports_reading_correctly_serialized_range_tombstones();
-}
-
-bool supports_correct_static_compact_in_mc() {
-    return bool(service::get_local_storage_service().features().cluster_supports_correct_static_compact_in_mc());
 }
 
 }

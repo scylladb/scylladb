@@ -3188,7 +3188,7 @@ static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable
 
     sst->write_components(make_combined_reader(s,
         mt1->make_flat_reader(s),
-        mt2->make_flat_reader(s)), 1, s, sstable_writer_config{}, mt1->get_encoding_stats()).get();
+        mt2->make_flat_reader(s)), 1, s, test_sstables_manager.configure_writer(), mt1->get_encoding_stats()).get();
     return tmp;
 }
 
@@ -5091,7 +5091,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
     mt->apply(partition);
     for (auto index_block_size : {1, 128, 64*1024}) {
         tmpdir dir;
-        sstable_writer_config cfg;
+        sstable_writer_config cfg = test_sstables_manager.configure_writer();
         cfg.promoted_index_block_size = index_block_size;
         test_env env;
         auto sst = env.make_sstable(write_schema,
@@ -5176,7 +5176,8 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     };
 
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), f);
-    auto env = test_env(&handler);
+    sstables_manager manager(handler, test_db_config, test_feature_service);
+    auto env = test_env(manager);
     tmpdir dir;
     auto sst = env.make_sstable(
             s, dir.path().string(), 1 /* generation */, sstable_version_types::mc, sstables::sstable::format_types::big);
@@ -5185,7 +5186,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     // trigger depends on the size of rows after they are written in the MC format and that size
     // depends on the encoding statistics (because of variable-length encoding). The original values
     // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-    sst->write_components(mt.make_flat_reader(s), 1, s, sstable_writer_config{}, encoding_stats{}).get();
+    sst->write_components(mt.make_flat_reader(s), 1, s, test_sstables_manager.configure_writer(), encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
 }
 
@@ -5231,10 +5232,11 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     };
 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, f);
-    auto env = test_env(&handler);
+    sstables_manager manager(handler, test_db_config, test_feature_service);
+    auto env = test_env(manager);
     tmpdir dir;
     auto sst = env.make_sstable(sc, dir.path().string(), 1, sstable_version_types::mc, sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(sc), 1, sc, sstable_writer_config{}, encoding_stats{}).get();
+    sst->write_components(mt->make_flat_reader(sc), 1, sc, test_sstables_manager.configure_writer(), encoding_stats{}).get();
 
     BOOST_REQUIRE_EQUAL(logged, expected);
 }

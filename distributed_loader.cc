@@ -29,6 +29,7 @@
 #include "sstables/compaction.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "sstables/remove.hh"
 #include "service/priority_manager.hh"
 #include "auth/common.hh"
@@ -40,7 +41,6 @@
 
 extern logging::logger dblog;
 
-sstables::sstable::version_types get_highest_supported_format();
 static future<> execute_futures(std::vector<future<>>& futures);
 
 static const std::unordered_set<sstring> system_keyspaces = {
@@ -404,7 +404,8 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                         }).get0();
 
                         return cf->make_sstable(directory, gen,
-                            get_highest_supported_format(), sstables::sstable::format_types::big);
+                            cf->get_sstables_manager().get_highest_supported_format(),
+                            sstables::sstable::format_types::big);
                     };
                     auto f = sstables::reshard_sstables(sstables, *cf, creator, max_sstable_bytes, level);
 

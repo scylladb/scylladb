@@ -97,10 +97,6 @@ using namespace db;
 
 logging::logger dblog("database");
 
-sstables::sstable::version_types get_highest_supported_format() {
-    return service::get_local_storage_service().sstables_format();
-}
-
 // Used for tests where the CF exists without a database object. We need to pass a valid
 // dirty_memory manager in that case.
 thread_local dirty_memory_manager default_dirty_memory_manager;
@@ -209,8 +205,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
               _cfg.compaction_large_cell_warning_threshold_mb()*1024*1024,
               _cfg.compaction_rows_count_warning_threshold()))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
-    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler))
-    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler))
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler, _cfg, feat))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>(*this))
     , _mnotifier(mn)
