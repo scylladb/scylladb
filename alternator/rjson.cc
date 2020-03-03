@@ -200,6 +200,14 @@ rjson::value* find(rjson::value& value, std::string_view name) {
     return member_it != value.MemberEnd() ? &member_it->value : nullptr;
 }
 
+bool remove_member(rjson::value& value, std::string_view name) {
+    // Although RemoveMember() has a variant taking a StringRef, it ignores
+    // given length (see https://github.com/Tencent/rapidjson/issues/1649).
+    // Luckily, the variant taking a GenericValue doesn't share this bug,
+    // and we can create a string GenericValue without copying the string.
+    return value.RemoveMember(rjson::value(name.data(), name.size()));
+}
+
 void set_with_string_name(rjson::value& base, const std::string& name, rjson::value&& member) {
     base.AddMember(rjson::value(name.c_str(), name.size(), the_allocator), std::move(member), the_allocator);
 }

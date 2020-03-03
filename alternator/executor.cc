@@ -2415,7 +2415,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     auto do_delete = [&] (bytes&& column_name) {
         any_deletes = true;
         if (_returnvalues == returnvalues::ALL_NEW) {
-            _return_attributes.RemoveMember(rjson::from_string(to_sstring_view(column_name)));
+            rjson::remove_member(_return_attributes, to_sstring_view(column_name));
         } else if (_returnvalues == returnvalues::UPDATED_OLD && item) {
             std::string_view cn =  to_sstring_view(column_name);
             rjson::value* col = rjson::find(*item, cn);
