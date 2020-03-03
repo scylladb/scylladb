@@ -28,6 +28,7 @@
 
 #include "cdc/log.hh"
 #include "cdc/generation.hh"
+#include "cdc/split.hh"
 #include "bytes.hh"
 #include "database.hh"
 #include "db/config.hh"
@@ -530,7 +531,7 @@ public:
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
     // more details like tombstones/ttl? Probably not but keep in mind.
-    mutation transform(const mutation& m, const cql3::untyped_result_set* rs = nullptr) const {
+    mutation transform(const mutation& m, const cql3::untyped_result_set* rs) const {
         auto ts = find_timestamp(*_schema, m);
         auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token());
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
@@ -824,7 +825,7 @@ public:
             const mutation& m)
     {
         auto& p = m.partition();
-        if (p.partition_tombstone() || !p.row_tombstones().empty() || p.clustered_rows().empty()) {
+        if (p.clustered_rows().empty() && p.static_row().empty()) {
             return make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>();
         }
 
@@ -851,13 +852,18 @@ public:
 
         query::column_id_vector static_columns, regular_columns;
 
-        auto sk = column_kind::static_column;
-        auto rk = column_kind::regular_column;
         // TODO: this assumes all mutations touch the same set of columns. This might not be true, and we may need to do more horrible set operation here.
-        for (auto& [r, cids, kind] : { std::tie(p.static_row().get(), static_columns, sk), std::tie(p.clustered_rows().begin()->row().cells(), regular_columns, rk) }) {
-            r.for_each_cell([&](column_id id, const atomic_cell_or_collection&) {
-                auto& cdef =_schema->column_at(kind, id);
-                cids.emplace_back(id);
+        if (!p.static_row().empty()) {
+            p.static_row().get().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
+                auto& cdef =_schema->column_at(column_kind::static_column, id);
+                static_columns.emplace_back(id);
+                columns.emplace_back(&cdef);
+            });
+        }
+        if (!p.clustered_rows().empty()) {
+            p.clustered_rows().begin()->row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
+                auto& cdef =_schema->column_at(column_kind::regular_column, id);
+                regular_columns.emplace_back(id);
                 columns.emplace_back(&cdef);
             });
         }
@@ -920,17 +926,24 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
 
             transformer trans(_ctxt, s);
 
-            if (!s->cdc_options().preimage()) {
-                mutations.emplace_back(trans.transform(m));
-                return make_ready_future<>();
+            auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
+            if (s->cdc_options().preimage()) {
+                // Note: further improvement here would be to coalesce the pre-image selects into one
+                // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
+                // so this is premature.
+                f = trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m);
             }
 
-            // Note: further improvement here would be to coalesce the pre-image selects into one
-            // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
-            // so this is premature.
-            auto f = trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m);
             return f.then([trans = std::move(trans), &mutations, idx] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
-                mutations.push_back(trans.transform(mutations[idx], rs.get()));
+                auto& m = mutations[idx];
+                auto& s = m.schema();
+                if (should_split(m, *s)) {
+                    for (auto&& mm : split(m, s)) {
+                        mutations.push_back(trans.transform(mm, rs.get()));
+                    }
+                } else {
+                    mutations.push_back(trans.transform(m, rs.get()));
+                }
             });
         }).then([](std::vector<mutation> mutations) {
             return make_ready_future<std::tuple<std::vector<mutation>, cdc::result_callback>>(std::make_tuple(std::move(mutations), result_callback{}));
