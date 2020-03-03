@@ -1671,7 +1671,7 @@ future<>
 storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != engine().cpu_id();
-    return _db.invoke_on(shard, _write_smp_service_group, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
+    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
         return db.apply(s, m, db::commitlog::force_sync::no, timeout);
     });
 }
@@ -1680,7 +1680,7 @@ future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != engine().cpu_id();
-    return _db.invoke_on(shard, _write_smp_service_group, [&m, gs = global_schema_ptr(s), timeout, sync] (database& db) -> future<> {
+    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), timeout, sync] (database& db) -> future<> {
         return db.apply(gs, m, sync, timeout);
     });
 }
@@ -1698,7 +1698,7 @@ future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != engine().cpu_id();
-    return _db.invoke_on(shard, _write_smp_service_group, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
+    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
         return db.apply_hint(gs, m, timeout);
     });
 }
@@ -1720,7 +1720,7 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
     auto shard = _db.local().shard_of(fm);
     bool local = shard == engine().cpu_id();
     get_stats().replica_cross_shard_ops += !local;
-    return _db.invoke_on(shard, _write_smp_service_group, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (database& db) {
+    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (database& db) {
         auto trace_state = gt.get();
         auto p = local ? std::move(permit) : /* FIXME: either obtain a real permit on this shard or hold original one across shard */ empty_service_permit();
         return db.apply_counter_update(gs, fm, timeout, trace_state).then([cl, timeout, trace_state, p = std::move(p)] (mutation m) mutable {
