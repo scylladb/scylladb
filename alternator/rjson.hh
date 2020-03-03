@@ -134,8 +134,8 @@ rjson::value* find(rjson::value& value, std::string_view name);
 const rjson::value* find(const rjson::value& value, std::string_view name);
 
 // Returns a reference to JSON member if it exists, throws otherwise
-rjson::value& get(rjson::value& value, rjson::string_ref_type name);
-const rjson::value& get(const rjson::value& value, rjson::string_ref_type name);
+rjson::value& get(rjson::value& value, std::string_view name);
+const rjson::value& get(const rjson::value& value, std::string_view name);
 
 // Sets a member in given JSON object by moving the member - allocates the name.
 // Throws if base is not a JSON object.

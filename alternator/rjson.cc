@@ -152,8 +152,12 @@ rjson::value parse_yieldable(std::string_view str) {
     return std::move(v);
 }
 
-rjson::value& get(rjson::value& value, rjson::string_ref_type name) {
-    auto member_it = value.FindMember(name);
+rjson::value& get(rjson::value& value, std::string_view name) {
+    // Although FindMember() has a variant taking a StringRef, it ignores the
+    // given length (see https://github.com/Tencent/rapidjson/issues/1649).
+    // Luckily, the variant taking a GenericValue doesn't share this bug,
+    // and we can create a string GenericValue without copying the string.
+    auto member_it = value.FindMember(rjson::value(name.data(), name.size()));
     if (member_it != value.MemberEnd())
         return member_it->value;
     else {
@@ -161,8 +165,8 @@ rjson::value& get(rjson::value& value, rjson::string_ref_type name) {
     }
 }
 
-const rjson::value& get(const rjson::value& value, rjson::string_ref_type name) {
-    auto member_it = value.FindMember(name);
+const rjson::value& get(const rjson::value& value, std::string_view name) {
+    auto member_it = value.FindMember(rjson::value(name.data(), name.size()));
     if (member_it != value.MemberEnd())
         return member_it->value;
     else {
