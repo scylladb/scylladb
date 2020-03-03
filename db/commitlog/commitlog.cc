@@ -1661,8 +1661,7 @@ void db::commitlog::segment_manager::on_timer() {
     // while they are running.
     (void)seastar::with_gate(_gate, [this] {
         if (cfg.mode != sync_mode::BATCH) {
-            //FIXME: discarded future.
-            (void)sync();
+            sync();
         }
         // IFF a new segment was put in use since last we checked, and we're
         // above threshold, request flush.
