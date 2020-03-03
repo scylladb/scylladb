@@ -43,7 +43,7 @@
 #include "db/snapshot-ctl.hh"
 #include "service/storage_service.hh"
 
-namespace service {
+namespace db {
 
 future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
     auto& ks = db.find_keyspace(ks_name);
@@ -58,8 +58,8 @@ future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
 }
 
 template <typename Func>
-std::result_of_t<Func()> storage_service::run_snapshot_modify_operation(Func&& f) {
-    auto& ss = get_storage_service();
+std::result_of_t<Func()> snapshot_ctl::run_snapshot_modify_operation(Func&& f) {
+    auto& ss = service::get_storage_service();
     return with_gate(ss.local()._snapshot_ops, [f = std::move(f), &ss] () {
         return ss.invoke_on(0, [f = std::move(f)] (auto& ss) mutable {
             return with_lock(ss._snapshot_lock.for_write(), std::move(f));
@@ -68,8 +68,8 @@ std::result_of_t<Func()> storage_service::run_snapshot_modify_operation(Func&& f
 }
 
 template <typename Func>
-std::result_of_t<Func()> storage_service::run_snapshot_list_operation(Func&& f) {
-    auto& ss = get_storage_service();
+std::result_of_t<Func()> snapshot_ctl::run_snapshot_list_operation(Func&& f) {
+    auto& ss = service::get_storage_service();
     return with_gate(ss.local()._snapshot_ops, [f = std::move(f), &ss] () {
         return ss.invoke_on(0, [f = std::move(f)] (auto& ss) mutable {
             return with_lock(ss._snapshot_lock.for_read(), std::move(f));
@@ -77,7 +77,7 @@ std::result_of_t<Func()> storage_service::run_snapshot_list_operation(Func&& f) 
     });
 }
 
-future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
+future<> snapshot_ctl::take_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
     if (tag.empty()) {
         throw std::runtime_error("You must supply a snapshot name.");
     }
@@ -103,7 +103,7 @@ future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspa
     });
 }
 
-future<> storage_service::take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag) {
+future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag) {
     if (ks_name.empty()) {
         throw std::runtime_error("You must supply a keyspace name");
     }
@@ -131,18 +131,18 @@ future<> storage_service::take_column_family_snapshot(sstring ks_name, std::vect
     });
 }
 
-future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag) {
+future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag) {
     return take_column_family_snapshot(ks_name, std::vector<sstring>{cf_name}, tag);
 }
 
-future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
+future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
     return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] {
         return _db.local().clear_snapshot(tag, keyspace_names, cf_name);
     });
 }
 
-future<std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>>
-storage_service::get_snapshot_details() {
+future<std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>>
+snapshot_ctl::get_snapshot_details() {
     using cf_snapshot_map = std::unordered_map<utils::UUID, column_family::snapshot_details>;
     using snapshot_map = std::unordered_map<sstring, cf_snapshot_map>;
 
@@ -175,8 +175,8 @@ storage_service::get_snapshot_details() {
         }
     };
 
-    return run_snapshot_list_operation([] {
-        return get_local_storage_service()._db.map_reduce(snapshot_reducer(), [] (database& db) {
+    return run_snapshot_list_operation([this] {
+        return _db.map_reduce(snapshot_reducer(), [] (database& db) {
             auto local_snapshots = make_lw_shared<snapshot_map>();
             return parallel_for_each(db.get_column_families(), [local_snapshots] (auto& cf_pair) {
                 return cf_pair.second->get_snapshot_details().then([uuid = cf_pair.first, local_snapshots] (auto map) {
@@ -191,26 +191,26 @@ storage_service::get_snapshot_details() {
             }).then([local_snapshots] {
                 return make_ready_future<snapshot_map>(std::move(*local_snapshots));
             });
-        }).then([] (snapshot_map&& map) {
-            std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>> result;
+        }).then([this] (snapshot_map&& map) {
+            std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>> result;
             for (auto&& pair: map) {
-                std::vector<service::storage_service::snapshot_details> details;
+                std::vector<snapshot_ctl::snapshot_details> details;
 
                 for (auto&& snap_map: pair.second) {
-                    auto& cf = get_local_storage_service()._db.local().find_column_family(snap_map.first);
+                    auto& cf = _db.local().find_column_family(snap_map.first);
                     details.push_back({ snap_map.second.live, snap_map.second.total, cf.schema()->cf_name(), cf.schema()->ks_name() });
                 }
                 result.emplace(pair.first, std::move(details));
             }
 
-            return make_ready_future<std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>>(std::move(result));
+            return make_ready_future<std::unordered_map<sstring, std::vector<snapshot_ctl::snapshot_details>>>(std::move(result));
         });
     });
 }
 
-future<int64_t> storage_service::true_snapshots_size() {
-    return run_snapshot_list_operation([] {
-        return get_local_storage_service()._db.map_reduce(adder<int64_t>(), [] (database& db) {
+future<int64_t> snapshot_ctl::true_snapshots_size() {
+    return run_snapshot_list_operation([this] {
+        return _db.map_reduce(adder<int64_t>(), [] (database& db) {
             return do_with(int64_t(0), [&db] (auto& local_total) {
                 return parallel_for_each(db.get_column_families(), [&local_total] (auto& cf_pair) {
                     return cf_pair.second->get_snapshot_details().then([&local_total] (auto map) {

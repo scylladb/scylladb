@@ -111,13 +111,6 @@ struct storage_service_config {
  * of other nodes in the cluster.
  */
 class storage_service : public service::migration_listener, public gms::i_endpoint_state_change_subscriber, public seastar::async_sharded_service<storage_service> {
-public:
-    struct snapshot_details {
-        int64_t live;
-        int64_t total;
-        sstring cf;
-        sstring ks;
-    };
 private:
     using token = dht::token;
     using token_range_endpoints = dht::token_range_endpoints;
@@ -239,15 +232,10 @@ private:
 
     bool _joined = false;
 
+public:
     seastar::rwlock _snapshot_lock;
     seastar::gate _snapshot_ops;
 
-    template <typename Func>
-    static std::result_of_t<Func()> run_snapshot_modify_operation(Func&&);
-
-    template <typename Func>
-    static std::result_of_t<Func()> run_snapshot_list_operation(Func&&);
-public:
     enum class mode { STARTING, NORMAL, JOINING, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
 
     future<> snapshots_close() {
@@ -665,51 +653,6 @@ public:
 
     future<std::unordered_map<sstring, std::vector<sstring>>> describe_schema_versions();
 
-    /**
-     * Takes the snapshot for all keyspaces. A snapshot name must be specified.
-     *
-     * @param tag the tag given to the snapshot; may not be null or empty
-     */
-    future<> take_snapshot(sstring tag) {
-        return take_snapshot(tag, {});
-    }
-
-    /**
-     * Takes the snapshot for the given keyspaces. A snapshot name must be specified.
-     *
-     * @param tag the tag given to the snapshot; may not be null or empty
-     * @param keyspaceNames the names of the keyspaces to snapshot; empty means "all."
-     */
-    future<> take_snapshot(sstring tag, std::vector<sstring> keyspace_names);
-
-    /**
-     * Takes the snapshot of multiple tables. A snapshot name must be specified.
-     *
-     * @param ks_name the keyspace which holds the specified column family
-     * @param tables a vector of tables names to snapshot
-     * @param tag the tag given to the snapshot; may not be null or empty
-     */
-    future<> take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag);
-
-    /**
-     * Takes the snapshot of a specific column family. A snapshot name must be specified.
-     *
-     * @param keyspaceName the keyspace which holds the specified column family
-     * @param columnFamilyName the column family to snapshot
-     * @param tag the tag given to the snapshot; may not be null or empty
-     */
-    future<> take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag);
-
-    /**
-     * Remove the snapshot with the given name from the given keyspaces.
-     * If no tag is specified we will remove all snapshots.
-     * If a cf_name is specified, only that table will be deleted
-     */
-    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name);
-
-    future<std::unordered_map<sstring, std::vector<snapshot_details>>> get_snapshot_details();
-
-    future<int64_t> true_snapshots_size();
 
     /**
      * Get all ranges an endpoint is responsible for (by keyspace)
