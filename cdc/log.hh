@@ -127,13 +127,17 @@ enum class operation : int8_t {
     range_delete_start_inclusive = 5, range_delete_start_exclusive = 6, range_delete_end_inclusive = 7, range_delete_end_exclusive = 8,
 };
 
-// cdc log data column operation
-enum class column_op : int8_t {
-    // same as "operation". Do not edit values or type/type unless you _really_ want to.
-    set = 0, del = 1, add = 2,
-};
-
 bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name);
 seastar::sstring log_name(const seastar::sstring& table_name);
+seastar::sstring log_data_column_name(std::string_view column_name);
+seastar::sstring log_meta_column_name(std::string_view column_name);
+bytes log_data_column_name_bytes(const bytes& column_name);
+bytes log_meta_column_name_bytes(const bytes& column_name);
+
+seastar::sstring log_data_column_deleted_name(std::string_view column_name);
+bytes log_data_column_deleted_name_bytes(const bytes& column_name);
+
+seastar::sstring log_data_column_deleted_elements_name(std::string_view column_name);
+bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name);
 
 } // namespace cdc

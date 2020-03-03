@@ -48,8 +48,8 @@ public:
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
     using abstract_type::deserialize;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
-    bytes serialize_partially_deserialized_form(
-            const std::vector<bytes_view>& v, cql_serialization_format sf) const;
+    static bytes serialize_partially_deserialized_form(
+            const std::vector<bytes_view>& v, cql_serialization_format sf);
 };
 
 data_value make_set_value(data_type tuple_type, set_type_impl::native_type value);
