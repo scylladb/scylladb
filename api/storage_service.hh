@@ -34,5 +34,6 @@ void unset_transport_controller(http_context& ctx, routes& r);
 void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl);
 void unset_rpc_controller(http_context& ctx, routes& r);
 void set_snapshot(http_context& ctx, routes& r);
+void unset_snapshot(http_context& ctx, routes& r);
 
 }

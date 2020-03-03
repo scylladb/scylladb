@@ -117,6 +117,10 @@ future<> set_server_snapshot(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { set_snapshot(ctx, r); });
 }
 
+future<> unset_server_snapshot(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_snapshot(ctx, r); });
+}
+
 future<> set_server_snitch(http_context& ctx) {
     return register_api(ctx, "endpoint_snitch_info", "The endpoint snitch info API", set_endpoint_snitch);
 }

@@ -1058,9 +1058,13 @@ int main(int ac, char** av) {
                 auth_service.stop().get();
             });
 
-            api::set_server_snapshot(ctx).get();
             auto stop_snapshots = defer_verbose_shutdown("snapshots", [] {
                 service::get_storage_service().invoke_on_all(&service::storage_service::snapshots_close).get();
+            });
+
+            api::set_server_snapshot(ctx).get();
+            auto stop_api_snapshots = defer_verbose_shutdown("snapshots API", [&ctx] {
+                api::unset_server_snapshot(ctx).get();
             });
 
             supervisor::notify("starting batchlog manager");

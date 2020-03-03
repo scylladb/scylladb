@@ -55,6 +55,7 @@ future<> unset_transport_controller(http_context& ctx);
 future<> set_rpc_controller(http_context& ctx, thrift_controller& ctl);
 future<> unset_rpc_controller(http_context& ctx);
 future<> set_server_snapshot(http_context& ctx);
+future<> unset_server_snapshot(http_context& ctx);
 future<> set_server_gossip(http_context& ctx);
 future<> set_server_load_sstable(http_context& ctx);
 future<> set_server_messaging_service(http_context& ctx);

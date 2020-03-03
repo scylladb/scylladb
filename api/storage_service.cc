@@ -1083,4 +1083,12 @@ void set_snapshot(http_context& ctx, routes& r) {
     }));
 }
 
+void unset_snapshot(http_context& ctx, routes& r) {
+    ss::get_snapshot_details.unset(r);
+    ss::take_snapshot.unset(r);
+    ss::del_snapshot.unset(r);
+    ss::true_snapshots_size.unset(r);
+    ss::scrub.unset(r);
+}
+
 }
