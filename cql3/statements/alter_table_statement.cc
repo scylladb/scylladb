@@ -337,7 +337,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             throw exceptions::invalid_request_exception("ALTER COLUMNFAMILY WITH invoked, but no parameters found");
         }
 
-        _properties->validate(db.extensions());
+        _properties->validate(db);
 
         if (!cf.views().empty() && _properties->get_gc_grace_seconds() == 0) {
             throw exceptions::invalid_request_exception(

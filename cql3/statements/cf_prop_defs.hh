@@ -89,7 +89,7 @@ public:
 private:
     mutable std::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
 public:
-    void validate(const db::extensions&) const;
+    void validate(const database& db) const;
     std::map<sstring, sstring> get_compaction_options() const;
     std::optional<std::map<sstring, sstring>> get_compression_options() const;
     std::optional<std::map<sstring, sstring>> get_cdc_options() const;

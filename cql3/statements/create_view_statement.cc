@@ -152,7 +152,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
 
-    _properties.validate(proxy.get_db().local().extensions());
+    _properties.validate(proxy.get_db().local());
 
     if (_properties.use_compact_storage()) {
         throw exceptions::invalid_request_exception(format("Cannot use 'COMPACT STORAGE' when defining a materialized view"));

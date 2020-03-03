@@ -203,7 +203,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         throw exceptions::invalid_request_exception(format("Multiple definition of identifier {}", (*i)->text()));
     }
 
-    _properties.validate(db.extensions());
+    _properties.validate(db);
 
     auto stmt = ::make_shared<create_table_statement>(_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
 

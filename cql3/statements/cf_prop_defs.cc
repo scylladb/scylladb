@@ -78,7 +78,7 @@ const sstring cf_prop_defs::COMPACTION_STRATEGY_CLASS_KEY = "class";
 
 const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
 
-void cf_prop_defs::validate(const db::extensions& exts) const {
+void cf_prop_defs::validate(const database& db) const {
     // Skip validation if the comapction strategy class is already set as it means we've alreayd
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_compaction_strategy_class) {
@@ -97,6 +97,8 @@ void cf_prop_defs::validate(const db::extensions& exts) const {
         sstring("replicate_on_write"),
         sstring("populate_io_cache_on_flush"),
     });
+
+    const auto& exts = db.extensions();
     property_definitions::validate(keywords, exts.schema_extension_keywords(), obsolete_keywords);
 
     try {
