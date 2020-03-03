@@ -48,12 +48,18 @@
 #include <seastar/net/inet_address.hh>
 #include <seastar/util/backtrace.hh>
 #include "hashing.hh"
-#include "utils/multiprecision_int.hh"       // FIXME: remove somehow
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/exceptions.hh"
 
 class tuple_type_impl;
 class big_decimal;
+
+
+namespace utils {
+
+class multiprecision_int;
+
+}
 
 namespace cql3 {
 
