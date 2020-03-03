@@ -979,7 +979,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
 }
 
-void set_snapshot(http_context& ctx, routes& r) {
+void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
     ss::get_snapshot_details.set(r, [](std::unique_ptr<request> req) {
         return service::get_local_storage_service().get_snapshot_details().then([] (std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>&& result) {
             return do_with(std::move(result), [](const std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>& result) {

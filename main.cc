@@ -62,6 +62,7 @@
 #include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
 #include "db/sstables-format-selector.hh"
+#include "db/snapshot-ctl.hh"
 #include <seastar/net/dns.hh>
 #include <seastar/core/io_queue.hh>
 #include <seastar/core/abort_on_ebadf.hh>
@@ -484,6 +485,7 @@ int main(int ac, char** av) {
     httpd::http_server_control prometheus_server;
     utils::directories dirs;
     sharded<gms::feature_service> feature_service;
+    sharded<db::snapshot_ctl> snapshot_ctl;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -512,7 +514,7 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
-                &token_metadata] {
+                &token_metadata, &snapshot_ctl] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
@@ -1062,7 +1064,12 @@ int main(int ac, char** av) {
                 service::get_storage_service().invoke_on_all(&service::storage_service::snapshots_close).get();
             });
 
-            api::set_server_snapshot(ctx).get();
+            snapshot_ctl.start(std::ref(db)).get();
+            auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
+                snapshot_ctl.stop().get();
+            });
+
+            api::set_server_snapshot(ctx, snapshot_ctl).get();
             auto stop_api_snapshots = defer_verbose_shutdown("snapshots API", [&ctx] {
                 api::unset_server_snapshot(ctx).get();
             });
