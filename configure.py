@@ -283,6 +283,7 @@ scylla_tests = set([
     'test/boost/cartesian_product_test',
     'test/boost/castas_fcts_test',
     'test/boost/cdc_test',
+    'test/boost/cdc_smp1_test',
     'test/boost/cell_locker_test',
     'test/boost/checksum_utils_test',
     'test/boost/chunked_vector_test',

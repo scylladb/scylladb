@@ -11,3 +11,5 @@ custom_args:
         - '-c1 -m2G'
     cql_query_test:
         - '-c2 -m2G --fail-on-abandoned-failed-futures'
+    cdc_smp1_test:
+        - '-c1 -m2G'
