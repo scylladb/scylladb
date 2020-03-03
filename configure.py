@@ -1144,6 +1144,12 @@ extra_cxxflags["release.cc"] = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\
 for m in ['debug', 'release', 'sanitize']:
     modes[m]['cxxflags'] += ' ' + dbgflag
 
+# The default build-id used by lld is xxhash, which is 8 bytes long, but RPM
+# requires build-ids to be at least 16 bytes long
+# (https://github.com/rpm-software-management/rpm/issues/950), so let's
+# explicitly ask for SHA1 build-ids.
+args.user_ldflags = '-Wl,--build-id=sha1' + ' ' + args.user_ldflags
+
 seastar_cflags = args.user_cflags
 if args.target != '':
     seastar_cflags += ' -march=' + args.target
