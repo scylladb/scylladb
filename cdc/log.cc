@@ -475,7 +475,6 @@ api::timestamp_type find_timestamp(const schema& s, const mutation& m) {
  * If `t1` == `t2`, then generate_timeuuid(`t1`) != generate_timeuuid(`t2`),
  * with unspecified nondeterministic ordering.
  */
-// external linkage for testing
 utils::UUID generate_timeuuid(api::timestamp_type t) {
     return utils::UUID_gen::get_random_time_UUID_from_micros(t);
 }
@@ -530,20 +529,18 @@ public:
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
     // more details like tombstones/ttl? Probably not but keep in mind.
-    mutation transform(const mutation& m, const cql3::untyped_result_set* rs) const {
-        auto ts = find_timestamp(*_schema, m);
+    mutation transform(const mutation& m, const cql3::untyped_result_set* rs, api::timestamp_type ts, bytes tuuid, int& batch_no) const {
         auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token());
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
-        auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
 
         auto& p = m.partition();
         if (p.partition_tombstone()) {
             // Partition deletion
             auto log_ck = set_pk_columns(m.key(), ts, tuuid, 0, res);
             set_operation(log_ck, ts, operation::partition_delete, res);
+            ++batch_no;
         } else if (!p.row_tombstones().empty()) {
             // range deletion
-            int batch_no = 0;
             for (auto& rt : p.row_tombstones()) {
                 auto set_bound = [&] (const clustering_key& log_ck, const clustering_key_prefix& ckp) {
                     auto exploded = ckp.explode(*_schema);
@@ -744,7 +741,6 @@ public:
                 return ttl;
             };
 
-            int batch_no = 0;
             if (!p.static_row().empty()) {
                 std::optional<clustering_key> pikey;
                 const cql3::untyped_result_set_row * pirow = nullptr;
@@ -966,11 +962,14 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 auto& m = mutations[idx];
                 auto& s = m.schema();
                 if (should_split(m, *s)) {
-                    for_each_change(m, s, [&] (mutation mm) {
-                        mutations.push_back(trans.transform(std::move(mm), rs.get()));
+                    for_each_change(m, s, [&] (mutation mm, api::timestamp_type ts, bytes tuuid, int& batch_no) {
+                        mutations.push_back(trans.transform(std::move(mm), rs.get(), ts, tuuid, batch_no));
                     });
                 } else {
-                    mutations.push_back(trans.transform(m, rs.get()));
+                    int batch_no = 0;
+                    auto ts = find_timestamp(*s, m);
+                    auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
+                    mutations.push_back(trans.transform(m, rs.get(), ts, tuuid, batch_no));
                 }
             });
         }).then([](std::vector<mutation> mutations) {

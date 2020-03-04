@@ -23,6 +23,7 @@
 #include "schema.hh"
 
 #include "split.hh"
+#include "log.hh"
 
 struct atomic_column_update {
     column_id id;
@@ -376,11 +377,15 @@ bool should_split(const mutation& base_mutation, const schema& base_schema) {
     return found_ts == api::missing_timestamp;
 }
 
-void for_each_change(const mutation& base_mutation, const schema_ptr& base_schema, seastar::noncopyable_function<void(mutation)> f) {
+void for_each_change(const mutation& base_mutation, const schema_ptr& base_schema,
+        seastar::noncopyable_function<void(mutation, api::timestamp_type, bytes, int&)> f) {
     auto changes = extract_changes(base_mutation, *base_schema);
     auto pk = base_mutation.key();
 
     for (auto& [change_ts, btch] : changes) {
+        auto tuuid = timeuuid_type->decompose(generate_timeuuid(change_ts));
+        int batch_no = 0;
+
         for (auto& sr_update : btch.static_updates) {
             mutation m(base_schema, pk);
             for (auto& atomic_update : sr_update.atomic_entries) {
@@ -395,7 +400,7 @@ void for_each_change(const mutation& base_mutation, const schema_ptr& base_schem
                 auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
                 m.set_static_cell(cdef, collection_mutation_description{{}, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
-            f(std::move(m));
+            f(std::move(m), change_ts, tuuid, batch_no);
         }
 
         for (auto& cr_insert : btch.clustered_inserts) {
@@ -412,7 +417,7 @@ void for_each_change(const mutation& base_mutation, const schema_ptr& base_schem
             }
             row.apply(cr_insert.marker);
 
-            f(std::move(m));
+            f(std::move(m), change_ts, tuuid, batch_no);
         }
 
         for (auto& cr_update : btch.clustered_updates) {
@@ -432,25 +437,25 @@ void for_each_change(const mutation& base_mutation, const schema_ptr& base_schem
                 row.apply(cdef, collection_mutation_description{{}, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
 
-            f(std::move(m));
+            f(std::move(m), change_ts, tuuid, batch_no);
         }
 
         for (auto& cr_delete : btch.clustered_row_deletions) {
             mutation m(base_schema, pk);
             m.partition().apply_delete(*base_schema, cr_delete.key, cr_delete.t);
-            f(std::move(m));
+            f(std::move(m), change_ts, tuuid, batch_no);
         }
 
         for (auto& crange_delete : btch.clustered_range_deletions) {
             mutation m(base_schema, pk);
             m.partition().apply_delete(*base_schema, crange_delete.rt);
-            f(std::move(m));
+            f(std::move(m), change_ts, tuuid, batch_no);
         }
 
         if (btch.partition_deletions) {
             mutation m(base_schema, pk);
             m.partition().apply(btch.partition_deletions->t);
-            f(std::move(m));
+            f(std::move(m), change_ts, tuuid, batch_no);
         }
     }
 }
