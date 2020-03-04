@@ -1531,6 +1531,12 @@ with open(buildfile_tmp, 'w') as f:
                 objs=' '.join(compiles)
             )
         )
+        f.write(
+            'build {mode}-headers: phony {header_objs}\n'.format(
+                mode=mode,
+                header_objs=' '.join(["$builddir/{mode}/{hh}.o".format(mode=mode, hh=hh) for hh in headers])
+            )
+        )
 
 
         gen_headers = []
