@@ -220,9 +220,9 @@ private:
         // Update the highest window seen, if necessary
         _highest_window_seen = std::max(_highest_window_seen, p.second);
 
-        update_estimated_compaction_by_tasks(p.first, cf.schema()->min_compaction_threshold());
+        update_estimated_compaction_by_tasks(p.first, cf.min_compaction_threshold());
 
-        return newest_bucket(std::move(p.first), cf.schema()->min_compaction_threshold(), cf.schema()->max_compaction_threshold(),
+        return newest_bucket(std::move(p.first), cf.min_compaction_threshold(), cf.schema()->max_compaction_threshold(),
             _options.sstable_window_size, _highest_window_seen, _stcs_options);
     }
 public:

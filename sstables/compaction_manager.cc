@@ -153,7 +153,7 @@ int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_
     }
 
     uint64_t total_size = get_total_size(descriptor.sstables);
-    int min_threshold = cf->schema()->min_compaction_threshold();
+    int min_threshold = cf->min_compaction_threshold();
     auto compacting_run_identifiers = boost::copy_range<std::unordered_set<utils::UUID>>(descriptor.sstables
         | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier)));
 

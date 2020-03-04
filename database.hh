@@ -546,6 +546,7 @@ private:
     // The master resides in system.truncated table
     db_clock::time_point _truncated_at = db_clock::time_point::min();
 
+    bool _is_bootstrap_or_replace = false;
 public:
     future<> add_sstable_and_update_cache(sstables::shared_sstable sst);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
@@ -563,6 +564,14 @@ public:
     }
     db_clock::time_point get_truncation_record() {
         return _truncated_at;
+    }
+
+    void notify_bootstrap_or_replace_start() {
+        _is_bootstrap_or_replace = true;
+    }
+
+    void notify_bootstrap_or_replace_end() {
+        _is_bootstrap_or_replace = false;
     }
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
@@ -870,7 +879,20 @@ public:
     }
 
     bool compaction_enforce_min_threshold() const {
-        return _config.compaction_enforce_min_threshold;
+        return _config.compaction_enforce_min_threshold || _is_bootstrap_or_replace;
+    }
+
+    unsigned min_compaction_threshold() {
+        // During receiving stream operations, the less we compact the faster streaming is. For
+        // bootstrap and replace thereThere are no readers so it is fine to be less aggressive with
+        // compactions as long as we don't ignore them completely (this could create a problem for
+        // when streaming ends)
+        if (_is_bootstrap_or_replace) {
+            auto target = std::min(schema()->max_compaction_threshold(), 16);
+            return std::max(schema()->min_compaction_threshold(), target);
+        } else {
+            return schema()->min_compaction_threshold();
+        }
     }
 
     /*!
