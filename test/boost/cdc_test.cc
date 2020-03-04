@@ -226,20 +226,19 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
 
         // Allow MODIFY, SELECT, ALTER
         auto log_table = "ks." + cdc::log_name("tbl");
-        auto stream_id_1 = cdc::log_meta_column_name("stream_id_1");
-        auto stream_id_2 = cdc::log_meta_column_name("stream_id_2");
+        auto stream_id = cdc::log_meta_column_name("stream_id");
         auto time = cdc::log_meta_column_name("time");
         auto batch_seq_no = cdc::log_meta_column_name("batch_seq_no");
         auto ttl = cdc::log_meta_column_name("ttl");
 
-        e.execute_cql(format("INSERT INTO {} (\"{}\", \"{}\", \"{}\", \"{}\") VALUES (0, 0, now(), 0)",
-            log_table, stream_id_1, stream_id_2, time, batch_seq_no        
+        e.execute_cql(format("INSERT INTO {} (\"{}\", \"{}\", \"{}\") VALUES (0x00000000000000000000000000000000, now(), 0)",
+            log_table, stream_id, time, batch_seq_no
         )).get();
-        e.execute_cql(format("UPDATE {} SET \"{}\"= 100 WHERE \"{}\" = 0 AND \"{}\" = 0 AND \"{}\" = now() AND \"{}\" = 0",
-            log_table, ttl, stream_id_1, stream_id_2, time, batch_seq_no
+        e.execute_cql(format("UPDATE {} SET \"{}\"= 100 WHERE \"{}\" = 0x00000000000000000000000000000000 AND \"{}\" = now() AND \"{}\" = 0",
+            log_table, ttl, stream_id, time, batch_seq_no
         )).get();
-        e.execute_cql(format("DELETE FROM {} WHERE \"{}\" = 0 AND \"{}\" = 0 AND \"{}\" = now() AND \"{}\" = 0",
-            log_table, stream_id_1, stream_id_2, time, batch_seq_no
+        e.execute_cql(format("DELETE FROM {} WHERE \"{}\" = 0x00000000000000000000000000000000 AND \"{}\" = now() AND \"{}\" = 0",
+            log_table, stream_id, time, batch_seq_no
         )).get();
         e.execute_cql("SELECT * FROM " + log_table).get();
         e.execute_cql("ALTER TABLE " + log_table + " ALTER \"" + ttl + "\" TYPE blob").get();
