@@ -642,6 +642,21 @@
       ]
     },
     {
+      "path": "/storage_proxy/metrics/cas_write/failed_read_round_optimization",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas write metrics",
+          "type": "long",
+          "nickname": "get_cas_write_metrics_failed_read_round_optimization",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
       "path": "/storage_proxy/metrics/cas_read/unfinished_commit",
       "operations": [
         {

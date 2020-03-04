@@ -377,6 +377,10 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return sum_stats(ctx.sp, &proxy::stats::cas_write_condition_not_met);
     });
 
+    sp::get_cas_write_metrics_failed_read_round_optimization.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::cas_failed_read_round_optimization);
+    });
+
     sp::get_cas_read_metrics_unfinished_commit.set(r, [&ctx](std::unique_ptr<request> req) {
         return sum_stats(ctx.sp, &proxy::stats::cas_read_unfinished_commit);
     });

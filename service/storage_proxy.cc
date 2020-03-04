@@ -1555,6 +1555,10 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("how many times write timeout was reported because of uncertainty in the result"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
+        sm::make_total_operations("cas_failed_read_round_optimization", cas_failed_read_round_optimization,
+                       sm::description("CAS read rounds issued only if previous value is missing on some replica"),
+                       {storage_proxy_stats::current_scheduling_group_label()}),
+
         sm::make_histogram("cas_read_contention", sm::description("how many contended reads were encountered"),
                        {storage_proxy_stats::current_scheduling_group_label()},
                        [this]{ return cas_read_contention.get_histogram(1, 8);}),
@@ -4325,12 +4329,24 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                         .then([this, handler, schema, cmd, request, partition_ranges, query_options, cl, &contentions]
                                (paxos_response_handler::ballot_and_data v) mutable {
                     // Read the current values and check they validate the conditions.
-                    paxos::paxos_state::logger.debug("CAS[{}]: Reading existing values for CAS precondition", handler->id());
-                    tracing::trace(handler->tr_state, "Reading existing values for CAS precondition");
-                    auto f = v.data ? make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(std::move(v.data)) :
-                            query(schema, cmd, std::move(partition_ranges), cl, query_options).then([] (coordinator_query_result&& qr) {
-                        return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(std::move(qr.query_result));
-                    });
+                    auto f = [&]() {
+                        if (v.data) {
+                            paxos::paxos_state::logger.debug("CAS[{}]: Using prefetched values for CAS precondition",
+                                    handler->id());
+                            tracing::trace(handler->tr_state, "Using prefetched values for CAS precondition");
+
+                            return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(std::move(v.data));
+                        } else {
+                            paxos::paxos_state::logger.debug("CAS[{}]: Reading existing values for CAS precondition",
+                                    handler->id());
+                            tracing::trace(handler->tr_state, "Reading existing values for CAS precondition");
+                            ++get_stats().cas_failed_read_round_optimization;
+                            return query(schema, cmd, std::move(partition_ranges), cl, query_options).then([](coordinator_query_result&& qr) {
+
+                                return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(std::move(qr.query_result));
+                            });
+                        }
+                    }();
                     return f.then([this, handler, schema, cmd, request, ballot = v.ballot, &contentions] (auto&& qr) {
                         auto mutation = request->apply(*qr, cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
                         if (!mutation) {

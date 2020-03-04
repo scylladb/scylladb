@@ -115,6 +115,7 @@ struct write_stats {
     uint64_t cas_write_unfinished_commit = 0;
     uint64_t cas_write_condition_not_met = 0;
     uint64_t cas_write_timeout_due_to_uncertainty = 0;
+    uint64_t cas_failed_read_round_optimization = 0;
 
     std::chrono::microseconds last_mv_flow_control_delay; // delay added for MV flow control in the last request
 public:
