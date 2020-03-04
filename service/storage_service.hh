@@ -122,17 +122,17 @@ public:
 };
 
 class format_selector {
-    storage_service& _s;
     gms::gossiper& _gossiper;
     gms::feature_service& _features;
     seastar::named_semaphore _sem = {1, named_semaphore_exception_factory{"feature listeners"}};
 
     feature_enabled_listener _mc_feature_listener;
 
+    sstables::sstable_version_types _selected_format = sstables::sstable_version_types::la;
     future<> select_format(sstables::sstable_version_types new_format);
 
 public:
-    format_selector(storage_service& ss, gms::gossiper& g, gms::feature_service& f, bool for_testing);
+    format_selector(gms::gossiper& g, gms::feature_service& f, bool for_testing);
 
     future<> read_sstables_format();
     future<> maybe_select_format(sstables::sstable_version_types new_format);

@@ -117,7 +117,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
         , _token_metadata(tm)
-        , _sstables_format_selector(*this, gossiper, feature_service, for_testing)
+        , _sstables_format_selector(gossiper, feature_service, for_testing)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks)
@@ -3435,9 +3435,8 @@ void feature_enabled_listener::on_enabled() {
     }
 }
 
-format_selector::format_selector(storage_service& ss, gms::gossiper& g, gms::feature_service& f, bool for_testing)
-    : _s(ss)
-    , _gossiper(g)
+format_selector::format_selector(gms::gossiper& g, gms::feature_service& f, bool for_testing)
+    : _gossiper(g)
     , _features(f)
     , _mc_feature_listener(*this, sstables::sstable_version_types::mc) {
 
@@ -3450,7 +3449,7 @@ format_selector::format_selector(storage_service& ss, gms::gossiper& g, gms::fea
 
 future<> format_selector::maybe_select_format(sstables::sstable_version_types new_format) {
     return with_semaphore(_sem, 1, [this, new_format] {
-        if (!sstables::is_later(new_format, _s._sstables_format)) {
+        if (!sstables::is_later(new_format, _selected_format)) {
             return make_ready_future<bool>(false);
         }
         return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format)).then([this, new_format] {
@@ -3461,7 +3460,7 @@ future<> format_selector::maybe_select_format(sstables::sstable_version_types ne
             return make_ready_future<>();
         }
         return _gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-                                                                     gms::versioned_value::supported_features(_s.get_config_supported_features()));
+                         gms::versioned_value::supported_features(join(",", _features.supported_feature_set())));
     });
 }
 
@@ -3476,6 +3475,7 @@ future<> format_selector::read_sstables_format() {
 }
 
 future<> format_selector::select_format(sstables::sstable_version_types format) {
+    _selected_format = format;
     return get_storage_service().invoke_on_all([format] (storage_service& s) {
         s._sstables_format = format;
         if (sstables::is_later(format, sstables::sstable_version_types::la)) {
