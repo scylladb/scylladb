@@ -78,10 +78,9 @@ int64_t stream_id::second() const {
 }
 
 partition_key stream_id::to_partition_key(const schema& log_schema) const {
-    return partition_key::from_exploded(log_schema,
-            { long_type->decompose(_first), long_type->decompose(_second) });
+    return partition_key::from_single_value(log_schema,
+            long_type->decompose(_first) + long_type->decompose(_second));
 }
-
 
 bool token_range_description::operator==(const token_range_description& o) const {
     return token_range_end == o.token_range_end && streams == o.streams
