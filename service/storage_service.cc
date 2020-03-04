@@ -93,8 +93,6 @@ namespace service {
 
 static logging::logger slogger("storage_service");
 
-static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
-
 distributed<storage_service> _the_storage_service;
 
 
@@ -3425,63 +3423,6 @@ future<> init_storage_service(sharded<abort_source>& abort_source, distributed<d
 
 future<> deinit_storage_service() {
     return service::get_storage_service().stop();
-}
-
-void feature_enabled_listener::on_enabled() {
-    if (!_started) {
-        _started = true;
-        // FIXME -- discarded future
-        (void)_selector.maybe_select_format(_format);
-    }
-}
-
-format_selector::format_selector(gms::gossiper& g, gms::feature_service& f, bool for_testing)
-    : _gossiper(g)
-    , _features(f)
-    , _mc_feature_listener(*this, sstables::sstable_version_types::mc) {
-
-    if (!for_testing) {
-        if (this_shard_id() == 0) {
-            _features.cluster_supports_mc_sstable().when_enabled(_mc_feature_listener);
-        }
-    }
-}
-
-future<> format_selector::maybe_select_format(sstables::sstable_version_types new_format) {
-    return with_semaphore(_sem, 1, [this, new_format] {
-        if (!sstables::is_later(new_format, _selected_format)) {
-            return make_ready_future<bool>(false);
-        }
-        return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format)).then([this, new_format] {
-            return select_format(new_format);
-        }).then([] { return true; });
-    }).then([this] (bool update_features) {
-        if (!update_features) {
-            return make_ready_future<>();
-        }
-        return _gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-                         gms::versioned_value::supported_features(join(",", _features.supported_feature_set())));
-    });
-}
-
-future<> format_selector::read_sstables_format() {
-    return db::system_keyspace::get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME).then([this] (std::optional<sstring> format_opt) {
-        if (format_opt) {
-            sstables::sstable_version_types format = sstables::from_string(*format_opt);
-            return select_format(format);
-        }
-        return make_ready_future<>();
-    });
-}
-
-future<> format_selector::select_format(sstables::sstable_version_types format) {
-    _selected_format = format;
-    return get_storage_service().invoke_on_all([format] (storage_service& s) {
-        s._sstables_format = format;
-        if (sstables::is_later(format, sstables::sstable_version_types::la)) {
-            s._feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
-        }
-    });
 }
 
 future<> storage_service::set_cql_ready(bool ready) {

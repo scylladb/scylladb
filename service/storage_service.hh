@@ -59,11 +59,11 @@
 #include "streaming/stream_state.hh"
 #include <seastar/core/distributed.hh>
 #include "utils/disk-error-handler.hh"
-#include "gms/feature.hh"
 #include "service/migration_listener.hh"
 #include "gms/feature_service.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
+#include "db/sstables-format-selector.hh"
 #include "sstables/version.hh"
 #include "cdc/metadata.hh"
 
@@ -106,41 +106,6 @@ enum class disk_error { regular, commit };
 
 struct bind_messaging_port_tag {};
 using bind_messaging_port = bool_class<bind_messaging_port_tag>;
-
-class format_selector;
-
-class feature_enabled_listener : public gms::feature::listener {
-    format_selector& _selector;
-    sstables::sstable_version_types _format;
-
-public:
-    feature_enabled_listener(format_selector& s, sstables::sstable_version_types format)
-        : _selector(s)
-        , _format(format)
-    { }
-    void on_enabled() override;
-};
-
-class format_selector {
-    gms::gossiper& _gossiper;
-    gms::feature_service& _features;
-    seastar::named_semaphore _sem = {1, named_semaphore_exception_factory{"feature listeners"}};
-
-    feature_enabled_listener _mc_feature_listener;
-
-    sstables::sstable_version_types _selected_format = sstables::sstable_version_types::la;
-    future<> select_format(sstables::sstable_version_types new_format);
-
-public:
-    format_selector(gms::gossiper& g, gms::feature_service& f, bool for_testing);
-
-    future<> read_sstables_format();
-    future<> maybe_select_format(sstables::sstable_version_types new_format);
-
-    void sync() {
-        get_units(_sem, 1).get0();
-    }
-};
 
 struct storage_service_config {
     size_t available_memory;
@@ -307,7 +272,7 @@ public:
 private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
-    friend class format_selector;
+    friend class db::sstables_format_selector;
     /* Used for tracking drain progress */
 public:
     struct drain_progress {
@@ -343,7 +308,7 @@ private:
     // if an sstable format was chosen earlier (and this choice was persisted
     // in the system table).
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::la;
-    format_selector _sstables_format_selector;
+    db::sstables_format_selector _sstables_format_selector;
 public:
     sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();

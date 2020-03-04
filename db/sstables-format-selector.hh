@@ -1,0 +1,74 @@
+/*
+ * Copyright (C) 2020 ScyllaDB
+ *
+ */
+
+/*
+ * This file is part of Scylla.
+ *
+ * Scylla is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Scylla is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/future.hh>
+#include "sstables/version.hh"
+#include "gms/feature.hh"
+
+using namespace seastar;
+
+namespace gms {
+class gossiper;
+class feature_service;
+}
+
+namespace db {
+
+class sstables_format_selector;
+
+class feature_enabled_listener : public gms::feature::listener {
+    sstables_format_selector& _selector;
+    sstables::sstable_version_types _format;
+
+public:
+    feature_enabled_listener(sstables_format_selector& s, sstables::sstable_version_types format)
+        : _selector(s)
+        , _format(format)
+    { }
+    void on_enabled() override;
+};
+
+class sstables_format_selector {
+    gms::gossiper& _gossiper;
+    gms::feature_service& _features;
+    seastar::named_semaphore _sem = {1, named_semaphore_exception_factory{"feature listeners"}};
+
+    feature_enabled_listener _mc_feature_listener;
+
+    sstables::sstable_version_types _selected_format = sstables::sstable_version_types::la;
+    future<> select_format(sstables::sstable_version_types new_format);
+
+public:
+    sstables_format_selector(gms::gossiper& g, gms::feature_service& f, bool for_testing);
+
+    future<> read_sstables_format();
+    future<> maybe_select_format(sstables::sstable_version_types new_format);
+
+    void sync() {
+        get_units(_sem, 1).get0();
+    }
+};
+
+} // namespace sstables
