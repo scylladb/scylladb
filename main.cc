@@ -60,6 +60,7 @@
 #include "tracing/tracing_backend_registry.hh"
 #include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
+#include "db/sstables-format-selector.hh"
 #include <seastar/net/dns.hh>
 #include <seastar/core/io_queue.hh>
 #include <seastar/core/abort_on_ebadf.hh>
@@ -855,7 +856,13 @@ int main(int ac, char** av) {
             sstables::init_metrics().get();
 
             db::system_keyspace::minimal_setup(db, qp);
-            service::get_local_storage_service().read_sstables_format().get();
+
+            db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service);
+
+            sst_format_selector.start().get();
+            auto stop_format_selector = defer_verbose_shutdown("sstables format selector", [&sst_format_selector] {
+                sst_format_selector.stop().get();
+            });
 
             // schema migration, if needed, is also done on shard 0
             db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
@@ -1007,6 +1014,7 @@ int main(int ac, char** av) {
             });
 
             ss.init_server().get();
+            sst_format_selector.sync();
             ss.join_cluster().get();
 
             startlog.info("SSTable data integrity checker is {}.",

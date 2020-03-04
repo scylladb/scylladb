@@ -115,7 +115,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
         , _token_metadata(tm)
-        , _sstables_format_selector(gossiper, feature_service, for_testing)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks)
@@ -426,13 +425,6 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     if (do_bind) {
         gms::get_local_gossiper().wait_for_gossip_to_settle().get();
     }
-    wait_for_feature_listeners_to_finish();
-}
-
-void storage_service::wait_for_feature_listeners_to_finish() {
-    // This makes sure that every feature listener that was started
-    // finishes before we move forward.
-    _sstables_format_selector.sync();
 }
 
 static auth::permissions_cache_config permissions_cache_config_from_db_config(const db::config& dc) {

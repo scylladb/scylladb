@@ -265,10 +265,6 @@ public:
         return _snapshot_ops.close();
     }
 
-    future<> read_sstables_format() {
-        return _sstables_format_selector.read_sstables_format();
-    }
-
 private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
@@ -308,7 +304,6 @@ private:
     // if an sstable format was chosen earlier (and this choice was persisted
     // in the system table).
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::la;
-    db::sstables_format_selector _sstables_format_selector;
 public:
     sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();
@@ -408,7 +403,6 @@ private:
     bool should_bootstrap() const;
     void prepare_to_join(std::vector<inet_address> loaded_endpoints, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
     void join_token_ring(int delay);
-    void wait_for_feature_listeners_to_finish();
     void maybe_start_sys_dist_ks();
 public:
     inline bool is_joined() const {

@@ -24,6 +24,8 @@
 
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/sharded.hh>
 #include "sstables/version.hh"
 #include "gms/feature.hh"
 
@@ -52,18 +54,24 @@ public:
 
 class sstables_format_selector {
     gms::gossiper& _gossiper;
-    gms::feature_service& _features;
+    sharded<gms::feature_service>& _features;
     seastar::named_semaphore _sem = {1, named_semaphore_exception_factory{"feature listeners"}};
+    seastar::gate _sel;
 
     feature_enabled_listener _mc_feature_listener;
 
     sstables::sstable_version_types _selected_format = sstables::sstable_version_types::la;
     future<> select_format(sstables::sstable_version_types new_format);
+    future<> read_sstables_format();
+
+    future<> do_maybe_select_format(sstables::sstable_version_types new_format);
 
 public:
-    sstables_format_selector(gms::gossiper& g, gms::feature_service& f, bool for_testing);
+    sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f);
 
-    future<> read_sstables_format();
+    future<> start();
+    future<> stop();
+
     future<> maybe_select_format(sstables::sstable_version_types new_format);
 
     void sync() {
