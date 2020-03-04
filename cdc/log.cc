@@ -627,10 +627,9 @@ public:
                     ++pos;
                 }
 
-                bytes_opt value;
-                std::optional<gc_clock::duration> ttl;
-
-                auto process_cells = [&](const row& r, column_kind ckind) {
+                auto process_cells = [&](const row& r, column_kind ckind, const clustering_key& log_ck, std::optional<clustering_key> pikey, const cql3::untyped_result_set_row* pirow) -> std::optional<gc_clock::duration> {
+                    bytes_opt value;
+                    std::optional<gc_clock::duration> ttl;
                     r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
                         auto& cdef = _schema->column_at(ckind, id);
                         auto* dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
@@ -786,14 +785,21 @@ public:
                             res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
                         }
                     });
+
+                    return ttl;
                 };
 
+                std::optional<gc_clock::duration> ttl;
                 const auto& marker = r.row().marker();
                 if (marker.is_live() && marker.is_expiring()) {
                     ttl = marker.ttl();
                 }
-                process_cells(r.row().cells(), column_kind::regular_column);
-                process_cells(p.static_row().get(), column_kind::static_column);
+                if (const auto clustering_ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow)) {
+                    ttl = clustering_ttl;
+                }
+                if (const auto static_ttl = process_cells(p.static_row().get(), column_kind::static_column, log_ck, pikey, pirow)) {
+                    ttl = static_ttl;
+                }
 
                 operation cdc_op;
                 if (r.row().deleted_at()) {
