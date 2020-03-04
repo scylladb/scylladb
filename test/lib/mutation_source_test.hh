@@ -51,8 +51,14 @@ class random_mutation_generator {
 public:
     struct generate_counters_tag { };
     using generate_counters = bool_class<generate_counters_tag>;
+    using generate_uncompactable = bool_class<class generate_uncompactable_tag>;
 
-    explicit random_mutation_generator(generate_counters, local_shard_only lso = local_shard_only::yes);
+    // With generate_uncompactable::yes, the mutation will be uncompactable, that
+    // is no higher level tombstone will cover lower level tombstones and no
+    // tombstone will cover data, i.e. compacting the mutation will not result
+    // in any changes.
+    explicit random_mutation_generator(generate_counters, local_shard_only lso = local_shard_only::yes,
+            generate_uncompactable uc = generate_uncompactable::no);
     ~random_mutation_generator();
     mutation operator()();
     // Generates n mutations sharing the same schema nad sorted by their decorated keys.
