@@ -938,9 +938,11 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 auto& m = mutations[idx];
                 auto& s = m.schema();
                 if (should_split(m, *s)) {
-                    for (auto&& mm : split(m, s)) {
-                        mutations.push_back(trans.transform(mm, rs.get()));
-                    }
+                    std::vector<mutation> res;
+                    for_each_change(m, s, [&] (mutation mm) {
+                        res.push_back(trans.transform(std::move(mm), rs.get()));
+                    });
+                    mutations.insert(mutations.end(), std::make_move_iterator(res.begin()), std::make_move_iterator(res.end()));
                 } else {
                     mutations.push_back(trans.transform(m, rs.get()));
                 }
