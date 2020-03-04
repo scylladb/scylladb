@@ -28,6 +28,7 @@
 #include <seastar/core/future-util.hh>
 #include "flat_mutation_reader.hh"
 #include "schema_registry.hh"
+#include "mutation_compactor.hh"
 
 
 static constexpr size_t merger_small_vector_size = 4;
@@ -1844,4 +1845,156 @@ std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_pt
     auto impl = std::make_unique<queue_reader>(std::move(s));
     auto handle = queue_reader_handle(*impl);
     return {flat_mutation_reader(std::move(impl)), std::move(handle)};
+}
+
+namespace {
+
+class compacting_reader : public flat_mutation_reader::impl {
+    friend class compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes>;
+
+private:
+    flat_mutation_reader _reader;
+    compact_mutation_state<emit_only_live_rows::no, compact_for_sstables::yes> _compactor;
+    noop_compacted_fragments_consumer _gc_consumer;
+
+    // Uncompacted stream
+    partition_start _last_uncompacted_partition_start;
+    mutation_fragment::kind _last_uncompacted_kind = mutation_fragment::kind::partition_end;
+
+    // Compacted stream
+    bool _has_compacted_partition_start = false;
+    bool _ignore_partition_end = false;
+
+private:
+    void maybe_push_partition_start() {
+        if (_has_compacted_partition_start) {
+            push_mutation_fragment(std::move(_last_uncompacted_partition_start));
+            _has_compacted_partition_start = false;
+        }
+    }
+    void maybe_inject_partition_end() {
+        // The compactor needs a valid stream, but downstream doesn't care about
+        // the injected partition end, so ignore it.
+        if (_last_uncompacted_kind != mutation_fragment::kind::partition_end) {
+            _ignore_partition_end = true;
+            _compactor.consume_end_of_partition(*this, _gc_consumer);
+            _ignore_partition_end = false;
+        }
+    }
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _has_compacted_partition_start = true;
+        // We need to reset the partition's tombstone here. If the tombstone is
+        // compacted away, `consume(tombstone)` below is simply not called. If
+        // it is not compacted away, `consume(tombstone)` below will restore it.
+        _last_uncompacted_partition_start.partition_tombstone() = {};
+    }
+    void consume(tombstone t) {
+        _last_uncompacted_partition_start.partition_tombstone() = t;
+        maybe_push_partition_start();
+    }
+    stop_iteration consume(static_row&& sr, tombstone, bool) {
+        maybe_push_partition_start();
+        push_mutation_fragment(std::move(sr));
+        return stop_iteration::no;
+    }
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
+        maybe_push_partition_start();
+        push_mutation_fragment(std::move(cr));
+        return stop_iteration::no;
+    }
+    stop_iteration consume(range_tombstone&& rt) {
+        maybe_push_partition_start();
+        push_mutation_fragment(std::move(rt));
+        return stop_iteration::no;
+    }
+    stop_iteration consume_end_of_partition() {
+        maybe_push_partition_start();
+        if (!_ignore_partition_end) {
+            push_mutation_fragment(partition_end{});
+        }
+        return stop_iteration::no;
+    }
+    void consume_end_of_stream() {
+    }
+
+public:
+    compacting_reader(flat_mutation_reader source, gc_clock::time_point compaction_time,
+            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
+        : impl(source.schema())
+        , _reader(std::move(source))
+        , _compactor(*_schema, compaction_time, get_max_purgeable)
+        , _last_uncompacted_partition_start(dht::decorated_key(dht::minimum_token(), partition_key::make_empty()), tombstone{}) {
+    }
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
+            return _reader.fill_buffer(timeout).then([this, timeout] {
+                if (_reader.is_buffer_empty()) {
+                    _end_of_stream = _reader.is_end_of_stream();
+                }
+                // It is important to not consume more than we actually need.
+                // Doing so leads to corner cases around `next_partition()`. The
+                // fragments consumed after our buffer is full might not be
+                // emitted by the compactor, so on a following `next_partition()`
+                // call we won't be able to determine whether we are at a
+                // partition boundary or not and thus whether we need to forward
+                // it to the underlying reader or not.
+                // This problem doesn't exist when we want more fragments, in this
+                // case we'll keep reading until the compactor emits something or
+                // we read EOS, and thus we'll know where we are.
+                while (!_reader.is_buffer_empty() && !is_buffer_full()) {
+                    auto mf = _reader.pop_mutation_fragment();
+                    _last_uncompacted_kind = mf.mutation_fragment_kind();
+                    switch (mf.mutation_fragment_kind()) {
+                    case mutation_fragment::kind::static_row:
+                        _compactor.consume(std::move(mf).as_static_row(), *this, _gc_consumer);
+                        break;
+                    case mutation_fragment::kind::clustering_row:
+                        _compactor.consume(std::move(mf).as_clustering_row(), *this, _gc_consumer);
+                        break;
+                    case mutation_fragment::kind::range_tombstone:
+                        _compactor.consume(std::move(mf).as_range_tombstone(), *this, _gc_consumer);
+                        break;
+                    case mutation_fragment::kind::partition_start:
+                        _last_uncompacted_partition_start = std::move(mf).as_partition_start();
+                        _compactor.consume_new_partition(_last_uncompacted_partition_start.key());
+                        if (_last_uncompacted_partition_start.partition_tombstone()) {
+                            _compactor.consume(_last_uncompacted_partition_start.partition_tombstone(), *this, _gc_consumer);
+                        }
+                        break;
+                    case mutation_fragment::kind::partition_end:
+                        _compactor.consume_end_of_partition(*this, _gc_consumer);
+                        break;
+                    }
+                }
+            });
+        });
+    }
+    virtual void next_partition() override {
+        clear_buffer_to_next_partition();
+        if (!is_buffer_empty()) {
+            return;
+        }
+        _end_of_stream = false;
+        maybe_inject_partition_end();
+        _reader.next_partition();
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+        clear_buffer();
+        _end_of_stream = false;
+        maybe_inject_partition_end();
+        return _reader.fast_forward_to(pr, timeout);
+    }
+    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+        throw std::bad_function_call();
+    }
+    virtual size_t buffer_size() const override {
+        return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();
+    }
+};
+
+} // anonymous namespace
+
+flat_mutation_reader make_compacting_reader(flat_mutation_reader source, gc_clock::time_point compaction_time,
+        std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable) {
+    return make_flat_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable);
 }
