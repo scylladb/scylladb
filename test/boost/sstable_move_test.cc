@@ -79,9 +79,6 @@ static bool partial_create_links(sstable_ptr sst, fs::path dst_path, int64_t gen
     auto tmp_toc = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, sstable_format_types::big, component_type::TemporaryTOC);
     link_file(sst->filename(component_type::TOC), tmp_toc).get();
     for (auto& [c, s] : sst->all_components()) {
-        if (c == component_type::TOC) {
-            continue;
-        }
         if (count-- <= 0) {
             return false;
         }
@@ -93,7 +90,7 @@ static bool partial_create_links(sstable_ptr sst, fs::path dst_path, int64_t gen
         return false;
     }
     auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, sstable_format_types::big, component_type::TOC);
-    rename_file(tmp_toc, dst).get();
+    remove_file(tmp_toc).get();
     return true;
 }
 

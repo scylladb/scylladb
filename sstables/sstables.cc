@@ -1956,7 +1956,7 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_
     });
 }
 
-/// create_links links all component files from the sstable directory to
+/// create_links_common links all component files from the sstable directory to
 /// the given destination directory, using the provided generation.
 ///
 /// It first checks if this is a replay of a previous
@@ -1968,9 +1968,24 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_
 /// Creating the links is done by:
 /// First, linking the source TOC component to the destination TemporaryTOC,
 /// to mark the destination for rollback, in case we crash mid-way.
-/// The all other components are linked.
-/// Eventually, the detination TemporaryTOC is renamed to TOC,
-/// to "commit" the destination sstable.
+/// Then, all components are linked.
+///
+/// Note that if scylla crashes at this point, the destination SSTable
+/// will have both a TemporaryTOC file and a regular TOC file.
+/// It should be deleted on restart, thus rolling the operation backwards.
+///
+/// Eventually, if \c mark_for_removal is unset, the detination
+/// TemporaryTOC is removed, to "commit" the destination sstable;
+///
+/// Otherwise, if \c mark_for_removal is set, the TemporaryTOC at the destination
+/// is moved to the source directory to mark the source sstable for removal,
+/// thus atomically toggling crash recovery from roll-back to roll-forward.
+///
+/// Similar to the scenario described above, crashing at this point
+/// would leave the source sstable marked for removal, possibly
+/// having both a TemporaryTOC file and a regular TOC file, and
+/// then the source sstable should be deleted on restart, rolling the
+/// operation forward.
 ///
 /// Note that idempotent versions of link_file and rename_file
 /// are used.  These versions handle EEXIST errors that may happen
@@ -1978,19 +1993,17 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_
 ///
 /// \param dir - the destination directory.
 /// \param generation - the generation of the destination sstable
-future<> sstable::create_links(const sstring& dir, int64_t generation) const {
-    sstlog.trace("create_links: {} -> {} generation={}", get_filename(), dir, generation);
-    return do_with(dir, all_components(), [this, generation] (const sstring& dir, auto& comps) {
-        return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps] {
+/// \param mark_for_removal - mark the sstable for removal after linking it to the destination dir
+future<> sstable::create_links_common(const sstring& dir, int64_t generation, bool mark_for_removal) const {
+    sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", get_filename(), dir, generation, mark_for_removal);
+    return do_with(dir, all_components(), [this, generation, mark_for_removal] (const sstring& dir, auto& comps) {
+        return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps, mark_for_removal] {
             // TemporaryTOC is always first, TOC is always last
             auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
             return sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), std::move(dst)).then([this, &dir] {
                 return sstable_write_io_check(sync_directory, dir);
             }).then([this, &dir, generation, &comps] {
                 return parallel_for_each(comps, [this, &dir, generation] (auto p) {
-                    if (p.first == component_type::TOC) {
-                        return make_ready_future<>();
-                    }
                     auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
                     auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
                     return sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
@@ -1998,16 +2011,34 @@ future<> sstable::create_links(const sstring& dir, int64_t generation) const {
             }).then([this, &dir] {
                 return sstable_write_io_check(sync_directory, dir);
             });
-        }).then([this, &dir, generation] {
-            auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
-            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TOC);
-            return sstable_write_io_check(rename_file, std::move(src), std::move(dst));
+        }).then([this, &dir, generation, mark_for_removal] {
+            auto dst_temp_toc = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
+            if (mark_for_removal) {
+                // Now that the source sstable is linked to new_dir, mark the source links for
+                // deletion by leaving a TemporaryTOC file in the source directory.
+                auto src_temp_toc = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, component_type::TemporaryTOC);
+                return sstable_write_io_check(rename_file, std::move(dst_temp_toc), std::move(src_temp_toc)).then([this] {
+                    return sstable_write_io_check(sync_directory, _dir);
+                });
+            } else {
+                // Now that the source sstable is linked to dir, remove
+                // the TemporaryTOC file at the destination.
+                return sstable_write_io_check(remove_file, std::move(dst_temp_toc));
+            }
         }).then([this, &dir] {
             return sstable_write_io_check(sync_directory, dir);
         }).then([this, &dir, generation] {
             sstlog.trace("create_links: {} -> {} generation={}: done", get_filename(), dir, generation);
         });
     });
+}
+
+future<> sstable::create_links(const sstring& dir, int64_t generation) const {
+    return create_links_common(dir, generation, false /* mark_for_removal */);
+}
+
+future<> sstable::create_links_and_mark_for_removal(const sstring& dir, int64_t generation) const {
+    return create_links_common(dir, generation, true /* mark_for_removal */);
 }
 
 future<> sstable::set_generation(int64_t new_generation) {
@@ -2034,19 +2065,10 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
     sstring old_dir = get_dir();
     sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
             get_filename(), old_dir, _generation, new_dir, new_generation, do_sync_dirs);
-    return create_links(new_dir, new_generation).then([this] {
-        // Now that the source sstable is linked to new_dir, mark the source links for
-        // deletion by renaming the TOC file to TOC.tmp
-        return sstable_write_io_check(rename_file, filename(component_type::TOC), filename(component_type::TemporaryTOC));
-    }).then([this] {
-        return sstable_write_io_check(sync_directory, _dir);
-    }).then([this, old_dir, new_dir, new_generation] {
+    return create_links_and_mark_for_removal(new_dir, new_generation).then([this, old_dir, new_dir, new_generation] {
         _dir = new_dir;
         int64_t old_generation = std::exchange(_generation, new_generation);
         return parallel_for_each(all_components(), [this, old_generation, old_dir] (auto p) {
-            if (p.first == component_type::TOC) {
-                return make_ready_future<>();
-            }
             return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
         }).then([this, old_dir, old_generation] {
             auto temp_toc = sstable_version_constants::get_component_map(_version).at(component_type::TemporaryTOC);
