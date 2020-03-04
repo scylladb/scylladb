@@ -376,13 +376,13 @@ bool should_split(const mutation& base_mutation, const schema& base_schema) {
     return found_ts == api::missing_timestamp;
 }
 
-std::vector<mutation> split(const mutation& base_mutation, const schema_ptr& base_schema) {
+void for_each_change(const mutation& base_mutation, const schema_ptr& base_schema, seastar::noncopyable_function<void(mutation)> f) {
     auto changes = extract_changes(base_mutation, *base_schema);
-    std::vector<mutation> result;
+    auto pk = base_mutation.key();
+
     for (auto& [change_ts, btch] : changes) {
         for (auto& sr_update : btch.static_updates) {
-            result.emplace_back(base_schema, base_mutation.key());
-            auto& m = result.back();
+            mutation m(base_schema, pk);
             for (auto& atomic_update : sr_update.atomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::static_column, atomic_update.id);
                 m.set_static_cell(cdef, std::move(atomic_update.cell));
@@ -395,12 +395,13 @@ std::vector<mutation> split(const mutation& base_mutation, const schema_ptr& bas
                 auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
                 m.set_static_cell(cdef, collection_mutation_description{{}, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
+            f(std::move(m));
         }
 
         for (auto& cr_insert : btch.clustered_inserts) {
-            result.emplace_back(base_schema, base_mutation.key());
-            auto& row = result.back().partition().clustered_row(*base_schema, cr_insert.key);
+            mutation m(base_schema, pk);
 
+            auto& row = m.partition().clustered_row(*base_schema, cr_insert.key);
             for (auto& atomic_update : cr_insert.atomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::regular_column, atomic_update.id);
                 row.cells().apply(cdef, std::move(atomic_update.cell));
@@ -409,14 +410,15 @@ std::vector<mutation> split(const mutation& base_mutation, const schema_ptr& bas
                 auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_delete.id);
                 row.cells().apply(cdef, collection_mutation_description{nonatomic_delete.t, {}}.serialize(*cdef.type));
             }
-
             row.apply(cr_insert.marker);
+
+            f(std::move(m));
         }
 
         for (auto& cr_update : btch.clustered_updates) {
-            result.emplace_back(base_schema, base_mutation.key());
-            auto& row = result.back().partition().clustered_row(*base_schema, cr_update.key).cells();
+            mutation m(base_schema, pk);
 
+            auto& row = m.partition().clustered_row(*base_schema, cr_update.key).cells();
             for (auto& atomic_update : cr_update.atomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::regular_column, atomic_update.id);
                 row.apply(cdef, std::move(atomic_update.cell));
@@ -429,24 +431,28 @@ std::vector<mutation> split(const mutation& base_mutation, const schema_ptr& bas
                 auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
                 row.apply(cdef, collection_mutation_description{{}, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
+
+            f(std::move(m));
         }
 
         for (auto& cr_delete : btch.clustered_row_deletions) {
-            result.emplace_back(base_schema, base_mutation.key());
-            result.back().partition().apply_delete(*base_schema, cr_delete.key, cr_delete.t);
+            mutation m(base_schema, pk);
+            m.partition().apply_delete(*base_schema, cr_delete.key, cr_delete.t);
+            f(std::move(m));
         }
 
         for (auto& crange_delete : btch.clustered_range_deletions) {
-            result.emplace_back(base_schema, base_mutation.key());
-            result.back().partition().apply_delete(*base_schema, crange_delete.rt);
+            mutation m(base_schema, pk);
+            m.partition().apply_delete(*base_schema, crange_delete.rt);
+            f(std::move(m));
         }
 
         if (btch.partition_deletions) {
-            result.emplace_back(base_schema, base_mutation.key());
-            result.back().partition().apply(btch.partition_deletions->t);
+            mutation m(base_schema, pk);
+            m.partition().apply(btch.partition_deletions->t);
+            f(std::move(m));
         }
     }
-    return result;
 }
 
 } // namespace cdc
