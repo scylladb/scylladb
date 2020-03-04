@@ -2859,3 +2859,89 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         }
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
+    auto make_populate = [] (bool single_fragment_buffer) {
+        return [single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) mutable {
+            auto mt = make_lw_shared<memtable>(s);
+            for (auto& mut : mutations) {
+                mt->apply(mut);
+            }
+            return mutation_source([=] (
+                    schema_ptr s,
+                    reader_permit,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr trace_state,
+                    streamed_mutation::forwarding fwd_sm,
+                    mutation_reader::forwarding fwd_mr) mutable {
+                auto source = mt->make_flat_reader(s, range, slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+                auto mr = make_compacting_reader(std::move(source), query_time, [] (const dht::decorated_key&) { return api::min_timestamp; });
+                if (single_fragment_buffer) {
+                    mr.set_max_buffer_size(1);
+                }
+                if (fwd_sm == streamed_mutation::forwarding::yes) {
+                    return make_forwardable(std::move(mr));
+                }
+                return mr;
+            });
+        };
+    };
+
+    BOOST_TEST_MESSAGE("run_mutation_source_tests(single_fragment_buffer=false)");
+    run_mutation_source_tests(make_populate(false));
+    BOOST_TEST_MESSAGE("run_mutation_source_tests(single_fragment_buffer=true)");
+    run_mutation_source_tests(make_populate(true));
+}
+
+// Check that next_partition() in the middle of a partition works properly.
+SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
+    simple_schema ss(simple_schema::with_static::no);
+    const auto& schema = *ss.schema();
+    std::deque<mutation_fragment> expected;
+
+    auto mr = [&] () {
+        const size_t buffer_size = 1024;
+        std::deque<mutation_fragment> mfs;
+        auto dk0 = ss.make_pkey(0);
+        auto dk1 = ss.make_pkey(1);
+
+        mfs.emplace_back(partition_start(dk0, tombstone{}));
+
+        auto i = 0;
+        size_t mfs_size = 0;
+        while (mfs_size <= buffer_size) {
+            mfs.emplace_back(ss.make_row(ss.make_ckey(i++), "v"));
+            mfs_size += mfs.back().memory_usage(schema);
+        }
+        mfs.emplace_back(partition_end{});
+
+        mfs.emplace_back(partition_start(dk1, tombstone{}));
+        mfs.emplace_back(ss.make_row(ss.make_ckey(0), "v"));
+        mfs.emplace_back(partition_end{});
+
+        for (const auto& mf : mfs) {
+            expected.emplace_back(*ss.schema(), mf);
+        }
+
+        auto mr = make_compacting_reader(make_flat_mutation_reader_from_fragments(ss.schema(), std::move(mfs)),
+                gc_clock::now(), [] (const dht::decorated_key&) { return api::min_timestamp; });
+        mr.set_max_buffer_size(buffer_size);
+
+        return mr;
+    }();
+
+    auto reader_assertions = assert_that(std::move(mr));
+
+    reader_assertions
+        .produces(schema, expected[0]) // partition start
+        .produces(schema, expected[1]) // first row
+        .next_partition();
+
+    auto it = expected.end() - 3;
+    while (it != expected.end()) {
+        reader_assertions.produces(schema, *it++);
+    }
+    reader_assertions.produces_end_of_stream();
+}
