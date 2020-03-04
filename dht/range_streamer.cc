@@ -306,8 +306,9 @@ future<> range_streamer::do_stream_async() {
                     auto sp = stream_plan(format("{}-{}-index-{:d}", description, keyspace, sp_index++), _reason);
                     auto abort_listener = _abort_source.subscribe([&] { sp.abort(); });
                     _abort_source.check();
-                    logger.info("{} with {} for keyspace={}, {} out of {} ranges: ranges = {}",
-                            description, source, keyspace, nr_ranges_streamed, nr_ranges_total, ranges_to_stream.size());
+                    logger.info("{} with {} for keyspace={}, streaming [{}, {}) out of {} ranges",
+                            description, source, keyspace,
+                            nr_ranges_streamed, nr_ranges_streamed + ranges_to_stream.size(), nr_ranges_total);
                     nr_ranges_streamed += ranges_to_stream.size();
                     if (_nr_rx_added) {
                         sp.request_ranges(source, keyspace, ranges_to_stream);
