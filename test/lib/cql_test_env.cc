@@ -114,12 +114,12 @@ public:
     static const char* ks_name;
     static std::atomic<bool> active;
 private:
-    shared_ptr<sharded<gms::feature_service>> _feature_service;
-    ::shared_ptr<distributed<database>> _db;
-    ::shared_ptr<sharded<auth::service>> _auth_service;
-    ::shared_ptr<sharded<db::view::view_builder>> _view_builder;
-    ::shared_ptr<sharded<db::view::view_update_generator>> _view_update_generator;
-    ::shared_ptr<sharded<service::migration_notifier>> _mnotifier;
+    sharded<gms::feature_service>& _feature_service;
+    sharded<database>& _db;
+    sharded<auth::service>& _auth_service;
+    sharded<db::view::view_builder>& _view_builder;
+    sharded<db::view::view_update_generator>& _view_update_generator;
+    sharded<service::migration_notifier>& _mnotifier;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -137,25 +137,25 @@ private:
     distributed<core_local_state> _core_local;
 private:
     auto make_query_state() {
-        if (_db->local().has_keyspace(ks_name)) {
-            _core_local.local().client_state.set_keyspace(_db->local(), ks_name);
+        if (_db.local().has_keyspace(ks_name)) {
+            _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
 public:
     single_node_cql_env(
-            shared_ptr<sharded<gms::feature_service>> feature_service,
-            ::shared_ptr<distributed<database>> db,
-            ::shared_ptr<sharded<auth::service>> auth_service,
-            ::shared_ptr<sharded<db::view::view_builder>> view_builder,
-            ::shared_ptr<sharded<db::view::view_update_generator>> view_update_generator,
-            ::shared_ptr<sharded<service::migration_notifier>> mnotifier)
-            : _feature_service(std::move(feature_service))
+            sharded<gms::feature_service>& feature_service,
+            sharded<database>& db,
+            sharded<auth::service>& auth_service,
+            sharded<db::view::view_builder>& view_builder,
+            sharded<db::view::view_update_generator>& view_update_generator,
+            sharded<service::migration_notifier>& mnotifier)
+            : _feature_service(feature_service)
             , _db(db)
-            , _auth_service(std::move(auth_service))
-            , _view_builder(std::move(view_builder))
-            , _view_update_generator(std::move(view_update_generator))
-            , _mnotifier(std::move(mnotifier))
+            , _auth_service(auth_service)
+            , _view_builder(view_builder)
+            , _view_update_generator(view_update_generator)
+            , _mnotifier(mnotifier)
     { }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) override {
@@ -231,19 +231,19 @@ public:
     }
 
     virtual future<> require_keyspace_exists(const sstring& ks_name) override {
-        auto& db = _db->local();
+        auto& db = _db.local();
         assert(db.has_keyspace(ks_name));
         return make_ready_future<>();
     }
 
     virtual future<> require_table_exists(const sstring& ks_name, const sstring& table_name) override {
-        auto& db = _db->local();
+        auto& db = _db.local();
         assert(db.has_schema(ks_name, table_name));
         return make_ready_future<>();
     }
 
     virtual future<> require_table_does_not_exist(const sstring& ks_name, const sstring& table_name) override {
-        auto& db = _db->local();
+        auto& db = _db.local();
         assert(!db.has_schema(ks_name, table_name));
         return make_ready_future<>();
     }
@@ -253,7 +253,7 @@ public:
                                       std::vector<data_value> ck,
                                       const sstring& column_name,
                                       data_value expected) override {
-        auto& db = _db->local();
+        auto& db = _db.local();
         auto& cf = db.find_column_family(ks_name, table_name);
         auto schema = cf.schema();
         auto pkey = partition_key::from_deeply_exploded(*schema, pk);
@@ -261,7 +261,7 @@ public:
         auto exp = expected.type()->decompose(expected);
         auto dk = dht::decorate_key(*schema, pkey);
         auto shard = dht::shard_of(*schema, dk._token);
-        return _db->invoke_on(shard, [pkey = std::move(pkey),
+        return _db.invoke_on(shard, [pkey = std::move(pkey),
                                       ckey = std::move(ckey),
                                       ks_name = std::move(ks_name),
                                       column_name = std::move(column_name),
@@ -299,15 +299,15 @@ public:
     }
 
     virtual database& local_db() override {
-        return _db->local();
+        return _db.local();
     }
 
     cql3::query_processor& local_qp() override {
         return cql3::get_local_query_processor();
     }
 
-    distributed<database>& db() override {
-        return *_db;
+    sharded<database>& db() override {
+        return _db;
     }
 
     distributed<cql3::query_processor>& qp() override {
@@ -315,23 +315,23 @@ public:
     }
 
     auth::service& local_auth_service() override {
-        return _auth_service->local();
+        return _auth_service.local();
     }
 
     virtual db::view::view_builder& local_view_builder() override {
-        return _view_builder->local();
+        return _view_builder.local();
     }
 
     virtual db::view::view_update_generator& local_view_update_generator() override {
-        return _view_update_generator->local();
+        return _view_update_generator.local();
     }
 
     virtual service::migration_notifier& local_mnotifier() override {
-        return _mnotifier->local();
+        return _mnotifier.local();
     }
 
     future<> start() {
-        return _core_local.start(std::ref(*_auth_service));
+        return _core_local.start(std::ref(_auth_service));
     }
 
     future<> stop() {
@@ -375,7 +375,7 @@ public:
             sharded<abort_source> abort_sources;
             abort_sources.start().get();
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
-            auto db = ::make_shared<distributed<database>>();
+            sharded<database> db;
             auto cfg = cfg_in.db_config;
             tmpdir data_dir;
             auto data_dir_path = data_dir.path().string();
@@ -403,13 +403,13 @@ public:
                 create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
             }
 
-            auto token_metadata = ::make_shared<sharded<locator::token_metadata>>();
-            token_metadata->start().get();
-            auto stop_token_metadata = defer([token_metadata] { token_metadata->stop().get(); });
+            sharded<locator::token_metadata> token_metadata;
+            token_metadata.start().get();
+            auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });
 
-            auto mm_notif = ::make_shared<sharded<service::migration_notifier>>();
-            mm_notif->start().get();
-            auto stop_mm_notify = defer([mm_notif] { mm_notif->stop().get(); });
+            sharded<service::migration_notifier> mm_notif;
+            mm_notif.start().get();
+            auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
 
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
@@ -418,7 +418,7 @@ public:
             ms.start(listen, std::move(7000), false).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
-            auto auth_service = ::make_shared<sharded<auth::service>>();
+            sharded<auth::service> auth_service;
             auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
@@ -430,12 +430,12 @@ public:
                 fcfg.enable_user_defined_functions = true;
             }
             fcfg.disabled_features = cfg_in.disabled_features;
-            auto feature_service = make_shared<sharded<gms::feature_service>>();
-            feature_service->start(fcfg).get();
-            auto stop_feature_service = defer([&] { feature_service->stop().get(); });
+            sharded<gms::feature_service> feature_service;
+            feature_service.start(fcfg).get();
+            auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
             // FIXME: split
-            tst_init_ms_fd_gossiper(*feature_service, *token_metadata, *cfg, db::config::seed_provider_type(), abort_sources).get();
+            tst_init_ms_fd_gossiper(feature_service, token_metadata, *cfg, db::config::seed_provider_type(), abort_sources).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
@@ -444,22 +444,22 @@ public:
             cql_config.start().get();
             auto stop_cql_config = defer([&] { cql_config.stop().get(); });
 
-            auto view_update_generator = ::make_shared<seastar::sharded<db::view::view_update_generator>>();
+            sharded<db::view::view_update_generator> view_update_generator;
 
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(*db), std::ref(gms::get_gossiper()), std::ref(*auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(*view_update_generator), std::ref(*feature_service), sscfg, std::ref(*mm_notif), std::ref(*token_metadata), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(cql_config), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
             dbcfg.available_memory = memory::stats().total_memory();
-            db->start(std::ref(*cfg), dbcfg, std::ref(*mm_notif), std::ref(*feature_service), std::ref(*token_metadata)).get();
-            auto stop_db = defer([db] {
-                db->stop().get();
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata)).get();
+            auto stop_db = defer([&db] {
+                db.stop().get();
             });
 
-            db->invoke_on_all([] (database& db) {
+            db.invoke_on_all([] (database& db) {
                 db.get_compaction_manager().start();
             }).get();
 
@@ -476,15 +476,15 @@ public:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            proxy.start(std::ref(*db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(*feature_service), std::ref(*token_metadata)).get();
+            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
-            mm.start(std::ref(*mm_notif), std::ref(*feature_service)).get();
+            mm.start(std::ref(mm_notif), std::ref(feature_service)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             auto& qp = cql3::get_query_processor();
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            qp.start(std::ref(proxy), std::ref(*db), std::ref(*mm_notif), qp_mcfg).get();
+            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), qp_mcfg).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             db::batchlog_manager_config bmcfg;
@@ -493,20 +493,20 @@ public:
             bm.start(std::ref(qp), bmcfg).get();
             auto stop_bm = defer([&bm] { bm.stop().get(); });
 
-            view_update_generator->start(std::ref(*db)).get();
-            view_update_generator->invoke_on_all(&db::view::view_update_generator::start).get();
-            auto stop_view_update_generator = defer([view_update_generator] {
-                view_update_generator->stop().get();
+            view_update_generator.start(std::ref(db)).get();
+            view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
+            auto stop_view_update_generator = defer([&view_update_generator] {
+                view_update_generator.stop().get();
             });
 
-            distributed_loader::init_system_keyspace(*db).get();
+            distributed_loader::init_system_keyspace(db).get();
 
-            auto& ks = db->local().find_keyspace(db::system_keyspace::NAME);
+            auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
                 auto cfm = pair.second;
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
-            distributed_loader::init_non_system_keyspaces(*db, proxy, mm).get();
+            distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
             sharded<cdc::cdc_service> cdc;
             cdc.start(std::ref(proxy)).get();
@@ -516,32 +516,32 @@ public:
 
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
-            db::system_keyspace::minimal_setup(*db, qp);
+            db::system_keyspace::minimal_setup(db, qp);
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
-            start_large_data_handler(*db).get();
-            auto stop_database_d = defer([db] {
-                stop_database(*db).get();
+            start_large_data_handler(db).get();
+            auto stop_database_d = defer([&db] {
+                stop_database(db).get();
             });
 
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
-            db::system_keyspace::migrate_truncation_records(feature_service->local().cluster_supports_truncation_table()).get();
+            db::system_keyspace::migrate_truncation_records(feature_service.local().cluster_supports_truncation_table()).get();
 
             service::get_local_storage_service().init_messaging_service_part().get();
             service::get_local_storage_service().init_server_without_the_messaging_service_part(service::bind_messaging_port(false)).get();
-            auto deinit_storage_service_server = defer([auth_service] {
+            auto deinit_storage_service_server = defer([&auth_service] {
                 gms::stop_gossiping().get();
-                auth_service->stop().get();
+                auth_service.stop().get();
             });
 
-            auto view_builder = ::make_shared<seastar::sharded<db::view::view_builder>>();
-            view_builder->start(std::ref(*db), std::ref(sys_dist_ks), std::ref(*mm_notif)).get();
-            view_builder->invoke_on_all([&mm] (db::view::view_builder& vb) {
+            sharded<db::view::view_builder> view_builder;
+            view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm_notif)).get();
+            view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) {
                 return vb.start(mm.local());
             }).get();
-            auto stop_view_builder = defer([view_builder] {
-                view_builder->stop().get();
+            auto stop_view_builder = defer([&view_builder] {
+                view_builder.stop().get();
             });
 
             // Create the testing user.
@@ -551,7 +551,7 @@ public:
                 config.can_login = true;
 
                 auth::create_role(
-                        auth_service->local(),
+                        auth_service.local(),
                         testing_superuser,
                         config,
                         auth::authentication_options()).get0();
