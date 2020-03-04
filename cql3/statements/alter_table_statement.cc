@@ -337,7 +337,9 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             throw exceptions::invalid_request_exception("ALTER COLUMNFAMILY WITH invoked, but no parameters found");
         }
 
-        _properties->validate(db);
+        {
+        auto schema_extensions = _properties->make_schema_extensions(db.extensions());
+        _properties->validate(db, schema_extensions);
 
         if (!cf.views().empty() && _properties->get_gc_grace_seconds() == 0) {
             throw exceptions::invalid_request_exception(
@@ -351,7 +353,8 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         if (s->is_counter() && _properties->get_default_time_to_live() > 0) {
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
         }
-        _properties->apply_to_builder(cfm, db);
+        _properties->apply_to_builder(cfm, std::move(schema_extensions));
+        }
         break;
 
     case alter_table_statement::type::rename:

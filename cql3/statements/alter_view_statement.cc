@@ -87,10 +87,11 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
         throw exceptions::invalid_request_exception("ALTER MATERIALIZED VIEW WITH invoked, but no parameters found");
     }
 
-    _properties->validate(proxy.get_db().local());
+    auto schema_extensions = _properties->make_schema_extensions(db.extensions());
+    _properties->validate(proxy.get_db().local(), schema_extensions);
 
     auto builder = schema_builder(schema);
-    _properties->apply_to_builder(builder, db);
+    _properties->apply_to_builder(builder, std::move(schema_extensions));
 
     if (builder.get_gc_grace_seconds() == 0) {
         throw exceptions::invalid_request_exception(

@@ -93,8 +93,8 @@ public:
         _defined_ordering.emplace_back(alias, reversed);
     }
 
-    void validate(const database& db) const {
-        _properties->validate(db);
+    void validate(const database& db, const schema::extensions_map& schema_extensions) const {
+        _properties->validate(db, schema_extensions);
     }
 };
 

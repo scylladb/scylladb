@@ -46,6 +46,7 @@
 #include "schema_builder.hh"
 #include "compaction_strategy.hh"
 #include "utils/UUID.hh"
+#include "cdc/cdc_options.hh"
 
 namespace db {
 class extensions;
@@ -89,10 +90,11 @@ public:
 private:
     mutable std::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
 public:
-    void validate(const database& db) const;
+    schema::extensions_map make_schema_extensions(const db::extensions& exts);
+    void validate(const database& db, const schema::extensions_map& schema_extensions) const;
     std::map<sstring, sstring> get_compaction_options() const;
     std::optional<std::map<sstring, sstring>> get_compression_options() const;
-    std::optional<std::map<sstring, sstring>> get_cdc_options() const;
+    const cdc::options* get_cdc_options(const schema::extensions_map&) const;
 #if 0
     public CachingOptions getCachingOptions() throws SyntaxException, ConfigurationException
     {
@@ -114,7 +116,7 @@ public:
     int32_t get_gc_grace_seconds() const;
     std::optional<utils::UUID> get_id() const;
 
-    void apply_to_builder(schema_builder& builder, const database&);
+    void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions);
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
 };
 

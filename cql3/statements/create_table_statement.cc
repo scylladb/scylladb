@@ -148,7 +148,7 @@ void create_table_statement::apply_properties_to(schema_builder& builder, const 
         addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
 #endif
 
-    _properties->apply_to_builder(builder, db);
+    _properties->apply_to_builder(builder, _properties->make_schema_extensions(db.extensions()));
 }
 
 void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind) const
@@ -203,7 +203,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         throw exceptions::invalid_request_exception(format("Multiple definition of identifier {}", (*i)->text()));
     }
 
-    _properties.validate(db);
+    _properties.validate(db, _properties.properties()->make_schema_extensions(db.extensions()));
 
     auto stmt = ::make_shared<create_table_statement>(_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
 

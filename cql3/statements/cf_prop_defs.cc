@@ -43,6 +43,7 @@
 #include "database.hh"
 #include "db/extensions.hh"
 #include "cdc/log.hh"
+#include "cdc/cdc_extension.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 
@@ -72,13 +73,27 @@ const sstring cf_prop_defs::KW_CRC_CHECK_CHANCE = "crc_check_chance";
 
 const sstring cf_prop_defs::KW_ID = "id";
 
-const sstring cf_prop_defs::KW_CDC = "cdc";
-
 const sstring cf_prop_defs::COMPACTION_STRATEGY_CLASS_KEY = "class";
 
 const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
 
-void cf_prop_defs::validate(const database& db) const {
+schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions& exts) {
+    schema::extensions_map er;
+    for (auto& p : exts.schema_extensions()) {
+        auto i = _properties.find(p.first);
+        if (i != _properties.end()) {
+            std::visit([&](auto& v) {
+                auto ep = p.second(v);
+                if (ep) {
+                    er.emplace(p.first, std::move(ep));
+                }
+            }, i->second);
+        }
+    }
+    return er;
+}
+
+void cf_prop_defs::validate(const database& db, const schema::extensions_map& schema_extensions) const {
     // Skip validation if the comapction strategy class is already set as it means we've alreayd
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_compaction_strategy_class) {
@@ -90,7 +105,7 @@ void cf_prop_defs::validate(const database& db) const {
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
         KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
         KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
-        KW_COMPRESSION, KW_CRC_CHECK_CHANCE, KW_ID, KW_CDC
+        KW_COMPRESSION, KW_CRC_CHECK_CHANCE, KW_ID
     });
     static std::set<sstring> obsolete_keywords({
         sstring("index_interval"),
@@ -131,13 +146,9 @@ void cf_prop_defs::validate(const database& db) const {
         cp.validate();
     }
 
-    auto cdc_options = get_cdc_options();
-    if (cdc_options && !cdc_options->empty()) {
-        // Constructor throws if options are not valid
-        cdc::options opts(*cdc_options);
-        if (opts.enabled() && !db.features().cluster_supports_cdc()) {
-            throw exceptions::configuration_exception("CDC not supported by the cluster");
-        }
+    auto cdc_options = get_cdc_options(schema_extensions);
+    if (cdc_options && cdc_options->enabled() && !db.features().cluster_supports_cdc()) {
+        throw exceptions::configuration_exception("CDC not supported by the cluster");
     }
 
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
@@ -189,13 +200,17 @@ std::optional<utils::UUID> cf_prop_defs::get_id() const {
     return std::nullopt;
 }
 
-std::optional<std::map<sstring, sstring>> cf_prop_defs::get_cdc_options() const {
-    return get_map(KW_CDC);
+const cdc::options* cf_prop_defs::get_cdc_options(const schema::extensions_map& schema_exts) const {
+    auto it = schema_exts.find(cdc::cdc_extension::NAME);
+    if (it == schema_exts.end()) {
+        return nullptr;
+    }
+
+    auto cdc_ext = dynamic_pointer_cast<cdc::cdc_extension>(it->second);
+    return &cdc_ext->get_options();
 }
 
-void cf_prop_defs::apply_to_builder(schema_builder& builder, const database& db) {
-    auto& exts = db.extensions();
-
+void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions) {
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));
     }
@@ -268,7 +283,8 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, const database& db)
     if (compression_options) {
         builder.set_compressor_params(compression_parameters(*compression_options));
     }
-    auto cdc_options = get_cdc_options();
+
+    auto cdc_options = get_cdc_options(schema_extensions);
     if (cdc_options) {
         builder.set_cdc_options(cdc::options(*cdc_options));
     }
@@ -278,19 +294,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, const database& db)
         cfm.caching(cachingOptions);
 #endif
 
-    schema::extensions_map er;
-    for (auto& p : exts.schema_extensions()) {
-        auto i = _properties.find(p.first);
-        if (i != _properties.end()) {
-            std::visit([&](auto& v) {
-                auto ep = p.second(v);
-                if (ep) {
-                    er.emplace(p.first, std::move(ep));
-                }
-            }, i->second);
-        }
-    }
-    builder.set_extensions(std::move(er));
+    builder.set_extensions(std::move(schema_extensions));
 }
 
 void cf_prop_defs::validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const
