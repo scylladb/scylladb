@@ -109,7 +109,6 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %config(noreplace) %{_sysconfdir}/scylla.d/*.conf
 /opt/scylladb/share/doc/scylla/*
-/opt/scylladb/share/doc/scylla/licenses/
 %{_unitdir}/*.service
 %{_unitdir}/*.timer
 %{_unitdir}/*.slice
@@ -123,7 +122,6 @@ rm -rf $RPM_BUILD_ROOT
 /opt/scylladb/swagger-ui/dist/*
 /opt/scylladb/api/api-doc/*
 /opt/scylladb/scyllatop/*
-/opt/scylladb/scripts/libexec/*
 /opt/scylladb/bin/*
 /opt/scylladb/libreloc/*
 /opt/scylladb/libexec/*
