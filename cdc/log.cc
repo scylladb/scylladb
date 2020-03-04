@@ -321,8 +321,7 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
 static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> uuid) {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.set_comment(sprint("CDC log for %s.%s", s.ks_name(), s.cf_name()));
-    b.with_column(log_meta_column_name_bytes("stream_id_1"), long_type, column_kind::partition_key);
-    b.with_column(log_meta_column_name_bytes("stream_id_2"), long_type, column_kind::partition_key);
+    b.with_column(log_meta_column_name_bytes("stream_id"), bytes_type, column_kind::partition_key);
     b.with_column(log_meta_column_name_bytes("time"), timeuuid_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("operation"), utf8_type);
