@@ -60,7 +60,6 @@
 #include "mutation_query.hh"
 #include "system_keyspace.hh"
 #include "cql3/cql3_type.hh"
-#include "cdc/log.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/util.hh"
 #include "types/list.hh"
@@ -2329,10 +2328,6 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
         builder.with_version(*version);
     } else {
         builder.with_version(sm.digest());
-    }
-    if (auto map = sm.cdc_options()) {
-        cdc::options cdc_options(*map);
-        builder.set_cdc_options(std::move(cdc_options));
     }
 
     if (is_system_keyspace(ks_name) && is_extra_durable(cf_name)) {

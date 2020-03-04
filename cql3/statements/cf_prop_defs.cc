@@ -284,10 +284,6 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
         builder.set_compressor_params(compression_parameters(*compression_options));
     }
 
-    auto cdc_options = get_cdc_options(schema_extensions);
-    if (cdc_options) {
-        builder.set_cdc_options(cdc::options(*cdc_options));
-    }
 #if 0
     CachingOptions cachingOptions = getCachingOptions();
     if (cachingOptions != null)
