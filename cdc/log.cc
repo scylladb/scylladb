@@ -746,6 +746,28 @@ public:
             };
 
             int batch_no = 0;
+            if (!p.static_row().empty()) {
+                std::optional<clustering_key> pikey;
+                const cql3::untyped_result_set_row * pirow = nullptr;
+
+                if (rs && !rs->empty()) {
+                    // For static rows, only one row from the result set is needed
+                    pikey = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                    set_operation(*pikey, ts, operation::pre_image, res);
+                    pirow = &rs->front();
+                    ++batch_no;
+                }
+
+                auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                auto ttl = process_cells(p.static_row().get(), column_kind::static_column, log_ck, pikey, pirow);
+
+                set_operation(log_ck, ts, operation::update, res);
+
+                if (ttl) {
+                    set_ttl(log_ck, ts, *ttl, res);
+                }
+                ++batch_no;
+            } else {
             for (const rows_entry& r : p.clustered_rows()) {
                 auto ck_value = r.key().explode(*_schema);
 
@@ -789,16 +811,10 @@ public:
                     ++pos;
                 }
 
-                std::optional<gc_clock::duration> ttl;
+                auto ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow);
                 const auto& marker = r.row().marker();
                 if (marker.is_live() && marker.is_expiring()) {
                     ttl = marker.ttl();
-                }
-                if (const auto clustering_ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow)) {
-                    ttl = clustering_ttl;
-                }
-                if (const auto static_ttl = process_cells(p.static_row().get(), column_kind::static_column, log_ck, pikey, pirow)) {
-                    ttl = static_ttl;
                 }
 
                 operation cdc_op;
@@ -815,6 +831,7 @@ public:
                     set_ttl(log_ck, ts, *ttl, res);
                 }
                 ++batch_no;
+            }
             }
         }
 
