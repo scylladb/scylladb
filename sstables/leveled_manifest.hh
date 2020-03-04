@@ -49,6 +49,7 @@
 #include <boost/range/algorithm/partial_sort.hpp>
 
 class leveled_manifest {
+    table& _table;
     schema_ptr _schema;
     std::vector<std::vector<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
@@ -82,7 +83,8 @@ public:
     static constexpr float TARGET_SCORE = 1.001f;
 private:
     leveled_manifest(column_family& cfs, int max_sstable_size_in_MB, const sstables::size_tiered_compaction_strategy_options& stcs_options)
-        : _schema(cfs.schema())
+        : _table(cfs)
+        , _schema(cfs.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
         , _stcs_options(stcs_options)
     {
@@ -245,7 +247,7 @@ public:
             // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
             if (get_level_size(0) > MAX_COMPACTING_L0) {
                 auto most_interesting = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
-                    _schema->min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
+                    _table.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
                 if (!most_interesting.empty()) {
                     logger.debug("L0 is too far behind, performing size-tiering there first");
                     return sstables::compaction_descriptor(std::move(most_interesting));
@@ -430,7 +432,7 @@ private:
             // do STCS in L0 when max_sstable_size is high compared to size of new sstables, so we'll
             // avoid quadratic behavior until L0 is worth promoting.
             candidates = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
-                _schema->min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
+                _table.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
         }
         return { std::move(candidates), can_promote };
     }
