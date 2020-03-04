@@ -531,20 +531,18 @@ public:
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
     // more details like tombstones/ttl? Probably not but keep in mind.
-    mutation transform(const mutation& m, const cql3::untyped_result_set* rs) const {
-        auto ts = find_timestamp(*_schema, m);
+    mutation transform(const mutation& m, const cql3::untyped_result_set* rs, api::timestamp_type ts, bytes tuuid, int& batch_no) const {
         auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token());
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
-        auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
 
         auto& p = m.partition();
         if (p.partition_tombstone()) {
             // Partition deletion
             auto log_ck = set_pk_columns(m.key(), ts, tuuid, 0, res);
             set_operation(log_ck, ts, operation::partition_delete, res);
+            ++batch_no;
         } else if (!p.row_tombstones().empty()) {
             // range deletion
-            int batch_no = 0;
             for (auto& rt : p.row_tombstones()) {
                 auto set_bound = [&] (const clustering_key& log_ck, const clustering_key_prefix& ckp) {
                     auto exploded = ckp.explode(*_schema);
@@ -583,7 +581,6 @@ public:
             }
         } else {
             // should be insert, update or deletion
-            int batch_no = 0;
             for (const rows_entry& r : p.clustered_rows()) {
                 auto ck_value = r.key().explode(*_schema);
 
@@ -939,12 +936,15 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 auto& s = m.schema();
                 if (should_split(m, *s)) {
                     std::vector<mutation> res;
-                    for_each_change(m, s, [&] (mutation mm) {
-                        res.push_back(trans.transform(std::move(mm), rs.get()));
+                    for_each_change(m, s, [&] (mutation mm, api::timestamp_type ts, bytes tuuid, int& batch_no) {
+                        res.push_back(trans.transform(std::move(mm), rs.get(), ts, tuuid, batch_no));
                     });
                     mutations.insert(mutations.end(), std::make_move_iterator(res.begin()), std::make_move_iterator(res.end()));
                 } else {
-                    mutations.push_back(trans.transform(m, rs.get()));
+                    int batch_no = 0;
+                    auto ts = find_timestamp(*s, m);
+                    auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
+                    mutations.push_back(trans.transform(m, rs.get(), ts, tuuid, batch_no));
                 }
             });
         }).then([](std::vector<mutation> mutations) {

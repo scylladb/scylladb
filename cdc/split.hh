@@ -29,6 +29,7 @@ class mutation;
 namespace cdc {
 
 bool should_split(const mutation& base_mutation, const schema& base_schema);
-void for_each_change(const mutation& base_mutation, const schema_ptr& base_schema, std::function<void(mutation)>);
+void for_each_change(const mutation& base_mutation, const schema_ptr& base_schema,
+        std::function<void(mutation, api::timestamp_type, bytes, int&)>);
 
 }
