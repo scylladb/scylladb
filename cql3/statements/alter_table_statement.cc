@@ -338,22 +338,22 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         }
 
         {
-        auto schema_extensions = _properties->make_schema_extensions(db.extensions());
-        _properties->validate(db, schema_extensions);
+            auto schema_extensions = _properties->make_schema_extensions(db.extensions());
+            _properties->validate(db, schema_extensions);
 
-        if (!cf.views().empty() && _properties->get_gc_grace_seconds() == 0) {
-            throw exceptions::invalid_request_exception(
-                    "Cannot alter gc_grace_seconds of the base table of a "
-                    "materialized view to 0, since this value is used to TTL "
-                    "undelivered updates. Setting gc_grace_seconds too low might "
-                    "cause undelivered updates to expire "
-                    "before being replayed.");
-        }
+            if (!cf.views().empty() && _properties->get_gc_grace_seconds() == 0) {
+                throw exceptions::invalid_request_exception(
+                        "Cannot alter gc_grace_seconds of the base table of a "
+                        "materialized view to 0, since this value is used to TTL "
+                        "undelivered updates. Setting gc_grace_seconds too low might "
+                        "cause undelivered updates to expire "
+                        "before being replayed.");
+            }
 
-        if (s->is_counter() && _properties->get_default_time_to_live() > 0) {
-            throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
-        }
-        _properties->apply_to_builder(cfm, std::move(schema_extensions));
+            if (s->is_counter() && _properties->get_default_time_to_live() > 0) {
+                throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
+            }
+            _properties->apply_to_builder(cfm, std::move(schema_extensions));
         }
         break;
 
