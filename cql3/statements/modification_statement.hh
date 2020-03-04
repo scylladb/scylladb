@@ -168,7 +168,7 @@ public:
 
     gc_clock::duration get_time_to_live(const query_options& options) const;
 
-    virtual future<> check_access(const service::client_state& state) const override;
+    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
 
     // Validate before execute, using client state and current schema
     void validate(service::storage_proxy&, const service::client_state& state) const override;

@@ -126,7 +126,7 @@ public:
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual future<> check_access(const service::client_state& state) const override;
+    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
 
     // Validates a prepared batch statement without validating its nested statements.
     void validate();
@@ -149,7 +149,7 @@ public:
      * Checks batch size to ensure threshold is met. If not, a warning is logged.
      * @param cfs ColumnFamilies that will store the batch's mutations.
      */
-    static void verify_batch_size(const std::vector<mutation>& mutations);
+    static void verify_batch_size(service::storage_proxy& proxy, const std::vector<mutation>& mutations);
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
             service::storage_proxy& storage, service::query_state& state, const query_options& options) const override;

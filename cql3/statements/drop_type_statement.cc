@@ -63,7 +63,7 @@ void drop_type_statement::prepare_keyspace(const service::client_state& state)
     }
 }
 
-future<> drop_type_statement::check_access(const service::client_state& state) const
+future<> drop_type_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
     return state.has_keyspace_access(keyspace(), auth::permission::DROP);
 }

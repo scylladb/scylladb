@@ -48,7 +48,7 @@
 void cql3::statements::list_users_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {
 }
 
-future<> cql3::statements::list_users_statement::check_access(const service::client_state& state) const {
+future<> cql3::statements::list_users_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     state.ensure_not_anonymous();
     return make_ready_future();
 }

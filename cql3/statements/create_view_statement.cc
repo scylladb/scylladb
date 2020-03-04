@@ -62,8 +62,8 @@
 #include "service/storage_proxy.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
-#include "service/storage_service.hh"
 #include "database.hh"
+#include "gms/feature_service.hh"
 
 namespace cql3 {
 
@@ -87,7 +87,7 @@ create_view_statement::create_view_statement(
 {
 }
 
-future<> create_view_statement::check_access(const service::client_state& state) const {
+future<> create_view_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     return state.has_column_family_access(keyspace(), _base_name->get_column_family(), auth::permission::ALTER);
 }
 

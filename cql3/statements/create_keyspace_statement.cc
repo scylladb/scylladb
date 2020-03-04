@@ -67,7 +67,7 @@ const sstring& create_keyspace_statement::keyspace() const
     return _name;
 }
 
-future<> create_keyspace_statement::check_access(const service::client_state& state) const
+future<> create_keyspace_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
     return state.has_all_keyspaces_access(auth::permission::CREATE);
 }

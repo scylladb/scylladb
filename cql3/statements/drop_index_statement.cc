@@ -42,9 +42,9 @@
 #include "cql3/statements/drop_index_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
 #include "schema_builder.hh"
 #include "database.hh"
+#include "gms/feature_service.hh"
 
 namespace cql3 {
 
@@ -57,35 +57,33 @@ drop_index_statement::drop_index_statement(::shared_ptr<index_name> index_name, 
 {
 }
 
-// A "drop index" statement does not specify the base table's name, just an
-// index name. Nevertheless, the virtual column_family() method is supposed
-// to return a reasonable table name. If the index doesn't exist, we return
-// an empty name (this commonly happens with "if exists").
 const sstring& drop_index_statement::column_family() const
 {
-    auto& db = service::get_local_storage_proxy().get_db().local();
-    if (db.has_keyspace(keyspace())) {
-        auto schema = db.find_indexed_table(keyspace(), _index_name);
-        if (schema) {
-            return schema->cf_name();
-        }
-    }
-    // Return the empty name stored by the superclass
-    return cf_statement::column_family();
+    return _cf_name ? *_cf_name :
+            // otherwise -- the empty name stored by the superclass
+            cf_statement::column_family();
 }
 
-future<> drop_index_statement::check_access(const service::client_state& state) const
+future<> drop_index_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
-    auto cfm = lookup_indexed_table();
+    auto cfm = lookup_indexed_table(proxy);
     if (!cfm) {
         return make_ready_future<>();
     }
     return state.has_column_family_access(cfm->ks_name(), cfm->cf_name(), auth::permission::ALTER);
 }
 
-void drop_index_statement::validate(service::storage_proxy&, const service::client_state& state) const
+void drop_index_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
 {
     // validated in lookup_indexed_table()
+
+    auto& db = proxy.get_db().local();
+    if (db.has_keyspace(keyspace())) {
+        auto schema = db.find_indexed_table(keyspace(), _index_name);
+        if (schema) {
+            _cf_name = schema->cf_name();
+        }
+    }
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
@@ -93,7 +91,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::an
     if (!proxy.features().cluster_supports_indexes()) {
         throw exceptions::invalid_request_exception("Index support is not enabled");
     }
-    auto cfm = lookup_indexed_table();
+    auto cfm = lookup_indexed_table(proxy);
     if (!cfm) {
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(nullptr);
     }
@@ -118,9 +116,9 @@ drop_index_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_index_statement>(*this));
 }
 
-schema_ptr drop_index_statement::lookup_indexed_table() const
+schema_ptr drop_index_statement::lookup_indexed_table(service::storage_proxy& proxy) const
 {
-    auto& db = service::get_local_storage_proxy().get_db().local();
+    auto& db = proxy.get_db().local();
     if (!db.has_keyspace(keyspace())) {
         throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace()));
     }

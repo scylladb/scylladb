@@ -73,7 +73,7 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<> check_access(const service::client_state& state) const override;
+    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
 
     /**
      * The <code>CqlParser</code> only goes as far as extracting the keyword arguments

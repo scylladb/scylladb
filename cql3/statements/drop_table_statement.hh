@@ -54,7 +54,7 @@ class drop_table_statement : public schema_altering_statement {
 public:
     drop_table_statement(::shared_ptr<cf_name> cf_name, bool if_exists);
 
-    virtual future<> check_access(const service::client_state& state) const override;
+    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
 
     virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
 

@@ -81,7 +81,7 @@ bool truncate_statement::depends_on_column_family(const sstring& cf_name) const
     return false;
 }
 
-future<> truncate_statement::check_access(const service::client_state& state) const
+future<> truncate_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
     return state.has_column_family_access(keyspace(), column_family(), auth::permission::MODIFY);
 }
@@ -97,10 +97,10 @@ void truncate_statement::validate(service::storage_proxy&, const service::client
 future<::shared_ptr<cql_transport::messages::result_message>>
 truncate_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const
 {
-    if (service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family())->is_view()) {
+    if (proxy.get_db().local().find_schema(keyspace(), column_family())->is_view()) {
         throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");
     }
-    return service::get_local_storage_proxy().truncate_blocking(keyspace(), column_family()).handle_exception([](auto ep) {
+    return proxy.truncate_blocking(keyspace(), column_family()).handle_exception([](auto ep) {
         throw exceptions::truncate_exception(ep);
     }).then([] {
         return ::shared_ptr<cql_transport::messages::result_message>{};

@@ -65,7 +65,7 @@ void cql3::statements::list_permissions_statement::validate(
     state.ensure_not_anonymous();
 }
 
-future<> cql3::statements::list_permissions_statement::check_access(const service::client_state& state) const {
+future<> cql3::statements::list_permissions_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     if (_resource) {
         maybe_correct_resource(*_resource, state);
         return state.ensure_exists(*_resource);

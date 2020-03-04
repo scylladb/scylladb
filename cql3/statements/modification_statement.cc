@@ -144,7 +144,7 @@ gc_clock::duration modification_statement::get_time_to_live(const query_options&
     return gc_clock::duration(attrs->get_time_to_live(options));
 }
 
-future<> modification_statement::check_access(const service::client_state& state) const {
+future<> modification_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     auto f = state.has_column_family_access(keyspace(), column_family(), auth::permission::MODIFY);
     if (has_conditions()) {
         f = f.then([this, &state] {

@@ -491,7 +491,7 @@ query_processor::execute_direct(const sstring_view& query_string, service::query
             metrics.regularStatementsExecuted.inc();
 #endif
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return cql_statement->check_access(query_state.get_client_state()).then([this, cql_statement, &query_state, &options] () mutable {
+    return cql_statement->check_access(_proxy, query_state.get_client_state()).then([this, cql_statement, &query_state, &options] () mutable {
         return process_authorized_statement(std::move(cql_statement), query_state, options);
     });
 }
@@ -507,7 +507,7 @@ query_processor::execute_prepared(
     ::shared_ptr<cql_statement> statement = prepared->statement;
     future<> fut = make_ready_future<>();
     if (needs_authorization) {
-        fut = statement->check_access(query_state.get_client_state()).then([this, &query_state, prepared = std::move(prepared), cache_key = std::move(cache_key)] () mutable {
+        fut = statement->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, prepared = std::move(prepared), cache_key = std::move(cache_key)] () mutable {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), std::move(cache_key), std::move(prepared)).handle_exception([this] (auto eptr) {
                 log.error("failed to cache the entry", eptr);
             });
@@ -849,7 +849,7 @@ query_processor::execute_batch(
         service::query_state& query_state,
         query_options& options,
         std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-    return batch->check_access(query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
+    return batch->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
         return parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second)).handle_exception([this] (auto eptr) {
                 log.error("failed to cache the entry", eptr);

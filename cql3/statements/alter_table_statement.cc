@@ -43,7 +43,6 @@
 #include "index/secondary_index_manager.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
 #include <boost/range/adaptor/filtered.hpp>
@@ -69,7 +68,7 @@ alter_table_statement::alter_table_statement(shared_ptr<cf_name> name,
 {
 }
 
-future<> alter_table_statement::check_access(const service::client_state& state) const {
+future<> alter_table_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER);
 }
 

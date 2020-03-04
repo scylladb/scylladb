@@ -107,11 +107,11 @@ uint32_t batch_statement::get_bound_terms() const
     return _bound_terms;
 }
 
-future<> batch_statement::check_access(const service::client_state& state) const
+future<> batch_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const
 {
-    return parallel_for_each(_statements.begin(), _statements.end(), [&state](auto&& s) {
+    return parallel_for_each(_statements.begin(), _statements.end(), [&proxy, &state](auto&& s) {
         if (s.needs_authorization) {
-            return s.statement->check_access(state);
+            return s.statement->check_access(proxy, state);
         } else {
             return make_ready_future<>();
         }
@@ -219,13 +219,13 @@ future<std::vector<mutation>> batch_statement::get_mutations(service::storage_pr
     });
 }
 
-void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) {
+void batch_statement::verify_batch_size(service::storage_proxy& proxy, const std::vector<mutation>& mutations) {
     if (mutations.size() <= 1) {
         return;     // We only warn for batch spanning multiple mutations
     }
 
-    size_t warn_threshold = service::get_local_storage_proxy().get_db().local().get_config().batch_size_warn_threshold_in_kb() * 1024;
-    size_t fail_threshold = service::get_local_storage_proxy().get_db().local().get_config().batch_size_fail_threshold_in_kb() * 1024;
+    size_t warn_threshold = proxy.get_db().local().get_config().batch_size_warn_threshold_in_kb() * 1024;
+    size_t fail_threshold = proxy.get_db().local().get_config().batch_size_fail_threshold_in_kb() * 1024;
 
     size_t size = 0;
     for (auto&m : mutations) {
@@ -318,7 +318,7 @@ future<> batch_statement::execute_without_conditions(
         }
     }));
 #endif
-    verify_batch_size(mutations);
+    verify_batch_size(storage, mutations);
 
     bool mutate_atomic = true;
     if (_type != type::LOGGED) {

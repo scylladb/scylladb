@@ -47,7 +47,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/role_name.hh"
 #include "cql3/selection/selection.hh"
-#include "service/storage_service.hh"
+#include "gms/feature_service.hh"
 
 static auth::permission_set filter_applicable_permissions(const auth::permission_set& ps, const auth::resource& r) {
     auto const filtered_permissions = auth::permission_set::from_mask(ps.mask() & r.applicable_permissions().mask());
@@ -75,7 +75,7 @@ void cql3::statements::permission_altering_statement::validate(service::storage_
     }
 }
 
-future<> cql3::statements::permission_altering_statement::check_access(const service::client_state& state) const {
+future<> cql3::statements::permission_altering_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     state.ensure_not_anonymous();
     maybe_correct_resource(_resource, state);
 

@@ -82,7 +82,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual future<> check_access(const service::client_state& state) const = 0;
+    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const = 0;
 
     /**
      * Perform additional validation required by the statment.
