@@ -389,7 +389,10 @@ async def run_test(test, options):
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             if process.returncode != 0:
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
-            return process.returncode == 0
+                return False
+            if not options.save_log_on_success:
+                pathlib.Path(test.log_filename).unlink()
+            return True
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
             if process is not None:
                 process.kill()
@@ -458,6 +461,9 @@ def parse_cmd_line():
                         help='Verbose reporting')
     parser.add_argument('--jobs', '-j', action="store", default=default_num_jobs, type=int,
                         help="Number of jobs to use for running the tests")
+    parser.add_argument('--save-log-on-success', "-s", default=False,
+                        dest="save_log_on_success", action="store_true",
+                        help="Save test log output on success.")
     args = parser.parse_args()
 
     if not sys.stdout.isatty():
@@ -607,8 +613,10 @@ def write_junit_report(tmpdir, mode):
                 continue
             failed += 1
             xml_fail = ET.SubElement(xml_res, 'failure')
-            xml_fail.text = "Test {} {} failed:\n".format(test.path, " ".join(test.args))
-            xml_fail.text += read_log(test.log_filename)
+            xml_fail.text = "Test {} {} failed, check the log at {}".format(
+                test.path,
+                " ".join(test.args),
+                test.log_filename)
     if total == 0:
         return
     xml_results.set("tests", str(total))
