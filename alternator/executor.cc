@@ -1363,8 +1363,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
-        // FIXME: create separate smp_service_group
-        return container().invoke_on(*shard, default_smp_service_group(),
+        return container().invoke_on(*shard, _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
@@ -1436,8 +1435,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
-        // FIXME: create separate smp_service_group
-        return container().invoke_on(*shard, default_smp_service_group(),
+        return container().invoke_on(*shard, _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
@@ -1533,6 +1531,7 @@ struct schema_decorated_key_equal {
 // FIXME: if we failed writing some of the mutations, need to return a list
 // of these failed mutations rather than fail the whole write (issue #5650).
 static future<> do_batch_write(service::storage_proxy& proxy,
+        smp_service_group ssg,
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
@@ -1577,15 +1576,14 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                 it->second.push_back(std::move(b.second));
             }
         }
-        return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state] (auto& e) {
+        return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state, ssg] (auto& e) {
             stats.write_using_lwt++;
             auto desired_shard = service::storage_proxy::cas_shard(*e.first.schema, e.first.dk.token());
             if (desired_shard == engine().cpu_id()) {
                 return cas_write(proxy, e.first.schema, e.first.dk, std::move(e.second), client_state, trace_state);
             } else {
                 stats.shard_bounce_for_lwt++;
-                // FIXME: create separate smp_service_group
-                return proxy.container().invoke_on(desired_shard, default_smp_service_group(),
+                return proxy.container().invoke_on(desired_shard, ssg,
                             [cs = client_state.move_to_other_shard(),
                              mb = e.second,
                              dk = e.first.dk,
@@ -1648,7 +1646,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         }
     }
 
-    return do_batch_write(_proxy, std::move(mutation_builders), client_state, trace_state, _stats).then([] () {
+    return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, _stats).then([] () {
         // FIXME: Issue #5650: If we failed writing some of the updates,
         // need to return a list of these failed updates in UnprocessedItems
         // rather than fail the whole write (issue #5650).
@@ -2595,8 +2593,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
-        // FIXME: create separate smp_service_group
-        return container().invoke_on(*shard, default_smp_service_group(),
+        return container().invoke_on(*shard, _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]

@@ -40,6 +40,9 @@ namespace alternator {
 class executor : public peering_sharded_service<executor> {
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
+    // An smp_service_group to be used for limiting the concurrency when
+    // forwarding Alternator request between shards - if necessary for LWT.
+    smp_service_group _ssg;
 
 public:
     using client_state = service::client_state;
@@ -48,7 +51,8 @@ public:
     static constexpr auto ATTRS_COLUMN_NAME = ":attrs";
     static constexpr auto KEYSPACE_NAME_PREFIX = "alternator_";
 
-    executor(service::storage_proxy& proxy, service::migration_manager& mm) : _proxy(proxy), _mm(mm) {}
+    executor(service::storage_proxy& proxy, service::migration_manager& mm, smp_service_group ssg)
+        : _proxy(proxy), _mm(mm), _ssg(ssg) {}
 
     future<request_return_type> create_table(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request);
     future<request_return_type> describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request);

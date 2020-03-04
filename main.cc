@@ -1079,7 +1079,13 @@ int main(int ac, char** av) {
                 } catch (...) {
                     std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve alternator_address {}", cfg->alternator_address())));
                 }
-                alternator_executor.start(std::ref(proxy), std::ref(mm)).get();
+                // Create an smp_service_group to be used for limiting the
+                // concurrency when forwarding Alternator request between
+                // shards - if necessary for LWT.
+                smp_service_group_config c;
+                c.max_nonlocal_requests = 5000;
+                smp_service_group ssg = create_smp_service_group(c).get0();
+                alternator_executor.start(std::ref(proxy), std::ref(mm), ssg).get();
                 alternator_server.start(std::ref(alternator_executor)).get();
                 std::optional<uint16_t> alternator_port;
                 if (cfg->alternator_port()) {
@@ -1113,9 +1119,10 @@ int main(int ac, char** av) {
                         return server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization);
                     });
                 }).get();
-                auto stop_alternator = [] {
+                auto stop_alternator = [ssg] {
                     alternator_server.stop().get();
                     alternator_executor.stop().get();
+                    destroy_smp_service_group(ssg).get();
                 };
 
                 ss.register_client_shutdown_hook("alternator", std::move(stop_alternator));
