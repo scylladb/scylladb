@@ -81,6 +81,7 @@
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
 #include "repair/repair.hh"
+#include "service/priority_manager.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -952,6 +953,11 @@ void storage_service::bootstrap() {
 
     _gossiper.check_seen_seeds();
 
+    _db.invoke_on_all([this] (database& db) {
+        db.get_streaming_scheduling_group().set_shares(1000);
+        return engine().update_shares_for_class(service::get_local_streaming_write_priority(), 1000);
+    }).get();
+
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     if (is_repair_based_node_ops_enabled()) {
         if (db().local().is_replacing()) {
@@ -964,6 +970,12 @@ void storage_service::bootstrap() {
         // Does the actual streaming of newly replicated token ranges.
         bs.bootstrap().get();
     }
+    _db.invoke_on_all([this] (database& db) {
+        db.get_streaming_scheduling_group().set_shares(200);
+        return engine().update_shares_for_class(service::get_local_streaming_write_priority(), 200);
+    }).get();
+
+
     slogger.info("Bootstrap completed! for the tokens {}", _bootstrap_tokens);
 }
 
