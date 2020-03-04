@@ -309,11 +309,9 @@ static size_t column_index(const cql_transport::messages::result_message::rows& 
 
 template<typename Comp = std::equal_to<bytes_opt>>
 static std::vector<std::vector<bytes_opt>> to_bytes_filtered(const cql_transport::messages::result_message::rows& rows, cdc::operation op, const Comp& comp = {}) {
-    const auto op_type = data_type_for<std::underlying_type_t<cdc::operation>>();
-
     auto results = to_bytes(rows);
     auto op_index = column_index(rows, cdc::log_meta_column_name("operation"));
-    auto op_bytes = op_type->decompose(std::underlying_type_t<cdc::operation>(op));
+    auto op_bytes = operation_to_bytes(op);
 
     results.erase(std::remove_if(results.begin(), results.end(), [&](const std::vector<bytes_opt>& bo) {
         return !comp(op_bytes, bo[op_index]);
@@ -509,7 +507,6 @@ SEASTAR_THREAD_TEST_CASE(test_range_deletion) {
         auto ck_index = column_index(*rows, cdc::log_data_column_name("ck"));
         auto ck_type = int32_type;
         auto op_index = column_index(*rows, cdc::log_meta_column_name("operation"));
-        auto op_type = data_type_for<std::underlying_type_t<cdc::operation>>();
 
         size_t row_idx = 0;
 
@@ -517,7 +514,7 @@ SEASTAR_THREAD_TEST_CASE(test_range_deletion) {
             BOOST_TEST_MESSAGE(format("{}", results[row_idx][ck_index]));
             BOOST_TEST_MESSAGE(format("{}", bytes_opt(ck_type->decompose(ck))));
             BOOST_REQUIRE_EQUAL(results[row_idx][ck_index], bytes_opt(ck_type->decompose(ck)));
-            BOOST_REQUIRE_EQUAL(results[row_idx][op_index], bytes_opt(op_type->decompose(std::underlying_type_t<cdc::operation>(operation))));
+            BOOST_REQUIRE_EQUAL(results[row_idx][op_index], bytes_opt(operation_to_bytes(operation)));
             ++row_idx;
         };
 
@@ -1005,24 +1002,21 @@ SEASTAR_THREAD_TEST_CASE(test_update_insert_delete_distinction) {
         BOOST_REQUIRE_EQUAL(results.size(), 4);  // 1 insert + 2 updates + 1 row delete == 4
 
         BOOST_REQUIRE_EQUAL(results[0].size(), 1);
-        BOOST_REQUIRE_EQUAL(*results[0].front(), data_value(cdc::operation::insert).serialize_nonnull()); // log entry from (0)
+        BOOST_REQUIRE_EQUAL(*results[0].front(), cdc::operation_to_bytes(cdc::operation::insert)); // log entry from (0)
 
         BOOST_REQUIRE_EQUAL(results[1].size(), 1);
-        BOOST_REQUIRE_EQUAL(*results[1].front(), data_value(cdc::operation::update).serialize_nonnull()); // log entry from (1)
+        BOOST_REQUIRE_EQUAL(*results[1].front(), cdc::operation_to_bytes(cdc::operation::update)); // log entry from (1)
 
         BOOST_REQUIRE_EQUAL(results[2].size(), 1);
-        BOOST_REQUIRE_EQUAL(*results[2].front(), data_value(cdc::operation::update).serialize_nonnull()); // log entry from (2)
+        BOOST_REQUIRE_EQUAL(*results[2].front(), cdc::operation_to_bytes(cdc::operation::update)); // log entry from (2)
 
         BOOST_REQUIRE_EQUAL(results[3].size(), 1);
-        BOOST_REQUIRE_EQUAL(*results[3].front(), data_value(cdc::operation::row_delete).serialize_nonnull()); // log entry from (3)
+        BOOST_REQUIRE_EQUAL(*results[3].front(), cdc::operation_to_bytes(cdc::operation::row_delete)); // log entry from (3)
     }, mk_cdc_test_config()).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
     do_with_cql_env_thread([](cql_test_env& e) {
-        using oper_ut = std::underlying_type_t<cdc::operation>;
-
-        auto oper_type = data_type_for<oper_ut>();
         auto m_type = map_type_impl::get_instance(int32_type, int32_type, false);
         auto keys_type = set_type_impl::get_instance(int32_type, false);
 
@@ -1140,16 +1134,16 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
 
         {
             auto result = get_result(
-                {int32_type, int32_type, m_type, boolean_type, oper_type},
+                {int32_type, int32_type, m_type, boolean_type, utf8_type},
                 "select v1, v2, m, \"cdc$deleted_m\", \"cdc$operation\""
                 " from ks.t_scylla_cdc_log where pk = 1 allow filtering");
             BOOST_REQUIRE_EQUAL(result.size(), 7);
 
             std::vector<std::vector<data_value>> expected = {
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::partition_delete)},
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::range_delete_start_inclusive)},
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::range_delete_end_exclusive)},
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::row_delete)},
+                {int_null, int_null, map_null, bool_null, cdc::operation_to_text(cdc::operation::partition_delete)},
+                {int_null, int_null, map_null, bool_null, cdc::operation_to_text(cdc::operation::range_delete_start_inclusive)},
+                {int_null, int_null, map_null, bool_null, cdc::operation_to_text(cdc::operation::range_delete_end_exclusive)},
+                {int_null, int_null, map_null, bool_null, cdc::operation_to_text(cdc::operation::row_delete)},
 
                 // The following sequence of operations:
                 //     insert into ks.t (pk,ck,v1) values (1,0,1) using timestamp T;
@@ -1166,9 +1160,9 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
                 //        and a {3:3} cell with timestamp T + 1. Thus we merge the tombstone into the T update,
                 //        and we add a T + 1 update to express the addition of the {3:3} cell.
                 //
-                {int32_t(1), int32_t(2), map_null, true, oper_ut(cdc::operation::update)},
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::insert)},
-                {int_null, int_null, vmap({{3,3}}), bool_null, oper_ut(cdc::operation::update)},
+                {int32_t(1), int32_t(2), map_null, true, cdc::operation_to_text(cdc::operation::update)},
+                {int_null, int_null, map_null, bool_null, cdc::operation_to_text(cdc::operation::insert)},
+                {int_null, int_null, vmap({{3,3}}), bool_null, cdc::operation_to_text(cdc::operation::update)},
             };
 
             // The first 5 changes have different timestamps, so we can compare the order.

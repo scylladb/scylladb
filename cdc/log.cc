@@ -63,6 +63,36 @@ using namespace std::chrono_literals;
 
 logging::logger cdc_log("cdc");
 
+std::string_view cdc::operation_to_text(cdc::operation op) {
+    static const std::string preimage = "PREIMAGE";
+    static const std::string update = "UPDATE";
+    static const std::string insert = "INSERT";
+    static const std::string row_delete = "ROW_DELETE";
+    static const std::string partition_delete = "PARTITION_DELETE";
+    static const std::string range_delete_start_incl = "RANGE_DELETE_INCL_START";
+    static const std::string range_delete_start_excl = "RANGE_DELETE_EXCL_START";
+    static const std::string range_delete_end_incl = "RANGE_DELETE_INCL_END";
+    static const std::string range_delete_end_excl = "RANGE_DELETE_EXCL_END";
+    switch (op) {
+        case cdc::operation::pre_image: return preimage;
+        case cdc::operation::update: return update;
+        case cdc::operation::insert: return insert;
+        case cdc::operation::row_delete: return row_delete;
+        case cdc::operation::partition_delete: return partition_delete;
+        case cdc::operation::range_delete_start_inclusive: return range_delete_start_incl;
+        case cdc::operation::range_delete_start_exclusive: return range_delete_start_excl;
+        case cdc::operation::range_delete_end_inclusive: return range_delete_end_incl;
+        case cdc::operation::range_delete_end_exclusive: return range_delete_end_excl;
+    }
+    // Should never happen as compiler would complain if any operation value
+    // is not covered by the switch above.
+    throw std::runtime_error("Unknown CDC operation");
+}
+
+bytes cdc::operation_to_bytes(cdc::operation op) {
+    return utf8_type->decompose(operation_to_text(op));
+}
+
 namespace cdc {
 static schema_ptr create_log_schema(const schema&, std::optional<utils::UUID> = {});
 }
@@ -234,8 +264,6 @@ bool cdc::options::operator!=(const options& o) const {
 
 namespace cdc {
 
-using operation_native_type = std::underlying_type_t<operation>;
-
 static const sstring cdc_log_suffix = "_scylla_cdc_log";
 static const sstring cdc_meta_column_prefix = "cdc$";
 static const sstring cdc_deleted_column_prefix = cdc_meta_column_prefix + "deleted_";
@@ -297,7 +325,7 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     b.with_column(log_meta_column_name_bytes("stream_id_2"), long_type, column_kind::partition_key);
     b.with_column(log_meta_column_name_bytes("time"), timeuuid_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
-    b.with_column(log_meta_column_name_bytes("operation"), data_type_for<operation_native_type>());
+    b.with_column(log_meta_column_name_bytes("operation"), utf8_type);
     b.with_column(log_meta_column_name_bytes("ttl"), long_type);
     auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
         for (const auto& column : columns) {
@@ -509,7 +537,7 @@ private:
     }
 
     void set_operation(const clustering_key& ck, api::timestamp_type ts, operation op, mutation& m) const {
-        m.set_cell(ck, _op_col, atomic_cell::make_live(*_op_col.type, ts, _op_col.type->decompose(operation_native_type(op)), _cdc_ttl_opt));
+        m.set_cell(ck, _op_col, atomic_cell::make_live(*_op_col.type, ts, operation_to_bytes(op), _cdc_ttl_opt));
     }
 
     void set_ttl(const clustering_key& ck, api::timestamp_type ts, gc_clock::duration ttl, mutation& m) const {

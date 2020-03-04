@@ -140,4 +140,8 @@ bytes log_data_column_deleted_name_bytes(const bytes& column_name);
 seastar::sstring log_data_column_deleted_elements_name(std::string_view column_name);
 bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name);
 
+// Visible for testing
+bytes operation_to_bytes(operation);
+std::string_view operation_to_text(operation op);
+
 } // namespace cdc
