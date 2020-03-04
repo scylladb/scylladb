@@ -135,6 +135,9 @@ void cf_prop_defs::validate(const database& db) const {
     if (cdc_options && !cdc_options->empty()) {
         // Constructor throws if options are not valid
         cdc::options opts(*cdc_options);
+        if (opts.enabled() && !db.features().cluster_supports_cdc()) {
+            throw exceptions::configuration_exception("CDC not supported by the cluster");
+        }
     }
 
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
@@ -267,11 +270,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, const database& db)
     }
     auto cdc_options = get_cdc_options();
     if (cdc_options) {
-        auto opts = cdc::options(*cdc_options);
-        if (opts.enabled() && !db.features().cluster_supports_cdc()) {
-            throw exceptions::configuration_exception("CDC not supported by the cluster");
-        }
-        builder.set_cdc_options(std::move(opts));
+        builder.set_cdc_options(cdc::options(*cdc_options));
     }
 #if 0
     CachingOptions cachingOptions = getCachingOptions();
