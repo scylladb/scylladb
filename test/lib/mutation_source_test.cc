@@ -1183,6 +1183,8 @@ static void test_clustering_slices(populate_fn_ex populate) {
 }
 
 static void test_query_only_static_row(populate_fn_ex populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
     simple_schema s;
 
     auto pkeys = s.make_pkeys(1);
@@ -1227,6 +1229,8 @@ static void test_query_only_static_row(populate_fn_ex populate) {
 }
 
 static void test_query_no_clustering_ranges_no_static_columns(populate_fn_ex populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
     simple_schema s(simple_schema::with_static::no);
 
     auto pkeys = s.make_pkeys(1);
