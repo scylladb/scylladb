@@ -768,70 +768,70 @@ public:
                 }
                 ++batch_no;
             } else {
-            for (const rows_entry& r : p.clustered_rows()) {
-                auto ck_value = r.key().explode(*_schema);
+                for (const rows_entry& r : p.clustered_rows()) {
+                    auto ck_value = r.key().explode(*_schema);
 
-                std::optional<clustering_key> pikey;
-                const cql3::untyped_result_set_row * pirow = nullptr;
+                    std::optional<clustering_key> pikey;
+                    const cql3::untyped_result_set_row * pirow = nullptr;
 
-                if (rs) {
-                    for (auto& utr : *rs) {
-                        bool match = true;
-                        for (auto& c : _schema->clustering_key_columns()) {
-                            auto rv = utr.get_view(c.name_as_text());
-                            auto cv = r.key().get_component(*_schema, c.component_index());
-                            if (rv != cv) {
-                                match = false;
+                    if (rs) {
+                        for (auto& utr : *rs) {
+                            bool match = true;
+                            for (auto& c : _schema->clustering_key_columns()) {
+                                auto rv = utr.get_view(c.name_as_text());
+                                auto cv = r.key().get_component(*_schema, c.component_index());
+                                if (rv != cv) {
+                                    match = false;
+                                    break;
+                                }
+                            }
+                            if (match) {
+                                pikey = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                                set_operation(*pikey, ts, operation::pre_image, res);
+                                pirow = &utr;
+                                ++batch_no;
                                 break;
                             }
                         }
-                        if (match) {
-                            pikey = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
-                            set_operation(*pikey, ts, operation::pre_image, res);
-                            pirow = &utr;
-                            ++batch_no;
-                            break;
+                    }
+
+                    auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+
+                    size_t pos = 0;
+                    for (const auto& column : _schema->clustering_key_columns()) {
+                        assert (pos < ck_value.size());
+                        auto cdef = _log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
+                        res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
+
+                        if (pirow) {
+                            assert(pirow->has(column.name_as_text()));
+                            res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
                         }
-                    }
-                }
 
-                auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
-
-                size_t pos = 0;
-                for (const auto& column : _schema->clustering_key_columns()) {
-                    assert (pos < ck_value.size());
-                    auto cdef = _log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
-                    res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
-
-                    if (pirow) {
-                        assert(pirow->has(column.name_as_text()));
-                        res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
+                        ++pos;
                     }
 
-                    ++pos;
-                }
+                    auto ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow);
+                    const auto& marker = r.row().marker();
+                    if (marker.is_live() && marker.is_expiring()) {
+                        ttl = marker.ttl();
+                    }
 
-                auto ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow);
-                const auto& marker = r.row().marker();
-                if (marker.is_live() && marker.is_expiring()) {
-                    ttl = marker.ttl();
-                }
+                    operation cdc_op;
+                    if (r.row().deleted_at()) {
+                        cdc_op = operation::row_delete;
+                    } else if (marker.is_live()) {
+                        cdc_op = operation::insert;
+                    } else {
+                        cdc_op = operation::update;
+                    }
+                    set_operation(log_ck, ts, cdc_op, res);
 
-                operation cdc_op;
-                if (r.row().deleted_at()) {
-                    cdc_op = operation::row_delete;
-                } else if (marker.is_live()) {
-                    cdc_op = operation::insert;
-                } else {
-                    cdc_op = operation::update;
+                    if (ttl) {
+                        set_ttl(log_ck, ts, *ttl, res);
+                    }
+                    ++batch_no;
                 }
-                set_operation(log_ck, ts, cdc_op, res);
-
-                if (ttl) {
-                    set_ttl(log_ck, ts, *ttl, res);
-                }
-                ++batch_no;
-            }
             }
         }
 
