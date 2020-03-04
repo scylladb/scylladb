@@ -1001,8 +1001,8 @@ static void test_date_tiered_clustering_slicing(populate_fn_ex populate) {
     auto pkey = ss.make_pkey();
 
     mutation m1(s, pkey);
-    ss.add_static_row(m1, "s");
     m1.partition().apply(ss.new_tombstone());
+    ss.add_static_row(m1, "s");
     ss.add_row(m1, ss.make_ckey(0), "v1");
 
     mutation_source ms = populate(s, {m1}, gc_clock::now());
@@ -1458,7 +1458,7 @@ struct mutation_sets {
 };
 
 static tombstone new_tombstone() {
-    return { new_timestamp(), gc_clock::now() };
+    return { new_timestamp(), gc_clock::now() + std::chrono::hours(10) };
 }
 
 static mutation_sets generate_mutation_sets() {
@@ -1511,6 +1511,15 @@ static mutation_sets generate_mutation_sets() {
 
         {
             auto tomb = new_tombstone();
+            auto key = clustering_key_prefix::from_deeply_exploded(*s1, {data_value(bytes("ck2_0"))});
+            m1.partition().apply_row_tombstone(*s1, key, tomb);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.partition().apply_row_tombstone(*s2, key, tomb);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto tomb = new_tombstone();
             m1.partition().apply_delete(*s1, ck2, tomb);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.partition().apply_delete(*s2, ck2, tomb);
@@ -1518,13 +1527,6 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto tomb = new_tombstone();
-            auto key = clustering_key_prefix::from_deeply_exploded(*s1, {data_value(bytes("ck2_0"))});
-            m1.partition().apply_row_tombstone(*s1, key, tomb);
-            result.unequal.emplace_back(mutations{m1, m2});
-            m2.partition().apply_row_tombstone(*s2, key, tomb);
-            result.equal.emplace_back(mutations{m1, m2});
-
             // Add a row which falls under the tombstone prefix.
             auto ts = new_timestamp();
             auto key_full = clustering_key_prefix::from_deeply_exploded(*s1, {data_value(bytes("ck2_0")), data_value(bytes("ck1_1")), });
@@ -1602,7 +1604,8 @@ static mutation_sets generate_mutation_sets() {
     static constexpr auto rmg_iterations = 10;
 
     {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no, local_shard_only::yes,
+                random_mutation_generator::generate_uncompactable::yes);
         for (int i = 0; i < rmg_iterations; ++i) {
             auto m = gen();
             result.unequal.emplace_back(mutations{m, gen()}); // collision unlikely
@@ -1611,7 +1614,8 @@ static mutation_sets generate_mutation_sets() {
     }
 
     {
-        random_mutation_generator gen(random_mutation_generator::generate_counters::yes);
+        random_mutation_generator gen(random_mutation_generator::generate_counters::yes, local_shard_only::yes,
+                random_mutation_generator::generate_uncompactable::yes);
         for (int i = 0; i < rmg_iterations; ++i) {
             auto m = gen();
             result.unequal.emplace_back(mutations{m, gen()}); // collision unlikely
