@@ -341,7 +341,7 @@ SEASTAR_TEST_CASE(test_user_function_varint_return) {
         e.execute_cql("CREATE FUNCTION my_func(a int) CALLED ON NULL INPUT RETURNS varint LANGUAGE Lua AS 'return a';").get();
         auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get0();
         assert_that(res).is_rows().with_rows_ignore_order({
-            {serialized(boost::multiprecision::cpp_int(42))}
+            {serialized(utils::multiprecision_int(42))}
         });
     });
 }

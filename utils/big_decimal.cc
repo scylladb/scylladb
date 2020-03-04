@@ -26,14 +26,14 @@
 
 #include <regex>
 
-uint64_t from_varint_to_integer(const boost::multiprecision::cpp_int& varint) {
+uint64_t from_varint_to_integer(const utils::multiprecision_int& varint) {
     // The behavior CQL expects on overflow is for values to wrap
     // around. For cpp_int conversion functions, the behavior is to
     // return the largest or smallest number that the target type can
     // represent. To implement one with the other, we first mask the
     // low 64 bits, convert to a uint64_t, and then let c++ convert,
     // with possible overflow, to ToType.
-    return static_cast<uint64_t>(~static_cast<uint64_t>(0) & varint);
+    return static_cast<uint64_t>(~static_cast<uint64_t>(0) & boost::multiprecision::cpp_int(varint));
 }
 
 

@@ -210,7 +210,7 @@ static void push_big_decimal(lua_State* l, const big_decimal& v) {
     luaL_setmetatable(l, scylla_decimal_metatable_name);
 }
 
-static void push_cpp_int(lua_State* l, const boost::multiprecision::cpp_int& v) {
+static void push_cpp_int(lua_State* l, const utils::multiprecision_int& v) {
     push_big_decimal(l, big_decimal(0, v));
 }
 
@@ -268,7 +268,7 @@ static auto visit_decimal(const big_decimal &v, Func&& f) {
     const auto& dividend = v.unscaled_value();
     auto divisor = boost::multiprecision::pow(ten, v.scale());
     if (dividend % divisor == 0) {
-        return f(dividend/divisor);
+        return f(utils::multiprecision_int(boost::multiprecision::cpp_int(dividend/divisor)));
     }
     boost::multiprecision::cpp_rational r = dividend;
     r /= divisor;
@@ -279,7 +279,7 @@ GCC6_CONCEPT(
 template <typename Func>
 concept bool CanHandleLuaTypes = requires(Func f) {
     { f(*static_cast<const double*>(nullptr)) }                         -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const boost::multiprecision::cpp_int*>(nullptr)) } -> lua_visit_ret_type<Func>;
+    { f(*static_cast<const utils::multiprecision_int*>(nullptr)) }      -> lua_visit_ret_type<Func>;
     { f(*static_cast<const big_decimal*>(nullptr)) }                    -> lua_visit_ret_type<Func>;
     { f(*static_cast<const std::string_view*>(nullptr)) }               -> lua_visit_ret_type<Func>;
     { f(*static_cast<const lua_table*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
@@ -293,8 +293,8 @@ static auto visit_lua_value(lua_State* l, int index, Func&& f) {
         lua_State* l;
         int index;
         Func& f;
-        auto operator()(const long long& v) { return f(boost::multiprecision::cpp_int(v)); }
-        auto operator()(const boost::multiprecision::cpp_int& v) { return f(v); }
+        auto operator()(const long long& v) { return f(utils::multiprecision_int(v)); }
+        auto operator()(const utils::multiprecision_int& v) { return f(v); }
         auto operator()(const double& v) {
             long long v2 = v;
             if (v2 == v) {
@@ -323,7 +323,7 @@ static auto visit_lua_value(lua_State* l, int index, Func&& f) {
                 Func& f;
                 const big_decimal &d;
                 auto operator()(const double&) { return f(d); }
-                auto operator()(const boost::multiprecision::cpp_int& v) { return f(v); }
+                auto operator()(const utils::multiprecision_int& v) { return f(v); }
             };
             return visit_decimal(v, visitor{f, v});
         }
@@ -349,7 +349,7 @@ static auto visit_lua_number(lua_State* l, int index, Func&& f) {
 
 template <typename Func> static auto visit_lua_decimal(lua_State* l, int index, Func&& f) {
     return visit_lua_number(l, index, make_visitor(
-               [&f](const boost::multiprecision::cpp_int& v) { return f(big_decimal(0, v)); },
+               [&f](const utils::multiprecision_int& v) { return f(big_decimal(0, v)); },
                [&f](const auto& v) { return f(v); }
            ));
 }
@@ -447,10 +447,10 @@ static lua_slice_state load_script(const lua::runtime_config& cfg, lua::bitcode_
 using millisecond = std::chrono::duration<double, std::milli>;
 static auto now() { return std::chrono::system_clock::now(); }
 
-static boost::multiprecision::cpp_int get_varint(lua_State* l, int index) {
+static utils::multiprecision_int get_varint(lua_State* l, int index) {
     return visit_lua_number(l, index, make_visitor(
-               [](const boost::multiprecision::cpp_int& v) { return v; },
-               [](const auto& v) -> boost::multiprecision::cpp_int{
+               [](const utils::multiprecision_int& v) { return v; },
+               [](const auto& v) -> utils::multiprecision_int{
                    throw exceptions::invalid_request_exception("value is not an integer");
                }
            ));
@@ -461,7 +461,7 @@ static sstring get_string(lua_State *l, int index) {
         [] (const lua_table&) -> sstring {
             throw exceptions::invalid_request_exception("unexpected value");
         },
-        [] (const boost::multiprecision::cpp_int& p) {
+        [] (const utils::multiprecision_int& p) {
             return sstring(p.str());
         },
         [] (const auto& v) {
@@ -542,7 +542,7 @@ struct simple_date_return_visitor {
     uint32_t operator()(const T&) {
         throw exceptions::invalid_request_exception("date must be a string, integer or date table");
     }
-    uint32_t operator()(const boost::multiprecision::cpp_int& v) {
+    uint32_t operator()(const utils::multiprecision_int& v) {
         if (v > std::numeric_limits<uint32_t>::max()) {
             throw exceptions::invalid_request_exception("date value must fit in 32 bits");
         }
@@ -560,7 +560,7 @@ struct timestamp_return_visitor {
     db_clock::time_point operator()(const T&) {
         throw exceptions::invalid_request_exception("timestamp must be a string, integer or date table");
     }
-    db_clock::time_point operator()(const boost::multiprecision::cpp_int& v) {
+    db_clock::time_point operator()(const utils::multiprecision_int& v) {
         int64_t v2 = int64_t(v);
         if (v2 == v) {
             return db_clock::time_point(db_clock::duration(v2));
@@ -686,7 +686,7 @@ struct from_lua_visitor {
         }
 
         const data_type& elements_type = t.get_elements_type();
-        using table_pair = std::pair<boost::multiprecision::cpp_int, data_value>;
+        using table_pair = std::pair<utils::multiprecision_int, data_value>;
         std::vector<table_pair> pairs;
         lua_pushnil(l);
         while (lua_next(l, -2) != 0) {
@@ -702,7 +702,7 @@ struct from_lua_visitor {
         size_t num_elements = pairs.size();
         std::vector<data_value> elements;
         for (size_t i = 0; i < num_elements; ++i) {
-            if (i + 1 != pairs[i].first) {
+            if (utils::multiprecision_int(i + 1) != pairs[i].first) {
                 throw exceptions::invalid_request_exception("table is not a sequence");
             }
             elements.push_back(pairs[i].second);
@@ -837,7 +837,7 @@ struct from_lua_visitor {
                    [] (const auto&) -> int64_t {
                        throw exceptions::invalid_request_exception("time must be a string or an integer");
                    },
-                   [] (const boost::multiprecision::cpp_int& v) {
+                   [] (const utils::multiprecision_int& v) {
                        int64_t v2 = int64_t(v);
                        if (v2 == v) {
                            return v2;
@@ -872,7 +872,7 @@ uint32_t simple_date_return_visitor::operator()(const lua_table&) {
     }
     date::year_month_day ymd{date::year{table.year}, date::month{table.month}, date::day{table.day}};
     int64_t days = date::local_days(ymd).time_since_epoch().count() + (1UL << 31);
-    return (*this)(boost::multiprecision::cpp_int(days));
+    return (*this)(utils::multiprecision_int(days));
 }
 
 db_clock::time_point timestamp_return_visitor::operator()(const lua_table&) {
@@ -881,7 +881,7 @@ db_clock::time_point timestamp_return_visitor::operator()(const lua_table&) {
     boost::posix_time::time_duration time(table.hour.value_or(12), table.minute.value_or(0), table.second.value_or(0));
     boost::posix_time::ptime timestamp(date, time);
     int64_t msec = (timestamp - boost::posix_time::from_time_t(0)).total_milliseconds();
-    return (*this)(boost::multiprecision::cpp_int(msec));
+    return (*this)(utils::multiprecision_int(msec));
 }
 }
 
@@ -915,7 +915,7 @@ namespace {
 struct to_lua_visitor {
     lua_slice_state& l;
 
-    void operator()(const varint_type_impl& t, const emptyable<boost::multiprecision::cpp_int>* v) {
+    void operator()(const varint_type_impl& t, const emptyable<utils::multiprecision_int>* v) {
         push_cpp_int(l, *v);
     }
 

@@ -408,7 +408,7 @@ struct to_json_string_visitor {
             throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
         }
         auto v = t.deserialize(bv);
-        return value_cast<boost::multiprecision::cpp_int>(v).str();
+        return value_cast<utils::multiprecision_int>(v).str();
     }
 };
 }

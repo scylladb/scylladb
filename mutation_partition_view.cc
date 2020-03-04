@@ -31,6 +31,8 @@
 #include "frozen_mutation.hh"
 #include "partition_builder.hh"
 #include "converting_mutation_partition_applier.hh"
+#include "concrete_types.hh"
+#include "types/user.hh"
 
 #include "utils/UUID.hh"
 #include "serializer.hh"

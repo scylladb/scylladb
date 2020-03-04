@@ -381,47 +381,47 @@ BOOST_AUTO_TEST_CASE(test_duration_type_compare) {
 }
 
 BOOST_AUTO_TEST_CASE(test_varint) {
-    BOOST_REQUIRE(varint_type->equal(varint_type->from_string("-1"), varint_type->decompose(boost::multiprecision::cpp_int(-1))));
-    BOOST_REQUIRE(varint_type->equal(varint_type->from_string("255"), varint_type->decompose(boost::multiprecision::cpp_int(255))));
-    BOOST_REQUIRE(varint_type->equal(varint_type->from_string("1"), varint_type->decompose(boost::multiprecision::cpp_int(1))));
-    BOOST_REQUIRE(varint_type->equal(varint_type->from_string("0"), varint_type->decompose(boost::multiprecision::cpp_int(0))));
+    BOOST_REQUIRE(varint_type->equal(varint_type->from_string("-1"), varint_type->decompose(utils::multiprecision_int(-1))));
+    BOOST_REQUIRE(varint_type->equal(varint_type->from_string("255"), varint_type->decompose(utils::multiprecision_int(255))));
+    BOOST_REQUIRE(varint_type->equal(varint_type->from_string("1"), varint_type->decompose(utils::multiprecision_int(1))));
+    BOOST_REQUIRE(varint_type->equal(varint_type->from_string("0"), varint_type->decompose(utils::multiprecision_int(0))));
 
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("-1"))),
-                      boost::multiprecision::cpp_int(-1));
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("255"))),
-                      boost::multiprecision::cpp_int(255));
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("1"))),
-                      boost::multiprecision::cpp_int(1));
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("0"))),
-                      boost::multiprecision::cpp_int(0));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(varint_type->from_string("-1"))),
+                      utils::multiprecision_int(-1));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(varint_type->from_string("255"))),
+                      utils::multiprecision_int(255));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(varint_type->from_string("1"))),
+                      utils::multiprecision_int(1));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(varint_type->from_string("0"))),
+                      utils::multiprecision_int(0));
 
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("-123"))),
-                      boost::multiprecision::cpp_int(-123));
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("123"))),
-                      boost::multiprecision::cpp_int(123));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(varint_type->from_string("-123"))),
+                      utils::multiprecision_int(-123));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(varint_type->from_string("123"))),
+                      utils::multiprecision_int(123));
 
     BOOST_REQUIRE(varint_type->equal(from_hex("000000"), from_hex("00")));
     BOOST_REQUIRE(varint_type->equal(from_hex("ffffff"), from_hex("ff")));
     BOOST_REQUIRE(varint_type->equal(from_hex("001000"), from_hex("1000")));
     BOOST_REQUIRE(varint_type->equal(from_hex("ff9000"), from_hex("9000")));
 
-    BOOST_REQUIRE(varint_type->equal(from_hex("ff"), varint_type->decompose(boost::multiprecision::cpp_int(-1))));
+    BOOST_REQUIRE(varint_type->equal(from_hex("ff"), varint_type->decompose(utils::multiprecision_int(-1))));
 
-    BOOST_REQUIRE(varint_type->equal(from_hex("00ff"), varint_type->decompose(boost::multiprecision::cpp_int(255))));
+    BOOST_REQUIRE(varint_type->equal(from_hex("00ff"), varint_type->decompose(utils::multiprecision_int(255))));
 
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("ff"))), boost::multiprecision::cpp_int(-1));
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00ff"))), boost::multiprecision::cpp_int(255));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(from_hex("ff"))), utils::multiprecision_int(-1));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(from_hex("00ff"))), utils::multiprecision_int(255));
 
-    BOOST_REQUIRE(!varint_type->equal(from_hex("00ff"), varint_type->decompose(boost::multiprecision::cpp_int(-1))));
-    BOOST_REQUIRE(!varint_type->equal(from_hex("ff"), varint_type->decompose(boost::multiprecision::cpp_int(255))));
+    BOOST_REQUIRE(!varint_type->equal(from_hex("00ff"), varint_type->decompose(utils::multiprecision_int(-1))));
+    BOOST_REQUIRE(!varint_type->equal(from_hex("ff"), varint_type->decompose(utils::multiprecision_int(255))));
 
-    BOOST_REQUIRE(varint_type->equal(from_hex("00deadbeef"), varint_type->decompose(boost::multiprecision::cpp_int("0xdeadbeef"))));
-    BOOST_REQUIRE(varint_type->equal(from_hex("00ffffffffffffffffffffffffffffffff"), varint_type->decompose(boost::multiprecision::cpp_int("340282366920938463463374607431768211455"))));
+    BOOST_REQUIRE(varint_type->equal(from_hex("00deadbeef"), varint_type->decompose(utils::multiprecision_int("0xdeadbeef"))));
+    BOOST_REQUIRE(varint_type->equal(from_hex("00ffffffffffffffffffffffffffffffff"), varint_type->decompose(utils::multiprecision_int("340282366920938463463374607431768211455"))));
 
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00deadbeef"))), boost::multiprecision::cpp_int("0xdeadbeef"));
-    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00ffffffffffffffffffffffffffffffff"))), boost::multiprecision::cpp_int("340282366920938463463374607431768211455"));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(from_hex("00deadbeef"))), utils::multiprecision_int("0xdeadbeef"));
+    BOOST_CHECK_EQUAL(value_cast<utils::multiprecision_int>(varint_type->deserialize(from_hex("00ffffffffffffffffffffffffffffffff"))), utils::multiprecision_int("340282366920938463463374607431768211455"));
 
-    BOOST_REQUIRE_EQUAL(from_hex("80000000"), varint_type->decompose(boost::multiprecision::cpp_int(-2147483648)));
+    BOOST_REQUIRE_EQUAL(from_hex("80000000"), varint_type->decompose(utils::multiprecision_int(-2147483648)));
 
     test_parsing_fails(varint_type, "1A");
 }
