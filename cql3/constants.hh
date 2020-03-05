@@ -124,7 +124,7 @@ public:
             // calling in lexer setText() with an empty string and not calling
             // setText() at all.
             if (text.size() == 1 && text[0] == '\xFF') {
-                text.reset();
+                text = {};
             }
             return ::make_shared<literal>(type::STRING, text);
         }
