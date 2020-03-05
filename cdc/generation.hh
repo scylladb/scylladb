@@ -62,14 +62,9 @@ namespace locator {
 namespace cdc {
 
 class stream_id final {
-    /* Currently stream IDs are just pairs of ints without any particular meaning given to these ints.
-     * After per-table partitioners are implemented, the first int will be the token
-     * (using a "take-the-first-int" partitioner) and the second int will be there to guarantee uniqueness
-     * of streams across different CDC generations. */
-    int64_t _first;
-    int64_t _second;
+    bytes _value;
 public:
-    stream_id();
+    stream_id() = default;
     stream_id(int64_t, int64_t);
     bool is_set() const;
     bool operator==(const stream_id&) const;

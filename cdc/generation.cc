@@ -23,6 +23,7 @@
 #include <random>
 #include <unordered_set>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/byteorder.hh>
 
 #include "keys.hh"
 #include "schema_builder.hh"
@@ -54,32 +55,33 @@ namespace cdc {
 extern const api::timestamp_clock::duration generation_leeway =
     std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::seconds(5));
 
-stream_id::stream_id()
-    : _first(-1), _second(-1) {}
-
 stream_id::stream_id(int64_t first, int64_t second)
-    : _first(first)
-    , _second(second) {}
+    : _value(bytes::initialized_later(), 2 * sizeof(int64_t))
+{
+    seastar::write_le(reinterpret_cast<char*>(_value.begin()), first);
+    seastar::write_le(reinterpret_cast<char*>(_value.begin()) + sizeof(int64_t), second);
+}
 
 bool stream_id::is_set() const {
-    return _first != -1 || _second != -1;
+    return !_value.empty();
 }
 
 bool stream_id::operator==(const stream_id& o) const {
-    return _first == o._first && _second == o._second;
+    return _value == o._value;
 }
 
 int64_t stream_id::first() const {
-    return _first;
+    assert(_value.size() == 2 * sizeof(int64_t));
+    return seastar::read_le<int64_t>(reinterpret_cast<const char*>(_value.begin()));
 }
 
 int64_t stream_id::second() const {
-    return _second;
+    assert(_value.size() == 2 * sizeof(int64_t));
+    return seastar::read_le<int64_t>(reinterpret_cast<const char*>(_value.begin()) + sizeof(int64_t));
 }
 
 partition_key stream_id::to_partition_key(const schema& log_schema) const {
-    return partition_key::from_single_value(log_schema,
-            long_type->decompose(_first) + long_type->decompose(_second));
+    return partition_key::from_single_value(log_schema, _value);
 }
 
 bool token_range_description::operator==(const token_range_description& o) const {
