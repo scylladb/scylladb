@@ -45,6 +45,7 @@
 #include "test/lib/make_random_string.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/log.hh"
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -1440,19 +1441,19 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
             shared_sstable sst = make_sstable(env, s, dir.path().string(), muts, test_sstables_manager.configure_writer(), version);
 
             auto max_est = sst->get_estimated_key_count();
-            BOOST_TEST_MESSAGE(format("count = {}", count));
-            BOOST_TEST_MESSAGE(format("est = {}", max_est));
+            testlog.trace("count = {}", count);
+            testlog.trace("est = {}", max_est);
 
             {
                 auto est = sst->estimated_keys_for_range(dht::token_range::make_open_ended_both_sides());
-                BOOST_TEST_MESSAGE(format("est([-inf; +inf]) = {}", est));
+                testlog.trace("est([-inf; +inf]) = {}", est);
                 BOOST_REQUIRE_EQUAL(est, sst->get_estimated_key_count());
             }
 
             for (int size : {1, 64, 256, 512, 1024, 4096, count}) {
                 auto r = dht::token_range::make(pks[0].token(), pks[size - 1].token());
                 auto est = sst->estimated_keys_for_range(r);
-                BOOST_TEST_MESSAGE(format("est([0; {}] = {}", size - 1, est));
+                testlog.trace("est([0; {}] = {}", size - 1, est);
                 BOOST_REQUIRE_GE(est, size);
                 BOOST_REQUIRE_LE(est, max_est);
             }
@@ -1462,7 +1463,7 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
                 auto upper = std::min(count - 1, lower + size - 1);
                 auto r = dht::token_range::make(pks[lower].token(), pks[upper].token());
                 auto est = sst->estimated_keys_for_range(r);
-                BOOST_TEST_MESSAGE(format("est([{}; {}]) = {}", lower, upper, est));
+                testlog.trace("est([{}; {}]) = {}", lower, upper, est);
                 BOOST_REQUIRE_GE(est, upper - lower + 1);
                 BOOST_REQUIRE_LE(est, max_est);
             }
@@ -1470,14 +1471,14 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
             {
                 auto r = dht::token_range::make(all_pks[0].token(), all_pks[0].token());
                 auto est = sst->estimated_keys_for_range(r);
-                BOOST_TEST_MESSAGE(format("est(non-overlapping to the left) = {}", est));
+                testlog.trace("est(non-overlapping to the left) = {}", est);
                 BOOST_REQUIRE_EQUAL(est, 0);
             }
 
             {
                 auto r = dht::token_range::make(all_pks[all_pks.size() - 1].token(), all_pks[all_pks.size() - 1].token());
                 auto est = sst->estimated_keys_for_range(r);
-                BOOST_TEST_MESSAGE(format("est(non-overlapping to the right) = {}", est));
+                testlog.trace("est(non-overlapping to the right) = {}", est);
                 BOOST_REQUIRE_EQUAL(est, 0);
             }
         }
@@ -1561,7 +1562,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
     auto large_allocs_after = memory::stats().large_allocations();
     auto duration = std::chrono::steady_clock::now() - t0;
 
-    BOOST_TEST_MESSAGE(format("Read took {:d} us", duration / 1us));
+    testlog.trace("Read took {:d} us", duration / 1us);
 
     assert_that(actual).is_equal_to(expected);
     BOOST_REQUIRE_EQUAL(large_allocs_after - large_allocs_before, 0);

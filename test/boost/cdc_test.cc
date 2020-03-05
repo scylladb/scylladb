@@ -29,6 +29,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/log.hh"
 #include "transport/messages/result_message.hh"
 
 #include "types.hh"
@@ -39,8 +40,6 @@
 #include "types/user.hh"
 
 using namespace std::string_literals;
-
-static logging::logger tlog("cdc_test");
 
 static cql_test_config mk_cdc_test_config() {
     shared_ptr<db::config> cfg(make_shared<db::config>());
@@ -134,7 +133,7 @@ SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
 
 SEASTAR_THREAD_TEST_CASE(test_generate_timeuuid) {
     auto seed = std::random_device{}();
-    tlog.info("test_generate_timeuuid seed: {}", seed);
+    testlog.info("test_generate_timeuuid seed: {}", seed);
 
     std::mt19937 rnd_engine(seed);
     std::uniform_int_distribution<api::timestamp_type> dist(1505959942168984, 1649959942168984);
@@ -217,7 +216,7 @@ SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_
 SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         auto assert_unauthorized = [&e] (const sstring& stmt) {
-            BOOST_TEST_MESSAGE(format("Must throw unauthorized_exception: {}", stmt));
+            testlog.info("Must throw unauthorized_exception: {}", stmt);
             BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
         };
 
@@ -262,7 +261,7 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         auto test_table = [&e] (const sstring& table_name) {
             auto assert_unauthorized = [&e] (const sstring& stmt) {
-                BOOST_TEST_MESSAGE(format("Must throw unauthorized_exception: {}", stmt));
+                testlog.info("Must throw unauthorized_exception: {}", stmt);
                 BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
             };
 
@@ -578,8 +577,8 @@ SEASTAR_THREAD_TEST_CASE(test_range_deletion) {
         size_t row_idx = 0;
 
         auto check_row = [&](int32_t ck, cdc::operation operation) {
-            BOOST_TEST_MESSAGE(format("{}", results[row_idx][ck_index]));
-            BOOST_TEST_MESSAGE(format("{}", bytes_opt(ck_type->decompose(ck))));
+            testlog.trace("{}", results[row_idx][ck_index]);
+            testlog.trace("{}", bytes_opt(ck_type->decompose(ck)));
             BOOST_REQUIRE_EQUAL(results[row_idx][ck_index], bytes_opt(ck_type->decompose(ck)));
             BOOST_REQUIRE_EQUAL(results[row_idx][op_index], bytes_opt(op_type->decompose(std::underlying_type_t<cdc::operation>(operation))));
             ++row_idx;
@@ -625,7 +624,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
 SEASTAR_THREAD_TEST_CASE(test_cdc_across_shards) {
     do_with_cql_env_thread([](cql_test_env& e) {
         if (smp::count < 2) {
-            tlog.warn("This test case requires at least 2 shards");
+            testlog.warn("This test case requires at least 2 shards");
             return;
         }
         smp::submit_to(1, [&e] {

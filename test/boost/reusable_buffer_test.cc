@@ -27,12 +27,13 @@
 #include <boost/range/algorithm/copy.hpp>
 
 #include "test/lib/random_utils.hh"
+#include "test/lib/log.hh"
 
 BOOST_AUTO_TEST_CASE(test_get_linearized_view) {
     utils::reusable_buffer buffer;
 
     auto test = [&buffer] (size_t n) {
-        BOOST_TEST_MESSAGE("Testing buffer size " << n);
+        testlog.info("Testing buffer size {}", n);
         auto original = tests::random::get_bytes(n);
 
         bytes_ostream bo;
@@ -76,8 +77,8 @@ BOOST_AUTO_TEST_CASE(test_make_buffer) {
     utils::reusable_buffer buffer;
 
     auto test = [&buffer] (size_t maximum, size_t actual) {
-        BOOST_TEST_MESSAGE("Testing maximum buffer size " << maximum << ", actual: " << actual);
-        
+        testlog.info("Testing maximum buffer size {}, actual: {} ", maximum, actual);
+
         bytes original;
         auto make_buffer_fn = [&] (bytes_mutable_view view) {
             original = tests::random::get_bytes(actual);

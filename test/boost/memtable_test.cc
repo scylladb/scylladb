@@ -36,6 +36,7 @@
 #include "flat_mutation_reader.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/log.hh"
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
@@ -132,7 +133,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                     mut.partition().compact_for_compaction(*mut.schema(), always_gc, now);
                 }
 
-                BOOST_TEST_MESSAGE("Simple read");
+                testlog.info("Simple read");
                 auto mt = make_memtable(mgr, tbl_stats, muts);
 
                 assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
@@ -142,7 +143,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                     .produces_compacted(compacted_muts[3], now)
                     .produces_end_of_stream();
 
-                BOOST_TEST_MESSAGE("Read with next_partition() calls between partition");
+                testlog.info("Read with next_partition() calls between partition");
                 mt = make_memtable(mgr, tbl_stats, muts);
                 assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
                     .next_partition()
@@ -156,7 +157,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                     .next_partition()
                     .produces_end_of_stream();
 
-                BOOST_TEST_MESSAGE("Read with next_partition() calls inside partitions");
+                testlog.info("Read with next_partition() calls inside partitions");
                 mt = make_memtable(mgr, tbl_stats, muts);
                 assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
                     .produces_compacted(compacted_muts[0], now)

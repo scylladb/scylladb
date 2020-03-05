@@ -874,6 +874,7 @@ headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
 scylla_tests_generic_dependencies = [
     'test/lib/cql_test_env.cc',
     'test/lib/test_services.cc',
+    'test/lib/log.cc',
 ]
 
 scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependencies + [
@@ -965,7 +966,13 @@ deps['test/boost/sstable_test'] += ['test/lib/sstable_utils.cc', 'test/lib/norma
 deps['test/boost/sstable_datafile_test'] += ['test/lib/sstable_utils.cc', 'test/lib/normalizing_reader.cc']
 deps['test/boost/mutation_reader_test'] += ['test/lib/sstable_utils.cc']
 
-deps['test/boost/bytes_ostream_test'] = ['test/boost/bytes_ostream_test.cc', 'utils/managed_bytes.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
+deps['test/boost/bytes_ostream_test'] = [
+    "test/boost/bytes_ostream_test.cc",
+    "utils/managed_bytes.cc",
+    "utils/logalloc.cc",
+    "utils/dynamic_bitset.cc",
+    "test/lib/log.cc",
+]
 deps['test/boost/input_stream_test'] = ['test/boost/input_stream_test.cc']
 deps['test/boost/UUID_test'] = ['utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 'utils/uuid.cc', 'utils/managed_bytes.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc', 'hashers.cc']
 deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test/boost/murmur_hash_test.cc']
@@ -976,12 +983,18 @@ deps['test/perf/perf_fast_forward'] += ['release.cc']
 deps['test/perf/perf_simple_query'] += ['release.cc']
 deps['test/boost/meta_test'] = ['test/boost/meta_test.cc']
 deps['test/manual/imr_test'] = ['test/manual/imr_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
-deps['test/boost/reusable_buffer_test'] = ['test/boost/reusable_buffer_test.cc']
+deps['test/boost/reusable_buffer_test'] = [
+    "test/boost/reusable_buffer_test.cc",
+    "test/lib/log.cc",
+]
 deps['test/boost/utf8_test'] = ['utils/utf8.cc', 'test/boost/utf8_test.cc']
 deps['test/boost/small_vector_test'] = ['test/boost/small_vector_test.cc']
 deps['test/boost/multishard_mutation_query_test'] += ['test/boost/test_table.cc']
 deps['test/boost/vint_serialization_test'] = ['test/boost/vint_serialization_test.cc', 'vint-serialization.cc', 'bytes.cc']
-deps['test/boost/linearizing_input_stream_test'] = ['test/boost/linearizing_input_stream_test.cc']
+deps['test/boost/linearizing_input_stream_test'] = [
+    "test/boost/linearizing_input_stream_test.cc",
+    "test/lib/log.cc",
+]
 
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 

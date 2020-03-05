@@ -26,6 +26,7 @@
 #include "flat_mutation_reader.hh"
 #include "mutation_assertions.hh"
 #include "schema.hh"
+#include "test/lib/log.hh"
 
 // Intended to be called in a seastar thread
 class flat_reader_assertions {
@@ -53,7 +54,7 @@ public:
 
     flat_reader_assertions& produces_partition_start(const dht::decorated_key& dk,
                                                      std::optional<tombstone> tomb = std::nullopt) {
-        BOOST_TEST_MESSAGE(format("Expecting partition start with key {}", dk));
+        testlog.trace("Expecting partition start with key {}", dk);
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected: partition start with key {}, got end of stream", dk));
@@ -72,7 +73,7 @@ public:
     }
 
     flat_reader_assertions& produces_static_row() {
-        BOOST_TEST_MESSAGE(format("Expecting static row"));
+        testlog.trace("Expecting static row");
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL("Expected static row, got end of stream");
@@ -84,7 +85,7 @@ public:
     }
 
     flat_reader_assertions& produces_row_with_key(const clustering_key& ck, std::optional<api::timestamp_type> active_range_tombstone = std::nullopt) {
-        BOOST_TEST_MESSAGE(format("Expect {}", ck));
+        testlog.trace("Expect {}", ck);
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected row with key {}, but got end of stream", ck));
@@ -108,7 +109,7 @@ public:
                 if (!range.overlaps(*_reader.schema(), next->as_range_tombstone().position(), next->as_range_tombstone().end_position())) {
                     break;
                 }
-                BOOST_TEST_MESSAGE(format("Received range tombstone: {}", mutation_fragment::printer(*_reader.schema(), *next)));
+                testlog.trace("Received range tombstone: {}", mutation_fragment::printer(*_reader.schema(), *next));
                 range = position_range(position_in_partition(next->position()), range.end());
                 _tombstones.apply(*_reader.schema(), _reader(db::no_timeout).get0()->as_range_tombstone());
             } else if (next->is_clustering_row() && next->as_clustering_row().empty()) {
@@ -118,7 +119,7 @@ public:
                 // There is no difference between an empty row and a row that doesn't exist.
                 // While readers that emit spurious empty rows may be wasteful, it is not
                 // incorrect to do so, so let's ignore them.
-                BOOST_TEST_MESSAGE(format("Received empty clustered row: {}", mutation_fragment::printer(*_reader.schema(), *next)));
+                testlog.trace("Received empty clustered row: {}", mutation_fragment::printer(*_reader.schema(), *next));
                 range = position_range(position_in_partition(next->position()), range.end());
                 _reader(db::no_timeout).get();
             } else {
@@ -140,7 +141,7 @@ public:
     };
 
     flat_reader_assertions& produces_static_row(const std::vector<expected_column>& columns) {
-        BOOST_TEST_MESSAGE(format("Expecting static row"));
+        testlog.trace("Expecting static row");
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL("Expected static row, got end of stream");
@@ -170,7 +171,7 @@ public:
     }
 
     flat_reader_assertions& produces_row(const clustering_key& ck, const std::vector<expected_column>& columns) {
-        BOOST_TEST_MESSAGE(format("Expect {}", ck));
+        testlog.trace("Expect {}", ck);
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected row with key {}, but got end of stream", ck));
@@ -209,7 +210,7 @@ public:
     flat_reader_assertions& produces_row(const clustering_key& ck,
                                          const std::vector<column_id>& column_ids,
                                          const std::vector<assert_function>& column_assert) {
-        BOOST_TEST_MESSAGE(format("Expect {}", ck));
+        testlog.trace("Expect {}", ck);
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected row with key {}, but got end of stream", ck));
@@ -238,7 +239,7 @@ public:
 
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
     flat_reader_assertions& produces_range_tombstone(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges = {}) {
-        BOOST_TEST_MESSAGE(format("Expect {}", rt));
+        testlog.trace("Expect {}", rt);
         auto mfo = read_next();
         if (!mfo) {
             BOOST_FAIL(format("Expected range tombstone {}, but got end of stream", rt));
@@ -273,7 +274,7 @@ public:
     }
 
     flat_reader_assertions& produces_partition_end() {
-        BOOST_TEST_MESSAGE("Expecting partition end");
+        testlog.trace("Expecting partition end");
         auto mfopt = read_next();
         if (!mfopt) {
             BOOST_FAIL(format("Expected partition end but got end of stream"));
@@ -300,7 +301,7 @@ public:
     }
 
     flat_reader_assertions& produces_end_of_stream() {
-        BOOST_TEST_MESSAGE("Expecting end of stream");
+        testlog.trace("Expecting end of stream");
         auto mfopt = read_next();
         if (bool(mfopt)) {
             BOOST_FAIL(format("Expected end of stream, got {}", mutation_fragment::printer(*_reader.schema(), *mfopt)));
@@ -364,7 +365,7 @@ public:
     }
 
     flat_reader_assertions& produces_eos_or_empty_mutation() {
-        BOOST_TEST_MESSAGE("Expecting eos or empty mutation");
+        testlog.trace("Expecting eos or empty mutation");
         auto mo = read_mutation_from_flat_mutation_reader(_reader, db::no_timeout).get0();
         if (mo) {
             if (!mo->partition().empty()) {
@@ -412,26 +413,26 @@ public:
     }
 
     flat_reader_assertions& fast_forward_to(const dht::partition_range& pr) {
-        BOOST_TEST_MESSAGE(format("Fast forward to partition range: {}", pr));
+        testlog.trace("Fast forward to partition range: {}", pr);
         _pr = pr;
         _reader.fast_forward_to(_pr, db::no_timeout).get();
         return *this;
     }
 
     flat_reader_assertions& next_partition() {
-        BOOST_TEST_MESSAGE("Skip to next partition");
+        testlog.trace("Skip to next partition");
         _reader.next_partition();
         return *this;
     }
 
     flat_reader_assertions& fast_forward_to(position_range pr) {
-        BOOST_TEST_MESSAGE(format("Fast forward to clustering range: {}", pr));
+        testlog.trace("Fast forward to clustering range: {}", pr);
         _reader.fast_forward_to(std::move(pr), db::no_timeout).get();
         return *this;
     }
 
     flat_reader_assertions& fast_forward_to(const clustering_key& ck1, const clustering_key& ck2) {
-        BOOST_TEST_MESSAGE(format("Fast forward to clustering range: [{}, {})", ck1, ck2));
+        testlog.trace("Fast forward to clustering range: [{}, {})", ck1, ck2);
         return fast_forward_to(position_range{
             position_in_partition(position_in_partition::clustering_row_tag_t(), ck1),
             position_in_partition(position_in_partition::clustering_row_tag_t(), ck2)

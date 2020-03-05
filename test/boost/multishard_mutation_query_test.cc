@@ -29,12 +29,11 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/test_table.hh"
+#include "test/lib/log.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 
 #include <experimental/source_location>
-
-logging::logger tlog("multishard_mutation_query_test");
 
 const sstring KEYSPACE_NAME = "multishard_mutation_query_test";
 
@@ -49,7 +48,7 @@ static uint64_t aggregate_querier_cache_stat(distributed<database>& db, uint64_t
 
 static void check_cache_population(distributed<database>& db, size_t queriers,
         std::experimental::source_location sl = std::experimental::source_location::current()) {
-    BOOST_TEST_MESSAGE(format("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line()));
+    testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
     parallel_for_each(boost::irange(0u, smp::count), [queriers, &db] (unsigned shard) {
         return db.invoke_on(shard, [queriers] (database& local_db) {
@@ -61,7 +60,7 @@ static void check_cache_population(distributed<database>& db, size_t queriers,
 
 static void require_eventually_empty_caches(distributed<database>& db,
         std::experimental::source_location sl = std::experimental::source_location::current()) {
-    BOOST_TEST_MESSAGE(format("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line()));
+    testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
     auto aggregated_population_is_zero = [&] () mutable {
         return aggregate_querier_cache_stat(db, &query::querier_cache::stats::population) == 0;
@@ -228,7 +227,7 @@ void check_results_are_equal(std::vector<mutation>& results1, std::vector<mutati
     boost::sort(results1, mut_less);
     boost::sort(results2, mut_less);
     for (unsigned i = 0; i < results1.size(); ++i) {
-        BOOST_TEST_MESSAGE(format("Comparing mutation #{:d}", i));
+        testlog.trace("Comparing mutation #{:d}", i);
         assert_that(results2[i]).is_equal_to(results1[i]);
     }
 }
@@ -440,7 +439,7 @@ static bool validate_payload(const schema& schema, data::value_view payload_view
     const size_t actual_size = payload_view.size_bytes();
 
     if (head.size != actual_size) {
-        tlog.error("Validating payload for pk={}, ck={} failed, sizes differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), head.size,
+        testlog.error("Validating payload for pk={}, ck={} failed, sizes differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), head.size,
                 actual_size);
         return false;
     }
@@ -451,14 +450,14 @@ static bool validate_payload(const schema& schema, data::value_view payload_view
 
     auto stored_pk = partition_key::from_exploded(schema, ser::deserialize(istream, boost::type<std::vector<bytes>>{}));
     if (!stored_pk.equal(schema, pk)) {
-        tlog.error("Validating payload for pk={}, ck={} failed, pks differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), stored_pk, pk);
+        testlog.error("Validating payload for pk={}, ck={} failed, pks differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), stored_pk, pk);
         return false;
     }
 
     if (bool(ck) != head.has_ck) {
         const auto stored = head.has_ck ? "clustering" : "static";
         const auto actual = ck ? "clustering" : "static";
-        tlog.error("Validating payload for pk={}, ck={} failed, row types differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), stored, actual);
+        testlog.error("Validating payload for pk={}, ck={} failed, row types differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), stored, actual);
         return false;
     }
 
@@ -468,7 +467,7 @@ static bool validate_payload(const schema& schema, data::value_view payload_view
 
     auto stored_ck = clustering_key::from_exploded(schema, ser::deserialize(istream, boost::type<std::vector<bytes>>{}));
     if (!stored_ck.equal(schema, *ck)) {
-        tlog.error("Validating payload for pk={}, ck={} failed, cks differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), stored_ck, *ck);
+        testlog.error("Validating payload for pk={}, ck={} failed, cks differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), stored_ck, *ck);
         return false;
     }
 
@@ -477,7 +476,7 @@ static bool validate_payload(const schema& schema, data::value_view payload_view
 
 template <typename RandomEngine>
 static test::population_description create_fuzzy_test_table(cql_test_env& env, RandomEngine& rnd_engine) {
-    tlog.info("Generating combinations...");
+    testlog.info("Generating combinations...");
 
     const std::optional<std::uniform_int_distribution<int>> static_row_configurations[] = {
         std::nullopt,
@@ -583,7 +582,7 @@ static test::population_description create_fuzzy_test_table(cql_test_env& env, R
     const auto partition_count = boost::accumulate(partition_configs, size_t(0),
             [] (size_t c, const test::partition_configuration& part_config) { return c + part_config.count; });
 
-    tlog.info("Done. Generated {} combinations, {} partitions in total.", partition_configs.size(), partition_count);
+    testlog.info("Done. Generated {} combinations, {} partitions in total.", partition_configs.size(), partition_count);
 
     return test::create_test_table(env, KEYSPACE_NAME, "fuzzy_test", rnd_engine(), std::move(partition_configs), &make_payload);
 }
@@ -715,13 +714,13 @@ validate_result_size(size_t i, schema_ptr schema, const std::vector<mutation>& r
         std::vector<dht::decorated_key> diff;
         std::set_difference(actual.cbegin(), actual.cend(), expected.cbegin(), expected.cend(), std::back_inserter(diff),
                 dht::decorated_key::less_comparator(schema));
-        tlog.error("[scan#{}]: got {} more partitions than expected, extra partitions: {}", i, diff.size(), diff);
+        testlog.error("[scan#{}]: got {} more partitions than expected, extra partitions: {}", i, diff.size(), diff);
         BOOST_FAIL(format("Got {} more partitions than expected", diff.size()));
     } else if (results.size() < expected_partitions.size()) {
         std::vector<dht::decorated_key> diff;
         std::set_difference(expected.cbegin(), expected.cend(), actual.cbegin(), actual.cend(), std::back_inserter(diff),
                 dht::decorated_key::less_comparator(schema));
-        tlog.error("[scan#{}]: got {} less partitions than expected, missing partitions: {}", i, diff.size(), diff);
+        testlog.error("[scan#{}]: got {} less partitions than expected, missing partitions: {}", i, diff.size(), diff);
         BOOST_FAIL(format("Got {} less partitions than expected", diff.size()));
     }
 }
@@ -779,7 +778,7 @@ struct with_schema_wrapper {
 };
 
 static void validate_result(size_t i, const mutation& result_mut, const expected_partition& expected_part) {
-    tlog.trace("[scan#{}]: validating {}: has_static_row={}, live_rows={}, dead_rows={}", i, expected_part.dkey, expected_part.has_static_row,
+    testlog.trace("[scan#{}]: validating {}: has_static_row={}, live_rows={}, dead_rows={}", i, expected_part.dkey, expected_part.has_static_row,
             expected_part.live_rows, expected_part.dead_rows);
 
     auto& schema = *result_mut.schema();
@@ -808,14 +807,14 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
             BOOST_REQUIRE(exp_dead_it != exp_dead_end);
         }
 
-        tlog.trace("[scan#{}]: validating {}/{}: is_live={}", i, expected_part.dkey, res_it->key(), is_live);
+        testlog.trace("[scan#{}]: validating {}/{}: is_live={}", i, expected_part.dkey, res_it->key(), is_live);
 
         if (is_live) {
             BOOST_CHECK_EQUAL(wrapper(res_it->key()), wrapper(*exp_live_it++));
         } else {
             // FIXME: Only a fraction of the dead rows is present in the result.
             if (!res_it->key().equal(schema, *exp_dead_it)) {
-                tlog.trace("[scan#{}]: validating {}/{}: dead row in the result is not the expected one: {} != {}", i, expected_part.dkey,
+                testlog.trace("[scan#{}]: validating {}/{}: dead row in the result is not the expected one: {} != {}", i, expected_part.dkey,
                         res_it->key(), res_it->key(), *exp_dead_it);
             }
 
@@ -827,7 +826,7 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
                 });
                 BOOST_CHECK(it != exp_dead_it);
 
-                tlog.trace("[scan#{}]: validating {}/{}: skipped over {} expected dead rows", i, expected_part.dkey,
+                testlog.trace("[scan#{}]: validating {}/{}: skipped over {} expected dead rows", i, expected_part.dkey,
                         res_it->key(), std::distance(exp_dead_it, it));
                 exp_dead_it = it;
             }
@@ -841,7 +840,7 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
     // results in lock-step, both have reached the end.
     BOOST_CHECK(res_it == res_end);
     if (res_it != res_end) {
-        tlog.error("[scan#{}]: validating {} failed: result contains unexpected trailing rows: {}", i, expected_part.dkey,
+        testlog.error("[scan#{}]: validating {} failed: result contains unexpected trailing rows: {}", i, expected_part.dkey,
                 boost::copy_range<std::vector<clustering_key>>(
                         boost::iterator_range<mutation_partition::rows_type::const_iterator>(res_it, res_end)
                         | boost::adaptors::transformed([] (const rows_entry& e) { return e.key(); })));
@@ -849,13 +848,13 @@ static void validate_result(size_t i, const mutation& result_mut, const expected
 
     BOOST_CHECK(exp_live_it == exp_live_end);
     if (exp_live_it != exp_live_end) {
-        tlog.error("[scan#{}]: validating {} failed: {} expected live rows missing from result", i, expected_part.dkey,
+        testlog.error("[scan#{}]: validating {} failed: {} expected live rows missing from result", i, expected_part.dkey,
                 std::distance(exp_live_it, exp_live_end));
     }
 
     // FIXME: see note about dead rows above.
     if (exp_dead_it != exp_dead_end) {
-        tlog.trace("[scan#{}]: validating {}: {} expected dead rows missing from result", i, expected_part.dkey,
+        testlog.trace("[scan#{}]: validating {}: {} expected dead rows missing from result", i, expected_part.dkey,
                 std::distance(exp_dead_it, exp_dead_end));
     }
 }
@@ -884,7 +883,7 @@ run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<database>& db, 
 
     const auto is_stateful = stateful_query(std::uniform_int_distribution<int>(0, 3)(rnd_engine));
 
-    tlog.debug("[scan#{}]: seed={}, is_stateful={}, prange={}, ckranges={}", i, seed, is_stateful, partition_range,
+    testlog.debug("[scan#{}]: seed={}, is_stateful={}, prange={}, ckranges={}", i, seed, is_stateful, partition_range,
             partition_slice.default_row_ranges());
 
     const auto [results, npages] = read_partitions_with_paged_scan(db, schema, 1000, 1024, is_stateful, partition_range, partition_slice);
@@ -901,7 +900,7 @@ run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<database>& db, 
         validate_result(i, *res_it++, *exp_it++);
     }
 
-    tlog.trace("[scan#{}]: validated all partitions, both the expected and actual partition list should be exhausted now", i);
+    testlog.trace("[scan#{}]: validated all partitions, both the expected and actual partition list should be exhausted now", i);
     BOOST_REQUIRE(res_it == results.cend() && exp_it == expected_partitions.cend());
 }
 
@@ -913,12 +912,12 @@ future<> run_concurrently(size_t count, size_t concurrency, noncopyable_function
             (void)with_gate(gate, [&func, &sem, &error, i] {
                 return with_semaphore(sem, 1, [&func, &error, i] {
                     if (error) {
-                        tlog.trace("Skipping func({}) due to previous func() returning with error", i);
+                        testlog.trace("Skipping func({}) due to previous func() returning with error", i);
                         return make_ready_future<>();
                     }
-                    tlog.trace("Invoking func({})", i);
+                    testlog.trace("Invoking func({})", i);
                     auto f = func(i).handle_exception([&error, i] (std::exception_ptr e) {
-                        tlog.debug("func({}) invocation returned with error: {}", i, e);
+                        testlog.debug("func({}) invocation returned with error: {}", i, e);
                         error = std::move(e);
                     });
                     return f;
@@ -927,10 +926,10 @@ future<> run_concurrently(size_t count, size_t concurrency, noncopyable_function
         }
         return gate.close().then([&error] {
             if (error) {
-                tlog.trace("Run failed, returning with error: {}", error);
+                testlog.trace("Run failed, returning with error: {}", error);
                 return make_exception_future<>(std::move(error));
             }
-            tlog.trace("Run succeeded");
+            testlog.trace("Run succeeded");
             return make_ready_future<>();
         });
     });
@@ -955,7 +954,7 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         // REPLACE RANDOM SEED HERE.
         const auto seed = std::random_device{}();
-        tlog.info("fuzzy test seed: {}", seed);
+        testlog.info("fuzzy test seed: {}", seed);
 
         auto rnd_engine = std::mt19937(seed);
 
@@ -967,7 +966,7 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
         auto cfg = fuzzy_test_config{seed, std::chrono::seconds{2}, 16, 256};
 #endif
 
-        tlog.info("Running test workload with configuration: seed={}, timeout={}s, concurrency={}, scans={}", cfg.seed, cfg.timeout.count(),
+        testlog.info("Running test workload with configuration: seed={}, timeout={}s, concurrency={}, scans={}", cfg.seed, cfg.timeout.count(),
                 cfg.concurrency, cfg.scans);
 
         const auto& partitions = pop_desc.partitions;
@@ -980,7 +979,7 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
 
             return run_fuzzy_test_workload(cfg, *db, gs.get(), partitions).finally([permit = std::move(permit)] {});
         }).handle_exception([seed] (std::exception_ptr e) {
-            tlog.error("Test workload failed with exception {}."
+            testlog.error("Test workload failed with exception {}."
                     " To repeat this particular run, replace the random seed of the test, with that of this run ({})."
                     " Look for `REPLACE RANDOM SEED HERE` in the source of the test.",
                     e,

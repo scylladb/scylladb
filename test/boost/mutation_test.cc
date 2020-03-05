@@ -58,13 +58,12 @@
 #include "service/storage_proxy.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/log.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/user.hh"
 #include "concrete_types.hh"
-
-logging::logger tlog("mutation_test");
 
 using namespace std::chrono_literals;
 
@@ -683,11 +682,11 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
 
     auto assert_order = [] (atomic_cell_view first, atomic_cell_view second) {
         if (compare_atomic_cell_for_merge(first, second) >= 0) {
-            BOOST_TEST_MESSAGE(format("Expected {} < {}", first, second));
+            testlog.trace("Expected {} < {}", first, second);
             abort();
         }
         if (compare_atomic_cell_for_merge(second, first) <= 0) {
-            BOOST_TEST_MESSAGE(format("Expected {} < {}", second, first));
+            testlog.trace("Expected {} < {}", second, first);
             abort();
         }
     };
@@ -1259,7 +1258,7 @@ SEASTAR_TEST_CASE(test_query_digest) {
                 check_digests_equal(compacted(m1), m2);
                 check_digests_equal(m1, compacted(m2));
             } else {
-                BOOST_TEST_MESSAGE("If not equal, they should become so after applying diffs mutually");
+                testlog.info("If not equal, they should become so after applying diffs mutually");
 
                 mutation_application_stats app_stats;
                 schema_ptr s = m1.schema();
@@ -1428,14 +1427,14 @@ SEASTAR_THREAD_TEST_CASE(test_row_marker_expiry) {
     can_gc_fn never_gc = [] (tombstone) { return false; };
 
     auto must_be_alive = [&] (row_marker mark, gc_clock::time_point t) {
-        BOOST_TEST_MESSAGE(format("must_be_alive({}, {})", mark, t));
+        testlog.trace("must_be_alive({}, {})", mark, t);
         BOOST_REQUIRE(mark.is_live(tombstone(), t));
         BOOST_REQUIRE(mark.is_missing() || !mark.is_dead(t));
         BOOST_REQUIRE(mark.compact_and_expire(tombstone(), t, never_gc, gc_clock::time_point()));
     };
 
     auto must_be_dead = [&] (row_marker mark, gc_clock::time_point t) {
-        BOOST_TEST_MESSAGE(format("must_be_dead({}, {})", mark, t));
+        testlog.trace("must_be_dead({}, {})", mark, t);
         BOOST_REQUIRE(!mark.is_live(tombstone(), t));
         BOOST_REQUIRE(mark.is_missing() || mark.is_dead(t));
         BOOST_REQUIRE(!mark.compact_and_expire(tombstone(), t, never_gc, gc_clock::time_point()));
@@ -2915,7 +2914,7 @@ void check_partition_summaries(const schema& schema, const std::vector<partition
 void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_point query_time, const std::vector<mutation>& mutations) {
     const auto expected_mutations_summary = summarize_mutations(mutations);
 
-    tlog.info("Original data: {}", create_stats(expected_mutations_summary));
+    testlog.info("Original data: {}", create_stats(expected_mutations_summary));
 
     auto reader = flat_mutation_reader_from_mutations(std::move(mutations));
     auto get_max_purgeable = [] (const dht::decorated_key&) {
@@ -2930,12 +2929,12 @@ void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_
 
     auto [survived_partitions, purged_partitions] = reader.consume(std::move(consumer), db::no_timeout).get0();
 
-    tlog.info("Survived data: {}", create_stats(survived_partitions));
-    tlog.info("Purged data:   {}", create_stats(purged_partitions));
+    testlog.info("Survived data: {}", create_stats(survived_partitions));
+    testlog.info("Purged data:   {}", create_stats(purged_partitions));
 
     auto merged_partition_summaries = merge(schema, std::move(survived_partitions), std::move(purged_partitions));
 
-    tlog.info("Merged data:   {}", create_stats(merged_partition_summaries));
+    testlog.info("Merged data:   {}", create_stats(merged_partition_summaries));
 
     check_partition_summaries(schema, merged_partition_summaries, expected_mutations_summary);
 }
@@ -2948,7 +2947,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
     tests::random_schema random_schema(tests::random::get_int<uint32_t>(), *spec);
     const auto& schema = *random_schema.schema();
 
-    tlog.info("Random schema:\n{}", random_schema.cql());
+    testlog.info("Random schema:\n{}", random_schema.cql());
 
     const auto query_time = gc_clock::now();
     const auto ttl = gc_clock::duration{schema.gc_grace_seconds().count() * 4};
@@ -2957,7 +2956,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
 
     // Random data
     {
-        tlog.info("Random data");
+        testlog.info("Random data");
         const auto ts_gen = tests::default_timestamp_generator();
         // Half of the tombstones are gcable.
         // Half of the cells are expiring. Half of those is expired.
@@ -2981,7 +2980,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
 
     // All data is purged
     {
-        tlog.info("All data is purged");
+        testlog.info("All data is purged");
         const auto ts_gen = [] (std::mt19937& engine, tests::timestamp_destination destination, api::timestamp_type min_timestamp) {
             static const api::timestamp_type tomb_ts_min = 10000;
             static const api::timestamp_type tomb_ts_max = 99999;
@@ -3016,7 +3015,7 @@ SEASTAR_THREAD_TEST_CASE(test_compaction_data_stream_split) {
 
     // No data is purged
     {
-        tlog.info("No data is purged");
+        testlog.info("No data is purged");
         const auto ts_gen = [] (std::mt19937& engine, tests::timestamp_destination destination, api::timestamp_type min_timestamp) {
             static const api::timestamp_type tomb_ts_min = 100;
             static const api::timestamp_type tomb_ts_max = 999;

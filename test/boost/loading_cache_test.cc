@@ -36,7 +36,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/tmpdir.hh"
-#include "log.hh"
+#include "test/lib/log.hh"
 
 #include <vector>
 #include <numeric>
@@ -56,8 +56,6 @@ static const sstring test_file_name = "loading_cache_test.txt";
 static const sstring test_string = "1";
 static bool file_prepared = false;
 static constexpr int num_loaders = 1000;
-
-static logging::logger test_logger("loading_cache_test");
 
 static thread_local int load_count;
 static const tmpdir& get_tmpdir() {
@@ -213,7 +211,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_same_key) {
         using namespace std::chrono;
         std::vector<int> ivec(num_loaders);
         load_count = 0;
-        utils::loading_cache<int, sstring> loading_cache(num_loaders, 1s, test_logger);
+        utils::loading_cache<int, sstring> loading_cache(num_loaders, 1s, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
@@ -233,7 +231,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_same_key) {
 SEASTAR_THREAD_TEST_CASE(test_loading_cache_removing_key) {
     using namespace std::chrono;
     load_count = 0;
-    utils::loading_cache<int, sstring> loading_cache(num_loaders, 100s, test_logger);
+    utils::loading_cache<int, sstring> loading_cache(num_loaders, 100s, testlog);
     auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
     prepare().get();
@@ -249,7 +247,7 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_removing_key) {
 SEASTAR_THREAD_TEST_CASE(test_loading_cache_removing_iterator) {
     using namespace std::chrono;
     load_count = 0;
-    utils::loading_cache<int, sstring> loading_cache(num_loaders, 100s, test_logger);
+    utils::loading_cache<int, sstring> loading_cache(num_loaders, 100s, testlog);
     auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
     prepare().get();
@@ -270,7 +268,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
         using namespace std::chrono;
         std::vector<int> ivec(num_loaders);
         load_count = 0;
-        utils::loading_cache<int, sstring> loading_cache(num_loaders, 1h, test_logger);
+        utils::loading_cache<int, sstring> loading_cache(num_loaders, 1h, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
@@ -289,7 +287,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
 SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_eviction) {
     return seastar::async([] {
         using namespace std::chrono;
-        utils::loading_cache<int, sstring> loading_cache(num_loaders, 20ms, test_logger);
+        utils::loading_cache<int, sstring> loading_cache(num_loaders, 20ms, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
@@ -307,7 +305,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_reloading) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
-        utils::loading_cache<int, sstring, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, test_logger, loader);
+        utils::loading_cache<int, sstring, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
         prepare().get();
         loading_cache.get_ptr(0, loader).discard_result().get();
@@ -320,7 +318,7 @@ SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
-        utils::loading_cache<int, sstring> loading_cache(1, 1s, test_logger);
+        utils::loading_cache<int, sstring> loading_cache(1, 1s, testlog);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
@@ -338,7 +336,7 @@ SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
     return seastar::async([] {
         using namespace std::chrono;
         load_count = 0;
-        utils::loading_cache<int, sstring, utils::loading_cache_reload_enabled::yes> loading_cache(1, 100ms, 10ms, test_logger, loader);
+        utils::loading_cache<int, sstring, utils::loading_cache_reload_enabled::yes> loading_cache(1, 100ms, 10ms, testlog, loader);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();

@@ -29,6 +29,7 @@
 #include "utils/linearizing_input_stream.hh"
 #include "utils/serialization.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/log.hh"
 
 namespace {
 
@@ -177,13 +178,13 @@ const payload generate_payload(std::mt19937& rnd_engine) {
 }
 
 std::vector<bytes> no_fragmenting(std::mt19937&, bytes_view bv) {
-    BOOST_TEST_MESSAGE(fmt::format("Fragmenting payload with {}()", __FUNCTION__));
+    testlog.info("Fragmenting payload with {}()", __FUNCTION__);
     return {bytes{bv}};
 }
 
 template <size_t N>
 std::vector<bytes> n_byte_fragments(std::mt19937&, bytes_view bv) {
-    BOOST_TEST_MESSAGE(fmt::format("Fragmenting payload with {}<{}>()", __FUNCTION__, N));
+    testlog.info("Fragmenting payload with {}<{}>()", __FUNCTION__, N);
     std::vector<bytes> ret;
     while (!bv.empty()) {
         const auto size = std::min(bv.size(), N);
@@ -194,7 +195,7 @@ std::vector<bytes> n_byte_fragments(std::mt19937&, bytes_view bv) {
 }
 
 std::vector<bytes> random_fragments(std::mt19937& rnd_engine, bytes_view bv) {
-    BOOST_TEST_MESSAGE(fmt::format("Fragmenting payload with {}()", __FUNCTION__));
+    testlog.info("Fragmenting payload with {}()", __FUNCTION__);
     std::vector<bytes> ret;
     while (!bv.empty()) {
         std::uniform_int_distribution<size_t> size_dist{1, bv.size()};
@@ -217,14 +218,14 @@ BOOST_AUTO_TEST_CASE(test_linearizing_input_stream) {
     auto payload = generate_payload(rnd_engine);
     std::uniform_int_distribution<uint8_t> skip_dist{0, 1};
 
-    BOOST_TEST_MESSAGE("Read back data");
+    testlog.info("Read back data");
 
     for (auto&& fragment_fn : {no_fragmenting, n_byte_fragments<1>, n_byte_fragments<2>, n_byte_fragments<3>, random_fragments}) {
         size_t expected_size = payload.data.size();
         auto fragmented_payload = fragment_vector(fragment_fn(rnd_engine, payload.data));
         auto in = utils::linearizing_input_stream(fragmented_payload);
 
-        BOOST_TEST_MESSAGE(fmt::format("Testing with payload: size={}, fragments={}", expected_size, fragmented_payload.fragments()));
+        testlog.info("Testing with payload: size={}, fragments={}", expected_size, fragmented_payload.fragments());
         BOOST_REQUIRE_EQUAL(fragmented_payload.size_bytes(), expected_size);
         BOOST_REQUIRE_EQUAL(in.size(), expected_size);
 
