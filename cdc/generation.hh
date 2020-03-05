@@ -66,12 +66,15 @@ class stream_id final {
 public:
     stream_id() = default;
     stream_id(int64_t, int64_t);
+    stream_id(bytes);
     bool is_set() const;
     bool operator==(const stream_id&) const;
     bool operator<(const stream_id&) const;
 
     int64_t first() const;
     int64_t second() const;
+
+    const bytes& to_bytes() const;
 
     partition_key to_partition_key(const schema& log_schema) const;
 };

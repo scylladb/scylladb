@@ -62,6 +62,8 @@ stream_id::stream_id(int64_t first, int64_t second)
     seastar::write_le(reinterpret_cast<char*>(_value.begin()) + sizeof(int64_t), second);
 }
 
+stream_id::stream_id(bytes b) : _value(std::move(b)) { }
+
 bool stream_id::is_set() const {
     return !_value.empty();
 }
@@ -82,6 +84,10 @@ int64_t stream_id::first() const {
 int64_t stream_id::second() const {
     assert(_value.size() == 2 * sizeof(int64_t));
     return seastar::read_le<int64_t>(reinterpret_cast<const char*>(_value.begin()) + sizeof(int64_t));
+}
+
+const bytes& stream_id::to_bytes() const {
+    return _value;
 }
 
 partition_key stream_id::to_partition_key(const schema& log_schema) const {
