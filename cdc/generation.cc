@@ -162,8 +162,7 @@ topology_description generate_topology_description(
     }
 
     auto schema = schema_builder("fake_ks", "fake_table")
-        .with_column("stream_id_1", long_type, column_kind::partition_key)
-        .with_column("stream_id_2", long_type, column_kind::partition_key)
+        .with_column("stream_id", bytes_type, column_kind::partition_key)
         .build();
 
     auto quota = std::chrono::seconds(spots_to_fill / 2000 + 1);
