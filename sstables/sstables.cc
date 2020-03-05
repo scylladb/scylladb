@@ -3276,6 +3276,9 @@ sstable::unlink()
 
 future<>
 delete_atomically(std::vector<shared_sstable> ssts) {
+    if (ssts.empty()) {
+        return make_ready_future<>();
+    }
     return seastar::async([ssts = std::move(ssts)] {
         sstring sstdir;
         min_max_tracker<int64_t> gen_tracker;
