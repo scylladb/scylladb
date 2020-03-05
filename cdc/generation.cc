@@ -70,6 +70,10 @@ bool stream_id::operator==(const stream_id& o) const {
     return _value == o._value;
 }
 
+bool stream_id::operator<(const stream_id& o) const {
+    return _value < o._value;
+}
+
 int64_t stream_id::first() const {
     assert(_value.size() == 2 * sizeof(int64_t));
     return seastar::read_le<int64_t>(reinterpret_cast<const char*>(_value.begin()));
@@ -342,11 +346,7 @@ static void do_update_streams_description(
         throw std::runtime_error(format("could not find streams data for timestamp {}", streams_ts));
     }
 
-    auto streams_less = [] (cdc::stream_id s1, cdc::stream_id s2) {
-        return s1.first() < s2.first() || (s1.first() == s2.first() && s1.second() < s2.second());
-    };
-
-    std::set<cdc::stream_id, decltype(streams_less)> streams_set(streams_less);
+    std::set<cdc::stream_id> streams_set;
     for (auto& entry: topo->entries()) {
         for (auto& s: entry.streams) {
             streams_set.insert(s);
