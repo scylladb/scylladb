@@ -1225,7 +1225,9 @@ public:
     void backlog_tracker_adjust_charges() override { }
 
     shared_sstable create_new_sstable() const override {
-        return _sstable_creator(_shard);
+        // create_new_sstables is used only from the garbage_collected writer.
+        // It it not supposed to work with resharding compactions
+        abort();
     }
 
     sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
