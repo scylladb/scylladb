@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
     time_it([&] {
         cql3_parser::CqlLexer::collector_type lexer_error_collector(query);
         cql3_parser::CqlParser::collector_type parser_error_collector(query);
-        cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(query.begin()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(query.size()), nullptr};
+        cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(query.data()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(query.size()), nullptr};
         cql3_parser::CqlLexer lexer{&input};
         lexer.set_error_listener(lexer_error_collector);
         cql3_parser::CqlParser::TokenStreamType tstream(ANTLR_SIZE_HINT, lexer.get_tokSource());

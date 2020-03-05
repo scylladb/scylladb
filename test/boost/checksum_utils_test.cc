@@ -65,12 +65,12 @@ void test() {
     for (auto size : {0, 1, 2, 10, 13, 16, 17, 22, 31, 1024, 2000, 80000}) {
         auto data = make_random_string(size);
 
-        auto current = Impl::checksum(data.cbegin(), data.size());
-        auto ref_current = ReferenceImpl::checksum(data.cbegin(), data.size());
+        auto current = Impl::checksum(data.data(), data.size());
+        auto ref_current = ReferenceImpl::checksum(data.data(), data.size());
         BOOST_REQUIRE_EQUAL(current, ref_current);
 
-        auto new_rolling = Impl::checksum(rolling, data.cbegin(), data.size());
-        auto ref_new_rolling = ReferenceImpl::checksum(rolling, data.cbegin(), data.size());
+        auto new_rolling = Impl::checksum(rolling, data.data(), data.size());
+        auto ref_new_rolling = ReferenceImpl::checksum(rolling, data.data(), data.size());
         BOOST_REQUIRE_EQUAL(new_rolling, ref_new_rolling);
 
         auto new_rolling_via_combine = Impl::checksum_combine(rolling, current, data.size());
