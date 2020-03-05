@@ -347,9 +347,7 @@ static void do_update_streams_description(
 
     std::set<cdc::stream_id> streams_set;
     for (auto& entry: topo->entries()) {
-        for (auto& s: entry.streams) {
-            streams_set.insert(s);
-        }
+        streams_set.insert(entry.streams.begin(), entry.streams.end());
     }
 
     std::vector<cdc::stream_id> streams_vec(streams_set.begin(), streams_set.end());
