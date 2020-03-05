@@ -582,232 +582,255 @@ public:
             }
         } else {
             // should be insert, update or deletion
-            int batch_no = 0;
-            for (const rows_entry& r : p.clustered_rows()) {
-                auto ck_value = r.key().explode(*_schema);
+            auto process_cells = [&](const row& r, column_kind ckind, const clustering_key& log_ck, std::optional<clustering_key> pikey, const cql3::untyped_result_set_row* pirow) -> std::optional<gc_clock::duration> {
+                bytes_opt value;
+                std::optional<gc_clock::duration> ttl;
+                r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
+                    auto& cdef = _schema->column_at(ckind, id);
+                    auto* dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
+                    auto has_pirow = pirow && pirow->has(cdef.name_as_text());
+                    bool is_column_delete = true;
 
+                    if (cdef.is_atomic()) {
+                        value = std::nullopt;
+                        auto view = cell.as_atomic_cell(cdef);
+                        if (view.is_live()) {
+                            is_column_delete = false;
+                            value = view.value().linearize();
+                            if (view.is_live_and_has_ttl()) {
+                                ttl = view.ttl();
+                            }
+                        }
+                    } else {
+                        auto mv = cell.as_collection_mutation();
+                        is_column_delete = false;
+                        bytes_opt deleted_elements = std::nullopt;
+                        std::vector<bytes> buf;
+                        value = mv.with_deserialized(*cdef.type, [&](collection_mutation_view_description view) -> bytes_opt {
+                            if (view.tomb) {
+                                // there is a tombstone with timestamp before this mutation.
+                                // this is how a assign collection = <value> is represented.
+                                // for non-atomics, a column delete + values in data column
+                                // simply means "replace values"
+                                is_column_delete = true;
+                            }
+                            auto process_cells = [&](auto value_callback) {
+                                for (auto& [key, value] : view.cells) {
+                                    // note: we are assuming that all mutations coming here adhere to
+                                    // / are created by the cql machinery or similar, i.e. if we have
+                                    // the tombstone above, it preceeds the actual cells, and is in
+                                    // fact an "assign" marker. So we only check for explicitly
+                                    // dead cells, i.e. null markers.
+                                    auto live = value.is_live();
+                                    if (!live) {
+                                        value_callback(key, bytes_view{}, live);
+                                        continue;
+                                    }
+                                    auto val = value.value().is_fragmented()
+                                        ? bytes_view{buf.emplace_back(value.value().linearize())}
+                                        : value.value().first_fragment()
+                                        ;
+                                    value_callback(key, val, live);
+                                }
+                            };
+
+                            std::vector<bytes_view> deleted;
+
+                            return visit(*cdef.type, make_visitor(
+                                // maps and lists are just flattened
+                                [&] (const collection_type_impl& type) -> bytes_opt {
+                                    std::vector<std::pair<bytes_view, bytes_view>> result;
+                                    process_cells([&](const bytes_view& key, const bytes_view& value, bool live) {
+                                        if (live) {
+                                            result.emplace_back(key, value);
+                                        } else {
+                                            deleted.emplace_back(key);
+                                        }
+                                    });
+                                    if (!deleted.empty()) {
+                                        deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted, cql_serialization_format::internal());
+                                    }
+                                    if (result.empty()) {
+                                        return std::nullopt;
+                                    }
+                                    return map_type_impl::serialize_partially_deserialized_form(result, cql_serialization_format::internal());
+                                },
+                                // set need to transform from mutation view
+                                [&] (const set_type_impl& type) -> bytes_opt  {
+                                    std::vector<bytes_view> result;
+                                    process_cells([&](const bytes_view& key, const bytes_view& value, bool live) {
+                                        if (live) {
+                                            result.emplace_back(key);
+                                        } else {
+                                            deleted.emplace_back(key);
+                                        }
+                                    });
+                                    if (!deleted.empty()) {
+                                        deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted, cql_serialization_format::internal());
+                                    }
+                                    if (result.empty()) {
+                                        return std::nullopt;
+                                    }
+                                    return set_type_impl::serialize_partially_deserialized_form(result, cql_serialization_format::internal());
+                                },
+                                // for user type we collect the fields in the mutation and set to
+                                // tuple of value or tuple of null in case of delete.
+                                // fields not in the mutation are null in the enclosing tuple, signifying "no info"
+                                [&](const user_type_impl& type) -> bytes_opt  {
+                                    std::vector<bytes_opt> result(type.size());
+                                    process_cells([&](const bytes_view& key, const bytes_view& value, bool live) {
+                                        if (live) {
+                                            auto idx = deserialize_field_index(key);
+                                            result[idx].emplace(value);
+                                        } else {
+                                            deleted.emplace_back(key);
+                                        }
+                                    });
+                                    if (!deleted.empty()) {
+                                        deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted, cql_serialization_format::internal());
+                                    }
+                                    if (result.empty()) {
+                                        return std::nullopt;
+                                    }
+                                    return type.build_value(result);
+                                },
+                                [&] (const abstract_type& o) -> bytes_opt {
+                                    throw std::runtime_error(format("cdc transform: unknown type {}", o.name()));
+                                }
+                            ));
+                        });
+
+                        if (deleted_elements) {
+                            auto* dc = _log_schema->get_column_definition(log_data_column_deleted_elements_name_bytes(cdef.name()));
+                            res.set_cell(log_ck, *dc, atomic_cell::make_live(*dc->type, ts, *deleted_elements, _cdc_ttl_opt));
+                        }
+                    }
+
+                    if (is_column_delete) {
+                        res.set_cell(log_ck, log_data_column_deleted_name_bytes(cdef.name()), data_value(true), ts, _cdc_ttl_opt);
+                    }
+                    if (value) {
+                        res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
+                    }
+
+                    if (has_pirow) {
+                        value = cdef.is_atomic()
+                            ? pirow->get_blob(cdef.name_as_text())
+                            : visit(*cdef.type, make_visitor(
+                                // flatten set
+                                [&] (const set_type_impl& type) {
+                                    auto v = pirow->get_view(cdef.name_as_text());
+                                    auto f = cql_serialization_format::internal();
+                                    auto n = read_collection_size(v, f);
+                                    std::vector<bytes_view> tmp;
+                                    tmp.reserve(n);
+                                    while (n--) {
+                                        tmp.emplace_back(read_collection_value(v, f)); // key
+                                        read_collection_value(v, f); // value. ignore.
+                                    }
+                                    return set_type_impl::serialize_partially_deserialized_form(tmp, f);
+                                },
+                                [&] (const abstract_type& o) -> bytes {
+                                    return pirow->get_blob(cdef.name_as_text());
+                                }
+                            ));
+
+                        assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
+                        assert(pikey->explode() != log_ck.explode());
+                        res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
+                    }
+                });
+
+                return ttl;
+            };
+
+            int batch_no = 0;
+            if (!p.static_row().empty()) {
                 std::optional<clustering_key> pikey;
                 const cql3::untyped_result_set_row * pirow = nullptr;
 
-                if (rs) {
-                    for (auto& utr : *rs) {
-                        bool match = true;
-                        for (auto& c : _schema->clustering_key_columns()) {
-                            auto rv = utr.get_view(c.name_as_text());
-                            auto cv = r.key().get_component(*_schema, c.component_index());
-                            if (rv != cv) {
-                                match = false;
-                                break;
-                            }
-                        }
-                        if (match) {
-                            pikey = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
-                            set_operation(*pikey, ts, operation::pre_image, res);
-                            pirow = &utr;
-                            ++batch_no;
-                            break;
-                        }
-                    }
+                if (rs && !rs->empty()) {
+                    // For static rows, only one row from the result set is needed
+                    pikey = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                    set_operation(*pikey, ts, operation::pre_image, res);
+                    pirow = &rs->front();
+                    ++batch_no;
                 }
 
                 auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                auto ttl = process_cells(p.static_row().get(), column_kind::static_column, log_ck, pikey, pirow);
 
-                size_t pos = 0;
-                for (const auto& column : _schema->clustering_key_columns()) {
-                    assert (pos < ck_value.size());
-                    auto cdef = _log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
-                    res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
-
-                    if (pirow) {
-                        assert(pirow->has(column.name_as_text()));
-                        res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
-                    }
-
-                    ++pos;
-                }
-
-                bytes_opt value;
-                std::optional<gc_clock::duration> ttl;
-
-                auto process_cells = [&](const row& r, column_kind ckind) {
-                    r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
-                        auto& cdef = _schema->column_at(ckind, id);
-                        auto* dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
-                        auto has_pirow = pirow && pirow->has(cdef.name_as_text());
-                        bool is_column_delete = true;
-
-                        if (cdef.is_atomic()) {
-                            value = std::nullopt;
-                            auto view = cell.as_atomic_cell(cdef);
-                            if (view.is_live()) {
-                                is_column_delete = false;
-                                value = view.value().linearize();
-                                if (view.is_live_and_has_ttl()) {
-                                    ttl = view.ttl();
-                                }
-                            } 
-                        } else {
-                            auto mv = cell.as_collection_mutation();
-                            is_column_delete = false;
-                            bytes_opt deleted_elements = std::nullopt;
-                            std::vector<bytes> buf;
-                            value = mv.with_deserialized(*cdef.type, [&](collection_mutation_view_description view) -> bytes_opt {
-                                if (view.tomb) {
-                                    // there is a tombstone with timestamp before this mutation.
-                                    // this is how a assign collection = <value> is represented.
-                                    // for non-atomics, a column delete + values in data column
-                                    // simply means "replace values"
-                                    is_column_delete = true;
-                                }
-                                auto process_cells = [&](auto value_callback) {
-                                    for (auto& [key, value] : view.cells) {
-                                        // note: we are assuming that all mutations coming here adhere to
-                                        // / are created by the cql machinery or similar, i.e. if we have 
-                                        // the tombstone above, it preceeds the actual cells, and is in
-                                        // fact an "assign" marker. So we only check for explicitly 
-                                        // dead cells, i.e. null markers. 
-                                        auto live = value.is_live();
-                                        if (!live) {
-                                            value_callback(key, bytes_view{}, live);
-                                            continue;
-                                        }
-                                        auto val = value.value().is_fragmented()
-                                            ? bytes_view{buf.emplace_back(value.value().linearize())}
-                                            : value.value().first_fragment()
-                                            ;
-                                        value_callback(key, val, live);
-                                    }
-                                };
-
-                                std::vector<bytes_view> deleted;
-
-                                return visit(*cdef.type, make_visitor(
-                                    // maps and lists are just flattened
-                                    [&] (const collection_type_impl& type) -> bytes_opt {
-                                        std::vector<std::pair<bytes_view, bytes_view>> result;
-                                        process_cells([&](const bytes_view& key, const bytes_view& value, bool live) {
-                                            if (live) {
-                                                result.emplace_back(key, value);
-                                            } else {
-                                                deleted.emplace_back(key);
-                                            }
-                                        });
-                                        if (!deleted.empty()) {
-                                            deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted, cql_serialization_format::internal());
-                                        }
-                                        if (result.empty()) {
-                                            return std::nullopt;
-                                        }
-                                        return map_type_impl::serialize_partially_deserialized_form(result, cql_serialization_format::internal());
-                                    },
-                                    // set need to transform from mutation view
-                                    [&] (const set_type_impl& type) -> bytes_opt  {
-                                        std::vector<bytes_view> result;
-                                        process_cells([&](const bytes_view& key, const bytes_view& value, bool live) {
-                                            if (live) {
-                                                result.emplace_back(key);
-                                            } else {
-                                                deleted.emplace_back(key);
-                                            }
-                                        });
-                                        if (!deleted.empty()) {
-                                            deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted, cql_serialization_format::internal());
-                                        }
-                                        if (result.empty()) {
-                                            return std::nullopt;
-                                        }
-                                        return set_type_impl::serialize_partially_deserialized_form(result, cql_serialization_format::internal());
-                                    },
-                                    // for user type we collect the fields in the mutation and set to
-                                    // tuple of value or tuple of null in case of delete.
-                                    // fields not in the mutation are null in the enclosing tuple, signifying "no info"
-                                    [&](const user_type_impl& type) -> bytes_opt  {
-                                        std::vector<bytes_opt> result(type.size());
-                                        process_cells([&](const bytes_view& key, const bytes_view& value, bool live) {
-                                            if (live) {
-                                                auto idx = deserialize_field_index(key);
-                                                result[idx].emplace(value);
-                                            } else {
-                                                deleted.emplace_back(key);
-                                            }
-                                        });
-                                        if (!deleted.empty()) {
-                                            deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted, cql_serialization_format::internal());
-                                        }
-                                        if (result.empty()) {
-                                            return std::nullopt;
-                                        }
-                                        return type.build_value(result);
-                                    },
-                                    [&] (const abstract_type& o) -> bytes_opt {
-                                        throw std::runtime_error(format("cdc transform: unknown type {}", o.name()));
-                                    }
-                                ));
-                            });
-
-                            if (deleted_elements) {
-                                auto* dc = _log_schema->get_column_definition(log_data_column_deleted_elements_name_bytes(cdef.name()));
-                                res.set_cell(log_ck, *dc, atomic_cell::make_live(*dc->type, ts, *deleted_elements, _cdc_ttl_opt));
-                            }
-                        }
-
-                        if (is_column_delete) {
-                            res.set_cell(log_ck, log_data_column_deleted_name_bytes(cdef.name()), data_value(true), ts, _cdc_ttl_opt);
-                        }
-                        if (value) {
-                            res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
-                        }
-
-                        if (has_pirow) {
-                            value = cdef.is_atomic()
-                                ? pirow->get_blob(cdef.name_as_text())
-                                : visit(*cdef.type, make_visitor(
-                                    // flatten set
-                                    [&] (const set_type_impl& type) {
-                                        auto v = pirow->get_view(cdef.name_as_text());
-                                        auto f = cql_serialization_format::internal();
-                                        auto n = read_collection_size(v, f);
-                                        std::vector<bytes_view> tmp;
-                                        tmp.reserve(n);
-                                        while (n--) {
-                                            tmp.emplace_back(read_collection_value(v, f)); // key
-                                            read_collection_value(v, f); // value. ignore.
-                                        }
-                                        return set_type_impl::serialize_partially_deserialized_form(tmp, f);
-                                    },
-                                    [&] (const abstract_type& o) -> bytes {
-                                        return pirow->get_blob(cdef.name_as_text());
-                                    }
-                                ));
-
-                            assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
-                            assert(pikey->explode() != log_ck.explode());
-                            res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
-                        }
-                    });
-                };
-
-                const auto& marker = r.row().marker();
-                if (marker.is_live() && marker.is_expiring()) {
-                    ttl = marker.ttl();
-                }
-                process_cells(r.row().cells(), column_kind::regular_column);
-                process_cells(p.static_row().get(), column_kind::static_column);
-
-                operation cdc_op;
-                if (r.row().deleted_at()) {
-                    cdc_op = operation::row_delete;
-                } else if (marker.is_live()) {
-                    cdc_op = operation::insert;
-                } else {
-                    cdc_op = operation::update;
-                }
-                set_operation(log_ck, ts, cdc_op, res);
+                set_operation(log_ck, ts, operation::update, res);
 
                 if (ttl) {
                     set_ttl(log_ck, ts, *ttl, res);
                 }
                 ++batch_no;
+            } else {
+                for (const rows_entry& r : p.clustered_rows()) {
+                    auto ck_value = r.key().explode(*_schema);
+
+                    std::optional<clustering_key> pikey;
+                    const cql3::untyped_result_set_row * pirow = nullptr;
+
+                    if (rs) {
+                        for (auto& utr : *rs) {
+                            bool match = true;
+                            for (auto& c : _schema->clustering_key_columns()) {
+                                auto rv = utr.get_view(c.name_as_text());
+                                auto cv = r.key().get_component(*_schema, c.component_index());
+                                if (rv != cv) {
+                                    match = false;
+                                    break;
+                                }
+                            }
+                            if (match) {
+                                pikey = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                                set_operation(*pikey, ts, operation::pre_image, res);
+                                pirow = &utr;
+                                ++batch_no;
+                                break;
+                            }
+                        }
+                    }
+
+                    auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+
+                    size_t pos = 0;
+                    for (const auto& column : _schema->clustering_key_columns()) {
+                        assert (pos < ck_value.size());
+                        auto cdef = _log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
+                        res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
+
+                        if (pirow) {
+                            assert(pirow->has(column.name_as_text()));
+                            res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
+                        }
+
+                        ++pos;
+                    }
+
+                    auto ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow);
+                    const auto& marker = r.row().marker();
+                    if (marker.is_live() && marker.is_expiring()) {
+                        ttl = marker.ttl();
+                    }
+
+                    operation cdc_op;
+                    if (r.row().deleted_at()) {
+                        cdc_op = operation::row_delete;
+                    } else if (marker.is_live()) {
+                        cdc_op = operation::insert;
+                    } else {
+                        cdc_op = operation::update;
+                    }
+                    set_operation(log_ck, ts, cdc_op, res);
+
+                    if (ttl) {
+                        set_ttl(log_ck, ts, *ttl, res);
+                    }
+                    ++batch_no;
+                }
             }
         }
 
@@ -834,8 +857,14 @@ public:
         auto&& cc = _schema->clustering_key_columns();
 
         std::vector<query::clustering_range> bounds;
-        if (cc.empty()) {
+        uint32_t row_limit = query::max_rows;
+
+        const bool has_only_static_row = !p.static_row().empty() && p.clustered_rows().empty();
+        if (cc.empty() || has_only_static_row) {
             bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+            if (has_only_static_row) {
+                row_limit = 1;
+            }
         } else {
             for (const rows_entry& r : p.clustered_rows()) {
                 auto& ck = r.key();
@@ -873,7 +902,7 @@ public:
         opts.set(query::partition_slice::option::collections_as_maps);
 
         auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), std::move(opts));
-        auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, query::max_partitions);
+        auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, row_limit);
 
         return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
                 [s = _schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
