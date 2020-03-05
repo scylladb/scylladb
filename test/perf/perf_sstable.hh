@@ -53,7 +53,7 @@ private:
     }
 
     sstring random_string(unsigned size) {
-        sstring str(sstring::initialized_later{}, size_t(size));
+        sstring str = uninitialized_string(size_t(size));
         for (auto& b: str) {
             b = _distribution(_generator);
         }

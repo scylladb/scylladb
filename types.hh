@@ -1166,7 +1166,7 @@ inline sstring read_simple_short_string(bytes_view& v) {
     if (v.size() < len) {
         throw_with_backtrace<marshal_exception>(format("read_simple_short_string - not enough bytes ({:d})", v.size()));
     }
-    sstring ret(sstring::initialized_later(), len);
+    sstring ret = uninitialized_string(len);
     std::copy(v.begin(), v.begin() + len, ret.begin());
     v.remove_prefix(len);
     return ret;

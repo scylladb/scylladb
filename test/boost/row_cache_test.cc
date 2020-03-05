@@ -910,7 +910,7 @@ SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
         std::vector<sstring> tmp;
         auto alloc_size = logalloc::segment_size * 10;
         while (tracker.region().occupancy().total_space() > alloc_size) {
-            tmp.push_back(sstring(sstring::initialized_later(), alloc_size));
+            tmp.push_back(uninitialized_string(alloc_size));
         }
     });
 }

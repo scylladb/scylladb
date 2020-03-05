@@ -92,7 +92,7 @@ mutation canonical_mutation::to_mutation(schema_ptr s) const {
 }
 
 static sstring bytes_to_text(bytes_view bv) {
-    sstring ret(sstring::initialized_later(), bv.size());
+    sstring ret = uninitialized_string(bv.size());
     std::copy_n(reinterpret_cast<const char*>(bv.data()), bv.size(), ret.data());
     return ret;
 }

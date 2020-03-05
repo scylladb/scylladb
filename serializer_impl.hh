@@ -572,7 +572,7 @@ struct serializer<sstring> {
     template<typename Input>
     static sstring read(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
-        sstring v(sstring::initialized_later(), sz);
+        sstring v = uninitialized_string(sz);
         in.read(v.data(), sz);
         return v;
     }
@@ -711,7 +711,7 @@ unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
         auto size = deserialize(in, boost::type<size_type>());
         auto index = deserialize(in, boost::type<size_type>());
         auto sz = size - sizeof(size_type) * 2;
-        sstring v(sstring::initialized_later(), sz);
+        sstring v = uninitialized_string(sz);
         in.read(v.data(), sz);
         return unknown_variant_type{ index, std::move(v) };
     });

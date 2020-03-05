@@ -108,7 +108,7 @@ private:
 
     template <typename CqlFrameHeaderType>
     sstring make_frame_one(uint8_t version, size_t length) {
-        sstring frame_buf(sstring::initialized_later(), sizeof(CqlFrameHeaderType));
+        sstring frame_buf = uninitialized_string(sizeof(CqlFrameHeaderType));
         auto* frame = reinterpret_cast<CqlFrameHeaderType*>(frame_buf.data());
         frame->version = version | 0x80;
         frame->flags   = _flags;
