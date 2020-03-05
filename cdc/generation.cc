@@ -66,6 +66,8 @@ stream_id::stream_id(int64_t first, int64_t second)
     copy_int_to_bytes(second, sizeof(int64_t), _value);
 }
 
+stream_id::stream_id(bytes b) : _value(std::move(b)) { }
+
 bool stream_id::is_set() const {
     return !_value.empty();
 }
@@ -91,6 +93,10 @@ int64_t stream_id::first() const {
 
 int64_t stream_id::second() const {
     return bytes_to_int64(_value, sizeof(int64_t));
+}
+
+const bytes& stream_id::to_bytes() const {
+    return _value;
 }
 
 partition_key stream_id::to_partition_key(const schema& log_schema) const {
