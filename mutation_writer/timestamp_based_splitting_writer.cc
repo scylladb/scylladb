@@ -464,20 +464,9 @@ future<> timestamp_based_splitting_mutation_writer::consume(partition_end&& pe) 
 future<> segregate_by_timestamp(flat_mutation_reader producer, classify_by_timestamp classifier, reader_consumer consumer) {
     //FIXME: make this into a consume() variant?
     auto schema = producer.schema();
-    return do_with(
+    return feed_writer(
             std::move(producer),
-            timestamp_based_splitting_mutation_writer(std::move(schema), std::move(classifier), std::move(consumer)),
-            [] (flat_mutation_reader& rd, timestamp_based_splitting_mutation_writer& wr) {
-        return rd.fill_buffer(db::no_timeout).then([&rd, &wr] {
-            return do_until([&rd] { return rd.is_buffer_empty() && rd.is_end_of_stream(); }, [&rd, &wr] {
-                auto f1 = rd.pop_mutation_fragment().consume(wr);
-                auto f2 = rd.is_buffer_empty() ? rd.fill_buffer(db::no_timeout) : make_ready_future<>();
-                return when_all_succeed(std::move(f1), std::move(f2));
-            });
-        }).finally([&wr] {
-            return wr.consume_end_of_stream();
-        });
-    });
+            timestamp_based_splitting_mutation_writer(std::move(schema), std::move(classifier), std::move(consumer)));
 }
 
 } // namespace mutation_writer
