@@ -754,7 +754,7 @@ public:
             std::swap(*it, _known_windows.front());
             return window;
         }
-        if (_known_windows.size() <= time_window_compaction_strategy::max_data_segregation_window_count) {
+        if (_known_windows.size() < time_window_compaction_strategy::max_data_segregation_window_count) {
             _known_windows.push_back(window);
             return window;
         }
