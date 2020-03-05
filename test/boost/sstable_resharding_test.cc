@@ -182,7 +182,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_resharding_strategy_tests) {
         {
             auto ssts = std::vector<sstables::shared_sstable>{ sst1, sst2 };
             auto descriptors = lcs.get_resharding_jobs(*cf, ssts);
-            auto expected_jobs = ssts.size()/smp::count + ssts.size()%smp::count;
+            auto expected_jobs = (ssts.size()+smp::count-1)/smp::count;
             BOOST_REQUIRE(descriptors.size() == expected_jobs);
         }
     }
