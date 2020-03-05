@@ -68,6 +68,7 @@ public:
     stream_id(int64_t, int64_t);
     bool is_set() const;
     bool operator==(const stream_id&) const;
+    bool operator<(const stream_id&) const;
 
     int64_t first() const;
     int64_t second() const;

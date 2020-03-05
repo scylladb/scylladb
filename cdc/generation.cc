@@ -74,6 +74,10 @@ bool stream_id::operator==(const stream_id& o) const {
     return _value == o._value;
 }
 
+bool stream_id::operator<(const stream_id& o) const {
+    return _value < o._value;
+}
+
 static int64_t bytes_to_int64(const bytes& b, size_t offset) {
     assert(b.size() >= offset + sizeof(int64_t));
     int64_t res;
@@ -351,11 +355,7 @@ static void do_update_streams_description(
         throw std::runtime_error(format("could not find streams data for timestamp {}", streams_ts));
     }
 
-    auto streams_less = [] (cdc::stream_id s1, cdc::stream_id s2) {
-        return s1.first() < s2.first() || (s1.first() == s2.first() && s1.second() < s2.second());
-    };
-
-    std::set<cdc::stream_id, decltype(streams_less)> streams_set(streams_less);
+    std::set<cdc::stream_id> streams_set;
     for (auto& entry: topo->entries()) {
         for (auto& s: entry.streams) {
             streams_set.insert(s);
