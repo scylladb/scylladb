@@ -69,6 +69,7 @@
 #include "utils/observable.hh"
 #include "dht/token.hh"
 #include "mutation_writer/shard_based_splitting_writer.hh"
+#include "mutation_source_metadata.hh"
 
 namespace sstables {
 
@@ -401,6 +402,7 @@ protected:
     encoding_stats_collector _stats_collector;
     utils::observable<> _on_new_sstable_sealed;
     bool _contains_multi_fragment_runs = false;
+    mutation_source_metadata _ms_metadata = {};
 protected:
     compaction(column_family& cf, creator_fn creator, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level)
         : _cf(cf)
@@ -423,7 +425,8 @@ protected:
 
     uint64_t partitions_per_sstable() const {
         uint64_t estimated_sstables = std::max(1UL, uint64_t(ceil(double(_info->start_size) / _max_sstable_size)));
-        return ceil(double(_estimated_partitions) / estimated_sstables);
+        return std::min(uint64_t(ceil(double(_estimated_partitions) / estimated_sstables)),
+                        _cf.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimated_partitions));
     }
 
     void setup_new_sstable(shared_sstable& sst) {
@@ -762,7 +765,7 @@ public:
     }
 
     reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
-        return std::move(end_consumer);
+        return _cf.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
     }
 
     void report_start(const sstring& formatted_msg) const override {
@@ -1195,7 +1198,11 @@ private:
     // return estimated partitions per sstable for a given shard
     uint64_t partitions_per_sstable(shard_id s) const {
         uint64_t estimated_sstables = std::max(uint64_t(1), uint64_t(ceil(double(_estimation_per_shard[s].estimated_size) / _max_sstable_size)));
-        return ceil(double(_estimation_per_shard[s].estimated_partitions) / estimated_sstables);
+        // As we adjust this estimate downwards from the compaction strategy, it can get to 0 so
+        // make sure we're returning at least 1.
+        return std::max(uint64_t(1),
+                std::min(uint64_t(ceil(double(_estimation_per_shard[s].estimated_partitions) / estimated_sstables)),
+                _cf.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions)));
     }
 public:
     resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor)
