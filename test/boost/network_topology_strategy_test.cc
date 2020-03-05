@@ -36,8 +36,7 @@
 #include <sstream>
 #include <boost/range/algorithm/adjacent_find.hpp>
 #include <boost/algorithm/cxx11/iota.hpp>
-
-static logging::logger nlogger("NetworkTopologyStrategyLogger");
+#include "test/lib/log.hh"
 
 using namespace locator;
 
@@ -47,7 +46,7 @@ struct ring_point {
 };
 
 void print_natural_endpoints(double point, const std::vector<inet_address> v) {
-    nlogger.debug("Natural endpoints for a token {}:", point);
+    testlog.debug("Natural endpoints for a token {}:", point);
     std::string str;
     std::ostringstream strm(str);
 
@@ -55,7 +54,7 @@ void print_natural_endpoints(double point, const std::vector<inet_address> v) {
         strm<<addr<<" ";
     }
 
-    nlogger.debug("{}", strm.str());
+    testlog.debug("{}", strm.str());
 }
 
 #ifndef SEASTAR_DEBUG
@@ -295,7 +294,7 @@ future<> heavy_origin_test() {
                     ring_points.emplace_back(rp);
                     tokens[address].emplace(token{dht::token::kind::key, d2t(token_point / total_eps)});
 
-                    nlogger.debug("adding node {} at {}", address, token_point);
+                    testlog.debug("adding node {} at {}", address, token_point);
 
                     token_point++;
                 }

@@ -23,6 +23,7 @@
 #include "seastarx.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/log.hh"
 #include <seastar/core/app-template.hh>
 #include "database.hh"
 #include "db/config.hh"
@@ -30,8 +31,6 @@
 #include "utils/int_range.hh"
 #include "utils/div_ceil.hh"
 #include <seastar/core/reactor.hh>
-
-logging::logger test_log("test");
 
 static thread_local bool cancelled = false;
 
@@ -64,7 +63,7 @@ int main(int argc, char** argv) {
 
     return app.run(argc, argv, [&app] {
         if (app.configuration().count("trace")) {
-            test_log.set_level(seastar::log_level::trace);
+            testlog.set_level(seastar::log_level::trace);
         }
 
         auto cfg_ptr = make_shared<db::config>();
@@ -83,7 +82,7 @@ int main(int argc, char** argv) {
 
             timer<> completion_timer;
             completion_timer.set_callback([&] {
-                test_log.info("Test done.");
+                testlog.info("Test done.");
                 cancelled = true;
             });
             completion_timer.arm(std::chrono::seconds(seconds));

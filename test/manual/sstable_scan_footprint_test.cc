@@ -22,6 +22,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/log.hh"
 
 #include "schema_builder.hh"
 #include "row_cache.hh"
@@ -35,8 +36,6 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/util/log.hh>
-
-static seastar::logger testlog("test");
 
 app_template app;
 

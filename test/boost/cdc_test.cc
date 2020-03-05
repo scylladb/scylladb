@@ -41,8 +41,6 @@
 
 using namespace std::string_literals;
 
-static logging::logger tlog("cdc_test");
-
 static cql_test_config mk_cdc_test_config() {
     shared_ptr<db::config> cfg(make_shared<db::config>());
     auto features = cfg->experimental_features();
@@ -135,7 +133,7 @@ SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
 
 SEASTAR_THREAD_TEST_CASE(test_generate_timeuuid) {
     auto seed = std::random_device{}();
-    tlog.info("test_generate_timeuuid seed: {}", seed);
+    testlog.info("test_generate_timeuuid seed: {}", seed);
 
     std::mt19937 rnd_engine(seed);
     std::uniform_int_distribution<api::timestamp_type> dist(1505959942168984, 1649959942168984);
@@ -562,7 +560,7 @@ SEASTAR_THREAD_TEST_CASE(test_add_columns) {
 SEASTAR_THREAD_TEST_CASE(test_cdc_across_shards) {
     do_with_cql_env_thread([](cql_test_env& e) {
         if (smp::count < 2) {
-            tlog.warn("This test case requires at least 2 shards");
+            testlog.warn("This test case requires at least 2 shards");
             return;
         }
         smp::submit_to(1, [&e] {

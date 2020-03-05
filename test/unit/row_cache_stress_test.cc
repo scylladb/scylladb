@@ -22,6 +22,7 @@
 #include <boost/range/irange.hpp>
 #include "seastarx.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/log.hh"
 #include <seastar/core/app-template.hh>
 #include "memtable.hh"
 #include "row_cache.hh"
@@ -30,8 +31,6 @@
 #include "utils/div_ceil.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include <seastar/core/reactor.hh>
-
-logging::logger test_log("test");
 
 static thread_local bool cancelled = false;
 
@@ -98,32 +97,32 @@ struct table {
 
     // Must not be called concurrently
     void flush() {
-        test_log.trace("flushing");
+        testlog.trace("flushing");
         prev_mt = std::exchange(mt, make_lw_shared<memtable>(s.schema()));
         auto flushed = make_lw_shared<memtable>(s.schema());
         flushed->apply(*prev_mt).get();
         prev_mt->mark_flushed(flushed->as_data_source());
-        test_log.trace("updating cache");
+        testlog.trace("updating cache");
         cache.update([&] {
             underlying.apply(flushed);
         }, *prev_mt).get();
-        test_log.trace("flush done");
+        testlog.trace("flush done");
         prev_mt = {};
     }
 
     void mutate_next_phase() {
-        test_log.trace("mutating, phase={}", mutation_phase);
+        testlog.trace("mutating, phase={}", mutation_phase);
         for (auto i : boost::irange<int>(0, p_keys.size())) {
             auto t = s.new_timestamp();
             auto tag = value_tag(i, mutation_phase);
             auto m = get_mutation(i, t, tag);
             mt->apply(std::move(m));
             p_writetime[i] = t;
-            test_log.trace("updated key {}, {} @{}", i, tag, t);
+            testlog.trace("updated key {}, {} @{}", i, tag, t);
             ++mutations;
             later().get();
         }
-        test_log.trace("mutated whole ring");
+        testlog.trace("mutated whole ring");
         ++mutation_phase;
         // FIXME: mutate concurrently with flush
         flush();
@@ -140,12 +139,12 @@ struct table {
         auto new_s = schema_builder(s.schema())
             .with_column(to_bytes(format("_a{}", col_id++)), byte_type)
             .build();
-        test_log.trace("changing schema to {}", *new_s);
+        testlog.trace("changing schema to {}", *new_s);
         set_schema(new_s);
     }
 
     std::unique_ptr<reader> make_reader(dht::partition_range pr, query::partition_slice slice) {
-        test_log.trace("making reader, pk={} ck={}", pr, slice);
+        testlog.trace("making reader, pk={} ck={}", pr, slice);
         auto r = std::make_unique<reader>(reader{std::move(pr), std::move(slice), make_empty_flat_reader(s.schema())});
         std::vector<flat_mutation_reader> rd;
         if (prev_mt) {
@@ -200,7 +199,7 @@ public:
     { }
 
     void consume_new_partition(const dht::decorated_key& key) {
-        test_log.trace("reader {}: enters partition {}", _id, key);
+        testlog.trace("reader {}: enters partition {}", _id, key);
         _value = {};
         _key = _t.index_of_key(key);
     }
@@ -215,7 +214,7 @@ public:
         sstring value;
         api::timestamp_type t;
         std::tie(value, t) = _t.s.get_value(*_s, row);
-        test_log.trace("reader {}: {} @{}, {}", _id, value, t, clustering_row::printer(*_s, row));
+        testlog.trace("reader {}: {} @{}, {}", _id, value, t, clustering_row::printer(*_s, row));
         if (_value && value != _value) {
             throw std::runtime_error(format("Saw values from two different writes in partition {:d}: {} and {}", _key, _value, value));
         }
@@ -228,7 +227,7 @@ public:
     }
 
     size_t consume_end_of_stream() {
-        test_log.trace("reader {}: done, {} rows", _id, _row_count);
+        testlog.trace("reader {}: done, {} rows", _id, _row_count);
         return _row_count;
     }
 };
@@ -267,7 +266,7 @@ int main(int argc, char** argv) {
 
     return app.run(argc, argv, [&app] {
         if (app.configuration().count("trace")) {
-            test_log.set_level(seastar::log_level::trace);
+            testlog.set_level(seastar::log_level::trace);
         }
 
         return seastar::async([&app] {
@@ -286,13 +285,13 @@ int main(int argc, char** argv) {
 
             timer<> completion_timer;
             completion_timer.set_callback([&] {
-                test_log.info("Test done.");
+                testlog.info("Test done.");
                 cancelled = true;
             });
             completion_timer.arm(std::chrono::seconds(seconds));
 
             auto fail = [&] (sstring msg) {
-                test_log.error("{}", msg);
+                testlog.error("{}", msg);
                 cancelled = true;
                 completion_timer.cancel();
             };
@@ -305,7 +304,7 @@ int main(int argc, char** argv) {
             monotonic_counter<uint64_t> flushes([&] { return t.mutation_phase; });
             stats_printer.set_callback([&] {
                 auto MB = 1024 * 1024;
-                test_log.info("reads/s: {}, scans/s: {}, mutations/s: {}, flushes/s: {}, Cache: {}/{} [MB], LSA: {}/{} [MB], std free: {} [MB]",
+                testlog.info("reads/s: {}, scans/s: {}, mutations/s: {}, flushes/s: {}, Cache: {}/{} [MB], LSA: {}/{} [MB], std free: {} [MB]",
                     reads.change(), scans.change(), mutations.change(), flushes.change(),
                     t.tracker.region().occupancy().used_space() / MB,
                     t.tracker.region().occupancy().total_space() / MB,
@@ -325,9 +324,9 @@ int main(int argc, char** argv) {
                 int_range ck_range = make_int_range(start, start + len);
 
                 int pk = t.p_keys.size() / 2; // FIXME: spread over 3 consecutive partitions
-                test_log.info("{} is using pk={} ck={}", id, pk, ck_range);
+                testlog.info("{} is using pk={} ck={}", id, pk, ck_range);
                 while (!cancelled) {
-                    test_log.trace("{}: starting read", id);
+                    testlog.trace("{}: starting read", id);
                     auto rd = t.make_single_key_reader(pk, ck_range);
                     auto row_count = rd->rd.consume(validating_consumer(t, id, t.s.schema()), db::no_timeout).get0();
                     if (row_count != len) {
@@ -339,7 +338,7 @@ int main(int argc, char** argv) {
             auto scanning_reader = [&] (reader_id id) {
                 auto expected_row_count = t.p_keys.size() * t.c_keys.size();
                 while (!cancelled) {
-                    test_log.trace("{}: starting read", id);
+                    testlog.trace("{}: starting read", id);
                     auto rd = t.make_scanning_reader();
                     auto row_count = rd->rd.consume(validating_consumer(t, id, t.s.schema()), db::no_timeout).get0();
                     if (row_count != expected_row_count) {
@@ -371,7 +370,7 @@ int main(int argc, char** argv) {
 
             timer<> evictor;
             evictor.set_callback([&] {
-                test_log.trace("evicting");
+                testlog.trace("evicting");
                 t.cache.evict();
             });
             evictor.arm_periodic(3s);

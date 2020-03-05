@@ -20,14 +20,13 @@
  */
 
 #include "test/lib/test_table.hh"
+#include "test/lib/log.hh"
 
 #include <boost/range/adaptor/map.hpp>
 
 #include "test/lib/cql_assertions.hh"
 
 namespace test {
-
-logging::logger tlog("test_table");
 
 std::vector<clustering_key> slice_keys(const schema& schema, const std::vector<clustering_key>& keys, const query::clustering_row_ranges& ranges) {
     if (keys.empty() || ranges.empty()) {
@@ -443,7 +442,7 @@ population_description create_test_table(cql_test_env& env, const sstring& ks_na
 
     pop_desc.schema = env.local_db().find_column_family(ks_name, table_name).schema();
 
-    tlog.info("Populating test data...");
+    testlog.info("Populating test data...");
 
     auto res = generate_partitions(env, *pop_desc.schema, *pop_gen, static_insert_id, clustering_insert_id, clustering_delete_id_mappings);
     pop_desc.partitions = std::move(res.partitions);
@@ -453,7 +452,7 @@ population_description create_test_table(cql_test_env& env, const sstring& ks_na
     for (auto& part : pop_desc.partitions) {
         live_row_count += std::max(part.live_rows.size(), size_t(part.has_static_row));
         dead_row_count += part.dead_rows.size();
-        tlog.trace("Partition {}, has_static_rows={}, rows={}, (of which live={} and dead={})",
+        testlog.trace("Partition {}, has_static_rows={}, rows={}, (of which live={} and dead={})",
                 part.dkey,
                 part.has_static_row,
                 part.live_rows.size() + part.dead_rows.size(),
@@ -466,7 +465,7 @@ population_description create_test_table(cql_test_env& env, const sstring& ks_na
     auto msg = env.execute_cql(format("SELECT COUNT(*) FROM {}.{}", ks_name, table_name)).get0();
     assert_that(msg).is_rows().with_rows({{serialized(int64_t(live_row_count))}});
 
-    tlog.info("Done. Population summary: written {} partitions, {} rows, {} range tombstones and {} bytes;"
+    testlog.info("Done. Population summary: written {} partitions, {} rows, {} range tombstones and {} bytes;"
             " have (after de-duplication) {} partitions, {} live rows and {} dead rows.",
             res.written_partition_count,
             res.written_row_count,
