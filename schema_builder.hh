@@ -142,15 +142,6 @@ public:
         return _raw._compaction_enabled;
     }
 
-    schema_builder& set_cdc_options(cdc::options options) {
-        _raw._cdc_options = std::move(options);
-        return *this;
-    }
-
-    const cdc::options& cdc_options() const {
-        return _raw._cdc_options;
-    }
-
     schema_builder& set_min_index_interval(int32_t t) {
         _raw._min_index_interval = t;
         return *this;

@@ -38,6 +38,8 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
+#include "serializer_impl.hh"
+#include "cdc/cdc_extension.hh"
 
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
@@ -574,7 +576,10 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
 
 // We don't want schema digest to change between Scylla versions because that results in a schema disagreement
 // during rolling upgrade.
-future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_dir, std::set<sstring> disabled_features, std::vector<utils::UUID> expected_digests, std::function<void(cql_test_env& e)> extra_schema_changes) {
+future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_dir,
+        std::set<sstring> disabled_features, std::vector<utils::UUID> expected_digests,
+        std::function<void(cql_test_env& e)> extra_schema_changes,
+        std::shared_ptr<db::extensions> extensions = std::make_shared<db::extensions>()) {
     using namespace db;
     using namespace db::schema_tables;
 
@@ -585,7 +590,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
     // new timestamps to appear and schema digests will not match anymore.
     const bool regenerate = false;
 
-    auto db_cfg_ptr = make_shared<db::config>();
+    auto db_cfg_ptr = ::make_shared<db::config>(std::move(extensions));
     auto& db_cfg = *db_cfg_ptr;
     db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
     db_cfg.experimental_features({experimental_features_t::UDF}, db::config::config_source::CommandLine);
@@ -716,6 +721,8 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
+    auto ext = std::make_shared<db::extensions>();
+    ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     std::vector<utils::UUID> expected_digests{
         utils::UUID("07d3ffb8-b7f5-367d-b128-d34b2033b788"),
         utils::UUID("9500fd95-abeb-32ea-b7af-568021eee217"),
@@ -733,5 +740,6 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
         std::move(expected_digests),
         [] (cql_test_env& e) {
             e.execute_cql("create table tests.table_cdc (pk int primary key, c1 int, c2 int) with cdc = {'enabled':'true'};").get();
-        });
+        },
+        std::move(ext));
 }

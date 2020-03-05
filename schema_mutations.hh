@@ -138,7 +138,6 @@ public:
     bool is_view() const;
 
     table_schema_version digest() const;
-    std::optional<std::map<sstring, sstring>> cdc_options() const;
 
     bool operator==(const schema_mutations&) const;
     bool operator!=(const schema_mutations&) const;

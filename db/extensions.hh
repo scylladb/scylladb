@@ -101,6 +101,18 @@ public:
         _schema_extensions.emplace(std::move(w), std::move(f));
     }
     /**
+     * A shorthand for the add_schema_extension. Adds a function that adds
+     * the extension to a schema with appropriate constructor overload.
+     */
+    template<typename Extension>
+    void add_schema_extension(sstring w) {
+        add_schema_extension(std::move(w), [] (db::extensions::schema_ext_config cfg) {
+            return std::visit([] (auto v) {
+                return ::make_shared<Extension>(v);
+            }, cfg);
+        });
+    }
+    /**
      * Init time method to add sstable extension
      */
     void add_sstable_file_io_extension(sstring n, sstable_file_io_extension);

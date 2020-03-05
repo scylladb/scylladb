@@ -152,13 +152,15 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
 
-    _properties.validate(proxy.get_db().local().extensions());
+    auto&& db = proxy.get_db().local();
+    auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
+    _properties.validate(db, schema_extensions);
 
     if (_properties.use_compact_storage()) {
         throw exceptions::invalid_request_exception(format("Cannot use 'COMPACT STORAGE' when defining a materialized view"));
     }
 
-    if (_properties.properties()->get_cdc_options().has_value()) {
+    if (_properties.properties()->get_cdc_options(schema_extensions)) {
         throw exceptions::invalid_request_exception("Cannot enable CDC for a materialized view");
     }
 
@@ -175,7 +177,6 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
                 _base_name->get_keyspace(), keyspace()));
     }
 
-    auto&& db = proxy.get_db().local();
     schema_ptr schema = validation::validate_column_family(db, _base_name->get_keyspace(), _base_name->get_column_family());
 
     if (schema->is_counter()) {
@@ -339,7 +340,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
             db::view::create_virtual_column(builder, def->name(), def->type);
         }
     }
-    _properties.properties()->apply_to_builder(builder, proxy.get_db().local());
+    _properties.properties()->apply_to_builder(builder, std::move(schema_extensions));
 
     if (builder.default_time_to_live().count() > 0) {
         throw exceptions::invalid_request_exception(

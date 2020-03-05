@@ -627,7 +627,6 @@ private:
         std::map<sstring, sstring> _compaction_strategy_options;
         bool _compaction_enabled = true;
         caching_options _caching_options;
-        cdc::options _cdc_options;
         table_schema_version _version;
         std::unordered_map<sstring, dropped_column> _dropped_columns;
         std::map<bytes, data_type> _collections;
@@ -803,9 +802,7 @@ public:
         return _raw._compaction_enabled;
     }
 
-    const cdc::options& cdc_options() const {
-        return _raw._cdc_options;
-    }
+    const cdc::options& cdc_options() const;
 
     const ::speculative_retry& speculative_retry() const {
         return _raw._speculative_retry;
