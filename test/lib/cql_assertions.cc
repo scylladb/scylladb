@@ -211,3 +211,29 @@ shared_ptr<cql_transport::messages::result_message> cquery_nofail(
     }
     return shared_ptr<cql_transport::messages::result_message>(nullptr);
 }
+
+void require_rows(cql_test_env& e,
+                  const char* qstr,
+                  const std::vector<std::vector<bytes_opt>>& expected,
+                  const std::experimental::source_location& loc) {
+    try {
+        assert_that(cquery_nofail(e, qstr, nullptr, loc)).is_rows().with_rows_ignore_order(expected);
+    }
+    catch (const std::exception& e) {
+        BOOST_FAIL(format("query '{}' failed: {}\n{}:{}: originally from here",
+                          qstr, e.what(), loc.file_name(), loc.line()));
+    }
+}
+
+void require_rows(cql_test_env& e,
+                  cql3::prepared_cache_key_type id,
+                  const std::vector<cql3::raw_value>& values,
+                  const std::vector<std::vector<bytes_opt>>& expected,
+                  const std::experimental::source_location& loc) {
+    try {
+        assert_that(e.execute_prepared(id, values).get0()).is_rows().with_rows_ignore_order(expected);
+    } catch (const std::exception& e) {
+        BOOST_FAIL(format("execute_prepared failed: {}\n{}:{}: originally from here",
+                          e.what(), loc.file_name(), loc.line()));
+    }
+}
