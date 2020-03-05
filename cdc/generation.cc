@@ -54,32 +54,43 @@ namespace cdc {
 extern const api::timestamp_clock::duration generation_leeway =
     std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::seconds(5));
 
-stream_id::stream_id()
-    : _first(-1), _second(-1) {}
+static void copy_int_to_bytes(int64_t i, size_t offset, bytes& b) {
+    i = net::hton(i);
+    std::copy_n(reinterpret_cast<int8_t*>(&i), sizeof(int64_t), b.begin() + offset);
+}
 
 stream_id::stream_id(int64_t first, int64_t second)
-    : _first(first)
-    , _second(second) {}
+    : _value(bytes::initialized_later(), 2 * sizeof(int64_t))
+{
+    copy_int_to_bytes(first, 0, _value);
+    copy_int_to_bytes(second, sizeof(int64_t), _value);
+}
 
 bool stream_id::is_set() const {
-    return _first != -1 || _second != -1;
+    return !_value.empty();
 }
 
 bool stream_id::operator==(const stream_id& o) const {
-    return _first == o._first && _second == o._second;
+    return _value == o._value;
+}
+
+static int64_t bytes_to_int64(const bytes& b, size_t offset) {
+    assert(b.size() >= offset + sizeof(int64_t));
+    int64_t res;
+    std::copy_n(b.begin() + offset, sizeof(int64_t), reinterpret_cast<int8_t *>(&res));
+    return net::ntoh(res);
 }
 
 int64_t stream_id::first() const {
-    return _first;
+    return bytes_to_int64(_value, 0);
 }
 
 int64_t stream_id::second() const {
-    return _second;
+    return bytes_to_int64(_value, sizeof(int64_t));
 }
 
 partition_key stream_id::to_partition_key(const schema& log_schema) const {
-    return partition_key::from_single_value(log_schema,
-            long_type->decompose(_first) + long_type->decompose(_second));
+    return partition_key::from_single_value(log_schema, _value);
 }
 
 bool token_range_description::operator==(const token_range_description& o) const {
