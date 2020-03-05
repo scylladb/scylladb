@@ -63,8 +63,8 @@ public:
     }
 private:
     shared_ptr<column_specification> casted_spec_of(database& db, const sstring& keyspace, const column_specification& receiver) const {
-        return make_shared<column_specification>(receiver.ks_name, receiver.cf_name,
-                make_shared<column_identifier>(to_string(), true), _type->prepare(db, keyspace).get_type());
+        return ::make_shared<column_specification>(receiver.ks_name, receiver.cf_name,
+                ::make_shared<column_identifier>(to_string(), true), _type->prepare(db, keyspace).get_type());
     }
 public:
     virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override {

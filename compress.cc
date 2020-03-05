@@ -103,9 +103,9 @@ shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& opti
     return {};
 }
 
-thread_local const shared_ptr<compressor> compressor::lz4 = make_shared<lz4_processor>(namespace_prefix + "LZ4Compressor");
-thread_local const shared_ptr<compressor> compressor::snappy = make_shared<snappy_processor>(namespace_prefix + "SnappyCompressor");
-thread_local const shared_ptr<compressor> compressor::deflate = make_shared<deflate_processor>(namespace_prefix + "DeflateCompressor");
+thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>(namespace_prefix + "LZ4Compressor");
+thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>(namespace_prefix + "SnappyCompressor");
+thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>(namespace_prefix + "DeflateCompressor");
 
 const sstring compression_parameters::SSTABLE_COMPRESSION = "sstable_compression";
 const sstring compression_parameters::CHUNK_LENGTH_KB = "chunk_length_in_kb";

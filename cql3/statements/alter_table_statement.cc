@@ -393,7 +393,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
     return service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), is_local_only)
         .then([this] {
             using namespace cql_transport;
-            return make_shared<event::schema_change>(
+            return ::make_shared<event::schema_change>(
                     event::schema_change::change_type::UPDATED,
                     event::schema_change::target_type::TABLE,
                     keyspace(),

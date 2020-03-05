@@ -29,7 +29,7 @@ namespace cql3 {
 
 shared_ptr<column_specification>
 sets::value_spec_of(const column_specification& column) {
-    return make_shared<column_specification>(column.ks_name, column.cf_name,
+    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("value({})", *column.name), true),
             dynamic_pointer_cast<const set_type_impl>(column.type)->get_elements_type());
 }

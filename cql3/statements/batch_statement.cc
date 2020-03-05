@@ -402,8 +402,8 @@ void batch_statement::build_cas_result_set_metadata() {
     // Add the mandatory [applied] column to result set metadata
     std::vector<shared_ptr<column_specification>> columns;
 
-    auto applied = make_shared<cql3::column_specification>(schema.ks_name(), schema.cf_name(),
-            make_shared<cql3::column_identifier>("[applied]", false), boolean_type);
+    auto applied = ::make_shared<cql3::column_specification>(schema.ks_name(), schema.cf_name(),
+            ::make_shared<cql3::column_identifier>("[applied]", false), boolean_type);
     columns.push_back(applied);
 
     for (const auto& def : boost::range::join(schema.partition_key_columns(), schema.clustering_key_columns())) {

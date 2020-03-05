@@ -752,7 +752,7 @@ createKeyspaceStatement returns [shared_ptr<cql3::statements::create_keyspace_st
         bool if_not_exists = false;
     }
     : K_CREATE K_KEYSPACE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )? ks=keyspaceName
-      K_WITH properties[attrs] { $expr = make_shared<cql3::statements::create_keyspace_statement>(ks, attrs, if_not_exists); }
+      K_WITH properties[attrs] { $expr = ::make_shared<cql3::statements::create_keyspace_statement>(ks, attrs, if_not_exists); }
     ;
 
 /**
@@ -914,7 +914,7 @@ alterKeyspaceStatement returns [shared_ptr<cql3::statements::alter_keyspace_stat
         auto attrs = make_shared<cql3::statements::ks_prop_defs>();
     }
     : K_ALTER K_KEYSPACE ks=keyspaceName
-        K_WITH properties[attrs] { $expr = make_shared<cql3::statements::alter_keyspace_statement>(ks, attrs); }
+        K_WITH properties[attrs] { $expr = ::make_shared<cql3::statements::alter_keyspace_statement>(ks, attrs); }
     ;
 
 /**
@@ -1243,16 +1243,16 @@ roleOption[cql3::role_options& opts]
 // identifiers because the underlying comparator is not necessarily text. See
 // CASSANDRA-8178 for details.
 cident returns [shared_ptr<cql3::column_identifier::raw> id]
-    : t=IDENT              { $id = make_shared<cql3::column_identifier::raw>(sstring{$t.text}, false); }
-    | t=QUOTED_NAME        { $id = make_shared<cql3::column_identifier::raw>(sstring{$t.text}, true); }
-    | k=unreserved_keyword { $id = make_shared<cql3::column_identifier::raw>(k, false); }
+    : t=IDENT              { $id = ::make_shared<cql3::column_identifier::raw>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = ::make_shared<cql3::column_identifier::raw>(sstring{$t.text}, true); }
+    | k=unreserved_keyword { $id = ::make_shared<cql3::column_identifier::raw>(k, false); }
     ;
 
 // Identifiers that do not refer to columns or where the comparator is known to be text
 ident returns [shared_ptr<cql3::column_identifier> id]
-    : t=IDENT              { $id = make_shared<cql3::column_identifier>(sstring{$t.text}, false); }
-    | t=QUOTED_NAME        { $id = make_shared<cql3::column_identifier>(sstring{$t.text}, true); }
-    | k=unreserved_keyword { $id = make_shared<cql3::column_identifier>(k, false); }
+    : t=IDENT              { $id = ::make_shared<cql3::column_identifier>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = ::make_shared<cql3::column_identifier>(sstring{$t.text}, true); }
+    | k=unreserved_keyword { $id = ::make_shared<cql3::column_identifier>(k, false); }
     ;
 
 // Keyspace & Column family names

@@ -68,7 +68,7 @@ use_statement::use_statement(sstring keyspace)
 
 std::unique_ptr<prepared_statement> use_statement::prepare(database& db, cql_stats& stats)
 {
-    return std::make_unique<prepared_statement>(make_shared<cql3::statements::use_statement>(_keyspace));
+    return std::make_unique<prepared_statement>(::make_shared<cql3::statements::use_statement>(_keyspace));
 }
 
 }

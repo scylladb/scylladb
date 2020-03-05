@@ -333,7 +333,7 @@ future<> gossiping_property_file_snitch::reload_gossiper_state() {
     }
 
     return ret.then([this] {
-        _reconnectable_helper = make_shared<reconnectable_snitch_helper>(_my_dc);
+        _reconnectable_helper = ::make_shared<reconnectable_snitch_helper>(_my_dc);
         gms::get_local_gossiper().register_(_reconnectable_helper);
     });
 }
