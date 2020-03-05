@@ -226,6 +226,13 @@ class Test:
         pass
 
 
+    def check_log(self, trim):
+        """Check and trim logs and xml output for tests which have it"""
+        if trim:
+            pathlib.Path(self.log_filename).unlink()
+        pass
+
+
 class UnitTest(Test):
     standard_args = shlex.split("--overprovisioned --unsafe-bypass-fsync 1 --blocked-reactor-notify-ms 2000000 --collectd 0")
 
@@ -250,11 +257,16 @@ class BoostTest(UnitTest):
     def __init__(self, test_no, shortname, args, suite, mode, options):
         super().__init__(test_no, shortname, args, suite, mode, options)
         boost_args = []
-        xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
-        boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
+        self.xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        boost_args += ['--report_level=no',
+                       '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
         boost_args += ['--catch_system_errors=no']  # causes undebuggable cores
         boost_args += ['--']
         self.args = boost_args + self.args
+
+    def check_log(self, trim):
+        ET.parse(self.xmlout)
+        super().check_log(trim)
 
 
 class CqlTest(Test):
@@ -390,8 +402,12 @@ async def run_test(test, options):
             if process.returncode != 0:
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
                 return False
-            if not options.save_log_on_success:
-                pathlib.Path(test.log_filename).unlink()
+            try:
+                test.check_log(not options.save_log_on_success)
+            except Exception as e:
+                print("")
+                print(test.name + ": " + palette.crit("failed to parse XML output: {}".format(e)))
+                # return False
             return True
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
             if process is not None:
