@@ -1166,20 +1166,20 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
 
         {
             auto result = get_result(
-                {int32_type, int32_type, int32_type, boolean_type, m_type, keys_type, long_type},
-                "select \"cdc$batch_seq_no\", v1, v2, \"cdc$deleted_v2\", m, \"cdc$deleted_elements_m\", \"cdc$ttl\""
+                {int32_type, int32_type, boolean_type, m_type, keys_type, long_type},
+                "select v1, v2, \"cdc$deleted_v2\", m, \"cdc$deleted_elements_m\", \"cdc$ttl\""
                 " from ks.t_scylla_cdc_log where pk = 0 and ck = 1 allow filtering");
             BOOST_REQUIRE_EQUAL(result.size(), 4);
 
             std::vector<std::vector<data_value>> expected = {
                 // The following represents the "v1 = 5" change. The "v2 = null" change gets merged with a different change, see below
-                {int32_t(0), int32_t(5), int_null, bool_null, map_null, keys_null, int64_t(5)},
-                {int32_t(0), int_null, int_null, bool_null, vmap({{0,6},{1,6}}), keys_null, long_null /*FIXME: ttl = 6*/},
+                {int32_t(5), int_null, bool_null, map_null, keys_null, int64_t(5)},
+                {int_null, int_null, bool_null, vmap({{0,6},{1,6}}), keys_null, long_null /*FIXME: ttl = 6*/},
                 // The following represents the "m[2] = 7" change. The "m[3] = null" change gets merged with a different change, see below
-                {int32_t(0), int_null, int_null, bool_null, vmap({{2,7}}), keys_null, long_null /*FIXME: ttl = 7*/},
+                {int_null, int_null, bool_null, vmap({{2,7}}), keys_null, long_null /*FIXME: ttl = 7*/},
                 // The "v2 = null" and "v[3] = null" changes get merged with the "m[4] = 0" change, because dead cells
                 // don't have a "ttl" concept; thus we put them together with alive cells which don't have a ttl (so ttl column = null).
-                {int32_t(0), int_null, int_null, true, vmap({{4,0}}), vkeys({3}), long_null},
+                {int_null, int_null, true, vmap({{4,0}}), vkeys({3}), long_null},
             };
 
             // These changes have the same timestamp, so their relative order in CDC log is arbitrary
@@ -1188,6 +1188,13 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
                     return er == r;
                 }) != result.end());
             }
+        }
+
+        {
+            auto result = get_result({int32_type},
+                "select \"cdc$batch_seq_no\" from ks.t_scylla_cdc_log where pk = 0 and ck = 1 allow filtering");
+            std::vector<std::vector<data_value>> expected = {{int32_t(0)}, {int32_t(1)}, {int32_t(2)}, {int32_t(3)}};
+            BOOST_REQUIRE_EQUAL(expected, result);
         }
 
         cquery_nofail(e, format(
@@ -1204,16 +1211,16 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
 
         {
             auto result = get_result(
-                {int32_type, int32_type, m_type, boolean_type, oper_type},
-                "select v1, v2, m, \"cdc$deleted_m\", \"cdc$operation\""
+                {int32_type, int32_type, int32_type, m_type, boolean_type, oper_type},
+                "select \"cdc$batch_seq_no\", v1, v2, m, \"cdc$deleted_m\", \"cdc$operation\""
                 " from ks.t_scylla_cdc_log where pk = 1 allow filtering");
             BOOST_REQUIRE_EQUAL(result.size(), 7);
 
             std::vector<std::vector<data_value>> expected = {
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::partition_delete)},
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::range_delete_start_inclusive)},
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::range_delete_end_exclusive)},
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::row_delete)},
+                {int32_t(0), int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::partition_delete)},
+                {int32_t(0), int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::range_delete_start_inclusive)},
+                {int32_t(1), int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::range_delete_end_exclusive)},
+                {int32_t(0), int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::row_delete)},
 
                 // The following sequence of operations:
                 //     insert into ks.t (pk,ck,v1) values (1,0,1) using timestamp T;
@@ -1230,21 +1237,12 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
                 //        and a {3:3} cell with timestamp T + 1. Thus we merge the tombstone into the T update,
                 //        and we add a T + 1 update to express the addition of the {3:3} cell.
                 //
-                {int32_t(1), int32_t(2), map_null, true, oper_ut(cdc::operation::update)},
-                {int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::insert)},
-                {int_null, int_null, vmap({{3,3}}), bool_null, oper_ut(cdc::operation::update)},
+                {int32_t(0), int32_t(1), int32_t(2), map_null, true, oper_ut(cdc::operation::update)},
+                {int32_t(0), int_null, int_null, map_null, bool_null, oper_ut(cdc::operation::insert)},
+                {int32_t(1), int_null, int_null, vmap({{3,3}}), bool_null, oper_ut(cdc::operation::update)},
             };
 
-            // The first 5 changes have different timestamps, so we can compare the order.
-            BOOST_REQUIRE(std::equal(expected.begin(), expected.begin() + 5, result.begin()));
-
-            // The last 2 changes have a higher timestamp than the other 5, but between the two the timestamp is the same.
-            // Thus their relative order in the CDC log is arbitrary.
-            for (auto it = expected.begin() + 5; it != expected.end(); ++it) {
-                BOOST_REQUIRE(std::find_if(result.begin() + 5, result.end(), [&] (const std::vector<data_value>& r) {
-                    return *it == r;
-                }) != result.end());
-            }
+            BOOST_REQUIRE_EQUAL(expected, result);
         }
 
         cquery_nofail(e, "delete from ks.t where pk = 2 and ck < 1 and ck > 2;");
