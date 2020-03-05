@@ -46,11 +46,10 @@ extern logging::logger cdc_log;
 
 namespace db {
 
-thread_local data_type cdc_stream_tuple_type = tuple_type_impl::get_instance({long_type, long_type});
-thread_local data_type cdc_streams_set_type = set_type_impl::get_instance(cdc_stream_tuple_type, false);
+thread_local data_type cdc_streams_set_type = set_type_impl::get_instance(bytes_type, false);
 
 /* See `token_range_description` struct */
-thread_local data_type cdc_streams_list_type = list_type_impl::get_instance(cdc_stream_tuple_type, false);
+thread_local data_type cdc_streams_list_type = list_type_impl::get_instance(bytes_type, false);
 thread_local data_type cdc_token_range_description_type = tuple_type_impl::get_instance(
         { utf8_type             // dht::token token_range_end;
         , cdc_streams_list_type // std::vector<stream_id> streams;
@@ -236,7 +235,7 @@ static list_type_impl::native_type prepare_cdc_generation_description(const cdc:
     for (auto& e: description.entries()) {
         list_type_impl::native_type streams;
         for (auto& s: e.streams) {
-            streams.push_back(make_tuple_value(cdc_stream_tuple_type, { s.first(), s.second() }));
+            streams.push_back(data_value(s.to_bytes()));
         }
 
         ret.push_back(make_tuple_value(cdc_token_range_description_type,
@@ -248,19 +247,11 @@ static list_type_impl::native_type prepare_cdc_generation_description(const cdc:
     return ret;
 }
 
-static cdc::stream_id get_stream_from_value(const data_value& v) {
-    auto tup = value_cast<tuple_type_impl::native_type>(v);
-    if (tup.size() != 2) {
-        on_internal_error(cdc_log, "get_stream_from_value: stream tuple type size != 2");
-    }
-    return { value_cast<int64_t>(tup[0]), value_cast<int64_t>(tup[1]) };
-}
-
 static std::vector<cdc::stream_id> get_streams_from_list_value(const data_value& v) {
     std::vector<cdc::stream_id> ret;
     auto& list_val = value_cast<list_type_impl::native_type>(v);
     for (auto& s_val: list_val) {
-        ret.push_back(get_stream_from_value(s_val));
+        ret.push_back(value_cast<bytes>(s_val));
     }
     return ret;
 }
@@ -334,7 +325,7 @@ system_distributed_keyspace::expire_cdc_topology_description(
 static set_type_impl::native_type prepare_cdc_streams(const std::vector<cdc::stream_id>& streams) {
     set_type_impl::native_type ret;
     for (auto& s: streams) {
-        ret.push_back(make_tuple_value(cdc_stream_tuple_type, { s.first(), s.second() }));
+        ret.push_back(data_value(s.to_bytes()));
     }
     return ret;
 }

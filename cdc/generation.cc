@@ -54,32 +54,53 @@ namespace cdc {
 extern const api::timestamp_clock::duration generation_leeway =
     std::chrono::duration_cast<api::timestamp_clock::duration>(std::chrono::seconds(5));
 
-stream_id::stream_id()
-    : _first(-1), _second(-1) {}
+static void copy_int_to_bytes(int64_t i, size_t offset, bytes& b) {
+    i = net::hton(i);
+    std::copy_n(reinterpret_cast<int8_t*>(&i), sizeof(int64_t), b.begin() + offset);
+}
 
 stream_id::stream_id(int64_t first, int64_t second)
-    : _first(first)
-    , _second(second) {}
+    : _value(bytes::initialized_later(), 2 * sizeof(int64_t))
+{
+    copy_int_to_bytes(first, 0, _value);
+    copy_int_to_bytes(second, sizeof(int64_t), _value);
+}
+
+stream_id::stream_id(bytes b) : _value(std::move(b)) { }
 
 bool stream_id::is_set() const {
-    return _first != -1 || _second != -1;
+    return !_value.empty();
 }
 
 bool stream_id::operator==(const stream_id& o) const {
-    return _first == o._first && _second == o._second;
+    return _value == o._value;
+}
+
+bool stream_id::operator<(const stream_id& o) const {
+    return _value < o._value;
+}
+
+static int64_t bytes_to_int64(const bytes& b, size_t offset) {
+    assert(b.size() >= offset + sizeof(int64_t));
+    int64_t res;
+    std::copy_n(b.begin() + offset, sizeof(int64_t), reinterpret_cast<int8_t *>(&res));
+    return net::ntoh(res);
 }
 
 int64_t stream_id::first() const {
-    return _first;
+    return bytes_to_int64(_value, 0);
 }
 
 int64_t stream_id::second() const {
-    return _second;
+    return bytes_to_int64(_value, sizeof(int64_t));
+}
+
+const bytes& stream_id::to_bytes() const {
+    return _value;
 }
 
 partition_key stream_id::to_partition_key(const schema& log_schema) const {
-    return partition_key::from_single_value(log_schema,
-            long_type->decompose(_first) + long_type->decompose(_second));
+    return partition_key::from_single_value(log_schema, _value);
 }
 
 bool token_range_description::operator==(const token_range_description& o) const {
@@ -156,8 +177,7 @@ topology_description generate_topology_description(
     }
 
     auto schema = schema_builder("fake_ks", "fake_table")
-        .with_column("stream_id_1", long_type, column_kind::partition_key)
-        .with_column("stream_id_2", long_type, column_kind::partition_key)
+        .with_column("stream_id", bytes_type, column_kind::partition_key)
         .build();
 
     auto quota = std::chrono::seconds(spots_to_fill / 2000 + 1);
@@ -340,15 +360,9 @@ static void do_update_streams_description(
         throw std::runtime_error(format("could not find streams data for timestamp {}", streams_ts));
     }
 
-    auto streams_less = [] (cdc::stream_id s1, cdc::stream_id s2) {
-        return s1.first() < s2.first() || (s1.first() == s2.first() && s1.second() < s2.second());
-    };
-
-    std::set<cdc::stream_id, decltype(streams_less)> streams_set(streams_less);
+    std::set<cdc::stream_id> streams_set;
     for (auto& entry: topo->entries()) {
-        for (auto& s: entry.streams) {
-            streams_set.insert(s);
-        }
+        streams_set.insert(entry.streams.begin(), entry.streams.end());
     }
 
     std::vector<cdc::stream_id> streams_vec(streams_set.begin(), streams_set.end());
