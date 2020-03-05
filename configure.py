@@ -1146,11 +1146,20 @@ extra_cxxflags["release.cc"] = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\
 for m in ['debug', 'release', 'sanitize']:
     modes[m]['cxxflags'] += ' ' + dbgflag
 
+get_dynamic_linker_output = subprocess.check_output(['./reloc/get-dynamic-linker.sh'], shell=True)
+dynamic_linker = get_dynamic_linker_output.decode('utf-8').strip()
+
+forced_ldflags = '-Wl,'
+
 # The default build-id used by lld is xxhash, which is 8 bytes long, but RPM
 # requires build-ids to be at least 16 bytes long
 # (https://github.com/rpm-software-management/rpm/issues/950), so let's
 # explicitly ask for SHA1 build-ids.
-args.user_ldflags = '-Wl,--build-id=sha1' + ' ' + args.user_ldflags
+forced_ldflags += '--build-id=sha1,'
+
+forced_ldflags += f'--dynamic-linker={dynamic_linker}'
+
+args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
 seastar_cflags = args.user_cflags
 if args.target != '':

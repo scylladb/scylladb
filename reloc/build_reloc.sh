@@ -2,9 +2,7 @@
 
 . /etc/os-release
 
-DYNAMIC_LINKER=$(./reloc/get-dynamic-linker.sh)
-
-COMMON_FLAGS="--enable-dpdk --cflags=-ffile-prefix-map=$PWD=. --ldflags=-Wl,--dynamic-linker=$DYNAMIC_LINKER"
+COMMON_FLAGS="--enable-dpdk --cflags=-ffile-prefix-map=$PWD=."
 
 DEFAULT_MODE="release"
 
