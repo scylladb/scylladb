@@ -109,8 +109,13 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, variable_spe
             throw exceptions::invalid_request_exception("A range deletion operation needs to specify both bounds for clusters without sstable mc format support");
         }
     }
-    if (!schema->is_compound() && stmt->restrictions().get_clustering_columns_restrictions()->is_slice()) {
-        throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
+    if (stmt->restrictions().get_clustering_columns_restrictions()->is_slice()) {
+        if (!schema->is_compound()) {
+            throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
+        }
+        if (!_deletions.empty()) {
+            throw exceptions::invalid_request_exception("Range deletions are not supported for specific columns");
+        }
     }
     return stmt;
 }

@@ -5130,3 +5130,15 @@ SEASTAR_TEST_CASE(test_like_parameter_marker) {
         prepared_on_shard(e, query, {T("err"), I(1), T("a%")}, {{B(false), "chg"}});
     });
 }
+
+SEASTAR_TEST_CASE(test_range_deletions_for_specific_column) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int, ck int, col text, PRIMARY KEY(pk, ck))").get();
+        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 1, 'aaa')").get();
+        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 2, 'bbb')").get();
+        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 3, 'ccc')").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("DELETE col FROM t WHERE pk = 0 AND ck > 1 AND ck <= 3").get(),
+                exceptions::invalid_request_exception);
+    });
+}
