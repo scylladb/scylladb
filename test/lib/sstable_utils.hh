@@ -22,11 +22,17 @@
 #pragma once
 
 #include "sstables/sstables.hh"
+#include "sstables/shared_sstable.hh"
 #include "memtable-sstable.hh"
 #include "dht/i_partitioner.hh"
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "test/lib/test_services.hh"
+#include "test/lib/sstable_test_env.hh"
+#include "gc_clock.hh"
+
+using namespace sstables;
+using namespace std::chrono_literals;
 
 struct local_shard_only_tag { };
 using local_shard_only = bool_class<local_shard_only_tag>;
@@ -76,3 +82,6 @@ inline sstring make_local_key(const schema_ptr& s, size_t min_key_size = 1) {
 inline std::vector<sstring> make_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1) {
     return do_make_keys(n, s, min_key_size, local_shard_only::no);
 }
+
+shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
+        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now());

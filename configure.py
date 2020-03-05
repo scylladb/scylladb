@@ -356,6 +356,8 @@ scylla_tests = set([
     'test/boost/sstable_3_x_test',
     'test/boost/sstable_datafile_test',
     'test/boost/sstable_mutation_test',
+    'test/boost/schema_changes_test',
+    'test/boost/sstable_conforms_to_mutation_source_test',
     'test/boost/sstable_resharding_test',
     'test/boost/sstable_test',
     'test/boost/storage_proxy_test',
@@ -967,6 +969,8 @@ for t in perf_tests:
 deps['test/boost/sstable_test'] += ['test/lib/sstable_utils.cc', 'test/lib/normalizing_reader.cc']
 deps['test/boost/sstable_datafile_test'] += ['test/lib/sstable_utils.cc', 'test/lib/normalizing_reader.cc']
 deps['test/boost/mutation_reader_test'] += ['test/lib/sstable_utils.cc']
+deps['test/boost/sstable_mutation_test'] += ['test/lib/sstable_utils.cc']
+deps['test/boost/sstable_conforms_to_mutation_source_test'] += ['test/lib/sstable_utils.cc']
 
 deps['test/boost/bytes_ostream_test'] = [
     "test/boost/bytes_ostream_test.cc",
