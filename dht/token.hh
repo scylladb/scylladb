@@ -125,6 +125,16 @@ public:
     static dht::token from_bytes(bytes_view bytes);
 
     /**
+     * Returns int64_t representation of the token
+     */
+    static int64_t to_int64(token);
+
+    /**
+     * Creates token from its int64_t representation
+     */
+    static dht::token from_int64(int64_t);
+
+    /**
      * Calculate the deltas between tokens in the ring in order to compare
      *  relative sizes.
      *
