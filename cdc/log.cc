@@ -116,6 +116,9 @@ public:
             if (!was_cdc) {
                 check_that_cdc_log_table_does_not_exist(db, new_schema, log_name(new_schema.cf_name()));
             }
+            if (is_cdc) {
+                check_for_attempt_to_create_nested_cdc_log(new_schema);
+            }
 
             auto logname = log_name(old_schema.cf_name());
             auto& keyspace = db.find_keyspace(old_schema.ks_name());
@@ -161,6 +164,15 @@ public:
     future<> append_mutations(Iter i, Iter e, schema_ptr s, lowres_clock::time_point, std::vector<mutation>&);
 
 private:
+    static void check_for_attempt_to_create_nested_cdc_log(const schema& schema) {
+        const auto& cf_name = schema.cf_name();
+        const auto cf_name_view = std::string_view(cf_name.data(), cf_name.size());
+        if (is_log_for_some_table(schema.ks_name(), cf_name_view)) {
+            throw exceptions::invalid_request_exception(format("Cannot create a CDC log for a table {}.{}, because creating nested CDC logs is not allowed",
+                    schema.ks_name(), schema.cf_name()));
+        }
+    }
+
     static void check_that_cdc_log_table_does_not_exist(database& db, const schema& schema, const sstring& logname) {
         if (db.has_schema(schema.ks_name(), logname)) {
             throw exceptions::invalid_request_exception(format("Cannot create CDC log table for table {}.{} because a table of name {}.{} already exists",
