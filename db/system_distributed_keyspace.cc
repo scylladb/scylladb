@@ -51,7 +51,7 @@ thread_local data_type cdc_streams_set_type = set_type_impl::get_instance(bytes_
 /* See `token_range_description` struct */
 thread_local data_type cdc_streams_list_type = list_type_impl::get_instance(bytes_type, false);
 thread_local data_type cdc_token_range_description_type = tuple_type_impl::get_instance(
-        { utf8_type             // dht::token token_range_end;
+        { long_type             // dht::token token_range_end;
         , cdc_streams_list_type // std::vector<stream_id> streams;
         , byte_type             // uint8_t sharding_ignore_msb;
         });
@@ -239,7 +239,7 @@ static list_type_impl::native_type prepare_cdc_generation_description(const cdc:
         }
 
         ret.push_back(make_tuple_value(cdc_token_range_description_type,
-                { data_value(e.token_range_end.to_sstring())
+                { data_value(dht::token::to_int64(e.token_range_end))
                 , make_list_value(cdc_streams_list_type, std::move(streams))
                 , data_value(int8_t(e.sharding_ignore_msb))
                 }));
@@ -262,7 +262,7 @@ static cdc::token_range_description get_token_range_description_from_value(const
         on_internal_error(cdc_log, "get_token_range_description_from_value: stream tuple type size != 3");
     }
 
-    auto token = dht::token::from_sstring(value_cast<sstring>(tup[0]));
+    auto token = dht::token::from_int64(value_cast<int64_t>(tup[0]));
     auto streams = get_streams_from_list_value(tup[1]);
     auto sharding_ignore_msb = uint8_t(value_cast<int8_t>(tup[2]));
 
