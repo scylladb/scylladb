@@ -1,0 +1,126 @@
+create table ks.t (pk int, ck int, vs int static, vc int, primary key (pk, ck)) with cdc = {'enabled': true, 'preimage': true};
+{
+	"status" : "ok"
+}
+
+-- generates 1 row: delta(static)
+update ks.t set vs = 0 where pk = 0;
+{
+	"status" : "ok"
+}
+-- generates 2 rows: preimage(static), delta(static)
+update ks.t set vs = 1 where pk = 0;
+{
+	"status" : "ok"
+}
+select "cdc$batch_seq_no", "cdc$operation", ck, vs, vc from ks.t_scylla_cdc_log where pk = 0 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "1",
+			"pk" : "0",
+			"vs" : "0"
+		},
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"pk" : "0",
+			"vs" : "0"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "1",
+			"pk" : "0",
+			"vs" : "1"
+		}
+	]
+}
+
+-- generates 3 rows: preimage(static), delta(static), delta(clustering)
+update ks.t set vs = 2, vc = 2 where pk = 0 and ck = 0;
+{
+	"status" : "ok"
+}
+-- generates 4 rows: preimage(static), preimage(clustering), delta(static), delta(clustering)
+update ks.t set vs = 3, vc = 3 where pk = 0 and ck = 0;
+{
+	"status" : "ok"
+}
+select "cdc$batch_seq_no", "cdc$operation", ck, vs, vc from ks.t_scylla_cdc_log where pk = 0 and ck = 0 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"cdc$batch_seq_no" : "2",
+			"cdc$operation" : "1",
+			"ck" : "0",
+			"pk" : "0",
+			"vc" : "2"
+		},
+		{
+			"cdc$batch_seq_no" : "2",
+			"cdc$operation" : "0",
+			"ck" : "0",
+			"pk" : "0",
+			"vc" : "2"
+		},
+		{
+			"cdc$batch_seq_no" : "3",
+			"cdc$operation" : "1",
+			"ck" : "0",
+			"pk" : "0",
+			"vc" : "3"
+		}
+	]
+}
+
+-- generates 1 row: delta(clustering)
+update ks.t set vc = 4 where pk = 1 and ck = 0;
+{
+	"status" : "ok"
+}
+-- generates 2 rows: preimage(clustering), delta(clustering)
+update ks.t set vc = 5 where pk = 1 and ck = 0;
+{
+	"status" : "ok"
+}
+select "cdc$batch_seq_no", "cdc$operation", ck, vs, vc from ks.t_scylla_cdc_log where pk = 1 and ck = 0 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "1",
+			"ck" : "0",
+			"pk" : "1",
+			"vc" : "4"
+		},
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"ck" : "0",
+			"pk" : "1",
+			"vc" : "4"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "1",
+			"ck" : "0",
+			"pk" : "1",
+			"vc" : "5"
+		}
+	]
+}
+
+-- there should be 13 rows in total
+select count(*) from ks.t_scylla_cdc_log;
+{
+	"rows" : 
+	[
+		{
+			"count" : "13"
+		}
+	]
+}

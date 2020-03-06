@@ -908,6 +908,7 @@ public:
 
         auto opts = selection->get_query_options();
         opts.set(query::partition_slice::option::collections_as_maps);
+        opts.set_if<query::partition_slice::option::always_return_static_content>(!p.static_row().empty());
 
         auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), std::move(opts));
         auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, row_limit);
