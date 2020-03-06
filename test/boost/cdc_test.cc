@@ -1260,3 +1260,66 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
         }
     }, mk_cdc_test_config()).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_batch_with_row_delete) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        const auto base_tbl_name = "tbl_batchrowdel";
+        const int pk = 0, ck = 0;
+
+        cquery_nofail(e, "CREATE TYPE ks.mytype (a int, b int)");
+        cquery_nofail(e, format("CREATE TABLE ks.{} (pk int, ck int, v1 int, v2 mytype, v3 map<int,int>, v4 set<int>, primary key (pk, ck)) WITH cdc = {{'enabled':true,'preimage':true}}", base_tbl_name));
+
+        cquery_nofail(e, format("INSERT INTO ks.{} (pk, ck, v1, v2, v3, v4) VALUES ({}, {}, 1, (1,2), {{1:2,3:4}}, {{1,2,3}})", base_tbl_name, pk, ck));
+        cquery_nofail(e, format(
+                "BEGIN UNLOGGED BATCH"
+                "   UPDATE ks.{tbl_name} set v1 = 666 WHERE pk = {pk} and ck = {ck};" // (1)
+                "   DELETE FROM ks.{tbl_name} WHERE pk = {pk} AND ck = {ck}; "        // (2)
+                "APPLY BATCH;",
+                fmt::arg("tbl_name", base_tbl_name), fmt::arg("pk", pk), fmt::arg("ck", ck)));
+
+        const sstring query = format("SELECT v1, v2, v3, v4, \"{}\" FROM ks.{}", cdc::log_meta_column_name("operation"), cdc::log_name(base_tbl_name));
+        auto msg = e.execute_cql(query).get0();
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        BOOST_REQUIRE(rows);
+        auto results = to_bytes(*rows);
+
+        auto udt_type = user_type_impl::get_instance("ks", "mytype", {to_bytes("a"), to_bytes("b")}, {int32_type, int32_type}, false);
+        auto m_type = map_type_impl::get_instance(int32_type, int32_type, false);
+        auto s_type = set_type_impl::get_instance(int32_type, false);
+        using oper_ut = std::underlying_type_t<cdc::operation>;
+        auto oper_type = data_type_for<oper_ut>();
+
+        auto int_null = data_value::make_null(int32_type);
+        auto udt_null = data_value::make_null(udt_type);
+        auto map_null = data_value::make_null(m_type);
+        auto set_null = data_value::make_null(s_type);
+
+        const std::vector<std::vector<data_value>> expected = {
+            // Preimage for (1)
+            {int32_t(1), udt_null, map_null, set_null, oper_ut(cdc::operation::pre_image)},
+            // Update (1)
+            {int32_t(666), udt_null, map_null, set_null, oper_ut(cdc::operation::update)},
+            // Row delete (2)
+            {int_null, udt_null, map_null, set_null, oper_ut(cdc::operation::row_delete)},
+            // Preimage for (1) + (2)
+            {int32_t(1), make_user_value(udt_type, {1,2}), make_map_value(m_type, {{1,2},{3,4}}), make_set_value(s_type, {1,2,3}), oper_ut(cdc::operation::pre_image)}
+        };
+
+        auto deser = [] (const data_type& t, const bytes_opt& b) -> data_value {
+            if (!b) {
+                return data_value::make_null(t);
+            }
+            return t->deserialize(*b);
+        };
+
+        for (const auto& er: expected) {
+            BOOST_REQUIRE(std::any_of(results.begin(), results.end(), [&] (const std::vector<bytes_opt>& r) {
+                return deser(int32_type, r[0]) == er[0] &&
+                        deser(udt_type, r[1]) == er[1] &&
+                        deser(m_type, r[2]) == er[2] &&
+                        deser(s_type, r[3]) == er[3] &&
+                        deser(oper_type, r[4]) == er[4];
+            }));
+        }
+    }, mk_cdc_test_config()).get();
+}
