@@ -43,10 +43,15 @@ public:
     /// \param pattern UTF-8 encoded pattern with wildcards '_' and '%'.
     explicit like_matcher(bytes_view pattern);
 
+    like_matcher(like_matcher&&) noexcept; // Must be defined in .cc, where class impl is known.
+
     ~like_matcher();
 
     /// Runs the compiled pattern on \c text.
     ///
     /// \return true iff text matches constructor's pattern.
     bool operator()(bytes_view text) const;
+
+    /// Resets pattern if different from the current one.
+    void reset(bytes_view pattern);
 };

@@ -20,10 +20,12 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
+#include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptors.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
 
 #include "statement_restrictions.hh"
 #include "single_column_primary_key_restrictions.hh"
@@ -926,14 +928,17 @@ bool token_restriction::slice::is_satisfied_by(const schema& schema,
     return satisfied;
 }
 
-bool single_column_restriction::LIKE::init_matcher(const query_options& options) const {
-    auto pattern = to_bytes_opt(_value->bind_and_get(options));
-    if (!pattern) {
-        return false;
-    }
-    if (!_matcher || pattern != _last_pattern) {
-        _matcher.emplace(*pattern);
-        _last_pattern = std::move(pattern);
+bool single_column_restriction::LIKE::init_matchers(const query_options& options) const {
+    for (size_t i = 0; i < _values.size(); ++i) {
+        auto pattern = to_bytes_opt(_values[i]->bind_and_get(options));
+        if (!pattern) {
+            return false;
+        }
+        if (i < _matchers.size()) {
+            _matchers[i].reset(*pattern);
+        } else {
+            _matchers.emplace_back(*pattern);
+        }
     }
     return true;
 }
@@ -951,11 +956,11 @@ bool single_column_restriction::LIKE::is_satisfied_by(const schema& schema,
     if (!cell_value) {
         return false;
     }
-    if (!init_matcher(options)) {
+    if (!init_matchers(options)) {
         return false;
     }
     return cell_value->with_linearized([&] (bytes_view data) {
-        return (*_matcher)(data);
+        return boost::algorithm::all_of(_matchers, [&] (auto& m) { return m(data); });
     });
 }
 
@@ -963,11 +968,34 @@ bool single_column_restriction::LIKE::is_satisfied_by(bytes_view data, const que
     if (!_column_def.type->is_string()) {
         throw exceptions::invalid_request_exception("LIKE is allowed only on string types");
     }
-    if (!init_matcher(options)) {
+    if (!init_matchers(options)) {
         return false;
     }
-    return (*_matcher)(data);
+    return boost::algorithm::all_of(_matchers, [&] (auto& m) { return m(data); });
 }
 
+sstring single_column_restriction::LIKE::to_string() const {
+    std::vector<sstring> vs(_values.size());
+    for (size_t i = 0; i < _values.size(); ++i) {
+        vs[i] = _values[i]->to_string();
+    }
+    return join(" AND ", vs);
 }
+
+void single_column_restriction::LIKE::merge_with(::shared_ptr<restriction> rest) {
+    if (auto other = dynamic_pointer_cast<LIKE>(rest)) {
+        boost::copy(other->_values, back_inserter(_values));
+    } else {
+        throw exceptions::invalid_request_exception(
+                format("{} cannot be restricted by both LIKE and non-LIKE restrictions", _column_def.name_as_text()));
+    }
 }
+
+::shared_ptr<single_column_restriction> single_column_restriction::LIKE::apply_to(const column_definition& cdef) {
+    auto r = ::make_shared<LIKE>(cdef, _values[0]);
+    std::copy(_values.cbegin() + 1, _values.cend(), back_inserter(r->_values));
+    return r;
+}
+
+} // namespace restrictions
+} // namespace cql3

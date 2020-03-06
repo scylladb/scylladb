@@ -4140,10 +4140,15 @@ SEASTAR_TEST_CASE(test_like_operator_conjunction) {
         cquery_nofail(e, "insert into t (s1, s2) values ('a', 'A')");
         require_rows(e, "select * from t where s1 like 'a%' and s2 like '__C' allow filtering",
                      {{T("abc"), T("ABC")}});
+        require_rows(e, "select * from t where s1 like 'a%' and s1 like '__C' allow filtering", {});
+        require_rows(e, "select s1 from t where s1 like 'a%' and s1 like '_' allow filtering", {{T("a")}});
+        require_rows(e, "select s1 from t where s1 like 'a%' and s1 like '%' allow filtering", {{T("a")}, {T("abc")}});
+        require_rows(e, "select s1 from t where s1 like 'a%' and s1 like '_b_' and s1 like '%c' allow filtering",
+                     {{T("abc")}});
         BOOST_REQUIRE_EXCEPTION(
                 e.execute_cql("select * from t where s1 like 'a%' and s1 = 'abc' allow filtering").get(),
                 exceptions::invalid_request_exception,
-                exception_predicate::message_contains("more than one relation"));
+                exception_predicate::message_contains("LIKE and non-LIKE"));
     });
 }
 
