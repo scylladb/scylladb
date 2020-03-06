@@ -36,6 +36,7 @@
 #include <sstream>
 #include <boost/range/algorithm/adjacent_find.hpp>
 #include <boost/algorithm/cxx11/iota.hpp>
+#include "test/lib/cql_test_env.hh"
 
 static logging::logger nlogger("NetworkTopologyStrategyLogger");
 
@@ -607,4 +608,13 @@ SEASTAR_TEST_CASE(testCalculateEndpoints) {
     });
 }
 
+SEASTAR_TEST_CASE(test_invalid_dcs) {
+    return do_with_cql_env_thread([] (auto& e) {
+        for (auto& incorrect : std::vector<std::string>{"3\"", "", "!!!", "abcb", "!3", "-5", "0x123"}) {
+            BOOST_REQUIRE_THROW(e.execute_cql("CREATE KEYSPACE abc WITH REPLICATION "
+                    "= {'class': 'NetworkTopologyStrategy', 'dc1':'" + incorrect + "'}").get(),
+                    exceptions::configuration_exception);
+        };
+    });
+}
 
