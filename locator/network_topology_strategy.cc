@@ -85,6 +85,10 @@ network_topology_strategy::network_topology_strategy(
                 "NetworkTopologyStrategy");
         }
 
+        if (val.empty() || std::any_of(val.begin(), val.end(), [] (char c) {return !isdigit(c);})) {
+            throw exceptions::configuration_exception(
+                    format("Replication factor must be numeric and non-negative, found '{}'", val));
+        }
         _dc_rep_factor.emplace(key, std::stol(val));
         _datacenteres.push_back(key);
     }
