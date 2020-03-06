@@ -812,7 +812,7 @@ public:
         return _raw._caching_options;
     }
 
-    dht::i_partitioner& get_partitioner() const;
+    const dht::i_partitioner& get_partitioner() const;
 
     const column_definition* get_column_definition(const bytes& name) const;
     const column_definition& column_at(column_kind, column_id) const;

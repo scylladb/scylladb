@@ -29,7 +29,6 @@
 #include "dht/sharder.hh"
 #include "to_string.hh"
 #include "xx_hasher.hh"
-#include "dht/i_partitioner.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "service/priority_manager.hh"
@@ -383,8 +382,8 @@ public:
             column_family& cf,
             schema_ptr s,
             dht::token_range range,
-            dht::i_partitioner& local_partitioner,
-            dht::i_partitioner& remote_partitioner,
+            const dht::i_partitioner& local_partitioner,
+            const dht::i_partitioner& remote_partitioner,
             unsigned remote_shard,
             uint64_t seed,
             is_local_reader local_reader)
@@ -400,7 +399,7 @@ private:
     flat_mutation_reader
     make_reader(seastar::sharded<database>& db,
             column_family& cf,
-            dht::i_partitioner& local_partitioner,
+            const dht::i_partitioner& local_partitioner,
             is_local_reader local_reader) {
         if (local_reader) {
             return cf.make_streaming_reader(_schema, _range);

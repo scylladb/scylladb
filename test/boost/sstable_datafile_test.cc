@@ -1772,7 +1772,7 @@ static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_p
 // ranges: [a,b] and [c,d]
 // returns true if token ranges overlap.
 static bool key_range_overlaps(column_family_for_tests& cf, sstring a, sstring b, sstring c, sstring d) {
-    dht::i_partitioner& p = cf->schema()->get_partitioner();
+    const dht::i_partitioner& p = cf->schema()->get_partitioner();
     auto range1 = create_token_range_from_keys(p, a, b);
     auto range2 = create_token_range_from_keys(p, c, d);
     return range1.overlaps(range2, dht::token_comparator());
@@ -4669,7 +4669,6 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             testlog.info("Writing sstable {}", sst->get_filename());
 
             {
-                auto& partitioner = dht::global_partitioner();
                 const auto ts = api::timestamp_type{1};
 
                 auto local_keys = make_local_keys(3, schema);
@@ -4695,7 +4694,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
 
                 auto write_partition = [&, schema, ts] (int pk, bool write_to_scrubbed) {
                     auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
-                    auto dkey = partitioner.decorate_key(*schema, pkey);
+                    auto dkey = dht::decorate_key(*schema, pkey);
 
                     testlog.trace("Writing partition {}", pkey.with_schema(*schema));
 
@@ -4817,13 +4816,12 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     std::deque<mutation_fragment> corrupt_fragments;
     std::deque<mutation_fragment> scrubbed_fragments;
 
-    auto& partitioner = dht::global_partitioner();
     const auto ts = api::timestamp_type{1};
     auto local_keys = make_local_keys(5, schema);
 
     auto make_partition_start = [&, schema] (unsigned pk) {
         auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
-        auto dkey = partitioner.decorate_key(*schema, pkey);
+        auto dkey = dht::decorate_key(*schema, pkey);
         return partition_start(std::move(dkey), {});
     };
 
