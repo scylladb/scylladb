@@ -90,11 +90,12 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
 
 void abstract_replication_strategy::validate_replication_factor(sstring rf) const
 {
+    if (rf.empty() || std::any_of(rf.begin(), rf.end(), [] (char c) {return !isdigit(c);})) {
+        throw exceptions::configuration_exception(
+                format("Replication factor must be numeric and non-negative, found '{}'", rf));
+    }
     try {
-        if (std::stol(rf) < 0) {
-            throw exceptions::configuration_exception(
-               sstring("Replication factor must be non-negative; found ") + rf);
-        }
+        std::stol(rf);
     } catch (...) {
         throw exceptions::configuration_exception(
             sstring("Replication factor must be numeric; found ") + rf);

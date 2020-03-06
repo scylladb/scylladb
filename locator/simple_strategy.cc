@@ -34,6 +34,7 @@ simple_strategy::simple_strategy(const sstring& keyspace_name, token_metadata& t
         auto& val = config_pair.second;
 
         if (boost::iequals(key, "replication_factor")) {
+            validate_replication_factor(val);
             _replication_factor = std::stol(val);
 
             break;
