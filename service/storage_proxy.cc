@@ -3532,7 +3532,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     // reordering of endpoints happens. The local endpoint, if
     // present, is always first in the list, as get_live_sorted_endpoints()
     // orders the list by proximity to the local endpoint.
-    is_read_non_local |= all_replicas.front() != utils::fb_utilities::get_broadcast_address();
+    is_read_non_local |= !all_replicas.empty() && all_replicas.front() != utils::fb_utilities::get_broadcast_address();
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
     std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, preferred_endpoints, repair_decision,
