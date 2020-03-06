@@ -86,8 +86,6 @@ using token = dht::token;
 using UUID = utils::UUID;
 using inet_address = gms::inet_address;
 
-using namespace std::chrono_literals;
-
 extern logging::logger cdc_log;
 
 namespace service {
@@ -98,18 +96,6 @@ static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 
 distributed<storage_service> _the_storage_service;
 
-
-timeout_config make_timeout_config(const db::config& cfg) {
-    timeout_config tc;
-    tc.read_timeout = cfg.read_request_timeout_in_ms() * 1ms;
-    tc.write_timeout = cfg.write_request_timeout_in_ms() * 1ms;
-    tc.range_read_timeout = cfg.range_request_timeout_in_ms() * 1ms;
-    tc.counter_write_timeout = cfg.counter_write_request_timeout_in_ms() * 1ms;
-    tc.truncate_timeout = cfg.truncate_request_timeout_in_ms() * 1ms;
-    tc.cas_timeout = cfg.cas_contention_timeout_in_ms() * 1ms;
-    tc.other_timeout = cfg.request_timeout_in_ms() * 1ms;
-    return tc;
-}
 
 int get_generation_number() {
     using namespace std::chrono;

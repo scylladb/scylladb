@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "timeout_config.hh"
 #include "redis/service.hh"
 #include "redis/keyspace_utils.hh"
 #include "redis/server.hh"
@@ -44,18 +45,6 @@ future<> redis_service::listen(distributed<auth::service>& auth_service, db::con
     }
     auto server = make_shared<distributed<redis_transport::redis_server>>();
     _server = server;
-
-    auto make_timeout_config = [] (db::config& cfg) {
-        timeout_config tc;
-        tc.read_timeout = cfg.read_request_timeout_in_ms() * 1ms; 
-        tc.write_timeout = cfg.write_request_timeout_in_ms() * 1ms; 
-        tc.range_read_timeout = cfg.range_request_timeout_in_ms() * 1ms; 
-        tc.counter_write_timeout = cfg.counter_write_request_timeout_in_ms() * 1ms; 
-        tc.truncate_timeout = cfg.truncate_request_timeout_in_ms() * 1ms; 
-        tc.cas_timeout = cfg.cas_contention_timeout_in_ms() * 1ms; 
-        tc.other_timeout = cfg.request_timeout_in_ms() * 1ms; 
-        return tc;
-    };
 
     auto addr = cfg.rpc_address();
     auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;

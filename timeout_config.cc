@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 ScyllaDB
+ * Copyright (C) 2020 ScyllaDB
  *
  */
 
@@ -20,23 +20,19 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include "timeout_config.hh"
+#include "db/config.hh"
 
-#include "db/timeout_clock.hh"
+using namespace std::chrono_literals;
 
-struct timeout_config {
-    db::timeout_clock::duration read_timeout;
-    db::timeout_clock::duration write_timeout;
-    db::timeout_clock::duration range_read_timeout;
-    db::timeout_clock::duration counter_write_timeout;
-    db::timeout_clock::duration truncate_timeout;
-    db::timeout_clock::duration cas_timeout;
-    db::timeout_clock::duration other_timeout;
-};
-
-using timeout_config_selector = db::timeout_clock::duration (timeout_config::*);
-
-extern const timeout_config infinite_timeout_config;
-
-namespace db { class config; }
-timeout_config make_timeout_config(const db::config& cfg);
+timeout_config make_timeout_config(const db::config& cfg) {
+    timeout_config tc;
+    tc.read_timeout = cfg.read_request_timeout_in_ms() * 1ms;
+    tc.write_timeout = cfg.write_request_timeout_in_ms() * 1ms;
+    tc.range_read_timeout = cfg.range_request_timeout_in_ms() * 1ms;
+    tc.counter_write_timeout = cfg.counter_write_request_timeout_in_ms() * 1ms;
+    tc.truncate_timeout = cfg.truncate_request_timeout_in_ms() * 1ms;
+    tc.cas_timeout = cfg.cas_contention_timeout_in_ms() * 1ms;
+    tc.other_timeout = cfg.request_timeout_in_ms() * 1ms;
+    return tc;
+}
