@@ -81,7 +81,7 @@ shared_ptr<compressor> compressor::create(const sstring& name, const opt_getter&
     qualified_name qn(namespace_prefix, name);
 
     for (auto& c : { lz4, snappy, deflate }) {
-        if (c->name() == qn) {
+        if (c->name() == static_cast<const sstring&>(qn)) {
             return c;
         }
     }
