@@ -305,23 +305,31 @@ schema_ptr tables() {
 
 // Holds Scylla-specific table metadata.
 schema_ptr scylla_tables(schema_features features) {
-    static auto make = [] (bool has_cdc_options) -> schema_ptr {
+    static auto make = [] (bool has_cdc_options, bool has_per_table_partitioners) -> schema_ptr {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
         auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("version", uuid_type)
             .set_gc_grace_seconds(schema_gc_grace);
+        // 0 - false, false
+        // 1 - true, false
+        // 2 - false, true
+        // 3 - true, true
+        int offset = 0;
         if (has_cdc_options) {
             sb.with_column("cdc", map_type_impl::get_instance(utf8_type, utf8_type, false));
-            sb.with_version(generate_schema_version(id, 1));
-        } else {
-            sb.with_version(generate_schema_version(id));
+            ++offset;
         }
+        if (has_per_table_partitioners) {
+            sb.with_column("partitioner", utf8_type);
+            offset += 2;
+        }
+        sb.with_version(generate_schema_version(id, offset));
         return sb.build();
     };
-    static thread_local schema_ptr schemas[2] = { make(false), make(true) };
-    return schemas[features.contains(schema_feature::CDC_OPTIONS)];
+    static thread_local schema_ptr schemas[2][2] = { {make(false, false), make(false, true)}, {make(true, false), make(true, true)} };
+    return schemas[features.contains(schema_feature::CDC_OPTIONS)][features.contains(schema_feature::PER_TABLE_PARTITIONERS)];
 }
 
 // The "columns" table lists the definitions of all columns in all tables
@@ -626,7 +634,7 @@ schema_ptr aggregates() {
 static
 mutation
 redact_columns_for_missing_features(mutation m, schema_features features) {
-    if (features.contains(schema_feature::CDC_OPTIONS)) {
+    if (features.contains(schema_feature::CDC_OPTIONS) && features.contains(schema_feature::PER_TABLE_PARTITIONERS)) {
         return std::move(m);
     }
     if (m.schema()->cf_name() != SCYLLA_TABLES) {
