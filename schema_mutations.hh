@@ -138,6 +138,7 @@ public:
     bool is_view() const;
 
     table_schema_version digest() const;
+    std::optional<sstring> partitioner() const;
 
     bool operator==(const schema_mutations&) const;
     bool operator!=(const schema_mutations&) const;

@@ -121,6 +121,10 @@ const dht::i_partitioner& schema::get_partitioner() const {
     return dht::global_partitioner();
 }
 
+bool schema::has_custom_partitioner() const {
+    return bool(_raw._partitioner);
+}
+
 ::shared_ptr<cql3::column_specification>
 schema::make_column_specification(const column_definition& def) {
     auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
