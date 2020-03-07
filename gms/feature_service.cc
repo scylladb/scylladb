@@ -224,6 +224,7 @@ db::schema_features feature_service::cluster_schema_features() const {
     f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(bool(_digest_insensitive_to_expiry));
     f.set_if<db::schema_feature::COMPUTED_COLUMNS>(bool(_computed_columns));
     f.set_if<db::schema_feature::CDC_OPTIONS>(bool(_cdc_feature));
+    f.set_if<db::schema_feature::PER_TABLE_PARTITIONERS>(bool(_per_table_partitioners_feature));
     return f;
 }
 
