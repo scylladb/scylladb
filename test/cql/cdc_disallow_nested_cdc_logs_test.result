@@ -1,0 +1,9 @@
+create table tbl (pk int primary key) with cdc = {'enabled': true};
+{
+	"status" : "ok"
+}
+alter table tbl_scylla_cdc_log with cdc = {'enabled': true};
+{
+	"message" : "exceptions::invalid_request_exception (Cannot create a CDC log for a table ks.tbl_scylla_cdc_log, because creating nested CDC logs is not allowed)",
+	"status" : "error"
+}
