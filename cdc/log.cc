@@ -723,26 +723,7 @@ public:
                     }
 
                     if (has_pirow) {
-                        value = cdef.is_atomic()
-                            ? pirow->get_blob(cdef.name_as_text())
-                            : visit(*cdef.type, make_visitor(
-                                // flatten set
-                                [&] (const set_type_impl& type) {
-                                    auto v = pirow->get_view(cdef.name_as_text());
-                                    auto f = cql_serialization_format::internal();
-                                    auto n = read_collection_size(v, f);
-                                    std::vector<bytes_view> tmp;
-                                    tmp.reserve(n);
-                                    while (n--) {
-                                        tmp.emplace_back(read_collection_value(v, f)); // key
-                                        read_collection_value(v, f); // value. ignore.
-                                    }
-                                    return set_type_impl::serialize_partially_deserialized_form(tmp, f);
-                                },
-                                [&] (const abstract_type& o) -> bytes {
-                                    return pirow->get_blob(cdef.name_as_text());
-                                }
-                            ));
+                        value = get_preimage_col_value(cdef, pirow);
 
                         assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
                         assert(pikey->explode() != log_ck.explode());
@@ -817,32 +798,61 @@ public:
 
                         ++pos;
                     }
-
-                    auto ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow);
-                    const auto& marker = r.row().marker();
-                    if (marker.is_live() && marker.is_expiring()) {
-                        ttl = marker.ttl();
-                    }
-
+                    
                     operation cdc_op;
                     if (r.row().deleted_at()) {
                         cdc_op = operation::row_delete;
-                    } else if (marker.is_live()) {
-                        cdc_op = operation::insert;
+                        if (pirow) {
+                            for (const column_definition& column: _schema->regular_columns()) {
+                                assert(pirow->has(column.name_as_text()));
+                                auto& cdef = *_log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
+                                auto value = get_preimage_col_value(column, pirow);
+                                res.set_cell(*pikey, cdef, atomic_cell::make_live(*column.type, ts, bytes_view(value), _cdc_ttl_opt));
+                            }
+                        }
                     } else {
-                        cdc_op = operation::update;
+                        auto ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow);
+                        const auto& marker = r.row().marker();
+                        if (marker.is_live() && marker.is_expiring()) {
+                            ttl = marker.ttl();
+                        }
+
+                        cdc_op = marker.is_live() ? operation::insert : operation::update;
+
+                        if (ttl) {
+                            set_ttl(log_ck, ts, *ttl, res);
+                        }
                     }
                     set_operation(log_ck, ts, cdc_op, res);
-
-                    if (ttl) {
-                        set_ttl(log_ck, ts, *ttl, res);
-                    }
                     ++batch_no;
                 }
             }
         }
 
         return res;
+    }
+
+    static bytes get_preimage_col_value(const column_definition& cdef, const cql3::untyped_result_set_row *pirow) {
+        return cdef.is_atomic()
+            ? pirow->get_blob(cdef.name_as_text())
+            : visit(*cdef.type, make_visitor(
+                // flatten set
+                [&] (const set_type_impl& type) {
+                    auto v = pirow->get_view(cdef.name_as_text());
+                    auto f = cql_serialization_format::internal();
+                    auto n = read_collection_size(v, f);
+                    std::vector<bytes_view> tmp;
+                    tmp.reserve(n);
+                    while (n--) {
+                        tmp.emplace_back(read_collection_value(v, f)); // key
+                        read_collection_value(v, f); // value. ignore.
+                    }
+                    return set_type_impl::serialize_partially_deserialized_form(tmp, f);
+                },
+                [&] (const abstract_type& o) -> bytes {
+                    return pirow->get_blob(cdef.name_as_text());
+                }
+            ));
     }
 
     static db::timeout_clock::time_point default_timeout() {
@@ -897,11 +907,22 @@ public:
             });
         }
         if (!p.clustered_rows().empty()) {
-            p.clustered_rows().begin()->row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
-                auto& cdef =_schema->column_at(column_kind::regular_column, id);
-                regular_columns.emplace_back(id);
-                columns.emplace_back(&cdef);
+            const bool has_row_delete = std::any_of(p.clustered_rows().begin(), p.clustered_rows().end(), [] (const rows_entry& re) {
+                return re.row().deleted_at();
             });
+
+            if (has_row_delete) {
+                for (const column_definition& c: _schema->regular_columns()) {
+                    regular_columns.emplace_back(c.id);
+                    columns.emplace_back(&c);
+                }
+            } else {
+                p.clustered_rows().begin()->row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
+                    const auto& cdef =_schema->column_at(column_kind::regular_column, id);
+                    regular_columns.emplace_back(id);
+                    columns.emplace_back(&cdef);
+                });
+            }
         }
         
         auto selection = cql3::selection::selection::for_columns(_schema, std::move(columns));
