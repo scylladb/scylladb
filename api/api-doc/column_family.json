@@ -70,7 +70,7 @@
             {
                "method":"POST",
                "summary":"Force a major compaction of this column family",
-               "type":"string",
+               "type":"void",
                "nickname":"force_major_compaction",
                "produces":[
                   "application/json"

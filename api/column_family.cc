@@ -994,5 +994,15 @@ void set_column_family(http_context& ctx, routes& r) {
         });
     });
 
+    cf::force_major_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
+        if (req->get_query_param("split_output") != "") {
+            fail(unimplemented::cause::API);
+        }
+        return foreach_column_family(ctx, req->param["name"], [](column_family &cf) {
+            return cf.compact_all_sstables();
+        }).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
 }
 }
