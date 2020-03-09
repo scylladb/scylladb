@@ -35,7 +35,6 @@
 #include <seastar/core/thread.hh>
 #include <chrono>
 #include "db/config.hh"
-#include "cql3/cql_config.hh"
 
 namespace bpo = boost::program_options;
 
@@ -61,12 +60,11 @@ namespace bpo = boost::program_options;
 int main(int ac, char ** av) {
     distributed<database> db;
     sharded<auth::service> auth_service;
-    sharded<cql3::cql_config> cql_config;
     app_template app;
     app.add_options()
         ("seed", bpo::value<std::vector<std::string>>(), "IP address of seed node")
         ("listen-address", bpo::value<std::string>()->default_value("0.0.0.0"), "IP address to listen");
-    return app.run_deprecated(ac, av, [&auth_service, &db, &app, &cql_config] {
+    return app.run_deprecated(ac, av, [&auth_service, &db, &app] {
         auto config = app.configuration();
         logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
@@ -92,8 +90,7 @@ int main(int ac, char ** av) {
             auto stop_mnotifier = defer([&] { mnotif.stop().get(); });
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            cql_config.start().get();
-            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), auth_service, cql_config, sys_dist_ks, view_update_generator, feature_service, sscfg, mnotif, token_metadata).get();
+            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg, mnotif, token_metadata).get();
             netw::get_messaging_service().start(listen).get();
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();

@@ -41,12 +41,6 @@ namespace thrift_std = boost;
 namespace thrift_std = std;
 #endif
 
-namespace cql3 {
-
-class cql_config;
-
-}
-
 namespace cassandra {
 
 static const sstring thrift_version = "20.1.0";
@@ -123,7 +117,7 @@ private:
     boost::intrusive::list<connection> _connections_list;
     seastar::gate _stop_gate;
 public:
-    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, const cql3::cql_config& cql_config, thrift_server_config config);
+    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, thrift_server_config config);
     ~thrift_server();
     future<> listen(socket_address addr, bool keepalive);
     future<> stop();
