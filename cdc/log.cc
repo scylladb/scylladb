@@ -262,8 +262,12 @@ bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table
         return false;
     }
     const auto base_name = sstring(table_name.data(), table_name.size() - cdc_log_suffix.size());
-    const auto base_schema = service::get_local_storage_proxy().get_db().local().find_schema(ks_name, base_name);
-    return bool(base_schema) && base_schema->cdc_options().enabled();
+    const auto& local_db = service::get_local_storage_proxy().get_db().local();
+    if (!local_db.has_schema(ks_name, base_name)) {
+        return false;
+    }
+    const auto base_schema = local_db.find_schema(ks_name, base_name);
+    return base_schema->cdc_options().enabled();
 }
 
 sstring log_name(const sstring& table_name) {
