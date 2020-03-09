@@ -623,7 +623,7 @@ public:
                                 // simply means "replace values"
                                 is_column_delete = true;
                             }
-                            auto process_cells = [&](auto value_callback) {
+                            auto process_collection = [&](auto value_callback) {
                                 for (auto& [key, value] : view.cells) {
                                     // note: we are assuming that all mutations coming here adhere to
                                     // / are created by the cql machinery or similar, i.e. if we have
@@ -649,7 +649,7 @@ public:
                                 // maps and lists are just flattened
                                 [&] (const collection_type_impl& type) -> bytes_opt {
                                     std::vector<std::pair<bytes_view, bytes_view>> result;
-                                    process_cells([&](const bytes_view& key, const bytes_view& value, bool live) {
+                                    process_collection([&](const bytes_view& key, const bytes_view& value, bool live) {
                                         if (live) {
                                             result.emplace_back(key, value);
                                         } else {
@@ -667,7 +667,7 @@ public:
                                 // set need to transform from mutation view
                                 [&] (const set_type_impl& type) -> bytes_opt  {
                                     std::vector<bytes_view> result;
-                                    process_cells([&](const bytes_view& key, const bytes_view& value, bool live) {
+                                    process_collection([&](const bytes_view& key, const bytes_view& value, bool live) {
                                         if (live) {
                                             result.emplace_back(key);
                                         } else {
@@ -687,7 +687,7 @@ public:
                                 // fields not in the mutation are null in the enclosing tuple, signifying "no info"
                                 [&](const user_type_impl& type) -> bytes_opt  {
                                     std::vector<bytes_opt> result(type.size());
-                                    process_cells([&](const bytes_view& key, const bytes_view& value, bool live) {
+                                    process_collection([&](const bytes_view& key, const bytes_view& value, bool live) {
                                         if (live) {
                                             auto idx = deserialize_field_index(key);
                                             result[idx].emplace(value);
