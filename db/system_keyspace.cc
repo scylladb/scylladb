@@ -1297,10 +1297,18 @@ typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 
 static constexpr uint8_t current_version = 1;
 static bool need_legacy_truncation_records = true;
-static thread_local shared_promise<> migration_complete;
+
+static thread_local struct {
+    std::optional<future<>> done;
+    gms::feature::listener_registration reg;
+} migration_complete;
 
 future<> wait_for_truncation_record_migration_complete() {
-   return migration_complete.get_shared_future();
+    // caller of this helper (test) first synchronously
+    // enables the feature migration_complete listens on,
+    // thus making thie future emplaced here
+    assert(migration_complete.done);
+    return std::move(*migration_complete.done);
 }
 
 /**
@@ -1425,8 +1433,7 @@ future<> migrate_truncation_records(const gms::feature& cluster_supports_truncat
             });
         }).then([&cluster_supports_truncation_table, tmp = std::move(tmp)] {
             if (!cluster_supports_truncation_table || !tmp.empty()) {
-                //FIXME: discarded future.
-                (void)cluster_supports_truncation_table.when_enabled().then([] {
+                migration_complete.reg = cluster_supports_truncation_table.when_enabled([] {
                     // this potentially races with a truncation, i.e. someone could be inserting into
                     // the legacy column while we delete it. But this is ok, it will just mean we have
                     // some unneeded data and will do a merge again next boot, but eventually we
@@ -1435,13 +1442,10 @@ future<> migrate_truncation_records(const gms::feature& cluster_supports_truncat
                     slogger.log(level, "Got cluster agreement on truncation table feature. Removing legacy records.");
                     need_legacy_truncation_records = false;
                     sstring req = format("DELETE truncated_at from system.{} WHERE key = '{}'", LOCAL, LOCAL);
-                    return qctx->qp().execute_internal(req).discard_result().then([level] {
+
+                    migration_complete.done = qctx->qp().execute_internal(req).discard_result().then([level] {
                         slogger.log(level, "Legacy records deleted.");
-                        return force_blocking_flush(LOCAL).then([] {
-                            return smp::invoke_on_all([] {
-                                migration_complete.set_value();
-                            });
-                        });
+                        return force_blocking_flush(LOCAL);
                     });
                 });
             }
