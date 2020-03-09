@@ -65,9 +65,9 @@ public:
     future<> stop();
     // Has to run inside seastar::async context
     void enable(const sstring& name);
-    void enable(const std::set<sstring>& list);
+    void enable(const std::set<std::string_view>& list);
     db::schema_features cluster_schema_features() const;
-    std::set<sstring> known_feature_set();
+    std::set<std::string_view> known_feature_set();
 
 private:
     gms::feature _range_tombstones_feature;

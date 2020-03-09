@@ -907,9 +907,9 @@ public:
     utils::UUID get_local_id() const { return _local_host_id; }
 
     sstring get_config_supported_features();
-    std::set<sstring> get_config_supported_features_set();
+    std::set<std::string_view> get_config_supported_features_set();
 private:
-    std::set<sstring> get_known_features_set();
+    std::set<std::string_view> get_known_features_set();
     future<> set_cql_ready(bool ready);
     void notify_down(inet_address endpoint);
     void notify_left(inet_address endpoint);

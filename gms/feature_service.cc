@@ -26,6 +26,33 @@
 #include "gms/feature_service.hh"
 
 namespace gms {
+constexpr std::string_view features::RANGE_TOMBSTONES = "RANGE_TOMBSTONES";
+constexpr std::string_view features::LARGE_PARTITIONS = "LARGE_PARTITIONS";
+constexpr std::string_view features::MATERIALIZED_VIEWS = "MATERIALIZED_VIEWS";
+constexpr std::string_view features::COUNTERS = "COUNTERS";
+constexpr std::string_view features::INDEXES = "INDEXES";
+constexpr std::string_view features::DIGEST_MULTIPARTITION_READ = "DIGEST_MULTIPARTITION_READ";
+constexpr std::string_view features::CORRECT_COUNTER_ORDER = "CORRECT_COUNTER_ORDER";
+constexpr std::string_view features::SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
+constexpr std::string_view features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
+constexpr std::string_view features::WRITE_FAILURE_REPLY = "WRITE_FAILURE_REPLY";
+constexpr std::string_view features::XXHASH = "XXHASH";
+constexpr std::string_view features::UDF = "UDF";
+constexpr std::string_view features::ROLES = "ROLES";
+constexpr std::string_view features::LA_SSTABLE = "LA_SSTABLE_FORMAT";
+constexpr std::string_view features::STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
+constexpr std::string_view features::MC_SSTABLE = "MC_SSTABLE_FORMAT";
+constexpr std::string_view features::ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
+constexpr std::string_view features::TRUNCATION_TABLE = "TRUNCATION_TABLE";
+constexpr std::string_view features::CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
+constexpr std::string_view features::UNBOUNDED_RANGE_TOMBSTONES = "UNBOUNDED_RANGE_TOMBSTONES";
+constexpr std::string_view features::VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
+constexpr std::string_view features::DIGEST_INSENSITIVE_TO_EXPIRY = "DIGEST_INSENSITIVE_TO_EXPIRY";
+constexpr std::string_view features::COMPUTED_COLUMNS = "COMPUTED_COLUMNS";
+constexpr std::string_view features::CDC = "CDC";
+constexpr std::string_view features::NONFROZEN_UDTS = "NONFROZEN_UDTS";
+constexpr std::string_view features::HINTED_HANDOFF_SEPARATE_CONNECTION = "HINTED_HANDOFF_SEPARATE_CONNECTION";
+constexpr std::string_view features::LWT = "LWT";
 
 static logging::logger logger("features");
 
@@ -106,11 +133,11 @@ void feature_service::enable(const sstring& name) {
     }
 }
 
-std::set<sstring> feature_service::known_feature_set() {
+std::set<std::string_view> feature_service::known_feature_set() {
     // Add features known by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
-    std::set<sstring> features = {
+    std::set<std::string_view> features = {
         gms::features::RANGE_TOMBSTONES,
         gms::features::LARGE_PARTITIONS,
         gms::features::COUNTERS,
@@ -155,7 +182,7 @@ std::set<sstring> feature_service::known_feature_set() {
     return features;
 }
 
-feature::feature(feature_service& service, sstring name, bool enabled)
+feature::feature(feature_service& service, std::string_view name, bool enabled)
         : _service(&service)
         , _name(name)
         , _enabled(enabled) {
@@ -197,7 +224,7 @@ db::schema_features feature_service::cluster_schema_features() const {
     return f;
 }
 
-void feature_service::enable(const std::set<sstring>& list) {
+void feature_service::enable(const std::set<std::string_view>& list) {
     for (gms::feature& f : {
         std::ref(_range_tombstones_feature),
         std::ref(_large_partitions_feature),

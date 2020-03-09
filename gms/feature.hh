@@ -72,7 +72,7 @@ public:
         // Has to run inside seastar::async context
         virtual void on_enabled() = 0;
     };
-    explicit feature(feature_service& service, sstring name, bool enabled = false);
+    explicit feature(feature_service& service, std::string_view name, bool enabled = false);
     feature() = default;
     ~feature();
     feature(const feature& other) = delete;
@@ -110,33 +110,33 @@ public:
 
 namespace features {
 
-static const sstring RANGE_TOMBSTONES = "RANGE_TOMBSTONES";
-static const sstring LARGE_PARTITIONS = "LARGE_PARTITIONS";
-static const sstring MATERIALIZED_VIEWS = "MATERIALIZED_VIEWS";
-static const sstring COUNTERS = "COUNTERS";
-static const sstring INDEXES = "INDEXES";
-static const sstring DIGEST_MULTIPARTITION_READ = "DIGEST_MULTIPARTITION_READ";
-static const sstring CORRECT_COUNTER_ORDER = "CORRECT_COUNTER_ORDER";
-static const sstring SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
-static const sstring CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
-static const sstring WRITE_FAILURE_REPLY = "WRITE_FAILURE_REPLY";
-static const sstring XXHASH = "XXHASH";
-static const sstring UDF = "UDF";
-static const sstring ROLES = "ROLES";
-static const sstring LA_SSTABLE = "LA_SSTABLE_FORMAT";
-static const sstring STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
-static const sstring MC_SSTABLE = "MC_SSTABLE_FORMAT";
-static const sstring ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
-static const sstring TRUNCATION_TABLE = "TRUNCATION_TABLE";
-static const sstring CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
-static const sstring UNBOUNDED_RANGE_TOMBSTONES = "UNBOUNDED_RANGE_TOMBSTONES";
-static const sstring VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
-static const sstring DIGEST_INSENSITIVE_TO_EXPIRY = "DIGEST_INSENSITIVE_TO_EXPIRY";
-static const sstring COMPUTED_COLUMNS = "COMPUTED_COLUMNS";
-static const sstring CDC = "CDC";
-static const sstring NONFROZEN_UDTS = "NONFROZEN_UDTS";
-static const sstring HINTED_HANDOFF_SEPARATE_CONNECTION = "HINTED_HANDOFF_SEPARATE_CONNECTION";
-static const sstring LWT = "LWT";
+extern const std::string_view RANGE_TOMBSTONES;
+extern const std::string_view LARGE_PARTITIONS;
+extern const std::string_view MATERIALIZED_VIEWS;
+extern const std::string_view COUNTERS;
+extern const std::string_view INDEXES;
+extern const std::string_view DIGEST_MULTIPARTITION_READ;
+extern const std::string_view CORRECT_COUNTER_ORDER;
+extern const std::string_view SCHEMA_TABLES_V3;
+extern const std::string_view CORRECT_NON_COMPOUND_RANGE_TOMBSTONES;
+extern const std::string_view WRITE_FAILURE_REPLY;
+extern const std::string_view XXHASH;
+extern const std::string_view UDF;
+extern const std::string_view ROLES;
+extern const std::string_view LA_SSTABLE;
+extern const std::string_view STREAM_WITH_RPC_STREAM;
+extern const std::string_view MC_SSTABLE;
+extern const std::string_view ROW_LEVEL_REPAIR;
+extern const std::string_view TRUNCATION_TABLE;
+extern const std::string_view CORRECT_STATIC_COMPACT_IN_MC;
+extern const std::string_view UNBOUNDED_RANGE_TOMBSTONES;
+extern const std::string_view VIEW_VIRTUAL_COLUMNS;
+extern const std::string_view DIGEST_INSENSITIVE_TO_EXPIRY;
+extern const std::string_view COMPUTED_COLUMNS;
+extern const std::string_view CDC;
+extern const std::string_view NONFROZEN_UDTS;
+extern const std::string_view HINTED_HANDOFF_SEPARATE_CONNECTION;
+extern const std::string_view LWT;
 
 }
 

@@ -579,7 +579,7 @@ private:
     // Get features supported by all the nodes this node knows about
     std::set<sstring> get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const;
 public:
-    void check_knows_remote_features(std::set<sstring>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const;
+    void check_knows_remote_features(std::set<std::string_view>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const;
     void maybe_enable_features();
 private:
     seastar::metrics::metric_groups _metrics;

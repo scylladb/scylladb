@@ -199,7 +199,7 @@ bool storage_service::is_auto_bootstrap() const {
 }
 
 // The features this node supports
-std::set<sstring> storage_service::get_known_features_set() {
+std::set<std::string_view> storage_service::get_known_features_set() {
     return _feature_service.known_feature_set();
 }
 
@@ -208,7 +208,7 @@ sstring storage_service::get_config_supported_features() {
 }
 
 // The features this node supports and is allowed to advertise to other nodes
-std::set<sstring> storage_service::get_config_supported_features_set() {
+std::set<std::string_view> storage_service::get_config_supported_features_set() {
     auto features = _feature_service.known_feature_set();
 
     if (sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
