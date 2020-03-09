@@ -1,0 +1,126 @@
+CREATE TABLE ks.tbl_cdc_lwt (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {'enabled':true, 'preimage':true};
+{
+	"status" : "ok"
+}
+
+-- (0) successful insert
+INSERT INTO ks.tbl_cdc_lwt (pk, ck, val) VALUES (1, 1, 111) IF NOT EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+-- (1) unsuccessful insert
+INSERT INTO ks.tbl_cdc_lwt (pk, ck, val) VALUES (1, 1, 222) IF NOT EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false",
+			"ck" : "1",
+			"pk" : "1",
+			"val" : "111"
+		}
+	]
+}
+-- (2) successful update
+UPDATE ks.tbl_cdc_lwt set val = 333 WHERE pk = 1 and ck = 1 IF EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"ck" : "1",
+			"pk" : "1",
+			"val" : "111"
+		}
+	]
+}
+-- (3) unsuccessful update
+UPDATE ks.tbl_cdc_lwt set val = 444 WHERE pk = 888 and ck = 777 IF EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+-- (4) successful row delete
+DELETE FROM ks.tbl_cdc_lwt WHERE pk = 1 AND ck = 1 IF EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"ck" : "1",
+			"pk" : "1",
+			"val" : "333"
+		}
+	]
+}
+-- (5) unsuccessful row delete
+DELETE FROM ks.tbl_cdc_lwt WHERE pk = 1 AND ck = 1 IF EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+
+SELECT "cdc$batch_seq_no", "cdc$operation", ck, pk, val FROM ks.tbl_cdc_lwt_scylla_cdc_log;
+{
+	"rows" : 
+	[
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "2",
+			"ck" : "1",
+			"pk" : "1",
+			"val" : "111"
+		},
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"ck" : "1",
+			"pk" : "1",
+			"val" : "111"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "1",
+			"ck" : "1",
+			"pk" : "1",
+			"val" : "333"
+		},
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"ck" : "1",
+			"pk" : "1",
+			"val" : "333"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "3",
+			"ck" : "1",
+			"pk" : "1"
+		}
+	]
+}
+
+-- there should be 5 rows in total: (0) + (2) + preimg(2) + (4) + preimg(4)
+SELECT count(*) FROM ks.tbl_cdc_lwt_scylla_cdc_log;
+{
+	"rows" : 
+	[
+		{
+			"count" : "5"
+		}
+	]
+}
