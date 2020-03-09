@@ -2454,9 +2454,12 @@ public:
                     master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _ri.keyspace, _cf_name, schema_version, _range, _seed, max_row_buf_size);
 
 
+            std::vector<gms::inet_address> nodes_to_stop;
+            nodes_to_stop.reserve(_all_nodes.size());
             try {
                 parallel_for_each(_all_nodes, [&, this] (const gms::inet_address& node) {
                     return master.repair_row_level_start(node, _ri.keyspace, _cf_name, _range, schema_version).then([&] () {
+                        nodes_to_stop.push_back(node);
                         return master.repair_get_estimated_partitions(node).then([this, node] (uint64_t partitions) {
                             rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
                             _estimated_partitions += partitions;
@@ -2489,7 +2492,7 @@ public:
                 _ri.nr_failed_ranges++;
             }
 
-            parallel_for_each(_all_nodes, [&] (const gms::inet_address& node) {
+            parallel_for_each(nodes_to_stop, [&] (const gms::inet_address& node) {
                 return master.repair_row_level_stop(node, _ri.keyspace, _cf_name, _range);
             }).get();
 
