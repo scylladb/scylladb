@@ -327,6 +327,18 @@ db_clock::time_point make_new_cdc_generation(
     auto ts = db_clock::now() + (
             for_testing ? std::chrono::milliseconds(0) : (
                 2 * ring_delay + std::chrono::duration_cast<std::chrono::milliseconds>(generation_leeway)));
+
+    // If we notice that another node has proposed a new generation concurrently,
+    // make sure that the timestamp of our generation is greater.
+    // Our generation is most likely at least as good as theirs because we've observed their proposition.
+    for (const auto& ep: g.get_endpoint_states()) {
+        auto other_ts = get_streams_timestamp_for(ep.first, g);
+        if (other_ts && *other_ts >= ts) {
+            cdc_log.warn("CDC generations proposed concurrently: {} and {}", ts, *other_ts);
+            ts = *other_ts + std::chrono::seconds(1);
+        }
+    }
+
     sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tm.count_normal_token_owners() }).get();
 
     return ts;
