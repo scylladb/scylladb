@@ -102,6 +102,58 @@ future<> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, s
     });
 }
 
+void set_transport_controller(http_context& ctx, routes& r) {
+    ss::start_native_transport.set(r, [](std::unique_ptr<request> req) {
+        return service::get_local_storage_service().start_native_transport().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    ss::stop_native_transport.set(r, [](std::unique_ptr<request> req) {
+        return service::get_local_storage_service().stop_native_transport().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    ss::is_native_transport_running.set(r, [] (std::unique_ptr<request> req) {
+        return service::get_local_storage_service().is_native_transport_running().then([] (bool running) {
+            return make_ready_future<json::json_return_type>(running);
+        });
+    });
+}
+
+void unset_transport_controller(http_context& ctx, routes& r) {
+    ss::start_native_transport.unset(r);
+    ss::stop_native_transport.unset(r);
+    ss::is_native_transport_running.unset(r);
+}
+
+void set_rpc_controller(http_context& ctx, routes& r) {
+    ss::stop_rpc_server.set(r, [](std::unique_ptr<request> req) {
+        return service::get_local_storage_service().stop_rpc_server().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    ss::start_rpc_server.set(r, [](std::unique_ptr<request> req) {
+        return service::get_local_storage_service().start_rpc_server().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    ss::is_rpc_server_running.set(r, [] (std::unique_ptr<request> req) {
+        return service::get_local_storage_service().is_rpc_server_running().then([] (bool running) {
+            return make_ready_future<json::json_return_type>(running);
+        });
+    });
+}
+
+void unset_rpc_controller(http_context& ctx, routes& r) {
+    ss::stop_rpc_server.unset(r);
+    ss::start_rpc_server.unset(r);
+    ss::is_rpc_server_running.unset(r);
+}
+
 void set_storage_service(http_context& ctx, routes& r) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {
@@ -493,42 +545,6 @@ void set_storage_service(http_context& ctx, routes& r) {
     ss::is_initialized.set(r, [](std::unique_ptr<request> req) {
         return service::get_local_storage_service().is_initialized().then([] (bool initialized) {
             return make_ready_future<json::json_return_type>(initialized);
-        });
-    });
-
-    ss::stop_rpc_server.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().stop_rpc_server().then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    ss::start_rpc_server.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().start_rpc_server().then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    ss::is_rpc_server_running.set(r, [] (std::unique_ptr<request> req) {
-        return service::get_local_storage_service().is_rpc_server_running().then([] (bool running) {
-            return make_ready_future<json::json_return_type>(running);
-        });
-    });
-
-    ss::start_native_transport.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().start_native_transport().then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    ss::stop_native_transport.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().stop_native_transport().then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    ss::is_native_transport_running.set(r, [] (std::unique_ptr<request> req) {
-        return service::get_local_storage_service().is_native_transport_running().then([] (bool running) {
-            return make_ready_future<json::json_return_type>(running);
         });
     });
 

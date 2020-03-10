@@ -1092,11 +1092,22 @@ int main(int ac, char** av) {
                     return service::get_local_storage_service().start_native_transport();
                 }).get();
             }
+
+            api::set_transport_controller(ctx).get();
+            auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {
+                api::unset_transport_controller(ctx).get();
+            });
+
             if (cfg->start_rpc()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [] {
                     return service::get_local_storage_service().start_rpc_server();
                 }).get();
             }
+
+            api::set_rpc_controller(ctx).get();
+            auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
+                api::unset_rpc_controller(ctx).get();
+            });
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 alternator::rmw_operation::set_default_write_isolation(cfg->alternator_write_isolation());
