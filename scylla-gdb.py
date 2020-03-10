@@ -1875,9 +1875,9 @@ def resolve(addr, cache=True, startswith=None):
 
     infosym = gdb.execute('info symbol 0x%x' % (addr), False, True)
     if infosym.startswith('No symbol'):
-        name = None
-    else:
-        name = infosym[:infosym.find('in section')]
+        return None
+
+    name = infosym[:infosym.find('in section')]
     if startswith and not name.startswith(startswith):
         return None
     if cache:
