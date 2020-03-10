@@ -234,9 +234,9 @@ ring_position_range_sharder::next(const schema& s) {
     return ring_position_range_and_shard{std::move(_range), shard};
 }
 
-ring_position_range_vector_sharder::ring_position_range_vector_sharder(const dht::i_partitioner& p, dht::partition_range_vector ranges)
+ring_position_range_vector_sharder::ring_position_range_vector_sharder(const sharding_info& si, dht::partition_range_vector ranges)
         : _ranges(std::move(ranges))
-        , _partitioner(p)
+        , _sharding_info(si)
         , _current_range(_ranges.begin()) {
     next_range();
 }

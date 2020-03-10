@@ -53,17 +53,17 @@ struct ring_position_range_and_shard_and_element : ring_position_range_and_shard
 class ring_position_range_vector_sharder {
     using vec_type = dht::partition_range_vector;
     vec_type _ranges;
-    const i_partitioner& _partitioner;
+    const sharding_info& _sharding_info;
     vec_type::iterator _current_range;
     std::optional<ring_position_range_sharder> _current_sharder;
 private:
     void next_range() {
         if (_current_range != _ranges.end()) {
-            _current_sharder.emplace(_partitioner.get_sharding_info(), std::move(*_current_range++));
+            _current_sharder.emplace(_sharding_info, std::move(*_current_range++));
         }
     }
 public:
-    ring_position_range_vector_sharder(const dht::i_partitioner& p, dht::partition_range_vector ranges);
+    ring_position_range_vector_sharder(const sharding_info& si, dht::partition_range_vector ranges);
     // results are returned sorted by index within the vector first, then within each vector item
     std::optional<ring_position_range_and_shard_and_element> next(const schema& s);
 };

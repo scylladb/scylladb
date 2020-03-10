@@ -3210,7 +3210,7 @@ sstable::compute_shards_for_this_sstable() const {
                 sm->token_ranges.elements
                 | boost::adaptors::transformed(disk_token_range_to_ring_position_range));
     }
-    auto sharder = dht::ring_position_range_vector_sharder(_schema->get_partitioner(), std::move(token_ranges));
+    auto sharder = dht::ring_position_range_vector_sharder(_schema->get_sharding_info(), std::move(token_ranges));
     auto rpras = sharder.next(*_schema);
     while (rpras) {
         shards.insert(rpras->shard);
