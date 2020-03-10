@@ -483,6 +483,61 @@ reader_consumer compaction_strategy_impl::make_interposer_consumer(const mutatio
     return end_consumer;
 }
 
+} // namespace sstables
+
+size_tiered_backlog_tracker::inflight_component
+size_tiered_backlog_tracker::partial_backlog(const compaction_backlog_tracker::ongoing_writes& ongoing_writes) const {
+    inflight_component in;
+    for (auto const& swp :  ongoing_writes) {
+        auto written = swp.second->written();
+        if (written > 0) {
+            in.total_bytes += written;
+            in.contribution += written * log4(written);
+        }
+    }
+    return in;
+}
+
+size_tiered_backlog_tracker::inflight_component
+size_tiered_backlog_tracker::compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
+    inflight_component in;
+    for (auto const& crp : ongoing_compactions) {
+        auto compacted = crp.second->compacted();
+        in.total_bytes += compacted;
+        in.contribution += compacted * log4((crp.first->data_size()));
+    }
+    return in;
+}
+
+double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
+    inflight_component partial = partial_backlog(ow);
+    inflight_component compacted = compacted_backlog(oc);
+
+    auto total_bytes = _total_bytes + partial.total_bytes - compacted.total_bytes;
+    if ((total_bytes <= 0)) {
+        return 0;
+    }
+    auto sstables_contribution = _sstables_backlog_contribution + partial.contribution - compacted.contribution;
+    auto b = (total_bytes * log4(total_bytes)) - sstables_contribution;
+    return b > 0 ? b : 0;
+}
+
+void size_tiered_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
+    if (sst->data_size() > 0) {
+        _total_bytes += sst->data_size();
+        _sstables_backlog_contribution += sst->data_size() * log4(sst->data_size());
+    }
+}
+
+void size_tiered_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
+    if (sst->data_size() > 0) {
+        _total_bytes -= sst->data_size();
+        _sstables_backlog_contribution -= sst->data_size() * log4(sst->data_size());
+    }
+}
+
+namespace sstables {
+
 // The backlog for TWCS is just the sum of the individual backlogs in each time window.
 // We'll keep various SizeTiered backlog tracker objects-- one per window for the static SSTables.
 // We then scan the current compacting and in-progress writes and matching them to existing time
