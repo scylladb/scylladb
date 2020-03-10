@@ -203,19 +203,6 @@ public:
     virtual unsigned shard_of(const token& t) const;
 
     /**
-     * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
-     *
-     * If the `spans` parameter is greater than zero, the result is the same as if the function
-     * is called `spans` times, each time applied to its return value, but efficiently. This allows
-     * selecting ranges that include multiple round trips around the 0..smp::count-1 shard span:
-     *
-     *     token_for_next_shard(t, shard, spans) == token_for_next_shard(token_for_shard(t, shard, 1), spans - 1)
-     *
-     * On overflow, maximum_token() is returned.
-     */
-    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
-
-    /**
      * @return number of shards configured for this partitioner
      */
     unsigned shard_count() const {
