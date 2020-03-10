@@ -634,7 +634,12 @@ def list_unordered_set(map, cache=True):
 def get_text_range():
     try:
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
-        reactor_backend = gdb.parse_and_eval('&seastar::local_engine->_backend')
+        reactor_backend = gdb.parse_and_eval('seastar::local_engine->_backend')
+        # 2019.1 has value member, >=3.0 has std::unique_ptr<>
+        if reactor_backend.type.strip_typedefs().name.startswith('std::unique_ptr<'):
+            reactor_backend = std_unique_ptr(reactor_backend).get()
+        else:
+            reactor_backend = gdb.parse_and_eval('&seastar::local_engine->_backend')
         known_vptr = int(reactor_backend.reinterpret_cast(vptr_type).dereference())
     except Exception as e:
         gdb.write("get_text_range(): Falling back to locating .rodata section because lookup to reactor backend to use as known vptr failed: {}\n".format(e))
