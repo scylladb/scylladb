@@ -35,4 +35,56 @@ unsigned shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const
 
 token token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t, shard_id shard, unsigned spans);
 
+class sharding_info {
+protected:
+    unsigned _shard_count;
+    unsigned _sharding_ignore_msb_bits;
+    std::vector<uint64_t> _shard_start;
+public:
+    sharding_info(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
+    /**
+     * Calculates the shard that handles a particular token.
+     */
+    virtual unsigned shard_of(const token& t) const;
+
+    /**
+     * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
+     *
+     * If the `spans` parameter is greater than zero, the result is the same as if the function
+     * is called `spans` times, each time applied to its return value, but efficiently. This allows
+     * selecting ranges that include multiple round trips around the 0..smp::count-1 shard span:
+     *
+     *     token_for_next_shard(t, shard, spans) == token_for_next_shard(token_for_shard(t, shard, 1), spans - 1)
+     *
+     * On overflow, maximum_token() is returned.
+     */
+    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
+
+    /**
+     * @return number of shards configured for this partitioner
+     */
+    unsigned shard_count() const {
+        return _shard_count;
+    }
+
+    unsigned sharding_ignore_msb() const {
+        return _sharding_ignore_msb_bits;
+    }
+
+    bool operator==(const sharding_info& o) const {
+        return _shard_count == o._shard_count && _sharding_ignore_msb_bits == o._sharding_ignore_msb_bits;
+    }
+
+    bool operator!=(const sharding_info& o) const {
+        return !(*this == o);
+    }
+
+};
+
+inline std::ostream& operator<<(std::ostream& os, const sharding_info& si) {
+    os << "sharding_info[shard_count=" << si.shard_count()
+       << ", ignore_msb_bits="<< si.sharding_ignore_msb() << "]";
+    return os;
+}
+
 } //namespace dht

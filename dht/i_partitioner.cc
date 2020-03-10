@@ -36,7 +36,7 @@
 
 namespace dht {
 
-i_partitioner::i_partitioner(unsigned shard_count, unsigned sharding_ignore_msb_bits)
+sharding_info::sharding_info(unsigned shard_count, unsigned sharding_ignore_msb_bits)
     : _shard_count(shard_count)
     // if one shard, ignore sharding_ignore_msb_bits as they will just cause needless
     // range breaks
@@ -44,16 +44,29 @@ i_partitioner::i_partitioner(unsigned shard_count, unsigned sharding_ignore_msb_
     , _shard_start(init_zero_based_shard_start(_shard_count, _sharding_ignore_msb_bits))
 {}
 
+i_partitioner::i_partitioner(unsigned shard_count, unsigned sharding_ignore_msb_bits)
+    : _sharding_info(shard_count, sharding_ignore_msb_bits)
+{}
+
 unsigned
-i_partitioner::shard_of(const token& t) const {
+sharding_info::shard_of(const token& t) const {
     return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
 }
 
 token
-i_partitioner::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
+sharding_info::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
     return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
+unsigned
+i_partitioner::shard_of(const token& t) const {
+    return _sharding_info.shard_of(t);
+}
+
+token
+i_partitioner::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
+    return _sharding_info.token_for_next_shard(t, shard, spans);
+}
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
     return out << "{key: " << dk._key << ", token:" << dk._token << "}";

@@ -52,6 +52,7 @@
 #include <range.hh>
 #include <byteswap.h>
 #include "dht/token.hh"
+#include "dht/token-sharding.hh"
 
 namespace sstables {
 
@@ -148,10 +149,7 @@ public:
 using decorated_key_opt = std::optional<decorated_key>;
 
 class i_partitioner {
-protected:
-    unsigned _shard_count;
-    unsigned _sharding_ignore_msb_bits;
-    std::vector<uint64_t> _shard_start;
+    sharding_info _sharding_info;
 public:
     i_partitioner(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
     virtual ~i_partitioner() {}
@@ -221,15 +219,14 @@ public:
      * @return number of shards configured for this partitioner
      */
     unsigned shard_count() const {
-        return _shard_count;
+        return _sharding_info.shard_count();
     }
 
     unsigned sharding_ignore_msb() const {
-        return _sharding_ignore_msb_bits;
+        return _sharding_info.sharding_ignore_msb();
     }
     bool operator==(const i_partitioner& o) const {
-        return name() == o.name()
-                && sharding_ignore_msb() == o.sharding_ignore_msb();
+        return name() == o.name() && _sharding_info == o._sharding_info;
     }
     bool operator!=(const i_partitioner& o) const {
         return !(*this == o);
