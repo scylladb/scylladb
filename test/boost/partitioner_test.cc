@@ -227,8 +227,10 @@ SEASTAR_THREAD_TEST_CASE(test_token_no_wraparound_1) {
     BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x6000'0000'0000'0000));
 }
 
-void test_partitioner_sharding(const dht::i_partitioner& part, unsigned shards, std::vector<dht::token> shard_limits,
-        std::function<dht::token (const dht::i_partitioner&, dht::token)> prev_token, unsigned ignorebits = 0) {
+void test_sharding(const dht::sharding_info& si, unsigned shards, std::vector<dht::token> shard_limits, unsigned ignorebits = 0) {
+    auto prev_token = [] (dht::token token) {
+        return token_from_long(long_from_token(token) - 1);
+    };
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
@@ -236,54 +238,48 @@ void test_partitioner_sharding(const dht::i_partitioner& part, unsigned shards, 
         .build();
     for (unsigned i = 0; i < (shards << ignorebits); ++i) {
         auto lim = shard_limits[i];
-        BOOST_REQUIRE_EQUAL(part.shard_of(lim), i % shards);
+        BOOST_REQUIRE_EQUAL(si.shard_of(lim), i % shards);
         if (i != 0) {
-            BOOST_REQUIRE_EQUAL(part.shard_of(prev_token(part, lim)), (i - 1) % shards);
-            BOOST_REQUIRE_EQUAL(lim, part.token_for_next_shard(prev_token(part, lim), i % shards));
+            BOOST_REQUIRE_EQUAL(si.shard_of(prev_token(lim)), (i - 1) % shards);
+            BOOST_REQUIRE_EQUAL(lim, si.token_for_next_shard(prev_token(lim), i % shards));
         }
         if (i != (shards << ignorebits) - 1) {
             auto next_shard = (i + 1) % shards;
-            BOOST_REQUIRE_EQUAL(part.shard_of(part.token_for_next_shard(lim, next_shard)), next_shard);
+            BOOST_REQUIRE_EQUAL(si.shard_of(si.token_for_next_shard(lim, next_shard)), next_shard);
         }
     }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding) {
-    auto prev_token = [] (const dht::i_partitioner&, dht::token token) {
-        return token_from_long(long_from_token(token) - 1);
-    };
     auto make_token_vector = [] (std::vector<int64_t> v) {
         return boost::copy_range<std::vector<dht::token>>(
                 v | boost::adaptors::transformed(token_from_long));
     };
-    dht::murmur3_partitioner mm3p7s(7);
+    dht::sharding_info mm3p7s(7);
     auto mm3p7s_shard_limits = make_token_vector({
         -9223372036854775807, -6588122883467697006+1, -3952873730080618204+1,
         -1317624576693539402+1, 1317624576693539401+1, 3952873730080618203+1,
         6588122883467697005+1,
     });
-    test_partitioner_sharding(mm3p7s, 7, mm3p7s_shard_limits, prev_token);
-    dht::murmur3_partitioner mm3p2s(2);
+    test_sharding(mm3p7s, 7, mm3p7s_shard_limits);
+    dht::sharding_info mm3p2s(2);
     auto mm3p2s_shard_limits = make_token_vector({
         -9223372036854775807, 0,
     });
-    test_partitioner_sharding(mm3p2s, 2, mm3p2s_shard_limits, prev_token);
-    dht::murmur3_partitioner mm3p1s(1);
+    test_sharding(mm3p2s, 2, mm3p2s_shard_limits);
+    dht::sharding_info mm3p1s(1);
     auto mm3p1s_shard_limits = make_token_vector({
         -9223372036854775807,
     });
-    test_partitioner_sharding(mm3p1s, 1, mm3p1s_shard_limits, prev_token);
+    test_sharding(mm3p1s, 1, mm3p1s_shard_limits);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
-    auto prev_token = [] (const dht::i_partitioner&, dht::token token) {
-        return token_from_long(long_from_token(token) - 1);
-    };
     auto make_token_vector = [] (std::vector<int64_t> v) {
         return boost::copy_range<std::vector<dht::token>>(
                 v | boost::adaptors::transformed(token_from_long));
     };
-    dht::murmur3_partitioner mm3p7s2i(7, 2);
+    dht::sharding_info mm3p7s2i(7, 2);
     auto mm3p7s2i_shard_limits = make_token_vector({
         -9223372036854775807,
         -8564559748508006107, -7905747460161236406, -7246935171814466706, -6588122883467697005,
@@ -294,8 +290,8 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
         5270498306774157605, 5929310595120927306, 6588122883467697006, 7246935171814466707,
         7905747460161236407, 8564559748508006108,
     });
-    test_partitioner_sharding(mm3p7s2i, 7, mm3p7s2i_shard_limits, prev_token, 2);
-    dht::murmur3_partitioner mm3p2s4i(2, 4);
+    test_sharding(mm3p7s2i, 7, mm3p7s2i_shard_limits, 2);
+    dht::sharding_info mm3p2s4i(2, 4);
     auto mm3p2s_shard_limits = make_token_vector({
         -9223372036854775807,
         -8646911284551352320, -8070450532247928832, -7493989779944505344, -6917529027641081856,
@@ -307,7 +303,7 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
         5764607523034234880, 6341068275337658368, 6917529027641081856, 7493989779944505344,
         8070450532247928832, 8646911284551352320,
     });
-    test_partitioner_sharding(mm3p2s4i, 2, mm3p2s_shard_limits, prev_token, 4);
+    test_sharding(mm3p2s4i, 2, mm3p2s_shard_limits, 4);
 }
 
 static
