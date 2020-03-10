@@ -848,6 +848,8 @@ public:
     // Returns a range of column definitions
     const_iterator_range_type regular_columns() const;
     // Returns a range of column definitions
+    const_iterator_range_type columns(column_kind) const;
+    // Returns a range of column definitions
 
     typedef boost::range::joined_range<const_iterator_range_type, const_iterator_range_type>
         select_order_range;
