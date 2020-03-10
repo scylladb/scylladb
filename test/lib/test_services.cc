@@ -21,7 +21,6 @@
 
 #include "test/lib/test_services.hh"
 #include "test/lib/reader_permit.hh"
-#include "auth/service.hh"
 #include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/view/view_update_generator.hh"
@@ -38,7 +37,6 @@ class storage_service_for_tests::impl {
     sharded<gms::gossiper> _gossiper;
     distributed<database> _db;
     db::config _cfg;
-    sharded<auth::service> _auth_service;
     sharded<locator::token_metadata> _token_metadata;
     sharded<service::migration_notifier> _mnotif;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
@@ -58,7 +56,7 @@ public:
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000).get();
         service::storage_service_config sscfg;
         sscfg.available_memory = memory::stats().total_memory();
-        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, std::ref(_mnotif), std::ref(_token_metadata), true).get();
+        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, std::ref(_mnotif), std::ref(_token_metadata), true).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();
