@@ -34,12 +34,12 @@ struct ring_position_range_and_shard {
 };
 
 class ring_position_range_sharder {
-    const i_partitioner& _partitioner;
+    const sharding_info& _sharding_info;
     dht::partition_range _range;
     bool _done = false;
 public:
-    ring_position_range_sharder(const i_partitioner& partitioner, nonwrapping_range<ring_position> rrp)
-            : _partitioner(partitioner), _range(std::move(rrp)) {}
+    ring_position_range_sharder(const sharding_info& sharding_info, nonwrapping_range<ring_position> rrp)
+            : _sharding_info(sharding_info), _range(std::move(rrp)) {}
     std::optional<ring_position_range_and_shard> next(const schema& s);
 };
 
@@ -59,7 +59,7 @@ class ring_position_range_vector_sharder {
 private:
     void next_range() {
         if (_current_range != _ranges.end()) {
-            _current_sharder.emplace(_partitioner, std::move(*_current_range++));
+            _current_sharder.emplace(_partitioner.get_sharding_info(), std::move(*_current_range++));
         }
     }
 public:

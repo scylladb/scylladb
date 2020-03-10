@@ -216,9 +216,9 @@ ring_position_range_sharder::next(const schema& s) {
     if (_done) {
         return {};
     }
-    auto shard = _range.start() ? _partitioner.shard_of(_range.start()->value().token()) : token::shard_of_minimum_token();
-    auto next_shard = shard + 1 < _partitioner.shard_count() ? shard + 1 : 0;
-    auto shard_boundary_token = _partitioner.token_for_next_shard(_range.start() ? _range.start()->value().token() : minimum_token(), next_shard);
+    auto shard = _range.start() ? _sharding_info.shard_of(_range.start()->value().token()) : token::shard_of_minimum_token();
+    auto next_shard = shard + 1 < _sharding_info.shard_count() ? shard + 1 : 0;
+    auto shard_boundary_token = _sharding_info.token_for_next_shard(_range.start() ? _range.start()->value().token() : minimum_token(), next_shard);
     auto shard_boundary = ring_position::starting_at(shard_boundary_token);
     if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
             && shard_boundary_token != maximum_token()) {
@@ -381,7 +381,7 @@ dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& r
 std::map<unsigned, dht::partition_range_vector>
 split_range_to_shards(dht::partition_range pr, const schema& s) {
     std::map<unsigned, dht::partition_range_vector> ret;
-    auto sharder = dht::ring_position_range_sharder(s.get_partitioner(), std::move(pr));
+    auto sharder = dht::ring_position_range_sharder(s.get_sharding_info(), std::move(pr));
     auto rprs = sharder.next(s);
     while (rprs) {
         ret[rprs->shard].emplace_back(rprs->ring_range);
@@ -395,7 +395,7 @@ split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s) {
     std::map<unsigned, dht::partition_range_vector> ret;
     for (const auto& range : ranges) {
         auto pr = dht::to_partition_range(range);
-        auto sharder = dht::ring_position_range_sharder(s.get_partitioner(), std::move(pr));
+        auto sharder = dht::ring_position_range_sharder(s.get_sharding_info(), std::move(pr));
         auto rprs = sharder.next(s);
         while (rprs) {
             ret[rprs->shard].emplace_back(rprs->ring_range);
