@@ -20,6 +20,7 @@
  */
 
 
+#include <list>
 #include <random>
 #include <experimental/source_location>
 
@@ -2203,8 +2204,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
             shard_pkeys[i++ % smp::count].push_back(pkey);
         }
 
-        auto partitioner = dummy_partitioner(s.schema()->get_partitioner(), std::move(pkeys_by_tokens));
-
         auto factory = [gs = global_simple_schema(s), &remote_controls, &shard_pkeys] (
                 schema_ptr,
                 const dht::partition_range& range,
@@ -2218,9 +2217,9 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         };
 
         {
-            auto schema = schema_builder(s.schema()).with_partitioner_for_tests_only(partitioner).build();
-            auto reader = make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
-                    schema, query::full_partition_range, schema->full_slice(), service::get_local_sstable_query_read_priority());
+            dummy_sharding_info sharding_info(s.schema()->get_sharding_info(), std::move(pkeys_by_tokens));
+            auto reader = make_multishard_combining_reader_for_tests(sharding_info, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
+                    s.schema(), query::full_partition_range, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
             reader.fill_buffer(db::no_timeout).get();
             BOOST_REQUIRE(reader.is_buffer_full());
         }
@@ -2409,7 +2408,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
                 mutation_reader::forwarding fwd_mr) {
             auto s = gs.get();
             auto pkey = s.make_pkey(pk);
-            if (s.schema()->get_partitioner().shard_of(pkey.token()) != this_shard_id()) {
+            if (s.schema()->get_sharding_info().shard_of(pkey.token()) != this_shard_id()) {
                 return make_empty_flat_reader(s.schema());
             }
             auto fragments = make_fragments_with_non_monotonic_positions(s, std::move(pkey), max_buffer_size, tombstone_deletion_time);

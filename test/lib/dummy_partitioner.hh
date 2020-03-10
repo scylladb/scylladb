@@ -23,11 +23,10 @@
 
 #include <boost/range/adaptor/map.hpp>
 #include "dht/token.hh"
-#include "dht/i_partitioner.hh"
+#include "dht/token-sharding.hh"
 
 // Shards tokens such that tokens are owned by shards in a round-robin manner.
-class dummy_partitioner : public dht::i_partitioner {
-    const dht::i_partitioner& _partitioner;
+class dummy_sharding_info : public dht::sharding_info {
     std::vector<dht::token> _tokens;
 
 public:
@@ -37,17 +36,11 @@ public:
     // ordered associative container (std::map) that has dht::token as keys.
     // Values will be ignored.
     template <typename T>
-    dummy_partitioner(const dht::i_partitioner& partitioner, const std::map<dht::token, T>& something_by_token)
-        : i_partitioner(smp::count)
-        , _partitioner(partitioner)
+    dummy_sharding_info(const dht::sharding_info& sharding, const std::map<dht::token, T>& something_by_token)
+        : sharding_info(sharding)
         , _tokens(boost::copy_range<std::vector<dht::token>>(something_by_token | boost::adaptors::map_keys)) {
     }
 
-    virtual dht::token get_token(const schema& s, partition_key_view key) const override { return _partitioner.get_token(s, key); }
-    virtual dht::token get_token(const sstables::key_view& key) const override { return _partitioner.get_token(key); }
-    virtual bool preserves_order() const override { return _partitioner.preserves_order(); }
-    virtual const sstring name() const override { return _partitioner.name(); }
     virtual unsigned shard_of(const dht::token& t) const override;
     virtual dht::token token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans = 1) const override;
 };
-

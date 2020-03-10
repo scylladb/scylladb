@@ -1478,6 +1478,7 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
         }
     };
 
+    const dht::sharding_info& _sharding_info;
     std::vector<lw_shared_ptr<shard_reader>> _shard_readers;
     // Contains the position of each shard with token granularity, organized
     // into a min-heap. Used to select the shard with the smallest token each
@@ -1493,6 +1494,7 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
 
 public:
     multishard_combining_reader(
+            const dht::sharding_info& sharding_info,
             shared_ptr<reader_lifecycle_policy> lifecycle_policy,
             schema_ptr s,
             const dht::partition_range& pr,
@@ -1517,13 +1519,13 @@ public:
 
 void multishard_combining_reader::on_partition_range_change(const dht::partition_range& pr) {
     _shard_selection_min_heap.clear();
-    _shard_selection_min_heap.reserve(_schema->get_partitioner().shard_count());
+    _shard_selection_min_heap.reserve(_sharding_info.shard_count());
 
     auto token = pr.start() ? pr.start()->value().token() : dht::minimum_token();
-    _current_shard = _schema->get_partitioner().shard_of(token);
+    _current_shard = _sharding_info.shard_of(token);
 
     const auto update_and_push_token_for_shard = [this, &token] (shard_id shard) {
-        token = _schema->get_partitioner().token_for_next_shard(token, shard);
+        token = _sharding_info.token_for_next_shard(token, shard);
         _shard_selection_min_heap.push_back(shard_and_token{shard, token});
         boost::push_heap(_shard_selection_min_heap);
     };
@@ -1572,13 +1574,13 @@ future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clo
         // double concurrency so the next time we cross shards we will have
         // more chances of hitting the reader's buffer.
         if (_crossed_shards) {
-            _concurrency = std::min(_concurrency * 2, _schema->get_partitioner().shard_count());
+            _concurrency = std::min(_concurrency * 2, _sharding_info.shard_count());
 
             // If concurrency > 1 we kick-off concurrency-1 read-aheads in the
             // background. They will be brought to the foreground when we move
             // to their respective shard.
             for (unsigned i = 1; i < _concurrency; ++i) {
-                _shard_readers[(_current_shard + i) % _schema->get_partitioner().shard_count()]->read_ahead(timeout);
+                _shard_readers[(_current_shard + i) % _sharding_info.shard_count()]->read_ahead(timeout);
             }
         }
         return reader.fill_buffer(timeout);
@@ -1586,6 +1588,7 @@ future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clo
 }
 
 multishard_combining_reader::multishard_combining_reader(
+        const dht::sharding_info& sharding_info,
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr s,
         const dht::partition_range& pr,
@@ -1593,12 +1596,12 @@ multishard_combining_reader::multishard_combining_reader(
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr)
-    : impl(std::move(s)) {
+    : impl(std::move(s)), _sharding_info(sharding_info) {
 
     on_partition_range_change(pr);
 
-    _shard_readers.reserve(_schema->get_partitioner().shard_count());
-    for (unsigned i = 0; i < _schema->get_partitioner().shard_count(); ++i) {
+    _shard_readers.reserve(_sharding_info.shard_count());
+    for (unsigned i = 0; i < _sharding_info.shard_count(); ++i) {
         _shard_readers.emplace_back(make_lw_shared<shard_reader>(_schema, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
     }
 }
@@ -1699,7 +1702,21 @@ flat_mutation_reader make_multishard_combining_reader(
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader<multishard_combining_reader>(std::move(lifecycle_policy), std::move(schema), pr, ps, pc,
+    const dht::sharding_info& sinfo = schema->get_sharding_info();
+    return make_flat_mutation_reader<multishard_combining_reader>(sinfo, std::move(lifecycle_policy), std::move(schema), pr, ps, pc,
+            std::move(trace_state), fwd_mr);
+}
+
+flat_mutation_reader make_multishard_combining_reader_for_tests(
+        const dht::sharding_info& sinfo,
+        shared_ptr<reader_lifecycle_policy> lifecycle_policy,
+        schema_ptr schema,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr) {
+    return make_flat_mutation_reader<multishard_combining_reader>(sinfo, std::move(lifecycle_policy), std::move(schema), pr, ps, pc,
             std::move(trace_state), fwd_mr);
 }
 

@@ -585,7 +585,7 @@ static future<reconcilable_result> do_query_mutations(
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
         query::result_memory_accounter&& accounter) {
-    return do_with(seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state), [s, &cmd, &ranges, trace_state, timeout,
+    return do_with(seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state), [&db, s, &cmd, &ranges, trace_state, timeout,
             accounter = std::move(accounter)] (shared_ptr<read_context>& ctx) mutable {
         return ctx->lookup_readers().then([&ctx, s = std::move(s), &cmd, &ranges, trace_state, timeout,
                 accounter = std::move(accounter)] () mutable {
