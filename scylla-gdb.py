@@ -2848,7 +2848,7 @@ class scylla_sstables(gdb.Command):
             )
 
     def invoke(self, arg, from_tty):
-        parser = argparse.ArgumentParser(description="scylla generate-object-graph")
+        parser = argparse.ArgumentParser(description="scylla sstables")
         parser.add_argument("-t", "--tables", action="store_true", help="Only consider sstables attached to tables")
         try:
             args = parser.parse_args(arg.split())
