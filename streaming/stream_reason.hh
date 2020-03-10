@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace streaming {
 
 enum class stream_reason : uint8_t {

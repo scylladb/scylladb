@@ -28,6 +28,10 @@
 
 using namespace seastar;
 
+namespace db {
+class config;
+}
+
 namespace utils {
 
 class directories {

@@ -22,6 +22,11 @@
 
 #pragma once
 
+#include <vector>
+#include <seastar/core/sstring.hh>
+
+#include "seastarx.hh"
+
 namespace cql_transport {
 namespace messages {
 

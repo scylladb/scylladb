@@ -21,6 +21,11 @@
 
 #pragma once
 
+#include <sys/types.h>
+#include <cstddef>
+#include <type_traits>
+#include <utility>
+
 namespace meta {
 
 // Wrappers that allows returning a list of types. All helpers defined in this

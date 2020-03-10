@@ -24,6 +24,8 @@
 #include <string_view>
 #include <seastar/core/sstring.hh>
 
+#include "seastarx.hh"
+
 template<typename CharT>
 class basic_mutable_view {
     CharT* _begin = nullptr;

@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 // combine two sorted uniqued sequences into a single sorted sequence
 // unique elements are copied, duplicate elements are merged with a
 // binary function.

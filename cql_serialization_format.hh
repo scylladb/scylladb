@@ -21,7 +21,8 @@
 
 #pragma once
 
-#include <iosfwd>
+#include <iostream>
+#include <cstdint>
 
 using cql_protocol_version_type = uint8_t;
 

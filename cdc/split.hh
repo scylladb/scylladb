@@ -23,6 +23,8 @@
 
 #include <vector>
 #include "schema_fwd.hh"
+#include "timestamp.hh"
+#include "bytes.hh"
 #include <seastar/util/noncopyable_function.hh>
 
 class mutation;

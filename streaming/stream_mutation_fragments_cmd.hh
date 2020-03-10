@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace streaming {
 
 enum class stream_mutation_fragments_cmd : uint8_t {

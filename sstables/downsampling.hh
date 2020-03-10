@@ -47,6 +47,7 @@
 #include <vector>
 #include <algorithm>
 #include <iterator>
+#include <cassert>
 
 namespace sstables {
 

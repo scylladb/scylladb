@@ -39,6 +39,7 @@
  */
 #pragma once
 #include "service/storage_proxy.hh"
+#include "cql3/statements/modification_statement.hh"
 
 namespace cql3::statements {
 

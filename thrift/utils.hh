@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <utility>
+
 namespace thrift {
 
 template <typename Ex, typename... Args>

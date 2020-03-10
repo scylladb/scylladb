@@ -23,7 +23,10 @@
 
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sstring.hh>
 #include <boost/range/algorithm/find_if.hpp>
+
+#include "seastarx.hh"
 
 class no_such_class : public std::runtime_error {
 public:

@@ -25,6 +25,7 @@
 #include "sstables/compaction_strategy_impl.hh"
 #include "sstables/sstable_set.hh"
 #include "sstables/compaction.hh"
+#include "database.hh"
 
 namespace sstables {
 

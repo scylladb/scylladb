@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "compound.hh"
+
 namespace imr {
 namespace methods {
 

@@ -25,6 +25,8 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+#include "seastarx.hh"
+
 // Represents a deferring operation which defers cooperatively with the caller.
 //
 // The operation is started and resumed by calling run(), which returns

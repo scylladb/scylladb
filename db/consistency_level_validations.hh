@@ -41,7 +41,10 @@
 
 #pragma once
 
+#include <seastar/core/sstring.hh>
 #include "consistency_level_type.hh"
+
+#include "seastarx.hh"
 
 class schema;
 

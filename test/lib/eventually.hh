@@ -24,6 +24,8 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+#include "seastarx.hh"
+
 inline
 void eventually(noncopyable_function<void ()> f, size_t max_attempts = 17) {
     size_t attempts = 0;

@@ -24,6 +24,10 @@
 #include <stdexcept>
 #include <seastar/core/print.hh>
 
+#include "bytes.hh"
+
+#include "seastarx.hh"
+
 class redis_exception : public std::exception {
     sstring _message;
 public:

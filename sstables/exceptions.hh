@@ -24,6 +24,8 @@
 
 #include <seastar/core/print.hh>
 
+#include "seastarx.hh"
+
 namespace sstables {
 class malformed_sstable_exception : public std::exception {
     sstring _msg;
