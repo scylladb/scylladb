@@ -2174,25 +2174,24 @@ future<> gossiper::wait_for_range_setup() {
 }
 
 bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
+    // We allow to bootstrap a new node in only two cases:
+    // 1) The node is a completely new node and no state in gossip at all
+    // 2) The node has state in gossip and it is already removed from the
+    // cluster either by nodetool decommission or nodetool removenode
     auto* eps = get_endpoint_state_for_endpoint_ptr(endpoint);
-
-    // if there's no previous state, or the node was previously removed from the cluster, we're good
-    if (!eps || is_dead_state(*eps)) {
-        return true;
+    bool allowed = true;
+    if (!eps) {
+        logger.debug("is_safe_for_bootstrap: node={}, status=no state in gossip, allowed_to_bootstrap={}", endpoint, allowed);
+        return allowed;
     }
-
     sstring status = get_gossip_status(*eps);
-
-    logger.debug("is_safe_for_bootstrap: node {} status {}", endpoint, status);
-
-    // these states are not allowed to join the cluster as it would not be safe
-    std::unordered_set<sstring> unsafe_statuses{
-        sstring(versioned_value::STATUS_UNKNOWN), // failed bootstrap but we did start gossiping
-        sstring(versioned_value::STATUS_NORMAL), // node is legit in the cluster or it was stopped with kill -9
-        sstring(versioned_value::SHUTDOWN) // node was shutdown
+    std::unordered_set<sstring> allowed_statuses{
+        sstring(versioned_value::STATUS_LEFT),
+        sstring(versioned_value::REMOVED_TOKEN),
     };
-
-    return !unsafe_statuses.count(status);
+    allowed = allowed_statuses.count(status);
+    logger.debug("is_safe_for_bootstrap: node={}, status={}, allowed_to_bootstrap={}", endpoint, status, allowed);
+    return allowed;
 }
 
 std::set<sstring> to_feature_set(sstring features_string) {
