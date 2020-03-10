@@ -32,37 +32,37 @@ namespace query {
 
 template <typename Consumer>
 class clustering_position_tracker {
-    std::unique_ptr<Consumer> _consumer;
+    Consumer _consumer;
     lw_shared_ptr<std::optional<clustering_key_prefix>> _last_ckey;
 
 public:
-    clustering_position_tracker(std::unique_ptr<Consumer>&& consumer, lw_shared_ptr<std::optional<clustering_key_prefix>> last_ckey)
-        : _consumer(std::move(consumer))
+    clustering_position_tracker(Consumer&& consumer, lw_shared_ptr<std::optional<clustering_key_prefix>> last_ckey)
+        : _consumer(std::forward<Consumer>(consumer))
         , _last_ckey(std::move(last_ckey)) {
     }
 
     void consume_new_partition(const dht::decorated_key& dk) {
         _last_ckey->reset();
-        _consumer->consume_new_partition(dk);
+        _consumer.consume_new_partition(dk);
     }
     void consume(tombstone t) {
-        _consumer->consume(t);
+        _consumer.consume(t);
     }
     stop_iteration consume(static_row&& sr, tombstone t, bool is_live) {
-        return _consumer->consume(std::move(sr), std::move(t), is_live);
+        return _consumer.consume(std::move(sr), std::move(t), is_live);
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_live) {
         *_last_ckey = cr.key();
-        return _consumer->consume(std::move(cr), std::move(t), is_live);
+        return _consumer.consume(std::move(cr), std::move(t), is_live);
     }
     stop_iteration consume(range_tombstone&& rt) {
-        return _consumer->consume(std::move(rt));
+        return _consumer.consume(std::move(rt));
     }
     stop_iteration consume_end_of_partition() {
-        return _consumer->consume_end_of_partition();
+        return _consumer.consume_end_of_partition();
     }
     auto consume_end_of_stream() {
-        return _consumer->consume_end_of_stream();
+        return _consumer.consume_end_of_stream();
     }
 };
 
@@ -86,15 +86,10 @@ auto consume_page(flat_mutation_reader& reader,
         gc_clock::time_point query_time,
         db::timeout_clock::time_point timeout,
         size_t reverse_read_max_memory) {
-    // FIXME: #3158
-    // consumer cannot be moved after consume_new_partition() is called
-    // on it because it stores references to some of it's own members.
-    // Move it to the heap before any consumption begins to avoid
-    // accidents.
-    return reader.peek(timeout).then([=, &reader, consumer = std::make_unique<Consumer>(std::move(consumer)), &slice] (
+    return reader.peek(timeout).then([=, &reader, consumer = std::move(consumer), &slice] (
                 mutation_fragment* next_fragment) mutable {
         const auto next_fragment_kind = next_fragment ? next_fragment->mutation_fragment_kind() : mutation_fragment::kind::partition_end;
-        compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_kind, *consumer);
+        compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_kind, consumer);
 
         auto last_ckey = make_lw_shared<std::optional<clustering_key_prefix>>();
         auto reader_consumer = make_stable_flattened_mutations_consumer<compact_for_query<OnlyLive, clustering_position_tracker<Consumer>>>(
