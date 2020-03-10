@@ -479,6 +479,134 @@ api::timestamp_type find_timestamp(const schema& s, const mutation& m) {
     throw std::runtime_error("cdc: could not find timestamp of mutation");
 }
 
+// iterators for collection merge
+template<typename T>
+class collection_iterator : public std::iterator<std::input_iterator_tag, const T> {
+    bytes_view _v, _next;
+    size_t _rem = 0;
+    T _current;
+public:
+    collection_iterator(bytes_view_opt v = {}) 
+        : _v(v.value_or(bytes_view{}))
+        , _rem(_v.empty() ? 0 : read_collection_size(_v, cql_serialization_format::internal()))
+    {
+        if (_rem != 0) {
+            parse();
+        }
+    }
+    collection_iterator(const collection_iterator&) = default;
+    const T& operator*() const {
+        return _current;
+    }
+    const T* operator->() const {
+        return &_current;
+    }
+    collection_iterator& operator++() {
+        next();
+        if (_rem != 0) {
+            parse();
+        } else {
+            _current = {};
+        }
+        return *this;
+    }
+    collection_iterator operator++(int) {
+        auto v = *this;
+        ++(*this);
+        return v;
+    }
+    bool operator==(const collection_iterator& x) const {
+        return _v == x._v;
+    }
+    bool operator!=(const collection_iterator& x) const {
+        return !(*this == x);
+    }
+private:
+    void next() {
+        --_rem;
+        _v = _next;
+    }
+    void parse();
+};
+
+template<>
+void collection_iterator<std::pair<bytes_view, bytes_view>>::parse() {
+    assert(_rem > 0);
+    _next = _v;
+    auto k = read_collection_value(_next, cql_serialization_format::internal());
+    auto v = read_collection_value(_next, cql_serialization_format::internal());
+    _current = std::make_pair(k, v);
+}
+
+template<>
+void collection_iterator<bytes_view>::parse() {
+    assert(_rem > 0);
+    _next = _v;
+    auto k = read_collection_value(_next, cql_serialization_format::internal());
+    _current = k;
+}
+
+template<typename Container, typename T>
+class maybe_back_insert_iterator : public std::back_insert_iterator<Container> {
+    const abstract_type& _type;
+    collection_iterator<T> _s, _e;
+public:
+    using value_type = typename Container::value_type;
+    maybe_back_insert_iterator(Container& c, const abstract_type& type, collection_iterator<T> s)
+        : std::back_insert_iterator<Container>(c)
+        , _type(type)
+        , _s(s)
+    {}
+    maybe_back_insert_iterator& operator*() {
+        return *this;
+    }
+    maybe_back_insert_iterator& operator=(const value_type& v) {
+        if (!find(v)) {
+            std::back_insert_iterator<Container>::operator=(v);
+        }
+        return *this;
+    }
+    maybe_back_insert_iterator& operator=(value_type&& v) {
+        if (!find(v)) {
+            std::back_insert_iterator<Container>::operator=(std::move(v));
+        }
+        return *this;
+    }
+private:
+    bool find(const value_type& v) {
+       // cheating - reducing search span, because we know we only append unique values (see below).
+       while (_s != _e) {
+           auto n = compare(*_s, v);
+           if (n <= 0) {
+               ++_s;
+           }
+           if (n == 0) {
+               return true;
+           }
+           if (n > 0) {
+               break;
+           }
+       }
+       return false;
+    }
+    bool compare(const T&, const value_type& v);
+};
+
+template<>
+bool maybe_back_insert_iterator<std::vector<std::pair<bytes_view, bytes_view>>, bytes_view>::compare(const bytes_view& t, const value_type& v) {
+    return _type.compare(t, v.first);
+}
+
+template<>
+bool maybe_back_insert_iterator<std::vector<bytes_view>, bytes_view>::compare(const bytes_view& t, const value_type& v) {
+    return _type.compare(t, v);
+}
+
+template<typename Container, typename T>
+auto make_maybe_back_inserter(Container& c, const abstract_type& type, collection_iterator<T> s) {
+    return maybe_back_insert_iterator<Container, T>(c, type, s);
+}
+
 /* Given a timestamp, generates a timeuuid with the following properties:
  * 1. `t1` < `t2` implies timeuuid_type->less(timeuuid_type->decompose(generate_timeuuid(`t1`)),
  *                                            timeuuid_type->decompose(generate_timeuuid(`t2`))),
@@ -538,13 +666,72 @@ public:
             _cdc_ttl_opt = std::chrono::seconds(_schema->cdc_options().ttl());
         }
     }
+    static size_t collection_size(const bytes_opt& bo) {
+        if (bo) {
+            bytes_view bv(*bo);
+            return read_collection_size(bv, cql_serialization_format::internal());
+        }
+        return 0;
+    }
+    template<typename Func>
+    static void udt_for_each(const bytes_opt& bo, Func&& f) {
+        if (bo) {
+            bytes_view bv(*bo);
+            std::for_each(tuple_deserializing_iterator::start(bv), tuple_deserializing_iterator::finish(bv), std::forward<Func>(f));
+        }
+    }
+    static bytes merge(const collection_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+        std::vector<std::pair<bytes_view, bytes_view>> res;
+        res.reserve(collection_size(prev) + collection_size(next));
+        auto type = ctype.name_comparator();
+        auto cmp = [&type = *type](const std::pair<bytes_view, bytes_view>& p1, const std::pair<bytes_view, bytes_view>& p2) {
+            return type.compare(p1.first, p2.first) < 0;
+        };
+        collection_iterator<std::pair<bytes_view, bytes_view>> e, i(prev), j(next);
+        // note order: set_union, when finding doubles, use value from first1 (j here). So 
+        // since this is next, it has prio
+        std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, collection_iterator<bytes_view>(deleted)), cmp);
+        return map_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
+    }
+    static bytes merge(const set_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+        std::vector<bytes_view> res;
+        res.reserve(collection_size(prev) + collection_size(next));
+        auto type = ctype.name_comparator();
+        auto cmp = [&type = *type](bytes_view k1, bytes_view k2) {
+            return type.compare(k1, k2) < 0;
+        };
+        collection_iterator<bytes_view> e, i(prev), j(next), d(deleted);
+        std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, d), cmp);
+        return set_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
+    }
+    static bytes merge(const user_type_impl& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+        std::vector<bytes_view_opt> res(type.size());
+        udt_for_each(prev, [&res, i = res.begin()](bytes_view_opt k) mutable {
+            *i++ = k;
+        });
+        udt_for_each(next, [&res, i = res.begin()](bytes_view_opt k) mutable {
+            if (k) {
+                *i = k;
+            }
+            ++i;
+        });
+        collection_iterator<bytes_view> e, d(deleted);
+        std::for_each(d, e, [&res](bytes_view k) {
+            auto index = deserialize_field_index(k);
+            res[index] = std::nullopt;
+        });
+        return type.build_value(res);
+    }
+    static bytes merge(const abstract_type& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+        throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
+    }
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
     // more details like tombstones/ttl? Probably not but keep in mind.
     mutation transform(const mutation& m, const cql3::untyped_result_set* rs, api::timestamp_type ts, bytes tuuid, int& batch_no) const {
         auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token());
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
-
+        const auto postimage = _schema->cdc_options().postimage();
         auto& p = m.partition();
         if (p.partition_tombstone()) {
             // Partition deletion
@@ -591,15 +778,20 @@ public:
             }
         } else {
             // should be insert, update or deletion
-            auto process_cells = [&](const row& r, column_kind ckind, const clustering_key& log_ck, std::optional<clustering_key> pikey, const cql3::untyped_result_set_row* pirow) -> std::optional<gc_clock::duration> {
-                bytes_opt value;
+            auto process_cells = [&](const row& r, column_kind ckind, const clustering_key& log_ck, std::optional<clustering_key> pikey, const cql3::untyped_result_set_row* pirow, std::optional<clustering_key> poikey) -> std::optional<gc_clock::duration> {
+                if (postimage && !poikey) {
+                    poikey = set_pk_columns(m.key(), ts, tuuid, ++batch_no, res);
+                    set_operation(*poikey, ts, operation::post_image, res);
+                }
                 std::optional<gc_clock::duration> ttl;
+                std::unordered_set<column_id> columns_assigned;
                 r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
                     auto& cdef = _schema->column_at(ckind, id);
                     auto* dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
                     auto has_pirow = pirow && pirow->has(cdef.name_as_text());
                     bool is_column_delete = true;
-
+                    bytes_opt value;
+                    bytes_opt deleted_elements = std::nullopt;
                     if (cdef.is_atomic()) {
                         value = std::nullopt;
                         auto view = cell.as_atomic_cell(cdef);
@@ -613,7 +805,6 @@ public:
                     } else {
                         auto mv = cell.as_collection_mutation();
                         is_column_delete = false;
-                        bytes_opt deleted_elements = std::nullopt;
                         std::vector<bytes> buf;
                         value = mv.with_deserialized(*cdef.type, [&](collection_mutation_view_description view) -> bytes_opt {
                             if (view.tomb) {
@@ -722,20 +913,51 @@ public:
                         res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
                     }
 
-                    if (has_pirow) {
-                        value = get_preimage_col_value(cdef, pirow);
+                    bytes_opt prev;
 
+                    if (has_pirow) {
+                        prev = get_preimage_col_value(cdef, pirow);
                         assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
                         assert(pikey->explode() != log_ck.explode());
-                        res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
+                        res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, *prev, _cdc_ttl_opt));
+                    }
+
+                    if (postimage) {
+                        // keep track of actually assigning this already
+                        columns_assigned.emplace(id);
+                        // don't merge with pre-image iff column delete
+                        if (is_column_delete) {
+                            prev = std::nullopt;
+                        }
+                        if (cdef.is_atomic() && !is_column_delete && value) {
+                            res.set_cell(*poikey, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
+                        } else if (!cdef.is_atomic() && (value || (deleted_elements && prev))) {
+                            auto v = visit(*cdef.type, [&] (const auto& type) -> bytes {
+                                return merge(type, prev, value, deleted_elements);
+                            });
+                            res.set_cell(*poikey, *dst, atomic_cell::make_live(*dst->type, ts, v, _cdc_ttl_opt));
+                        }
                     }
                 });
+
+                // fill in all columns not already processed. Note that column nulls are also marked.
+                if (postimage && pirow) {
+                    for (auto& cdef : _schema->columns(ckind)) {
+                        if (!columns_assigned.count(cdef.id)) {
+                            auto v = pirow->get_view_opt(cdef.name_as_text());
+                            if (v) {
+                                auto dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
+                                res.set_cell(*poikey, *dst, atomic_cell::make_live(*dst->type, ts, *v, _cdc_ttl_opt));
+                            }
+                        }
+                    }
+                }
 
                 return ttl;
             };
 
             if (!p.static_row().empty()) {
-                std::optional<clustering_key> pikey;
+                std::optional<clustering_key> pikey, poikey;
                 const cql3::untyped_result_set_row * pirow = nullptr;
 
                 if (rs && !rs->empty()) {
@@ -747,7 +969,13 @@ public:
                 }
 
                 auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
-                auto ttl = process_cells(p.static_row().get(), column_kind::static_column, log_ck, pikey, pirow);
+
+                if (postimage) {
+                     poikey = set_pk_columns(m.key(), ts, tuuid, ++batch_no, res);
+                     set_operation(*poikey, ts, operation::post_image, res);
+                }
+
+                auto ttl = process_cells(p.static_row().get(), column_kind::static_column, log_ck, pikey, pirow, poikey);
 
                 set_operation(log_ck, ts, operation::update, res);
 
@@ -759,7 +987,7 @@ public:
                 for (const rows_entry& r : p.clustered_rows()) {
                     auto ck_value = r.key().explode(*_schema);
 
-                    std::optional<clustering_key> pikey;
+                    std::optional<clustering_key> pikey, poikey;
                     const cql3::untyped_result_set_row * pirow = nullptr;
 
                     if (rs) {
@@ -785,6 +1013,11 @@ public:
 
                     auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
 
+                    if (postimage) {
+                        poikey = set_pk_columns(m.key(), ts, tuuid, ++batch_no, res);
+                        set_operation(*poikey, ts, operation::post_image, res);
+                    }
+
                     size_t pos = 0;
                     for (const auto& column : _schema->clustering_key_columns()) {
                         assert (pos < ck_value.size());
@@ -794,6 +1027,9 @@ public:
                         if (pirow) {
                             assert(pirow->has(column.name_as_text()));
                             res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
+                        }
+                        if (poikey) {
+                            res.set_cell(*poikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
                         }
 
                         ++pos;
@@ -811,7 +1047,7 @@ public:
                             }
                         }
                     } else {
-                        auto ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow);
+                        auto ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, pirow, poikey);
                         const auto& marker = r.row().marker();
                         if (marker.is_live() && marker.is_expiring()) {
                             ttl = marker.ttl();
@@ -900,18 +1136,26 @@ public:
 
         // TODO: this assumes all mutations touch the same set of columns. This might not be true, and we may need to do more horrible set operation here.
         if (!p.static_row().empty()) {
-            p.static_row().get().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
-                auto& cdef =_schema->column_at(column_kind::static_column, id);
-                static_columns.emplace_back(id);
-                columns.emplace_back(&cdef);
-            });
+            // for postimage we need everything...
+            if (_schema->cdc_options().postimage()) {
+                for (const column_definition& c: _schema->static_columns()) {
+                    static_columns.emplace_back(c.id);
+                    columns.emplace_back(&c);
+                }
+            } else {
+                p.static_row().get().for_each_cell([&] (column_id id, const atomic_cell_or_collection&) {
+                    auto& cdef =_schema->column_at(column_kind::static_column, id);
+                    static_columns.emplace_back(id);
+                    columns.emplace_back(&cdef);
+                });
+            }
         }
         if (!p.clustered_rows().empty()) {
             const bool has_row_delete = std::any_of(p.clustered_rows().begin(), p.clustered_rows().end(), [] (const rows_entry& re) {
                 return re.row().deleted_at();
             });
-
-            if (has_row_delete) {
+            // for postimage we need everything...
+            if (has_row_delete || _schema->cdc_options().postimage()) {
                 for (const column_definition& c: _schema->regular_columns()) {
                     regular_columns.emplace_back(c.id);
                     columns.emplace_back(&c);
@@ -985,7 +1229,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             transformer trans(_ctxt, s);
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
-            if (s->cdc_options().preimage()) {
+            if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
