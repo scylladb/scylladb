@@ -69,7 +69,7 @@ public:
 };
 
 class selective_token_range_sharder {
-    const i_partitioner& _partitioner;
+    const sharding_info& _sharding_info;
     dht::token_range _range;
     shard_id _shard;
     bool _done = false;
@@ -77,14 +77,14 @@ class selective_token_range_sharder {
     dht::token _start_token;
     std::optional<range_bound<dht::token>> _start_boundary;
 public:
-    selective_token_range_sharder(const i_partitioner& partitioner, dht::token_range range, shard_id shard)
-            : _partitioner(partitioner)
+    selective_token_range_sharder(const sharding_info& sharding_info, dht::token_range range, shard_id shard)
+            : _sharding_info(sharding_info)
             , _range(std::move(range))
             , _shard(shard)
-            , _next_shard(_shard + 1 == _partitioner.shard_count() ? 0 : _shard + 1)
+            , _next_shard(_shard + 1 == _sharding_info.shard_count() ? 0 : _shard + 1)
             , _start_token(_range.start() ? _range.start()->value() : minimum_token())
-            , _start_boundary(_partitioner.shard_of(_start_token) == shard ?
-                _range.start() : range_bound<dht::token>(_partitioner.token_for_next_shard(_start_token, shard))) {
+            , _start_boundary(_sharding_info.shard_of(_start_token) == shard ?
+                _range.start() : range_bound<dht::token>(_sharding_info.token_for_next_shard(_start_token, shard))) {
     }
     std::optional<dht::token_range> next();
 };

@@ -2464,10 +2464,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         auto token_range = dht::token_range::make_open_ended_both_sides();
         auto partition_range = dht::to_partition_range(token_range);
 
-        auto& local_partitioner = schema->get_partitioner();
-        auto remote_partitioner_ptr = create_object<dht::i_partitioner, const unsigned&, const unsigned&>(local_partitioner.name(),
-                local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
-        auto& remote_partitioner = *remote_partitioner_ptr;
+        auto& local_partitioner = schema->get_sharding_info();
+        auto remote_partitioner = dht::sharding_info(local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
 
         auto tested_reader = make_multishard_streaming_reader(env.db(), schema,
                 [sharder = dht::selective_token_range_sharder(remote_partitioner, token_range, 0)] () mutable -> std::optional<dht::partition_range> {

@@ -389,7 +389,7 @@ public:
             is_local_reader local_reader)
             : _schema(s)
             , _range(dht::to_partition_range(range))
-            , _sharder(remote_partitioner, range, remote_shard)
+            , _sharder(remote_partitioner.get_sharding_info(), range, remote_shard)
             , _seed(seed)
             , _local_read_op(local_reader ? std::optional(cf.read_in_progress()) : std::nullopt)
             , _reader(make_reader(db, cf, local_reader)) {
@@ -910,7 +910,7 @@ private:
         if (_repair_master || _same_sharding_config) {
             return do_estimate_partitions_on_local_shard();
         } else {
-            return do_with(dht::selective_token_range_sharder(*_remote_partitioner, _range, _master_node_shard_config.shard), uint64_t(0), [this] (auto& sharder, auto& partitions_sum) mutable {
+            return do_with(dht::selective_token_range_sharder(_remote_partitioner->get_sharding_info(), _range, _master_node_shard_config.shard), uint64_t(0), [this] (auto& sharder, auto& partitions_sum) mutable {
                 return repeat([this, &sharder, &partitions_sum] () mutable {
                     auto shard_range = sharder.next();
                     if (shard_range) {

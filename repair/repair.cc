@@ -1329,7 +1329,7 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
             ri->ranges_index++;
             rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
                 ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->cfs, range);
-            return do_with(dht::selective_token_range_sharder(ri->partitioner, range, ri->shard), [ri] (auto& sharder) {
+            return do_with(dht::selective_token_range_sharder(ri->partitioner.get_sharding_info(), range, ri->shard), [ri] (auto& sharder) {
                 return repeat([ri, &sharder] () {
                     check_in_shutdown();
                     ri->check_in_abort();
