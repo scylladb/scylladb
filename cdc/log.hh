@@ -69,11 +69,6 @@ namespace cdc {
 class db_context;
 class metadata;
 
-// Callback to be invoked on mutation finish to fix
-// the whole bit about post-image.
-// TODO: decide on what the parameters are to be for this.
-using result_callback = std::function<future<>()>;
-
 /// \brief CDC service, responsible for schema listeners
 ///
 /// CDC service will listen for schema changes and iff CDC is enabled/changed
@@ -92,7 +87,7 @@ public:
     // appropriate augments to set the log entries.
     // Iff post-image is enabled for any of these, a non-empty callback is also
     // returned to be invoked post the mutation query.
-    future<std::tuple<std::vector<mutation>, result_callback>> augment_mutation_call(
+    future<std::vector<mutation>> augment_mutation_call(
         lowres_clock::time_point timeout,
         std::vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state
