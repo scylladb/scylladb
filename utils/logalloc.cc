@@ -2064,6 +2064,17 @@ bool segment_pool::migrate_segment(segment* src, segment* dst)
 }
 
 void tracker::impl::register_region(region::impl* r) {
+    // If needed, increase capacity of regions before taking the reclaim lock,
+    // to avoid failing an allocation when push_back() tries to increase
+    // capacity.
+    //
+    // The capacity increase is atomic (wrt _regions) so it cannot be
+    // observed
+    if (_regions.size() == _regions.capacity()) {
+        auto copy = _regions;
+        copy.reserve(copy.capacity() * 2);
+        _regions = std::move(copy);
+    }
     reclaiming_lock _(*this);
     _regions.push_back(r);
     llogger.debug("Registered region @{} with id={}", r, r->id());
