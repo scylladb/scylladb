@@ -289,8 +289,19 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
                     [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
                 tracing::trace_state_ptr trace_state = executor::maybe_trace_query(*client_state, op, req->content);
                 tracing::trace(trace_state, op);
-                return _json_parser.parse(req->content).then([this, callback_it = std::move(callback_it), &client_state, trace_state, req = std::move(req)] (rjson::value json_request) mutable {
-                    return callback_it->second(_executor, *client_state, trace_state, empty_service_permit(), std::move(json_request), std::move(req)).finally([trace_state] {});
+                // JSON parsing can allocate up to roughly 2x the size of the raw document, + a couple of bytes for maintenance.
+                // FIXME: by this time, the whole HTTP request was already read, so some memory is already occupied.
+                // Once HTTP allows working on streams, we should grab the permit *before* reading the HTTP payload.
+                size_t mem_estimate = req->content.size() * 3 + 8000;
+                auto units_fut = get_units(*_memory_limiter, mem_estimate);
+                if (_memory_limiter->waiters()) {
+                    ++_executor._stats.requests_blocked_memory;
+                }
+                return units_fut.then([this, callback_it = std::move(callback_it), &client_state, trace_state, req = std::move(req)] (semaphore_units<> units) mutable {
+                    return _json_parser.parse(req->content).then([this, callback_it = std::move(callback_it), &client_state, trace_state,
+                            units = std::move(units), req = std::move(req)] (rjson::value json_request) mutable {
+                        return callback_it->second(_executor, *client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req)).finally([trace_state] {});
+                    });
                 });
             });
         });
