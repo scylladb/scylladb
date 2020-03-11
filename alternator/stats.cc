@@ -89,6 +89,8 @@ stats::stats() : api_operations{} {
                     seastar::metrics::description("number of writes that used LWT")),
             seastar::metrics::make_total_operations("shard_bounce_for_lwt", shard_bounce_for_lwt,
                     seastar::metrics::description("number writes that had to be bounced from this shard because of LWT requirements")),
+            seastar::metrics::make_total_operations("requests_blocked_memory", requests_blocked_memory,
+                    seastar::metrics::description("Counts a number of requests blocked due to memory pressure.")),
             seastar::metrics::make_total_operations("filtered_rows_read_total", cql_stats.filtered_rows_read_total,
                     seastar::metrics::description("number of rows read during filtering operations")),
             seastar::metrics::make_total_operations("filtered_rows_matched_total", cql_stats.filtered_rows_matched_total,
