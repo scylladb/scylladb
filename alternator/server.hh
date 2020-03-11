@@ -48,6 +48,8 @@ class server {
     gate _pending_requests;
     alternator_callbacks_map _callbacks;
 
+    semaphore* _memory_limiter;
+
     class json_parser {
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
         std::string_view _raw_document;
@@ -68,7 +70,8 @@ class server {
 public:
     server(executor& executor);
 
-    future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization);
+    future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
+            bool enforce_authorization, semaphore* memory_limiter);
     future<> stop();
 private:
     void set_routes(seastar::httpd::routes& r);
