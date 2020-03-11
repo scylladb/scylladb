@@ -451,14 +451,17 @@ class repair_writer {
     // partition_start is written and is closed when a partition_end is
     // written.
     std::vector<bool> _partition_opened;
+    streaming::stream_reason _reason;
 public:
     repair_writer(
             schema_ptr schema,
             uint64_t estimated_partitions,
-            size_t nr_peer_nodes)
+            size_t nr_peer_nodes,
+            streaming::stream_reason reason)
             : _schema(std::move(schema))
             , _estimated_partitions(estimated_partitions)
-            , _nr_peer_nodes(nr_peer_nodes) {
+            , _nr_peer_nodes(nr_peer_nodes)
+            , _reason(reason) {
         init_writer();
     }
 
@@ -495,9 +498,9 @@ public:
         table& t = db.local().find_column_family(_schema->id());
         _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema,
                 make_generating_reader(_schema, std::move(get_next_mutation_fragment)),
-                [&db, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
+                [&db, reason = this->_reason, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
             auto& t = db.local().find_column_family(reader.schema());
-            return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, streaming::stream_reason::repair).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
+            return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, reason).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
                 //FIXME: for better estimations this should be transmitted from remote
                 auto metadata = mutation_source_metadata{};
                 auto& cs = t->get_compaction_strategy();
@@ -590,6 +593,7 @@ private:
     repair_master _repair_master;
     gms::inet_address _myip;
     uint32_t _repair_meta_id;
+    streaming::stream_reason _reason;
     // Repair master's sharding configuration
     shard_config _master_node_shard_config;
     // Partitioner of repair master
@@ -653,6 +657,7 @@ public:
             uint64_t seed,
             repair_master master,
             uint32_t repair_meta_id,
+            streaming::stream_reason reason,
             shard_config master_node_shard_config,
             size_t nr_peer_nodes = 1)
             : _db(db)
@@ -666,6 +671,7 @@ public:
             , _repair_master(master)
             , _myip(utils::fb_utilities::get_broadcast_address())
             , _repair_meta_id(repair_meta_id)
+            , _reason(reason)
             , _master_node_shard_config(std::move(master_node_shard_config))
             , _remote_partitioner(make_remote_partitioner())
             , _same_sharding_config(is_same_sharding_config())
@@ -681,7 +687,7 @@ public:
                     _seed,
                     repair_reader::is_local_reader(_repair_master || _same_sharding_config)
               )
-            , _repair_writer(_schema, _estimated_partitions, _nr_peer_nodes)
+            , _repair_writer(_schema, _estimated_partitions, _nr_peer_nodes, _reason)
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
                         return netw::get_local_messaging_service().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
@@ -731,7 +737,8 @@ public:
             uint64_t max_row_buf_size,
             uint64_t seed,
             shard_config master_node_shard_config,
-            table_schema_version schema_version) {
+            table_schema_version schema_version,
+            streaming::stream_reason reason) {
         return service::get_schema_for_write(schema_version, {from, src_cpu_id}).then([from,
                 repair_meta_id,
                 range,
@@ -739,7 +746,8 @@ public:
                 max_row_buf_size,
                 seed,
                 master_node_shard_config,
-                schema_version] (schema_ptr s) {
+                schema_version,
+                reason] (schema_ptr s) {
             auto& db = service::get_local_storage_proxy().get_db();
             auto& cf = db.local().find_column_family(s->id());
             node_repair_meta_id id{from, repair_meta_id};
@@ -752,6 +760,7 @@ public:
                     seed,
                     repair_meta::repair_master::no,
                     repair_meta_id,
+                    reason,
                     std::move(master_node_shard_config));
             bool insertion = repair_meta_map().emplace(id, rm).second;
             if (!insertion) {
@@ -1412,28 +1421,28 @@ public:
 
     // RPC API
     future<>
-    repair_row_level_start(gms::inet_address remote_node, sstring ks_name, sstring cf_name, dht::token_range range, table_schema_version schema_version) {
+    repair_row_level_start(gms::inet_address remote_node, sstring ks_name, sstring cf_name, dht::token_range range, table_schema_version schema_version, streaming::stream_reason reason) {
         if (remote_node == _myip) {
             return make_ready_future<>();
         }
         stats().rpc_call_nr++;
         return netw::get_local_messaging_service().send_repair_row_level_start(msg_addr(remote_node),
                 _repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range), _algo, _max_row_buf_size, _seed,
-                _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb, _master_node_shard_config.partitioner_name, std::move(schema_version));
+                _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb, _master_node_shard_config.partitioner_name, std::move(schema_version), reason);
     }
 
     // RPC handler
     static future<>
     repair_row_level_start_handler(gms::inet_address from, uint32_t src_cpu_id, uint32_t repair_meta_id, sstring ks_name, sstring cf_name,
             dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size,
-            uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version) {
+            uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason) {
         if (!_sys_dist_ks->local_is_initialized() || !_view_update_generator->local_is_initialized()) {
             return make_exception_future<>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
                     utils::fb_utilities::get_broadcast_address())));
         }
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
             utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
-        return insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version));
+        return insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason);
     }
 
     // RPC API
@@ -2104,15 +2113,16 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
         });
         ms.register_repair_row_level_start([] (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring ks_name,
                 sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed,
-                unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version) {
+                unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version, rpc::optional<streaming::stream_reason> reason) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
             return smp::submit_to(src_cpu_id % smp::count, [from, src_cpu_id, repair_meta_id, ks_name, cf_name,
-                    range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, remote_partitioner_name, schema_version] () mutable {
+                    range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, remote_partitioner_name, schema_version, reason] () mutable {
+                streaming::stream_reason r = reason ? *reason : streaming::stream_reason::repair;
                 return repair_meta::repair_row_level_start_handler(from, src_cpu_id, repair_meta_id, std::move(ks_name),
                         std::move(cf_name), std::move(range), algo, max_row_buf_size, seed,
                         shard_config{remote_shard, remote_shard_count, remote_ignore_msb, std::move(remote_partitioner_name)},
-                        schema_version);
+                        schema_version, r);
             });
         });
         ms.register_repair_row_level_stop([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
@@ -2442,6 +2452,7 @@ public:
                     _seed,
                     repair_meta::repair_master::yes,
                     repair_meta_id,
+                    _ri.reason,
                     std::move(master_node_shard_config),
                     _all_live_peer_nodes.size());
 
@@ -2456,7 +2467,7 @@ public:
             nodes_to_stop.reserve(_all_nodes.size());
             try {
                 parallel_for_each(_all_nodes, [&, this] (const gms::inet_address& node) {
-                    return master.repair_row_level_start(node, _ri.keyspace, _cf_name, _range, schema_version).then([&] () {
+                    return master.repair_row_level_start(node, _ri.keyspace, _cf_name, _range, schema_version, _ri.reason).then([&] () {
                         nodes_to_stop.push_back(node);
                         return master.repair_get_estimated_partitions(node).then([this, node] (uint64_t partitions) {
                             rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
