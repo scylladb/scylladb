@@ -181,6 +181,7 @@ public:
     shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
+    streaming::stream_reason reason;
     std::unordered_map<dht::token_range, repair_neighbors> neighbors;
     size_t nr_failed_ranges = 0;
     bool aborted = false;
@@ -211,7 +212,8 @@ public:
             const std::vector<sstring>& cfs_,
             int id_,
             const std::vector<sstring>& data_centers_,
-            const std::vector<sstring>& hosts_);
+            const std::vector<sstring>& hosts_,
+            streaming::stream_reason reason_);
     future<> do_streaming();
     void check_failed_ranges();
     future<> request_transfer_ranges(const sstring& cf,
