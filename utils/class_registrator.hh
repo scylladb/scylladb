@@ -81,21 +81,21 @@ public:
     using result_type = typename result_for<BaseType>::type;
     using creator_type = std::function<result_type(Args...)>;
 private:
-    std::unordered_map<std::string, creator_type> _classes;
+    std::unordered_map<sstring, creator_type> _classes;
 public:
     void register_class(sstring name, creator_type creator);
     template<typename T>
     void register_class(sstring name);
     result_type create(const sstring& name, Args&&...);
 
-    std::unordered_map<std::string, creator_type>& classes() {
+    std::unordered_map<sstring, creator_type>& classes() {
         return _classes;
     }
-    const std::unordered_map<std::string, creator_type>& classes() const {
+    const std::unordered_map<sstring, creator_type>& classes() const {
         return _classes;
     }
 
-    std::string to_qualified_class_name(std::string_view class_name) const;
+    sstring to_qualified_class_name(std::string_view class_name) const;
 };
 
 template<typename BaseType, typename... Args>
@@ -110,19 +110,19 @@ void nonstatic_class_registry<BaseType, Args...>::register_class(sstring name) {
 }
 
 template<typename BaseType, typename... Args>
-std::string nonstatic_class_registry<BaseType, Args...>::to_qualified_class_name(std::string_view class_name) const {
+sstring nonstatic_class_registry<BaseType, Args...>::to_qualified_class_name(std::string_view class_name) const {
     if (is_class_name_qualified(class_name)) {
-        return std::string(class_name);
+        return sstring(class_name);
     } else {
         const auto& classes{nonstatic_class_registry<BaseType, Args...>::classes()};
 
         const auto it = boost::find_if(classes, [class_name](const auto& registered_class) {
             // the fully qualified name contains the short name
             auto i = registered_class.first.find_last_of('.');
-            return i != std::string::npos && registered_class.first.compare(i + 1, std::string::npos, class_name) == 0;
+            return i != sstring::npos && registered_class.first.compare(i + 1, sstring::npos, class_name) == 0;
         });
         if (it == classes.end()) {
-            return std::string(class_name);
+            return sstring(class_name);
         }
         return it->first;
     }
@@ -153,7 +153,7 @@ public:
         return registry().create(name, std::forward<U>(a)...);
     }
 
-    static std::unordered_map<std::string, creator_type>& classes() {
+    static std::unordered_map<sstring, creator_type>& classes() {
         return registry().classes();
     }
 
