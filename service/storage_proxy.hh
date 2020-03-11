@@ -66,6 +66,7 @@
 #include "service/paxos/proposal.hh"
 #include "service/client_state.hh"
 #include "service/paxos/prepare_summary.hh"
+#include "cdc/stats.hh"
 
 
 namespace seastar::rpc {
@@ -191,6 +192,7 @@ public:
     using write_stats = storage_proxy_stats::write_stats;
     using stats = storage_proxy_stats::stats;
     using global_stats = storage_proxy_stats::global_stats;
+    using cdc_stats = cdc::stats;
 
     class coordinator_query_options {
         clock_type::time_point _timeout;
@@ -292,6 +294,7 @@ private:
     std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
 
     cdc::cdc_service* _cdc = nullptr;
+    cdc_stats _cdc_stats;
 private:
     future<> uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
@@ -575,6 +578,12 @@ public:
     }
     global_stats& get_global_stats() {
         return _global_stats;
+    }
+    const cdc_stats& get_cdc_stats() const {
+        return _cdc_stats;
+    }
+    cdc_stats& get_cdc_stats() {
+        return _cdc_stats;
     }
 
     scheduling_group_key get_stats_key() const {

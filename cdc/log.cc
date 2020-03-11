@@ -25,6 +25,7 @@
 #include <boost/range/irange.hpp>
 #include <seastar/util/defer.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/metrics.hh>
 
 #include "cdc/log.hh"
 #include "cdc/generation.hh"
@@ -49,6 +50,7 @@
 #include "concrete_types.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "tracing/trace_state.hh"
+#include "stats.hh"
 
 namespace std {
 
@@ -66,6 +68,62 @@ logging::logger cdc_log("cdc");
 
 namespace cdc {
 static schema_ptr create_log_schema(const schema&, std::optional<utils::UUID> = {});
+}
+
+static constexpr auto cdc_group_name = "cdc";
+
+void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_groups& metrics, std::string_view suffix) {
+    namespace sm = seastar::metrics;
+    auto register_part = [&] (part_type part, sstring part_name) {
+        metrics.add_group(cdc_group_name, {
+                sm::make_total_operations(format("operations_on_{}_performed_{}", part_name, suffix), count[(size_t)part],
+                        sm::description(format("number of {} CDC operations that processed a {}", suffix, part_name)),
+                        {})
+            });
+    };
+
+    register_part(part_type::STATIC_ROW, "static_row");
+    register_part(part_type::CLUSTERING_ROW, "clustering_row");
+    register_part(part_type::MAP, "map");
+    register_part(part_type::SET, "set");
+    register_part(part_type::LIST, "list");
+    register_part(part_type::UDT, "udt");
+    register_part(part_type::RANGE_TOMBSTONE, "range_tombstone");
+    register_part(part_type::PARTITION_DELETE, "partition_delete");
+    register_part(part_type::ROW_DELETE, "row_delete");
+}
+
+cdc::stats::stats() {
+    namespace sm = seastar::metrics;
+
+    auto register_counters = [this] (counters& counters, sstring kind) {
+        const auto split_label = sm::label("split");
+        _metrics.add_group(cdc_group_name, {
+                sm::make_total_operations("operations_" + kind, counters.unsplit_count,
+                        sm::description(format("number of {} CDC operations", kind)),
+                        {split_label(false)}),
+
+                sm::make_total_operations("operations_" + kind, counters.split_count,
+                        sm::description(format("number of {} CDC operations", kind)),
+                        {split_label(true)}),
+
+                sm::make_total_operations("preimage_selects_" + kind, counters.preimage_selects,
+                        sm::description(format("number of {} preimage queries performed", kind)),
+                        {}),
+
+                sm::make_total_operations("operations_with_preimage_" + kind, counters.with_preimage_count,
+                        sm::description(format("number of {} operations that included preimage", kind)),
+                        {}),
+
+                sm::make_total_operations("operations_with_postimage_" + kind, counters.with_postimage_count,
+                        sm::description(format("number of {} operations that included postimage", kind)),
+                        {})
+            });
+
+        counters.touches.register_metrics(_metrics, kind);
+    };
+    register_counters(counters_total, "total");
+    register_counters(counters_failed, "failed");
 }
 
 class cdc::cdc_service::impl : service::migration_listener::empty_listener {
