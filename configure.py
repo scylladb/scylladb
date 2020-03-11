@@ -249,19 +249,19 @@ def find_headers(repodir, excluded_dirs):
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION',
-        'cxx_ld_flags': '',
+        'cxx_ld_flags': '-Wstack-usage=%s' % (1024*43),
     },
     'release': {
         'cxxflags': '',
-        'cxx_ld_flags': '-O3',
+        'cxx_ld_flags': '-O3 -Wstack-usage=%s' % (1024*32),
     },
     'dev': {
         'cxxflags': '-DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION',
-        'cxx_ld_flags': '-O1',
+        'cxx_ld_flags': '-O1 -Wstack-usage=%s' % (1024*32),
     },
     'sanitize': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER',
-        'cxx_ld_flags': '-Os',
+        'cxx_ld_flags': '-Os -Wstack-usage=%s' % (1024*50),
     }
 }
 
@@ -1174,6 +1174,8 @@ forced_ldflags += '--build-id=sha1,'
 forced_ldflags += f'--dynamic-linker={dynamic_linker}'
 
 args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
+
+args.user_cflags += ' -Wno-error=stack-usage='
 
 seastar_cflags = args.user_cflags
 if args.target != '':
