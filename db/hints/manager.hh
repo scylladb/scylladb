@@ -391,8 +391,7 @@ public:
         /// \return Whatever \ref func returns.
         template <typename Func>
         friend inline auto with_file_update_mutex(end_point_hints_manager& ep_man, Func&& func) {
-            lw_shared_ptr<seastar::shared_mutex> lock_ptr = ep_man._file_update_mutex_ptr;
-            return with_lock(*lock_ptr, std::forward<Func>(func)).finally([lock_ptr] {});
+            return with_lock(*ep_man._file_update_mutex_ptr, std::forward<Func>(func)).finally([lock_ptr = ep_man._file_update_mutex_ptr] {});
         }
 
         const fs::path& hints_dir() const noexcept {
