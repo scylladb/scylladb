@@ -1,0 +1,137 @@
+#!/bin/bash
+
+# Exit if any one of the commands below fails
+set -e
+
+script_path=$(dirname $(readlink -e $0))
+
+# By default, we take the latest build/*/scylla as the executable:
+SCYLLA=${SCYLLA-$(ls -t "$script_path/../build/"*"/scylla" | head -1)}
+SCYLLA=$(readlink -f "$SCYLLA")
+SCYLLA_IP=${IP-127.0.0.1}
+CPUSET=${CPUSET-0}
+CQLSH=${CQLSH-cqlsh}
+
+# We need to use cqlsh to set up the authentication credentials expected by
+# some of the tests that check check authentication. If cqlsh is not installed
+# there isn't much point of even starting Scylla
+if ! type "$CQLSH" >/dev/null 2>&1
+then
+    echo "Error: cannot find '$CQLSH', needed for configuring Alternator authentication." >&2
+    echo "Please install $CQLSH in your path, or set CQLSH to its location." >&2
+    exit 1
+fi
+
+tmp_dir=/tmp/alternator-test-$$
+mkdir $tmp_dir
+
+# We run the cleanup() function on exit for any reason - successful finish
+# of the script, an error (since we have "set -e"), or a signal.
+# It ensures that Scylla is killed and its temporary storage directory is
+# deleted. It also shows Scylla's output log.
+code=17
+summary=
+cleanup() {
+    kill -9 $SCYLLA_PROCESS 2>/dev/null || :
+    echo
+    echo "Scylla log:"
+    echo
+    # we want to cat "$tmp_dir/log", but this can take a long time,
+    # especially if stdout is piped, and be interrupted. We don't want
+    # the "rm" below to not happen, so we need to open the file later,
+    # and cat it later:
+    exec 3<"$tmp_dir/log"
+    rm -rf --preserve-root "$tmp_dir"
+    cat <&3
+    echo $summary
+    exit $code
+}
+trap 'cleanup' EXIT
+
+# Set up SSL certificates needed for "--alternator-https-port=8043"
+# to work. We only need to do this if the "--https" option was explicitly
+# passed - otherwise the test would not use HTTPS anyway.
+alternator_port_option="--alternator-port=8000"
+for i
+do
+    if [ "$i" = --https ]
+    then
+        openssl genrsa 2048 > "$tmp_dir/scylla.key"
+        openssl req -new -x509 -nodes -sha256 -days 365 -subj "/C=IL/ST=None/L=None/O=None/OU=None/CN=example.com" -key "$tmp_dir/scylla.key" -out "$tmp_dir/scylla.crt"
+        alternator_port_option="--alternator-https-port=8043"
+    fi
+done
+"$SCYLLA" --options-file "$script_path/../conf/scylla.yaml" \
+         --alternator-address $SCYLLA_IP \
+        $alternator_port_option \
+        --alternator-enforce-authorization=1 \
+        --experimental=on --developer-mode=1 \
+        --ring-delay-ms 0 --collectd 0 \
+        --cpuset "$CPUSET" -m 1G \
+        --api-address $SCYLLA_IP --rpc-address $SCYLLA_IP \
+        --listen-address $SCYLLA_IP \
+        --seed-provider-parameters seeds=$SCYLLA_IP \
+        --workdir "$tmp_dir" \
+        --server-encryption-options keyfile="$tmp_dir/scylla.key" \
+        --server-encryption-options certificate="$tmp_dir/scylla.crt" \
+        --auto-snapshot 0 \
+        >"$tmp_dir/log" 2>&1 &
+SCYLLA_PROCESS=$!
+
+# Set up the the proper authentication credentials needed by the Alternator
+# test. This requires connecting to Scylla with cqlsh - we'll wait up for
+# one minute for this to work:
+echo "Scylla is: $SCYLLA."
+echo -n "Booting Scylla..."
+ok=
+SECONDS=0
+while ((SECONDS < 100))
+do
+    sleep 2
+    echo -n .
+    if ! kill -0 $SCYLLA_PROCESS 2>/dev/null
+    then
+        summary="Error: Scylla failed to boot after $SECONDS seconds."
+        break
+    fi
+    err=`"$CQLSH" -e "INSERT INTO system_auth.roles (role, salted_hash) VALUES ('alternator', 'secret_pass')" 2>&1` && ok=yes && break
+    case "$err" in
+    "Connection error:"*)
+        # This is what we expect while Scylla is still booting.
+        ;;
+    *"command not found")
+        summary="Error: need 'cqlsh' in your path, to configure Alternator authentication."
+        echo
+        echo $summary
+        break;;
+    *)
+        summary="Unknown cqlsh error, can't set authentication credentials: '$err'"
+        echo
+        echo $summary
+        break;;
+    esac
+done
+if test -n "$ok" && kill -0 $SCYLLA_PROCESS 2>/dev/null
+then
+    echo "Done ($SECONDS seconds)"
+else
+    echo
+    if test -z "$summary"
+    then
+        summary="Error: Scylla failed to boot after $SECONDS seconds."
+        echo $summary
+    fi
+    exit 1
+fi
+
+cd "$script_path"
+pytest "$@"
+code=$?
+case $code in
+0) summary="Alternator tests pass";;
+*) summary="Alternator tests failure";;
+esac
+
+# Note that the cleanup() function runs now, just like on any exit from
+# any reason in this script. It will delete the temporary files and
+# announce the failure or success of the test.
