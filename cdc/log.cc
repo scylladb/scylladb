@@ -156,7 +156,7 @@ public:
         }
     }
 
-    future<std::tuple<std::vector<mutation>, result_callback>> augment_mutation_call(
+    future<std::vector<mutation>> augment_mutation_call(
         lowres_clock::time_point timeout,
         std::vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state
@@ -1208,7 +1208,7 @@ transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_siz
 
 } // namespace cdc
 
-future<std::tuple<std::vector<mutation>, cdc::result_callback>>
+future<std::vector<mutation>>
 cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
@@ -1217,7 +1217,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     });
 
     if (i == e) {
-        return make_ready_future<std::tuple<std::vector<mutation>, cdc::result_callback>>(std::make_tuple(std::move(mutations), result_callback{}));
+        return make_ready_future<std::vector<mutation>>(std::move(mutations));
     }
 
     tracing::trace(tr_state, "CDC: Started generating mutations for log rows");
@@ -1271,7 +1271,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             });
         }).then([tr_state](std::vector<mutation> mutations) {
             tracing::trace(tr_state, "CDC: Finished generating all log mutations");
-            return make_ready_future<std::tuple<std::vector<mutation>, cdc::result_callback>>(std::make_tuple(std::move(mutations), result_callback{}));
+            return make_ready_future<std::vector<mutation>>(std::move(mutations));
         });
     });
 }
@@ -1282,7 +1282,7 @@ bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutat
     });
 }
 
-future<std::tuple<std::vector<mutation>, cdc::result_callback>>
+future<std::vector<mutation>>
 cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
     return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state));
 }
