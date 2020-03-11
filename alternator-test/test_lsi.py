@@ -26,25 +26,22 @@ import time
 from botocore.exceptions import ClientError, ParamValidationError
 from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables
 
-# Currently, Alternator's LSIs only support eventually consistent reads, so tests
-# that involve writing to a table and then expect to read something from it cannot
-# be guaranteed to succeed without retrying the read. The following utility
-# functions make it easy to write such tests.
+# LSIs support strongly-consistent reads, so the following functions do not
+# need to retry like we did in test_gsi.py for GSIs:
 def assert_index_query(table, index_name, expected_items, **kwargs):
+    assert multiset(expected_items) == multiset(full_query(table, IndexName=index_name, ConsistentRead=True, **kwargs))
+def assert_index_scan(table, index_name, expected_items, **kwargs):
+    assert multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, ConsistentRead=True, **kwargs))
+
+# A version doing retries instead of ConsistentRead, to be used just for the
+# one test below which has both GSI and LSI:
+def retrying_assert_index_query(table, index_name, expected_items, **kwargs):
     for i in range(3):
         if multiset(expected_items) == multiset(full_query(table, IndexName=index_name, **kwargs)):
             return
-        print('assert_index_query retrying')
+        print('retrying_assert_index_query retrying')
         time.sleep(1)
     assert multiset(expected_items) == multiset(full_query(table, IndexName=index_name, **kwargs))
-
-def assert_index_scan(table, index_name, expected_items, **kwargs):
-    for i in range(3):
-        if multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, **kwargs)):
-            return
-        print('assert_index_scan retrying')
-        time.sleep(1)
-    assert multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, **kwargs))
 
 # Although quite silly, it is actually allowed to create an index which is
 # identical to the base table.
@@ -302,13 +299,11 @@ def test_lsi_consistent_read(test_table_lsi_1):
     expected_items = [i for i in items if i['p'] == p1 and i['b'] == b1]
     assert_index_query(test_table_lsi_1, 'hello', expected_items,
         KeyConditions={'p': {'AttributeValueList': [p1], 'ComparisonOperator': 'EQ'},
-                       'b': {'AttributeValueList': [b1], 'ComparisonOperator': 'EQ'}},
-        ConsistentRead=True)
+                       'b': {'AttributeValueList': [b1], 'ComparisonOperator': 'EQ'}})
     expected_items = [i for i in items if i['p'] == p2 and i['b'] == b2]
     assert_index_query(test_table_lsi_1, 'hello', expected_items,
         KeyConditions={'p': {'AttributeValueList': [p2], 'ComparisonOperator': 'EQ'},
-                       'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}},
-        ConsistentRead=True)
+                       'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}})
 
 # A table with both gsi and lsi present
 @pytest.fixture(scope="session")
@@ -360,6 +355,6 @@ def test_lsi_and_gsi(test_table_lsi_gsi):
 
     for index in ['hello_g1', 'hello_l1']:
         expected_items = [i for i in items if i['p'] == p1 and i['x1'] == x1]
-        assert_index_query(test_table_lsi_gsi, index, expected_items,
+        retrying_assert_index_query(test_table_lsi_gsi, index, expected_items,
             KeyConditions={'p': {'AttributeValueList': [p1], 'ComparisonOperator': 'EQ'},
                            'x1': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})

@@ -191,7 +191,10 @@ static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& r
 // a table or a materialized view from which to read, based on the TableName
 // and optional IndexName in the request. Only requests like Query and Scan
 // which allow IndexName should use this function.
-static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
+enum class table_or_view_type { base, lsi, gsi };
+static std::pair<schema_ptr, table_or_view_type>
+get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
+    table_or_view_type type = table_or_view_type::base;
     std::string table_name = get_table_name(request);
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     const rjson::value* index_name = rjson::find(request, "IndexName");
@@ -200,6 +203,7 @@ static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::
         if (index_name->IsString()) {
             orig_table_name = std::move(table_name);
             table_name = view_name(orig_table_name, index_name->GetString());
+            type = table_or_view_type::gsi;
         } else {
             throw api_error("ValidationException",
                     format("Non-string IndexName '{}'", index_name->GetString()));
@@ -208,11 +212,12 @@ static schema_ptr get_table_or_view(service::storage_proxy& proxy, const rjson::
 
     // If no tables for global indexes were found, the index may be local
     if (!proxy.get_db().local().has_schema(keyspace_name, table_name)) {
+        type = table_or_view_type::lsi;
         table_name = lsi_name(orig_table_name, index_name->GetString());
     }
 
     try {
-        return proxy.get_db().local().find_schema(keyspace_name, table_name);
+        return { proxy.get_db().local().find_schema(keyspace_name, table_name), type };
     } catch(no_such_column_family&) {
         if (index_name) {
             // DynamoDB returns a different error depending on whether the
@@ -2918,7 +2923,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     _stats.api_operations.scan++;
     elogger.trace("Scanning {}", request);
 
-    schema_ptr schema = get_table_or_view(_proxy, request);
+    auto [schema, table_type] = get_table_or_view(_proxy, request);
 
     if (rjson::find(request, "FilterExpression")) {
         return make_ready_future<request_return_type>(api_error("ValidationException",
@@ -2934,6 +2939,10 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     //FIXME(sarna): ScanFilter is deprecated in favor of FilterExpression
     rjson::value* scan_filter = rjson::find(request, "ScanFilter");
     db::consistency_level cl = get_read_consistency(request);
+    if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
+        return make_ready_future<request_return_type>(api_error("ValidationException",
+                "Consistent reads are not allowed on global indexes (GSI)"));
+    }
     rjson::value* limit_json = rjson::find(request, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : query::max_partitions;
     if (limit <= 0) {
@@ -3376,12 +3385,16 @@ future<executor::request_return_type> executor::query(client_state& client_state
     _stats.api_operations.query++;
     elogger.trace("Querying {}", request);
 
-    schema_ptr schema = get_table_or_view(_proxy, request);
+    auto [schema, table_type] = get_table_or_view(_proxy, request);
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
     db::consistency_level cl = get_read_consistency(request);
+    if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
+        return make_ready_future<request_return_type>(api_error("ValidationException",
+                "Consistent reads are not allowed on global indexes (GSI)"));
+    }
     rjson::value* limit_json = rjson::find(request, "Limit");
     uint32_t limit = limit_json ? limit_json->GetUint64() : query::max_partitions;
     if (limit <= 0) {

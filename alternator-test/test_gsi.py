@@ -150,7 +150,6 @@ def test_gsi_missing_table(dynamodb):
         dynamodb.meta.client.scan(TableName='nonexistent_table', IndexName='any_name')
 
 # Verify that strongly-consistent reads on GSI are *not* allowed.
-@pytest.mark.xfail(reason="GSI strong consistency not checked")
 def test_gsi_strong_consistency(test_table_gsi_1):
     with pytest.raises(ClientError, match='ValidationException.*Consistent'):
         full_query(test_table_gsi_1, KeyConditions={'c': {'AttributeValueList': ['hi'], 'ComparisonOperator': 'EQ'}}, IndexName='hello', ConsistentRead=True)
