@@ -65,7 +65,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         abort_sources.start().get();
         auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
 
-        feature_service.start().get();
+        feature_service.start(gms::feature_config_from_db_config(cfg)).get();
         auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();

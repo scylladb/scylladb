@@ -75,7 +75,7 @@ int main(int ac, char ** av) {
             db::config cfg;
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             sharded<gms::feature_service> feature_service;
-            feature_service.start().get();
+            feature_service.start(gms::feature_config_from_db_config(cfg)).get();
             sharded<db::system_distributed_keyspace> sys_dist_ks;
             sharded<db::view::view_update_generator> view_update_generator;
             sharded<abort_source> abort_sources;

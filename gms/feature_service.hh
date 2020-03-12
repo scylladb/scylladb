@@ -58,8 +58,6 @@ class feature_service final {
 
     feature_config _config;
 public:
-    /* config-less initialization is for testing */
-    feature_service() : feature_service(feature_config{}) {}
     explicit feature_service(feature_config cfg);
     ~feature_service() = default;
     future<> stop();
