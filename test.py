@@ -136,8 +136,11 @@ class TestSuite(ABC):
 
     def add_test_list(self, mode, options):
         lst = [ os.path.splitext(os.path.basename(t))[0] for t in glob.glob(os.path.join(self.path, self.pattern)) ]
+        run_first_tests = set(self.cfg.get("run_first", []))
         if lst:
-            lst.sort()
+            # Some tests are long and are better to be started earlier,
+            # so pop them up while sorting the list
+            lst.sort(key=lambda x: (x not in run_first_tests, x))
         skip_tests = set(self.cfg.get("skip_in_debug_mode", []))
         for shortname in lst:
             if mode not in ["release", "dev"] and shortname in skip_tests:
