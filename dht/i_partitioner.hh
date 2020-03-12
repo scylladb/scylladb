@@ -198,11 +198,6 @@ public:
     virtual const sstring name() const = 0;
 
     /**
-     * Calculates the shard that handles a particular token.
-     */
-    virtual unsigned shard_of(const token& t) const;
-
-    /**
      * @return number of shards configured for this partitioner
      */
     unsigned shard_count() const {

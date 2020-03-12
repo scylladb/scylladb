@@ -58,11 +58,6 @@ sharding_info::token_for_next_shard(const token& t, shard_id shard, unsigned spa
     return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
-unsigned
-i_partitioner::shard_of(const token& t) const {
-    return _sharding_info.shard_of(t);
-}
-
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
     return out << "{key: " << dk._key << ", token:" << dk._token << "}";
 }
