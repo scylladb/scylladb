@@ -442,6 +442,10 @@ public:
     flat_reader_assertions& produces_compacted(const mutation& m, gc_clock::time_point query_time,
             const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         auto mo = read_mutation_from_flat_mutation_reader(_reader, db::no_timeout).get0();
+        // If the passed in mutation is empty, allow for the reader to produce an empty or no partition.
+        if (m.partition().empty() && !mo) {
+            return *this;
+        }
         BOOST_REQUIRE(bool(mo));
         memory::disable_failure_guard dfg;
         mutation got = *mo;
