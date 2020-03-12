@@ -678,9 +678,14 @@ void view_updates::generate_update(
         return;
     }
 
-    bool should_update = false;
-    bool should_replace = false;
-    bool should_create = false;
+    // If one of the key columns is missing, set has_new_row = false
+    // meaning that after the update there will be no view row.
+    // If one of the key columns is missing in the existing value,
+    // set has_old_row = false meaning we don't have an old row to
+    // delete.
+    bool has_old_row = true;
+    bool has_new_row = true;
+    bool same_row = true;
     for (auto col_id : col_ids) {
         auto* after = update.cells().find_cell(col_id);
         // Note: multi-cell columns can't be part of the primary key.
@@ -690,27 +695,31 @@ void view_updates::generate_update(
             if (before && before->as_atomic_cell(cdef).is_live()) {
                 if (after && after->as_atomic_cell(cdef).is_live()) {
                     auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(cdef), after->as_atomic_cell(cdef));
-                    if (cmp == 0) {
-                        should_update = true;
-                    } else {
-                        should_replace = true;
+                    if (cmp != 0) {
+                        same_row = false;
                     }
-                } else {
-                    delete_old_entry(base_key, *existing, update, now);
-                    return;
                 }
+            } else {
+                has_old_row = false;
             }
+        } else {
+            has_old_row = false;
         }
-        if (after && after->as_atomic_cell(cdef).is_live()) {
-            should_create = true;
+        if (!after || !after->as_atomic_cell(cdef).is_live()) {
+            has_new_row = false;
         }
     }
-
-    if (should_replace) {
-        replace_entry(base_key, update, *existing, now);
-    } else if (should_update) {
-        update_entry(base_key, update, *existing, now);
-    } else if (should_create) {
+    if (has_old_row) {
+        if (has_new_row) {
+            if (same_row) {
+                update_entry(base_key, update, *existing, now);
+            } else {
+                replace_entry(base_key, update, *existing, now);
+            }
+        } else {
+            delete_old_entry(base_key, *existing, update, now);
+        }
+    } else if (has_new_row) {
         create_entry(base_key, update, now);
     }
 }
