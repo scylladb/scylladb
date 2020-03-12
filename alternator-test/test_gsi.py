@@ -394,7 +394,6 @@ def test_gsi_update_second_regular_base_column(test_table_gsi_3):
 # with one indexed attribute, and in this test we use test_table_gsi_3 which
 # has two base regular attributes in the view key, and more possibilities
 # of which value might be missing. Reproduces issue #6008.
-@pytest.mark.xfail(reason="Issue #6008")
 def test_gsi_missing_attribute_3(test_table_gsi_3):
     p = random_string()
     a = random_string()

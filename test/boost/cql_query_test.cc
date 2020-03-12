@@ -4566,6 +4566,44 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
         assert_that(msg).is_rows().with_rows({
             {{int32_type->decompose(11), int32_type->decompose(13), int32_type->decompose(1), int32_type->decompose(2)}},
         });
+
+        // Reproduce issue #6008 - updates with not-previously-existing row,
+        // not setting both v1 and v2 - should not create a view row, and
+        // definitely not cause a crash as they did in #6008. Same for
+        // deletes when no previous row exists.
+        cquery_nofail(e, "DELETE FROM t WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+        cquery_nofail(e, "UPDATE t SET v1 = 17 WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+
+        cquery_nofail(e, "DELETE FROM t WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+        cquery_nofail(e, "UPDATE t SET v2 = 7 WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+        // Same tests as above, but with a row marker left behind, so there
+        // is an existing base row - it's just empty.
+        cquery_nofail(e, "INSERT INTO t (p, c, v1, v2) VALUES (1, 2, 3, 4)");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_rows({
+            {{int32_type->decompose(3), int32_type->decompose(4), int32_type->decompose(1), int32_type->decompose(2)}},
+        });
+        cquery_nofail(e, "UPDATE t SET v1 = NULL, v2 = NULL WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+        cquery_nofail(e, "UPDATE t SET v1 = 17 WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+
+        cquery_nofail(e, "UPDATE t SET v1 = NULL, v2 = NULL WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
+        cquery_nofail(e, "UPDATE t SET v2 = 7 WHERE p = 1 AND c = 2");
+        msg = cquery_nofail(e, "SELECT * FROM tv");
+        assert_that(msg).is_rows().with_size(0);
     });
 }
 
