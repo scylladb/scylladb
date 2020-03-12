@@ -387,6 +387,35 @@ def test_gsi_update_second_regular_base_column(test_table_gsi_3):
         KeyConditions={'a': {'AttributeValueList': [items[3]['a']], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [items[3]['b']], 'ComparisonOperator': 'EQ'}})
 
+# Test that when a table has a GSI, if the indexed attribute is missing, the
+# item is added to the base table but not the index.
+# This is the same feature we already tested in test_gsi_missing_attribute()
+# above, but on a different table: In that test we used test_table_gsi_2,
+# with one indexed attribute, and in this test we use test_table_gsi_3 which
+# has two base regular attributes in the view key, and more possibilities
+# of which value might be missing. Reproduces issue #6008.
+@pytest.mark.xfail(reason="Issue #6008")
+def test_gsi_missing_attribute_3(test_table_gsi_3):
+    p = random_string()
+    a = random_string()
+    b = random_string()
+    # First, add an item with a missing "a" value. It should appear in the
+    # base table, but not in the index:
+    test_table_gsi_3.put_item(Item={'p':  p, 'b': b})
+    assert test_table_gsi_3.get_item(Key={'p':  p})['Item'] == {'p': p, 'b': b}
+    # Note: with eventually consistent read, we can't really be sure that
+    # an item will "never" appear in the index. We hope that if a bug exists
+    # and such an item did appear, sometimes the delay here will be enough
+    # for the unexpected item to become visible.
+    assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, IndexName='hello')])
+    # Same thing for an item with a missing "b" value:
+    test_table_gsi_3.put_item(Item={'p':  p, 'a': a})
+    assert test_table_gsi_3.get_item(Key={'p':  p})['Item'] == {'p': p, 'a': a}
+    assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, IndexName='hello')])
+    # And for an item missing both:
+    test_table_gsi_3.put_item(Item={'p':  p})
+    assert test_table_gsi_3.get_item(Key={'p':  p})['Item'] == {'p': p}
+    assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, IndexName='hello')])
 
 # A fourth scenario of GSI. Two GSIs on a single base table.
 @pytest.fixture(scope="session")
