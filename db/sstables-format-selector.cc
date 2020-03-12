@@ -21,6 +21,7 @@
  */
 
 #include "sstables-format-selector.hh"
+#include "log.hh"
 #include "database.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
@@ -29,6 +30,7 @@
 
 namespace db {
 
+static logging::logger logger("format_selector");
 static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 
 void feature_enabled_listener::on_enabled() {
@@ -92,6 +94,7 @@ future<> sstables_format_selector::read_sstables_format() {
 }
 
 future<> sstables_format_selector::select_format(sstables::sstable_version_types format) {
+    logger.info("Selected {} sstables format", to_string(format));
     _selected_format = format;
     return _db.invoke_on_all([this] (database& db) {
         db.set_format(_selected_format);
