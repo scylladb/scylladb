@@ -87,7 +87,7 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
 }
 
 feature_config feature_config_from_db_config(db::config& cfg) {
-    feature_config fcfg;
+    feature_config fcfg = {};
 
     if (cfg.enable_sstables_mc_format()) {
         fcfg.enable_sstables_mc_format = true;
