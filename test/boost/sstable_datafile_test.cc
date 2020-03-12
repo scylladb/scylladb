@@ -1741,8 +1741,9 @@ static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_p
 // returns true if token ranges overlap.
 static bool key_range_overlaps(column_family_for_tests& cf, sstring a, sstring b, sstring c, sstring d) {
     const dht::i_partitioner& p = cf->schema()->get_partitioner();
-    auto range1 = create_token_range_from_keys(p, a, b);
-    auto range2 = create_token_range_from_keys(p, c, d);
+    const dht::sharding_info& si = cf->schema()->get_sharding_info();
+    auto range1 = create_token_range_from_keys(si, p, a, b);
+    auto range2 = create_token_range_from_keys(si, p, c, d);
     return range1.overlaps(range2, dht::token_comparator());
 }
 
