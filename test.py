@@ -138,10 +138,10 @@ class TestSuite(ABC):
         lst = glob.glob(os.path.join(self.path, self.pattern))
         if lst:
             lst.sort()
-        long_tests = set(self.cfg.get("long", []))
+        skip_tests = set(self.cfg.get("skip_in_debug_mode", []))
         for t in lst:
             shortname = os.path.splitext(os.path.basename(t))[0]
-            if mode not in ["release", "dev"] and shortname in long_tests:
+            if mode not in ["release", "dev"] and shortname in skip_tests:
                 continue
             t = os.path.join(self.name, shortname)
             patterns = options.name if options.name else [t]
