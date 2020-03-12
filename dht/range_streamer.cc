@@ -300,7 +300,7 @@ future<> range_streamer::do_stream_async() {
                 unsigned sp_index = 0;
                 unsigned nr_ranges_streamed = 0;
                 size_t nr_ranges_total = range_vec.size();
-                size_t nr_ranges_per_stream_plan = nr_ranges_total / 10;
+                size_t nr_ranges_per_stream_plan = nr_ranges_total / 10 + 1;
                 dht::token_range_vector ranges_to_stream;
                 auto do_streaming = [&] {
                     auto sp = stream_plan(format("{}-{}-index-{:d}", description, keyspace, sp_index++), _reason);
