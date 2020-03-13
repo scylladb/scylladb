@@ -380,19 +380,4 @@ split_range_to_shards(dht::partition_range pr, const schema& s) {
     return ret;
 }
 
-std::map<unsigned, dht::partition_range_vector>
-split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s) {
-    std::map<unsigned, dht::partition_range_vector> ret;
-    for (const auto& range : ranges) {
-        auto pr = dht::to_partition_range(range);
-        auto sharder = dht::ring_position_range_sharder(s.get_sharding_info(), std::move(pr));
-        auto rprs = sharder.next(s);
-        while (rprs) {
-            ret[rprs->shard].emplace_back(rprs->ring_range);
-            rprs = sharder.next(s);
-        }
-    }
-    return ret;
-}
-
 }
