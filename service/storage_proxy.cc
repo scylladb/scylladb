@@ -1205,6 +1205,7 @@ future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool a
             f_cdc = _proxy->get_cdc_service()->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state)
                     .then([this, base_tbl_id] (std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) {
                 auto mutations = std::move(std::get<0>(t));
+                auto tracker = std::move(std::get<1>(t));
                 // Pick only the CDC ("augmenting") mutations
                 mutations.erase(std::remove_if(mutations.begin(), mutations.end(), [base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
                     return v.schema()->id() == base_tbl_id;
@@ -1212,8 +1213,7 @@ future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool a
                 if (mutations.empty()) {
                     return make_ready_future<>();
                 }
-
-                return _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout);
+                return _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker));
             });
         }
     }
