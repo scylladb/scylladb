@@ -3039,7 +3039,7 @@ class scylla_generate_object_graph(gdb.Command):
     @staticmethod
     def _traverse_object_graph_breadth_first(address, max_depth, max_vertices, timeout_seconds, value_range_override):
         vertices = dict() # addr -> obj info (ptr metadata, vtable symbol)
-        edges = defaultdict(set) # (referrer, referee) -> {offset1, offset2...}
+        edges = defaultdict(set) # (referrer, referee) -> {(prev_offset1, next_offset1), (prev_offset2, next_offset2), ...}
 
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
 
@@ -3058,7 +3058,7 @@ class scylla_generate_object_graph(gdb.Command):
                     value_range = vertices[current_obj][0].size
                 else:
                     value_range = value_range_override
-                for ptr_meta, _ in scylla_find.find(current_obj, value_range=value_range, find_all=True):
+                for ptr_meta, to_off in scylla_find.find(current_obj, value_range=value_range, find_all=True):
                     if timeout_seconds > 0:
                         current_time = time.time()
                         if current_time - start_time > timeout_seconds:
@@ -3066,7 +3066,8 @@ class scylla_generate_object_graph(gdb.Command):
                             break
 
                     next_obj, next_off = ptr_meta.ptr, ptr_meta.offset_in_object
-                    edges[(next_obj, current_obj)].add(next_off)
+                    next_obj -= next_off
+                    edges[(next_obj, current_obj)].add((next_off, to_off))
                     if next_obj in vertices:
                         continue
 
