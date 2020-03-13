@@ -4165,7 +4165,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
     storage_proxy::coordinator_query_options query_options) {
-    if (partition_ranges.size() > 1 || !query::is_single_partition(partition_ranges[0])) {
+    if (partition_ranges.size() != 1 || !query::is_single_partition(partition_ranges[0])) {
         return make_exception_future<storage_proxy::coordinator_query_result>(
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
     }
