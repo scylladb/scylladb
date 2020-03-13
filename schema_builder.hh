@@ -193,6 +193,9 @@ public:
         _raw._extensions = std::move(exts);
         return *this;
     }
+    const schema::extensions_map& get_extensions() const {
+        return _raw._extensions;
+    }
     schema_builder& set_compaction_strategy(sstables::compaction_strategy_type type) {
         _raw._compaction_strategy = type;
         return *this;

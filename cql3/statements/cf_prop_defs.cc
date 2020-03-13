@@ -290,6 +290,10 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
         cfm.caching(cachingOptions);
 #endif
 
+    // for extensions that are not altered, keep the old ones
+    auto& old_exts = builder.get_extensions();
+    schema_extensions.insert(old_exts.begin(), old_exts.end());
+
     builder.set_extensions(std::move(schema_extensions));
 }
 
