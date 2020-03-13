@@ -956,12 +956,12 @@ keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid
     for (auto& extra : _config.all_datadirs) {
         cfdirs.push_back(column_family_directory(extra, name, uuid));
     }
-    return seastar::async([cfdirs = std::move(cfdirs)] {
-        for (auto& cfdir : cfdirs) {
-            io_check([&cfdir] { return recursive_touch_directory(cfdir); }).get();
-        }
-        io_check([name = cfdirs[0] + "/upload"] { return touch_directory(name); }).get();
-        io_check([name = cfdirs[0] + "/staging"] { return touch_directory(name); }).get();
+    return parallel_for_each(cfdirs, [] (sstring cfdir) {
+        return io_check([cfdir] { return recursive_touch_directory(cfdir); });
+    }).then([cfdirs0 = cfdirs[0]] {
+        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/upload"); });
+    }).then([cfdirs0 = cfdirs[0]] {
+        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/staging"); });
     });
 }
 
