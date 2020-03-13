@@ -3269,7 +3269,7 @@ class scylla_gdb_func_downcast_vptr(gdb.Function):
         if m is None:
             raise ValueError("Failed to extract type name from symbol name `{}'".format(symbol_name))
 
-        actual_type = gdb.lookup_type(m[1]).pointer()
+        actual_type = gdb.lookup_type(m.group(1)).pointer()
         return ptr.reinterpret_cast(actual_type)
 
 
