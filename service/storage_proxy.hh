@@ -285,7 +285,8 @@ private:
             clock_type::time_point,
             tracing::trace_state_ptr,
             service_permit,
-            bool> _mutate_stage;
+            bool,
+            lw_shared_ptr<cdc::operation_result_tracker>> _mutate_stage;
     db::view::node_update_backlog& _max_view_update_backlog;
     std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
 
@@ -390,7 +391,7 @@ private:
     void unthrottle();
     void handle_read_error(std::exception_ptr eptr, bool range);
     template<typename Range>
-    future<> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state, service_permit permit, std::optional<clock_type::time_point> timeout_opt = { });
+    future<> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state, service_permit permit, std::optional<clock_type::time_point> timeout_opt = { }, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker = { });
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_nonsingular_mutations_locally(
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector&& pr, tracing::trace_state_ptr trace_state,
             uint64_t max_size, clock_type::time_point timeout);
@@ -402,7 +403,7 @@ private:
 
     gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
 
-    future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool);
+    future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker);
 
     future<> send_to_endpoint(
             std::unique_ptr<mutation_holder> m,
