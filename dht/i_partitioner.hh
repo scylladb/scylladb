@@ -208,9 +208,6 @@ public:
         return _sharding_info;
     }
 
-    unsigned sharding_ignore_msb() const {
-        return _sharding_info.sharding_ignore_msb();
-    }
     bool operator==(const i_partitioner& o) const {
         return name() == o.name() && _sharding_info == o._sharding_info;
     }
