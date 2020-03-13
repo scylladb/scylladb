@@ -2257,6 +2257,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
     class context {
         storage_proxy& _p;
         std::vector<mutation> _mutations;
+        lw_shared_ptr<cdc::operation_result_tracker> _cdc_tracker;
         db::consistency_level _cl;
         clock_type::time_point _timeout;
         tracing::trace_state_ptr _trace_state;
@@ -2267,9 +2268,10 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         const std::unordered_set<gms::inet_address> _batchlog_endpoints;
 
     public:
-        context(storage_proxy & p, std::vector<mutation>&& mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
+        context(storage_proxy & p, std::vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
                 : _p(p)
                 , _mutations(std::move(mutations))
+                , _cdc_tracker(std::move(cdc_tracker))
                 , _cl(cl)
                 , _timeout(timeout)
                 , _trace_state(std::move(tr_state))
@@ -2301,6 +2303,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit));
             }).then([this, cl] (std::vector<unique_response_handler> ids) {
+                _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                 return _p.mutate_begin(std::move(ids), cl, _timeout);
             });
         }
@@ -2327,15 +2330,16 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state, _permit).then([this] (std::vector<unique_response_handler> ids) {
                 return sync_write_to_batchlog().then([this, ids = std::move(ids)] () mutable {
                     tracing::trace(_trace_state, "Sending batch mutations");
+                    _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                     return _p.mutate_begin(std::move(ids), _cl, _timeout);
                 }).then(std::bind(&context::async_remove_from_batchlog, this));
             });
         }
     };
 
-    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit), cl] (std::vector<mutation> mutations) mutable {
+    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit), cl] (std::vector<mutation> mutations, lw_shared_ptr<cdc::operation_result_tracker> tracker) mutable {
       try {
-          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit)));
+          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), std::move(tracker), cl, timeout, std::move(tr_state), std::move(permit)));
       } catch(...) {
           return make_exception_future<lw_shared_ptr<context>>(std::current_exception());
       }
@@ -2347,13 +2351,14 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
         return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state)).then([this, mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup)](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
-            return std::move(mk_ctxt)(std::move(mutations)).then([this] (lw_shared_ptr<context> ctxt) {
+            auto tracker = std::move(std::get<1>(t));
+            return std::move(mk_ctxt)(std::move(mutations), std::move(tracker)).then([this] (lw_shared_ptr<context> ctxt) {
                 return ctxt->run().finally([ctxt]{});
             }).then_wrapped(std::move(cleanup));
         });
     }
 
-    return mk_ctxt(std::move(mutations)).then([this] (lw_shared_ptr<context> ctxt) {
+    return mk_ctxt(std::move(mutations), nullptr).then([this] (lw_shared_ptr<context> ctxt) {
         return ctxt->run().finally([ctxt]{});
     }).then_wrapped(std::move(cleanup));
 }
