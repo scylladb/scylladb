@@ -15,6 +15,7 @@ import bisect
 import os
 import subprocess
 import time
+import html
 
 
 def template_arguments(gdb_type):
@@ -3102,12 +3103,14 @@ class scylla_generate_object_graph(gdb.Command):
             size = ptr_meta.size
             state = "L" if ptr_meta.is_live else "F"
 
+            addr_str = "<b>0x{:x}</b>".format(addr) if addr == address else "0x{:x}".format(addr)
+
             if vtable_symbol_name:
                 symbol_name = vtable_symbol_name[prefix_len:] if len(vtable_symbol_name) > prefix_len else vtable_symbol_name
-                output_file.write('{} [label="0x{:x} ({}, {}) {}"]; // {}\n'.format(addr, addr, size, state,
-                    symbol_name[:16], vtable_symbol_name))
+                output_file.write('{} [label=<{} ({}, {})<br/>{}>]; // {}\n'.format(addr, addr_str, size, state,
+                    html.escape(symbol_name[:32]), vtable_symbol_name))
             else:
-                output_file.write('{} [label="0x{:x} ({}, {})"];\n'.format(addr, addr, size, state, ptr_meta))
+                output_file.write('{} [label=<{} ({}, {})>];\n'.format(addr, addr_str, size, state, ptr_meta))
 
         for edge, offsets in edges.items():
             a, b = edge
