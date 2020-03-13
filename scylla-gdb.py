@@ -3155,6 +3155,8 @@ class scylla_smp_queues(gdb.Command):
                 name = resolve(vptr, startswith='vtable for seastar::smp_message_queue::async_work_item')
                 if name:
                     known_vptrs[vptr] = None
+                else:
+                    continue
 
             offset = known_vptrs[vptr]
 
