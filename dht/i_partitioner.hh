@@ -197,13 +197,6 @@ public:
      */
     virtual const sstring name() const = 0;
 
-    /**
-     * @return number of shards configured for this partitioner
-     */
-    unsigned shard_count() const {
-        return _sharding_info.shard_count();
-    }
-
     const dht::sharding_info& get_sharding_info() const {
         return _sharding_info;
     }
