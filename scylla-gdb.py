@@ -3096,8 +3096,6 @@ class scylla_generate_object_graph(gdb.Command):
 
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
         prefix_len = len('vtable for ')
-        vertices[address] = (scylla_ptr.analyze(address),
-                resolve(gdb.Value(address).reinterpret_cast(vptr_type).dereference(), cache=False))
 
         for addr, obj_info in vertices.items():
             ptr_meta, vtable_symbol_name = obj_info
