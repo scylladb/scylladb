@@ -3354,6 +3354,28 @@ class scylla_gdb_func_collection_element(gdb.Function):
         raise ValueError("Unsupported container type: {}".format(typ.name))
 
 
+class scylla_gdb_func_sharded_local(gdb.Function):
+    """Get the local instance of a sharded object
+
+    Usage:
+    $sharded_local($obj)
+
+    Where:
+    $obj - a variable, or an expression that evaluates to any `seastar::sharded`
+    instance.
+
+    Example:
+    (gdb) p $sharded_local(cql3::_the_query_processor)
+    $1 = (cql3::query_processor *) 0x6350001f2390
+    """
+
+    def __init__(self):
+        super(scylla_gdb_func_sharded_local, self).__init__('sharded_local')
+
+    def invoke(self, obj):
+        return sharded(obj).local()
+
+
 # Commands
 scylla()
 scylla_databases()
@@ -3400,3 +3422,4 @@ scylla_features()
 scylla_gdb_func_dereference_smart_ptr()
 scylla_gdb_func_downcast_vptr()
 scylla_gdb_func_collection_element()
+scylla_gdb_func_sharded_local()
