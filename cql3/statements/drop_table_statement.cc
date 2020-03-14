@@ -80,7 +80,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_table_statement::an
         try {
             f.get();
             using namespace cql_transport;
-            return make_shared<event::schema_change>(
+            return ::make_shared<event::schema_change>(
                     event::schema_change::change_type::DROPPED,
                     event::schema_change::target_type::TABLE,
                     this->keyspace(),

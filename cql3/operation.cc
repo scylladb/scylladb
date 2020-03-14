@@ -216,12 +216,12 @@ operation::subtraction::prepare(database& db, const sstring& keyspace, const col
     } else if (ctype->get_kind() == abstract_type::kind::map) {
         auto&& mtype = dynamic_pointer_cast<const map_type_impl>(ctype);
         // The value for a map subtraction is actually a set
-        auto&& vr = make_shared<column_specification>(
+        auto&& vr = ::make_shared<column_specification>(
                 receiver.column_specification->ks_name,
                 receiver.column_specification->cf_name,
                 receiver.column_specification->name,
                 set_type_impl::get_instance(mtype->get_keys_type(), false));
-        return make_shared<sets::discarder>(receiver, _value->prepare(db, keyspace, std::move(vr)));
+        return ::make_shared<sets::discarder>(receiver, _value->prepare(db, keyspace, std::move(vr)));
     }
     abort();
 }
@@ -294,7 +294,7 @@ operation::set_counter_value_from_tuple_list::prepare(database& db, const sstrin
 
     // We need to fake a column of list<tuple<...>> to prepare the value term
     auto & os = receiver.column_specification;
-    auto spec = make_shared<cql3::column_specification>(os->ks_name, os->cf_name, os->name, counter_tuple_list_type);
+    auto spec = ::make_shared<cql3::column_specification>(os->ks_name, os->cf_name, os->name, counter_tuple_list_type);
     auto v = _value->prepare(db, keyspace, spec);
 
     // Will not be used elsewhere, so make it local.

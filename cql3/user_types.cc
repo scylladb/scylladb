@@ -55,10 +55,10 @@ shared_ptr<column_specification> user_types::field_spec_of(const column_specific
     auto&& ut = static_pointer_cast<const user_type_impl>(column.type);
     auto&& name = ut->field_name(field);
     auto&& sname = sstring(reinterpret_cast<const char*>(name.data()), name.size());
-    return make_shared<column_specification>(
+    return ::make_shared<column_specification>(
                                    column.ks_name,
                                    column.cf_name,
-                                   make_shared<column_identifier>(column.name->to_string() + "." + sname, true),
+                                   ::make_shared<column_identifier>(column.name->to_string() + "." + sname, true),
                                    ut->field_type(field));
 }
 

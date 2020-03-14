@@ -70,7 +70,7 @@ public:
     }
     static future<redis_message> number(size_t n) {
         auto m = make_lw_shared<scattered_message<char>> ();
-        m->append(sstring(sprint(":%zu\r\n", n)));
+        m->append(sprint(":%zu\r\n", n));
         return make_ready_future<redis_message>(m);
     }
     static future<redis_message> make_strings_result(bytes result) {
@@ -108,8 +108,8 @@ private:
         return sstring(reinterpret_cast<const char*>(b.data()), b.size());
     }
     static void write_bytes(lw_shared_ptr<scattered_message<char>> m, bytes& b) {
-        m->append(sstring(sprint("$%d\r\n", b.size())));
-        m->append(sstring(reinterpret_cast<const char*>(b.data()), b.size()));
+        m->append(sprint("$%d\r\n", b.size()));
+        m->append(std::string_view(reinterpret_cast<const char*>(b.data()), b.size()));
         m->append_static("\r\n");
     }   
 };

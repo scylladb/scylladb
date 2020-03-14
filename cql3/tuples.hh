@@ -263,9 +263,9 @@ public:
             }
             in_name += ")";
 
-            auto identifier = make_shared<column_identifier>(in_name, true);
+            auto identifier = ::make_shared<column_identifier>(in_name, true);
             auto type = tuple_type_impl::get_instance(types);
-            return make_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, type);
+            return ::make_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, type);
         }
     };
 

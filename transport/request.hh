@@ -99,7 +99,7 @@ public:
 
     sstring read_string() {
         auto n = read_short();
-        sstring s(sstring::initialized_later(), n);
+        sstring s = uninitialized_string(n);
         _in.read_to(n, s.begin(), exception_thrower());
         validate_utf8(s);
         return s;

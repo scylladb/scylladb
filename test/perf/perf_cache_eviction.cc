@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
             };
 
             auto pkey = make_pkey("key1");
-            sstring value = sstring(sstring::initialized_later(), 1024);
+            sstring value = uninitialized_string(1024);
 
             using clock = std::chrono::steady_clock;
 

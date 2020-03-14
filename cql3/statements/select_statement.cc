@@ -1250,7 +1250,7 @@ void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr sche
             _select_clause.reserve(schema->all_columns().size());
             for (const column_definition& column_def : schema->all_columns_in_select_order()) {
                 _select_clause.push_back(make_shared<selection::raw_selector>(
-                        make_shared<column_identifier::raw>(column_def.name_as_text(), true), nullptr));
+                        ::make_shared<column_identifier::raw>(column_def.name_as_text(), true), nullptr));
             }
         }
 

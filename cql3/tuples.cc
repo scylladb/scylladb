@@ -121,9 +121,9 @@ tuples::in_raw::make_in_receiver(const std::vector<shared_ptr<column_specificati
     }
     in_name += ")";
 
-    auto identifier = make_shared<column_identifier>(in_name, true);
+    auto identifier = ::make_shared<column_identifier>(in_name, true);
     auto type = tuple_type_impl::get_instance(types);
-    return make_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
+    return ::make_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
 }
 
 tuples::in_marker::in_marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)

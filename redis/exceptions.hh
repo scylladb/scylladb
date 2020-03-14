@@ -28,7 +28,7 @@ class redis_exception : public std::exception {
     sstring _message;
 public:
     redis_exception(sstring message) : _message(std::move(message)) {}
-    virtual const char* what() const noexcept override { return _message.begin(); }
+    virtual const char* what() const noexcept override { return _message.c_str(); }
     const sstring& what_message() const noexcept { return _message; }
 };
 

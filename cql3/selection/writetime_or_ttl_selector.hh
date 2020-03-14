@@ -72,7 +72,7 @@ public:
             }
 
             virtual shared_ptr<selector> new_instance() const override {
-                return make_shared<writetime_or_ttl_selector>(_column_name, _idx, _is_writetime);
+                return ::make_shared<writetime_or_ttl_selector>(_column_name, _idx, _is_writetime);
             }
 
             virtual bool is_write_time_selector_factory() const override {
@@ -83,7 +83,7 @@ public:
                 return !_is_writetime;
             }
         };
-        return make_shared<wtots_factory>(std::move(column_name), idx, is_writetime);
+        return ::make_shared<wtots_factory>(std::move(column_name), idx, is_writetime);
     }
 
     virtual void add_input(cql_serialization_format sf, result_set_builder& rs) override {

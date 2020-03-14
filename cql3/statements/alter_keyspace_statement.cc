@@ -96,7 +96,7 @@ future<shared_ptr<cql_transport::event::schema_change>> cql3::statements::alter_
     const auto& tm = proxy.get_token_metadata();
     return service::get_local_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm, tm), is_local_only).then([this] {
         using namespace cql_transport;
-        return make_shared<event::schema_change>(
+        return ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
                 event::schema_change::target_type::KEYSPACE,
                 keyspace());

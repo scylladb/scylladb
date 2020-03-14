@@ -338,7 +338,7 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
             const sstring& pattern = literal_term->get_raw_text();
             return column_condition::condition(receiver, collection_element_term,
                     _value->prepare(db, keyspace, value_spec),
-                    std::make_unique<like_matcher>(bytes_view(reinterpret_cast<const int8_t*>(pattern.begin()), pattern.size())),
+                    std::make_unique<like_matcher>(bytes_view(reinterpret_cast<const int8_t*>(pattern.data()), pattern.size())),
                     _op);
         } else {
             // Pass through rhs value, matcher object built on execution

@@ -122,7 +122,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::an
             auto&& ks = db.find_keyspace(keyspace());
             do_announce_migration(db, ks, is_local_only);
             using namespace cql_transport;
-            return make_shared<event::schema_change>(
+            return ::make_shared<event::schema_change>(
                     event::schema_change::change_type::UPDATED,
                     event::schema_change::target_type::TYPE,
                     keyspace(),

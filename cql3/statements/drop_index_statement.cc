@@ -103,7 +103,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::an
         // Note that we shouldn't call columnFamily() at this point because the index has been dropped and the call to lookupIndexedTable()
         // in that method would now throw.
         using namespace cql_transport;
-        return make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,
+        return ::make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,
                                                  event::schema_change::target_type::TABLE,
                                                  cfm->ks_name(),
                                                  cfm->cf_name());

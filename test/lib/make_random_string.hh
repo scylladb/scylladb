@@ -31,7 +31,7 @@ inline
 sstring make_random_string(size_t size) {
     static thread_local std::default_random_engine rng;
     std::uniform_int_distribution<char> dist;
-    sstring str(sstring::initialized_later(), size);
+    sstring str = uninitialized_string(size);
     for (auto&& b : str) {
         b = dist(rng);
     }

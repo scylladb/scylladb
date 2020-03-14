@@ -117,7 +117,7 @@ bytes random_bytes(size_t size) {
 }
 
 sstring random_string(size_t size) {
-    sstring result(sstring::initialized_later(), size);
+    sstring result = uninitialized_string(size);
     static const char chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     for (size_t i = 0; i < size; ++i) {
         result[i] = chars[std::rand() % sizeof(chars)];

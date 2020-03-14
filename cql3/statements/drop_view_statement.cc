@@ -82,7 +82,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_view_statement::ann
             f.get();
             using namespace cql_transport;
 
-            return make_shared<event::schema_change>(event::schema_change::change_type::DROPPED,
+            return ::make_shared<event::schema_change>(event::schema_change::change_type::DROPPED,
                                                      event::schema_change::target_type::TABLE,
                                                      this->keyspace(),
                                                      this->column_family());

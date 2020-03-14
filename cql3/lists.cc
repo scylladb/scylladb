@@ -32,20 +32,20 @@ namespace cql3 {
 
 shared_ptr<column_specification>
 lists::index_spec_of(const column_specification& column) {
-    return make_shared<column_specification>(column.ks_name, column.cf_name,
+    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("idx({})", *column.name), true), int32_type);
 }
 
 shared_ptr<column_specification>
 lists::value_spec_of(const column_specification& column) {
-    return make_shared<column_specification>(column.ks_name, column.cf_name,
+    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("value({})", *column.name), true),
                 dynamic_pointer_cast<const list_type_impl>(column.type)->get_elements_type());
 }
 
 shared_ptr<column_specification>
 lists::uuid_index_spec_of(const column_specification& column) {
-    return make_shared<column_specification>(column.ks_name, column.cf_name,
+    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("uuid_idx({})", *column.name), true), uuid_type);
 }
 

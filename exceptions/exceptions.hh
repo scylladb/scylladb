@@ -99,7 +99,7 @@ public:
         : _code(code)
         , _msg(std::move(msg))
     { }
-    virtual const char* what() const noexcept override { return _msg.begin(); }
+    virtual const char* what() const noexcept override { return _msg.c_str(); }
     exception_code code() const { return _code; }
     sstring get_message() const { return what(); }
 };

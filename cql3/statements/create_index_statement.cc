@@ -315,7 +315,7 @@ create_index_statement::announce_migration(service::storage_proxy& proxy, bool i
     return service::get_local_migration_manager().announce_column_family_update(
             builder.build(), false, {}, is_local_only).then([this]() {
         using namespace cql_transport;
-        return make_shared<event::schema_change>(
+        return ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
                 event::schema_change::target_type::TABLE,
                 keyspace(),
