@@ -114,12 +114,12 @@ public:
         inflight_component partial = partial_backlog(ow);
         inflight_component compacted = compacted_backlog(oc);
 
-        auto total_bytes = _total_bytes + partial.total_bytes - compacted.total_bytes;
-        if ((total_bytes <= 0)) {
+        auto effective_total_bytes = _total_bytes + partial.total_bytes - compacted.total_bytes;
+        if ((effective_total_bytes <= 0)) {
             return 0;
         }
         auto sstables_contribution = _sstables_backlog_contribution + partial.contribution - compacted.contribution;
-        auto b = (total_bytes * log4(total_bytes)) - sstables_contribution;
+        auto b = (effective_total_bytes * log4(_total_bytes)) - sstables_contribution;
         return b > 0 ? b : 0;
     }
 
