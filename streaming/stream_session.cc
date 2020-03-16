@@ -48,7 +48,6 @@
 #include "utils/fb_utilities.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/sleep.hh>
-#include "service/storage_service.hh"
 #include <seastar/core/thread.hh>
 #include "cql3/query_processor.hh"
 #include "streaming/stream_state.hh"
@@ -167,7 +166,7 @@ void stream_session::init_messaging_service_handler() {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
-        table& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
+        table& cf = get_local_db().find_column_family(cf_id);
         if (!_sys_dist_ks->local_is_initialized() || !_view_update_generator->local_is_initialized()) {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
                     utils::fb_utilities::get_broadcast_address())));
