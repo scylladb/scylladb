@@ -128,6 +128,7 @@ enum class operation : int8_t {
     // enum decl, so don't change the constant values (or the datatype).
     pre_image = 0, update = 1, insert = 2, row_delete = 3, partition_delete = 4,
     range_delete_start_inclusive = 5, range_delete_start_exclusive = 6, range_delete_end_inclusive = 7, range_delete_end_exclusive = 8,
+    post_image = 9,
 };
 
 bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name);

@@ -77,6 +77,12 @@ public:
     std::optional<T> get_opt(const sstring& name) const {
         return has(name) ? get_as<T>(name) : std::optional<T>{};
     }
+    bytes_view_opt get_view_opt(const sstring& name) const {
+        if (has(name)) {
+            return get_view(name);
+        }
+        return std::nullopt;
+    }
     template<typename T>
     T get_or(const sstring& name, T t) const {
         return has(name) ? get_as<T>(name) : t;

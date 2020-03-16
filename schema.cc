@@ -1407,6 +1407,21 @@ schema::regular_columns() const {
             , _raw._columns.end());
 }
 
+schema::const_iterator_range_type
+schema::columns(column_kind kind) const {
+    switch (kind) {
+    case column_kind::partition_key:
+        return partition_key_columns();
+    case column_kind::clustering_key:
+        return clustering_key_columns();
+    case column_kind::static_column:
+        return static_columns();
+    case column_kind::regular_column:
+        return regular_columns();
+    }
+    throw std::invalid_argument(std::to_string(int(kind)));
+}
+
 schema::select_order_range schema::all_columns_in_select_order() const {
     auto is_static_compact_table = this->is_static_compact_table();
     auto no_non_pk_columns = is_compact_table()
