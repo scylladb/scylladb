@@ -335,16 +335,11 @@ elif ! $packaging; then
 
     # this handles both case group is not exist || group already exists
     if [ $nousr ]; then
-        adduser --system \
-                --quiet \
-                --home /var/lib/scylla \
-                --no-create-home \
-                --disabled-password \
-                --group scylla
+        useradd -r -d /var/lib/scylla -M scylla
     # only group is not exist, create it and add user to the group
     elif [ $nogrp ]; then
-        addgroup --system scylla
-        adduser scylla scylla
+        groupadd -r scylla
+        usermod -g scylla scylla
     fi
     chown -R scylla:scylla $rdata
     chown -R scylla:scylla $rhkdata
