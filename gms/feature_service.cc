@@ -57,6 +57,9 @@ constexpr std::string_view features::PER_TABLE_PARTITIONERS = "PER_TABLE_PARTITI
 
 static logging::logger logger("features");
 
+feature_config::feature_config() {
+}
+
 feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _range_tombstones_feature(*this, features::RANGE_TOMBSTONES)
         , _large_partitions_feature(*this, features::LARGE_PARTITIONS)
@@ -89,7 +92,7 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
 }
 
 feature_config feature_config_from_db_config(db::config& cfg) {
-    feature_config fcfg = {};
+    feature_config fcfg;
 
     if (cfg.enable_sstables_mc_format()) {
         fcfg.enable_sstables_mc_format = true;
