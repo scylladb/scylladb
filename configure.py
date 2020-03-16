@@ -850,6 +850,7 @@ redis = [
         'redis/abstract_command.cc',
         'redis/command_factory.cc',
         'redis/commands.cc',
+        'redis/lolwut.cc',
         ]
 
 idls = ['idl/gossip_digest.idl.hh',
