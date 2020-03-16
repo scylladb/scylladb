@@ -92,6 +92,10 @@ public:
         std::vector<cql3::raw_value> values,
         db::consistency_level cl = db::consistency_level::ONE) = 0;
 
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
+        cql3::prepared_cache_key_type id,
+        std::unique_ptr<cql3::query_options> qo) = 0;
+
     virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) = 0;
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) = 0;
