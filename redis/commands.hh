@@ -93,6 +93,14 @@ public:
     virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
 };
 
+class lolwut : public abstract_command {
+    const int _cols, _squares_per_row, _squares_per_col;
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    lolwut(bytes&& name, const int cols, const int squares_per_row, const int squares_per_col) : abstract_command(std::move(name)), _cols(cols), _squares_per_row(squares_per_row), _squares_per_col(squares_per_col) {}
+    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
 }
 
 }

@@ -30,6 +30,7 @@
 #include "redis/options.hh"
 #include "redis/query_utils.hh"
 #include "redis/mutation_utils.hh"
+#include "redis/lolwut.hh"
 
 namespace redis {
 
@@ -127,6 +128,35 @@ shared_ptr<abstract_command> echo::prepare(service::storage_proxy& proxy, reques
 
 future<redis_message> echo::execute(service::storage_proxy&, redis::redis_options&, service_permit) {
     return redis_message::make_strings_result(std::move(_str));
+}
+
+shared_ptr<abstract_command> lolwut::prepare(service::storage_proxy& proxy, request&& req) {
+    int cols = 66;
+    int squares_per_row = 8;
+    int squares_per_col = 12;
+    try {
+        if (req.arguments_size() >= 1) {
+            cols = std::stoi(std::string(reinterpret_cast<const char*>(req._args[0].data()), req._args[0].size()));
+            cols = std::clamp(cols, 1, 1000);
+        }
+        if (req.arguments_size() >= 2) {
+            squares_per_row = std::stoi(std::string(reinterpret_cast<const char*>(req._args[1].data()), req._args[1].size()));
+            squares_per_row = std::clamp(squares_per_row, 1, 200);
+        }
+        if (req.arguments_size() >= 3) {
+            squares_per_col = std::stoi(std::string(reinterpret_cast<const char*>(req._args[2].data()), req._args[2].size()));
+            squares_per_col = std::clamp(squares_per_col, 1, 200);
+       }
+    } catch (...) {
+        throw wrong_arguments_exception(1, req.arguments_size(), req._command);
+    }
+    return seastar::make_shared<lolwut> (std::move(req._command), cols, squares_per_row, squares_per_col);
+}
+
+future<redis_message> lolwut::execute(service::storage_proxy&, redis::redis_options& options, service_permit) {
+    return redis::lolwut5(_cols, _squares_per_row, _squares_per_col).then([] (auto result) {
+        return redis_message::make_strings_result(std::move(result));
+    });
 }
 
 }
