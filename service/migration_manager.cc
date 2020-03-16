@@ -100,6 +100,7 @@ void migration_manager::init_messaging_service()
         _feature_listeners.push_back(_feat.cluster_supports_view_virtual_columns().when_enabled(update_schema));
         _feature_listeners.push_back(_feat.cluster_supports_digest_insensitive_to_expiry().when_enabled(update_schema));
         _feature_listeners.push_back(_feat.cluster_supports_cdc().when_enabled(update_schema));
+        _feature_listeners.push_back(_feat.cluster_supports_per_table_partitioners().when_enabled(update_schema));
     }
     _feature_listeners.push_back(_feat.cluster_supports_schema_tables_v3().when_enabled([this] {
         _cluster_upgraded = true;

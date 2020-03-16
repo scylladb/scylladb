@@ -1721,7 +1721,6 @@ static std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(un
     std::vector<std::pair<sstring, dht::token>> key_and_token_pair;
 
     key_and_token_pair.reserve(tokens_to_generate);
-    dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp_count, ignore_msb);
     dht::murmur3_partitioner partitioner(smp_count, ignore_msb);
 
     while (tokens < tokens_to_generate) {
@@ -4175,11 +4174,6 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
         auto s = builder.build();
 
         auto tmp = tmpdir();
-        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
-            auto sst = env.make_sstable(s, tmp.path().string(), (*gen)++, la, big);
-            sst->set_unshared();
-            return sst;
-        };
         auto make_insert = [&] (auto p) {
             auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
             mutation m(s, key);
@@ -4187,7 +4181,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             BOOST_REQUIRE(m.decorated_key().token() == p.second);
             return m;
         };
-
+        auto gen = make_lw_shared<unsigned>(1);
         auto make_shared_sstable = [&] (std::unordered_set<unsigned> shards, unsigned ignore_msb, unsigned smp_count) {
             auto mut = [&] (auto shard) {
                 auto tokens = token_generation_for_shard(1, shard, ignore_msb, smp_count);
@@ -4195,19 +4189,21 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             };
             auto muts = boost::copy_range<std::vector<mutation>>(shards
                 | boost::adaptors::transformed([&] (auto shard) { return mut(shard); }));
-            dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(1, ignore_msb);
+            auto sst_gen = [&env, s, &tmp, gen, ignore_msb] () mutable {
+                auto schema = schema_builder(s).with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner", 1, ignore_msb).build();
+                auto sst = env.make_sstable(std::move(schema), tmp.path().string(), (*gen)++, la, big);
+                sst->set_unshared();
+                return sst;
+            };
             auto sst = make_sstable_containing(sst_gen, std::move(muts));
-            dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp_count, ignore_msb);
-            sst = env.reusable_sst(s, tmp.path().string(), sst->generation()).get0();
-            // restore partitioner
-            dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp::count);
+            auto schema = schema_builder(s).with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner", smp_count, ignore_msb).build();
+            sst = env.reusable_sst(std::move(schema), tmp.path().string(), sst->generation()).get0();
             return sst;
         };
 
         auto assert_sstable_owners = [&] (std::unordered_set<unsigned> expected_owners, unsigned ignore_msb, unsigned smp_count) {
             assert(expected_owners.size() <= smp_count);
             auto sst = make_shared_sstable(expected_owners, ignore_msb, smp_count);
-            dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp_count, ignore_msb);
             auto owners = boost::copy_range<std::unordered_set<unsigned>>(sst->get_shards_for_this_sstable());
             BOOST_REQUIRE(boost::algorithm::all_of(expected_owners, [&] (unsigned expected_owner) {
                 return owners.count(expected_owner);

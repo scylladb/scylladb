@@ -24,6 +24,7 @@
 #include "schema.hh"
 #include "database_fwd.hh"
 #include "cdc/log.hh"
+#include "dht/i_partitioner.hh"
 
 struct schema_builder {
 public:
@@ -230,6 +231,9 @@ public:
         _raw._wait_for_sync = sync;
         return *this;
     }
+    schema_builder& with_partitioner(sstring name, unsigned shard_count, unsigned sharding_ignore_msb_bits);
+    // Use only for tests!!!
+    schema_builder& with_partitioner_for_tests_only(const dht::i_partitioner&);
     class default_names {
     public:
         default_names(const schema_builder&);

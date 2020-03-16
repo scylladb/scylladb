@@ -79,8 +79,13 @@ public:
     const db::extensions& extensions() const {
         return _extensions;
     }
+
+    const unsigned murmur3_partitioner_ignore_msb_bits() const {
+        return _murmur3_partitioner_ignore_msb_bits;
+    }
 private:
     const db::extensions& _extensions;
+    const unsigned _murmur3_partitioner_ignore_msb_bits;
 };
 
 namespace schema_tables {

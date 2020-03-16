@@ -660,9 +660,6 @@ public:
 };
 std::ostream& operator<<(std::ostream& out, partition_ranges_view v);
 
-void set_global_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
-i_partitioner& global_partitioner();
-
 unsigned shard_of(const schema&, const token&);
 inline decorated_key decorate_key(const schema& s, const partition_key& key) {
     return s.get_partitioner().decorate_key(s, key);
@@ -692,8 +689,6 @@ future<utils::chunked_vector<partition_range>> split_range_to_single_shard(const
 future<utils::chunked_vector<partition_range>> split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const dht::partition_range& pr, shard_id shard);
 
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name, unsigned shard_count, unsigned sharding_ignore_msb_bits);
-
-extern std::unique_ptr<i_partitioner> default_partitioner;
 
 } // dht
 

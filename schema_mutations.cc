@@ -105,6 +105,16 @@ table_schema_version schema_mutations::digest() const {
     return utils::UUID_gen::get_name_UUID(h.finalize());
 }
 
+std::optional<sstring> schema_mutations::partitioner() const {
+    if (_scylla_tables) {
+        auto rs = query::result_set(*_scylla_tables);
+        if (!rs.empty()) {
+            return rs.row(0).get<sstring>("partitioner");
+        }
+    }
+    return { };
+}
+
 static mutation_opt compact(const mutation_opt& m) {
     if (!m) {
         return m;

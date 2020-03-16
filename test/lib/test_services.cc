@@ -25,7 +25,6 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/view/view_update_generator.hh"
 #include "dht/i_partitioner.hh"
-#include "dht/murmur3_partitioner.hh"
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "message/messaging_service.hh"

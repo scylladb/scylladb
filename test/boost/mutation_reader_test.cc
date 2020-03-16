@@ -2133,8 +2133,13 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                             return reader;
                     };
 
+                    auto schema_version = s->version();
+                    auto schema = schema_builder(std::move(s))
+                        .with_version(schema_version) // We have to set the same schema version here because debug build checks that
+                        .with_partitioner_for_tests_only(*partitioner)
+                        .build();
                     auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), evict_paused_readers);
-                    auto mr = make_multishard_combining_reader(std::move(lifecycle_policy), *partitioner, s, range, slice, pc, trace_state, fwd_mr);
+                    auto mr = make_multishard_combining_reader(std::move(lifecycle_policy), schema, range, slice, pc, trace_state, fwd_mr);
                     if (fwd_sm == streamed_mutation::forwarding::yes) {
                         return make_forwardable(std::move(mr));
                     }
@@ -2179,7 +2184,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
 
         assert_that(make_multishard_combining_reader(
                     seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
-                    s.schema()->get_partitioner(),
                     s.schema(),
                     query::full_partition_range,
                     s.schema()->full_slice(),
@@ -2425,8 +2429,9 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         };
 
         {
-            auto reader = make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)), partitioner,
-                    s.schema(), query::full_partition_range, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
+            auto schema = schema_builder(s.schema()).with_partitioner_for_tests_only(partitioner).build();
+            auto reader = make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
+                    schema, query::full_partition_range, schema->full_slice(), service::get_local_sstable_query_read_priority());
             reader.fill_buffer(db::no_timeout).get();
             BOOST_REQUIRE(reader.is_buffer_full());
         }
@@ -2504,7 +2509,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
         };
         auto reader = make_multishard_combining_reader(
                 seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
-                partitioner,
                 schema,
                 query::full_partition_range,
                 schema->full_slice(),
@@ -2632,7 +2636,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
 
         assert_that(make_multishard_combining_reader(
                     seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), true),
-                    s.schema()->get_partitioner(),
                     s.schema(),
                     query::full_partition_range,
                     s.schema()->full_slice(),
@@ -2677,7 +2680,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                 local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
         auto& remote_partitioner = *remote_partitioner_ptr;
 
-        auto tested_reader = make_multishard_streaming_reader(env.db(), local_partitioner, schema,
+        auto tested_reader = make_multishard_streaming_reader(env.db(), schema,
                 [sharder = dht::selective_token_range_sharder(remote_partitioner, token_range, 0)] () mutable -> std::optional<dht::partition_range> {
             if (auto next = sharder.next()) {
                 return dht::to_partition_range(*next);
@@ -2697,7 +2700,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                     streamed_mutation::forwarding::no, fwd_mr);
         };
         auto reference_reader = make_filtering_reader(
-                make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory)), local_partitioner,
+                make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory)),
                     schema, partition_range, schema->full_slice(), service::get_local_sstable_query_read_priority()),
                 [&remote_partitioner] (const dht::decorated_key& pkey) {
                     return remote_partitioner.shard_of(pkey.token()) == 0;

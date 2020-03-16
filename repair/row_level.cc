@@ -392,19 +392,18 @@ public:
             , _sharder(remote_partitioner, range, remote_shard)
             , _seed(seed)
             , _local_read_op(local_reader ? std::optional(cf.read_in_progress()) : std::nullopt)
-            , _reader(make_reader(db, cf, local_partitioner, local_reader)) {
+            , _reader(make_reader(db, cf, local_reader)) {
     }
 
 private:
     flat_mutation_reader
     make_reader(seastar::sharded<database>& db,
             column_family& cf,
-            const dht::i_partitioner& local_partitioner,
             is_local_reader local_reader) {
         if (local_reader) {
             return cf.make_streaming_reader(_schema, _range);
         }
-        return make_multishard_streaming_reader(db, local_partitioner, _schema, [this] {
+        return make_multishard_streaming_reader(db, _schema, [this] {
             auto shard_range = _sharder.next();
             if (shard_range) {
                 return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));

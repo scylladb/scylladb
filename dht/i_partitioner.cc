@@ -22,7 +22,6 @@
 #include "i_partitioner.hh"
 #include "sharder.hh"
 #include <seastar/core/reactor.hh>
-#include "dht/murmur3_partitioner.hh"
 #include "dht/token-sharding.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"
@@ -80,14 +79,6 @@ std::ostream& operator<<(std::ostream& out, partition_ranges_view v) {
     return out;
 }
 
-// FIXME: make it per-keyspace
-std::unique_ptr<i_partitioner> default_partitioner;
-
-void set_global_partitioner(const sstring& class_name, unsigned ignore_msb)
-{
-    default_partitioner = make_partitioner(class_name, smp::count, ignore_msb);
-}
-
 std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name, unsigned shard_count, unsigned sharding_ignore_msb_bits) {
     try {
         return create_object<i_partitioner, const unsigned&, const unsigned&>(partitioner_name, shard_count, sharding_ignore_msb_bits);
@@ -97,14 +88,6 @@ std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name, u
         throw std::runtime_error(format("Partitioner {} is not supported, supported partitioners = {{ {} }} : {}",
                 partitioner_name, supported_partitioners, e.what()));
     }
-}
-
-i_partitioner&
-global_partitioner() {
-    if (!default_partitioner) {
-        default_partitioner = std::make_unique<murmur3_partitioner>(smp::count, 12);
-    }
-    return *default_partitioner;
 }
 
 bool
@@ -317,7 +300,8 @@ ring_position_range_vector_sharder::next(const schema& s) {
 }
 
 future<utils::chunked_vector<partition_range>>
-split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const partition_range& pr, shard_id shard) {
+split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
+    const i_partitioner& partitioner = s.get_partitioner();
     auto next_shard = shard + 1 == partitioner.shard_count() ? 0 : shard + 1;
     auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = partitioner.shard_of(start_token);
@@ -346,12 +330,6 @@ split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, c
         return make_ready_future<std::optional<utils::chunked_vector<partition_range>>>(std::move(ret));
     });
 }
-
-future<utils::chunked_vector<partition_range>>
-split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
-    return split_range_to_single_shard(s.get_partitioner(), s, pr, shard);
-}
-
 
 int ring_position::tri_compare(const schema& s, const ring_position& o) const {
     return ring_position_comparator(s)(*this, o);

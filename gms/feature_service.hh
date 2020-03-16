@@ -95,6 +95,7 @@ private:
     gms::feature _nonfrozen_udts;
     gms::feature _hinted_handoff_separate_connection;
     gms::feature _lwt_feature;
+    gms::feature _per_table_partitioners_feature;
 
 public:
     bool cluster_supports_range_tombstones() const {
@@ -163,6 +164,10 @@ public:
 
     const feature& cluster_supports_cdc() const {
         return _cdc_feature;
+    }
+
+    const feature& cluster_supports_per_table_partitioners() const {
+        return _per_table_partitioners_feature;
     }
 
     bool cluster_supports_row_level_repair() const {

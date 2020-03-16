@@ -104,6 +104,7 @@ namespace db {
 
 schema_ctxt::schema_ctxt(const db::config& cfg)
     : _extensions(cfg.extensions())
+    , _murmur3_partitioner_ignore_msb_bits(cfg.murmur3_partitioner_ignore_msb_bits())
 {}
 
 schema_ctxt::schema_ctxt(const database& db)
@@ -305,23 +306,31 @@ schema_ptr tables() {
 
 // Holds Scylla-specific table metadata.
 schema_ptr scylla_tables(schema_features features) {
-    static auto make = [] (bool has_cdc_options) -> schema_ptr {
+    static auto make = [] (bool has_cdc_options, bool has_per_table_partitioners) -> schema_ptr {
         auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
         auto sb = schema_builder(NAME, SCYLLA_TABLES, std::make_optional(id))
             .with_column("keyspace_name", utf8_type, column_kind::partition_key)
             .with_column("table_name", utf8_type, column_kind::clustering_key)
             .with_column("version", uuid_type)
             .set_gc_grace_seconds(schema_gc_grace);
+        // 0 - false, false
+        // 1 - true, false
+        // 2 - false, true
+        // 3 - true, true
+        int offset = 0;
         if (has_cdc_options) {
             sb.with_column("cdc", map_type_impl::get_instance(utf8_type, utf8_type, false));
-            sb.with_version(generate_schema_version(id, 1));
-        } else {
-            sb.with_version(generate_schema_version(id));
+            ++offset;
         }
+        if (has_per_table_partitioners) {
+            sb.with_column("partitioner", utf8_type);
+            offset += 2;
+        }
+        sb.with_version(generate_schema_version(id, offset));
         return sb.build();
     };
-    static thread_local schema_ptr schemas[2] = { make(false), make(true) };
-    return schemas[features.contains(schema_feature::CDC_OPTIONS)];
+    static thread_local schema_ptr schemas[2][2] = { {make(false, false), make(false, true)}, {make(true, false), make(true, true)} };
+    return schemas[features.contains(schema_feature::CDC_OPTIONS)][features.contains(schema_feature::PER_TABLE_PARTITIONERS)];
 }
 
 // The "columns" table lists the definitions of all columns in all tables
@@ -626,7 +635,7 @@ schema_ptr aggregates() {
 static
 mutation
 redact_columns_for_missing_features(mutation m, schema_features features) {
-    if (features.contains(schema_feature::CDC_OPTIONS)) {
+    if (features.contains(schema_feature::CDC_OPTIONS) && features.contains(schema_feature::PER_TABLE_PARTITIONERS)) {
         return std::move(m);
     }
     if (m.schema()->cf_name() != SCYLLA_TABLES) {
@@ -1807,6 +1816,18 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
         auto& cdc_cdef = *scylla_tables()->get_column_definition("cdc");
         m.set_clustered_cell(ckey, cdc_cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
     }
+    if (table->has_custom_partitioner()) {
+        m.set_clustered_cell(ckey, "partitioner", table->get_partitioner().name(), timestamp);
+    } else {
+        // Avoid storing anything for default partitioner, so we don't end up with
+        // different digests on different nodes due to the other node redacting
+        // the partitioner column when the per_table_partitioners cluster feature is disabled.
+        //
+        // Tombstones are not considered for schema digest, so this is okay (and
+        // needed in order for disabling of per_table_partitioners to have effect).
+        auto& cdef = *scylla_tables()->get_column_definition("partitioner");
+        m.set_clustered_cell(ckey, cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
+    }
     return m;
 }
 
@@ -2328,6 +2349,10 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
         builder.with_version(*version);
     } else {
         builder.with_version(sm.digest());
+    }
+
+    if (auto partitioner = sm.partitioner()) {
+        builder.with_partitioner(*partitioner, smp::count, ctxt.murmur3_partitioner_ignore_msb_bits());
     }
 
     if (is_system_keyspace(ks_name) && is_extra_durable(cf_name)) {
