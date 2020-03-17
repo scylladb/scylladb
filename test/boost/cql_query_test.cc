@@ -5111,12 +5111,15 @@ SEASTAR_TEST_CASE(test_null_value_tuple_floating_types_and_uuids) {
     });
 }
 
-static std::unique_ptr<cql3::query_options> q_serial_opts() {
+static std::unique_ptr<cql3::query_options> q_serial_opts(
+        std::vector<cql3::raw_value> values,
+        db::consistency_level cl) {
+
     const auto& so = cql3::query_options::specific_options::DEFAULT;
     auto qo = std::make_unique<cql3::query_options>(
-            db::consistency_level::ONE,
+            cl,
             infinite_timeout_config,
-            std::vector<cql3::raw_value>{},
+            values,
             // Ensure (optional) serial consistency is always specified.
             cql3::query_options::specific_options{
                 so.page_size,
@@ -5131,7 +5134,8 @@ static std::unique_ptr<cql3::query_options> q_serial_opts() {
 // Run parametrized query on the appropriate shard
 static void prepared_on_shard(cql_test_env& e, const sstring& query,
             std::vector<bytes> params,
-            std::vector<std::vector<bytes_opt>> expected_rows) {
+            std::vector<std::vector<bytes_opt>> expected_rows,
+            db::consistency_level cl = db::consistency_level::ONE) {
     auto execute = [&] () mutable {
         return seastar::async([&] () mutable {
             auto id = e.prepare(query).get0();
@@ -5141,8 +5145,8 @@ static void prepared_on_shard(cql_test_env& e, const sstring& query,
                 raw_values.emplace_back(cql3::raw_value::make_value(param));
             }
 
-            auto qo = q_serial_opts();
-            auto msg = e.execute_prepared(id, raw_values).get0();
+            auto qo = q_serial_opts(std::move(raw_values), cl);
+            auto msg = e.execute_prepared_with_qo(id, std::move(qo)).get0();
             if (!msg->move_to_shard()) {
                 assert_that(msg).is_rows().with_rows_ignore_order(expected_rows);
             }
@@ -5173,6 +5177,34 @@ SEASTAR_TEST_CASE(test_like_parameter_marker) {
         prepared_on_shard(e, query, {T("err"), I(1), T("a%")}, {{B(false), "chg"}});
     });
 }
+
+SEASTAR_TEST_CASE(test_select_serial_consistency) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t (a int, b int, primary key (a,b))").get();
+        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (1, 1)").get();
+        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (1, 2)").get();
+        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (2, 1)").get();
+        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (2, 2)").get();
+
+        auto check_fails = [&e] (const sstring& query, const source_location& loc = source_location::current()) {
+            try {
+                prepared_on_shard(e, query, {}, {}, db::consistency_level::SERIAL);
+                assert(false);
+            } catch (const exceptions::invalid_request_exception& e) {
+                testlog.info("Query '{}' failed as expected with error: {}", query, e);
+            } catch (...) {
+                BOOST_ERROR(format("query '{}' failed with unexpected error: {}\n{}:{}: originally from here",
+                    query, std::current_exception(),
+                    loc.file_name(), loc.line()));
+            }
+        };
+        check_fails("select * from t allow filtering");
+        check_fails("select * from t where  b > 0 allow filtering");
+        check_fails("select * from t where  a in (1, 3)");
+        prepared_on_shard(e, "select * from t where a = 1", {}, {{I(1), I(1)}, {I(1), I(2)}}, db::consistency_level::SERIAL);
+    });
+}
+
 
 SEASTAR_TEST_CASE(test_range_deletions_for_specific_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {

@@ -184,28 +184,36 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
         cql3::prepared_cache_key_type id,
         std::vector<cql3::raw_value> values,
-        db::consistency_level cl) override
-    {
-        auto prepared = local_qp().get_prepared(id);
-        if (!prepared) {
-            throw not_prepared_exception(id);
-        }
-        auto stmt = prepared->statement;
-        assert(stmt->get_bound_terms() == values.size());
+        db::consistency_level cl = db::consistency_level::ONE) override {
 
         const auto& so = cql3::query_options::specific_options::DEFAULT;
-        auto options = ::make_shared<cql3::query_options>(cl, infinite_timeout_config,
+        auto options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config,
                 std::move(values), cql3::query_options::specific_options{
                             so.page_size,
                             so.state,
                             db::consistency_level::SERIAL,
                             so.timestamp,
                         });
-        options->prepare(prepared->bound_names);
+        return execute_prepared_with_qo(id, std::move(options));
+    }
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
+        cql3::prepared_cache_key_type id,
+        std::unique_ptr<cql3::query_options> qo) override
+    {
+        auto prepared = local_qp().get_prepared(id);
+        if (!prepared) {
+            throw not_prepared_exception(id);
+        }
+        auto stmt = prepared->statement;
+
+        assert(stmt->get_bound_terms() == qo->get_values_count());
+        qo->prepare(prepared->bound_names);
 
         auto qs = make_query_state();
-        return local_qp().execute_prepared(std::move(prepared), std::move(id), *qs, *options, true)
-            .finally([options, qs] {});
+        auto& lqo = *qo;
+        return local_qp().execute_prepared(std::move(prepared), std::move(id), *qs, lqo, true)
+            .finally([qs, qo = std::move(qo)] {});
     }
 
     virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) override {
