@@ -427,6 +427,13 @@ public:
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
             sharded<auth::service> auth_service;
+            // Normally the auth server is already stopped in here,
+            // but if there is an initialization failure we have to
+            // make sure to stop it now or ~sharded will assert.
+            auto stop_auth_server = defer([&auth_service] {
+                auth_service.stop().get();
+            });
+
             auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
