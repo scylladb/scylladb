@@ -1198,3 +1198,46 @@ SEASTAR_TEST_CASE(test_computed_columns) {
         });
     });
 }
+
+// Ref: #5708 - filtering should be applied on an indexed column
+// if the restriction is not eligible for indexing (it's not EQ)
+SEASTAR_TEST_CASE(test_filtering_indexed_column) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE test_index (a INT, b INT, c INT, d INT, e INT, PRIMARY KEY ((a, b),c));");
+        cquery_nofail(e, "CREATE INDEX ON test_index(d);");
+        cquery_nofail(e, "INSERT INTO test_index (a, b, c, d, e) VALUES (1, 2, 3, 4, 5);");
+        cquery_nofail(e, "INSERT INTO test_index (a, b, c, d, e) VALUES (11, 22, 33, 44, 55);");
+        cquery_nofail(e, "select c,e from ks.test_index where d = 44 ALLOW FILTERING;");
+        cquery_nofail(e, "select a from ks.test_index where d > 43 ALLOW FILTERING;");
+
+        eventually([&] {
+            auto msg = cquery_nofail(e, "select c,e from ks.test_index where d = 44 ALLOW FILTERING;");
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(33), int32_type->decompose(55)}
+            });
+        });
+        eventually([&] {
+            auto msg = cquery_nofail(e, "select a from ks.test_index where d > 43 ALLOW FILTERING;");
+            // NOTE: Column d will also be fetched, because it needs to be filtered.
+            // It's not the case in the previous select, where d was only used as an index.
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(11), int32_type->decompose(44)}
+            });
+        });
+
+        cquery_nofail(e, "CREATE INDEX ON test_index(b);");
+        cquery_nofail(e, "CREATE INDEX ON test_index(c);");
+        eventually([&] {
+            auto msg = cquery_nofail(e, "select e from ks.test_index where b > 12 ALLOW FILTERING;");
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(55), int32_type->decompose(22)}
+            });
+        });
+        eventually([&] {
+            auto msg = cquery_nofail(e, "select d from ks.test_index where c > 25 ALLOW FILTERING;");
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(44), int32_type->decompose(33)}
+            });
+        });
+    });
+}
