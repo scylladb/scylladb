@@ -26,10 +26,11 @@
 #include "query-request.hh"
 #include "query-result.hh"
 #include "schema_fwd.hh"
-#include "mutation.hh"
 
 #include <optional>
 #include <stdexcept>
+
+class mutation;
 
 namespace query {
 

@@ -62,7 +62,6 @@
 #include "atomic_cell.hh"
 #include "query-request.hh"
 #include "keys.hh"
-#include "mutation.hh"
 #include "memtable.hh"
 #include <list>
 #include "mutation_reader.hh"
@@ -98,6 +97,7 @@
 class cell_locker;
 class cell_locker_stats;
 class locked_cell;
+class mutation;
 
 class frozen_mutation;
 class reconcilable_result;

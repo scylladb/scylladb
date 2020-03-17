@@ -52,7 +52,6 @@
 #include "to_string.hh"
 #include "exceptions/exceptions.hh"
 #include "keys.hh"
-#include "mutation_partition.hh"
 #include "utils/like_matcher.hh"
 
 namespace cql3 {
