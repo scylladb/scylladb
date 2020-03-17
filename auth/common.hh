@@ -79,7 +79,7 @@ future<> create_metadata_table_if_missing(
         std::string_view table_name,
         cql3::query_processor&,
         std::string_view cql,
-        ::service::migration_manager&);
+        ::service::migration_manager&) noexcept;
 
 future<> wait_for_schema_agreement(::service::migration_manager&, const database&, seastar::abort_source&);
 

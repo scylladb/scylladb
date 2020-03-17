@@ -59,7 +59,7 @@ future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_f
     }).discard_result();
 }
 
-future<> create_metadata_table_if_missing(
+static future<> create_metadata_table_if_missing_impl(
         std::string_view table_name,
         cql3::query_processor& qp,
         std::string_view cql,
@@ -85,7 +85,14 @@ future<> create_metadata_table_if_missing(
     return ignore_existing([&mm, table = std::move(table)] () {
         return mm.announce_new_column_family(table, false);
     });
+}
 
+future<> create_metadata_table_if_missing(
+        std::string_view table_name,
+        cql3::query_processor& qp,
+        std::string_view cql,
+        ::service::migration_manager& mm) noexcept {
+    return futurize_apply(create_metadata_table_if_missing_impl, table_name, qp, cql, mm);
 }
 
 future<> wait_for_schema_agreement(::service::migration_manager& mm, const database& db, seastar::abort_source& as) {
