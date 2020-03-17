@@ -249,15 +249,15 @@ def find_headers(repodir, excluded_dirs):
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION',
-        'cxx_ld_flags': '-Wstack-usage=%s' % (1024*43),
+        'cxx_ld_flags': '-Wstack-usage=%s' % (1024*40),
     },
     'release': {
         'cxxflags': '',
-        'cxx_ld_flags': '-O3 -Wstack-usage=%s' % (1024*32),
+        'cxx_ld_flags': '-O3 -Wstack-usage=%s' % (1024*29),
     },
     'dev': {
         'cxxflags': '-DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION',
-        'cxx_ld_flags': '-O1 -Wstack-usage=%s' % (1024*32),
+        'cxx_ld_flags': '-O1 -Wstack-usage=%s' % (1024*29),
     },
     'sanitize': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER',
