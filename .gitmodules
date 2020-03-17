@@ -15,3 +15,6 @@
 [submodule "scylla-jmx"]
 	path = scylla-jmx
 	url = ../scylla-jmx
+[submodule "scylla-tools"]
+	path = scylla-tools
+	url = ../scylla-tools-java
