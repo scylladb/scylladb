@@ -61,14 +61,6 @@ done
 
 FLAGS="$COMMON_FLAGS $FLAGS"
 
-is_redhat_variant() {
-    [ -f /etc/redhat-release ]
-}
-is_debian_variant() {
-    [ -f /etc/debian_version ]
-}
-
-
 if [ ! -e reloc/build_reloc.sh ]; then
     echo "run build_reloc.sh in top of scylla dir"
     exit 1
