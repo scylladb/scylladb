@@ -380,28 +380,45 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
     if (need_filtering()) {
         auto& sim = db.find_column_family(_schema).get_index_manager();
         auto [opt_idx, _] = find_idx(sim);
-        auto column_uses_indexing = [&opt_idx] (const column_definition* cdef) {
-            return opt_idx && opt_idx->depends_on(*cdef);
+        auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, ::shared_ptr<single_column_restriction> restr) {
+            return opt_idx && restr && restr->is_supported_by(*opt_idx);
         };
+        auto single_pk_restrs = dynamic_pointer_cast<single_column_partition_key_restrictions>(_partition_key_restrictions);
         if (_partition_key_restrictions->needs_filtering(*_schema)) {
             for (auto&& cdef : _partition_key_restrictions->get_column_defs()) {
-                if (!column_uses_indexing(cdef)) {
+                ::shared_ptr<single_column_restriction> restr;
+                if (single_pk_restrs) {
+                    auto it = single_pk_restrs->restrictions().find(cdef);
+                    if (it != single_pk_restrs->restrictions().end()) {
+                        restr = dynamic_pointer_cast<single_column_restriction>(it->second);
+                    }
+                }
+                if (!column_uses_indexing(cdef, restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 }
             }
         }
+        auto single_ck_restrs = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions);
         const bool pk_has_unrestricted_components = _partition_key_restrictions->has_unrestricted_components(*_schema);
         if (pk_has_unrestricted_components || _clustering_columns_restrictions->needs_filtering(*_schema)) {
             column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _schema->clustering_key_columns().begin()->id +
                     _clustering_columns_restrictions->num_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : _clustering_columns_restrictions->get_column_defs()) {
-                if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef)) {
+                ::shared_ptr<single_column_restriction> restr;
+                if (single_pk_restrs) {
+                    auto it = single_ck_restrs->restrictions().find(cdef);
+                    if (it != single_ck_restrs->restrictions().end()) {
+                        restr = dynamic_pointer_cast<single_column_restriction>(it->second);
+                    }
+                }
+                if (cdef->id >= first_filtering_id && !column_uses_indexing(cdef, restr)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 }
             }
         }
         for (auto&& cdef : _nonprimary_key_restrictions->get_column_defs()) {
-            if (!column_uses_indexing(cdef)) {
+            auto restr = dynamic_pointer_cast<single_column_restriction>(_nonprimary_key_restrictions->get_restriction(*cdef));
+            if (!column_uses_indexing(cdef, restr)) {
                 column_defs_for_filtering.emplace_back(cdef);
             }
         }
