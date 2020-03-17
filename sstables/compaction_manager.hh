@@ -54,7 +54,7 @@ public:
         uint64_t active_tasks = 0; // Number of compaction going on.
         int64_t errors = 0;
     };
-private:
+
     struct task {
         column_family* compacting_cf = nullptr;
         shared_future<> compaction_done = make_ready_future<>();
@@ -63,6 +63,7 @@ private:
         sstables::compaction_type type = sstables::compaction_type::Compaction;
         bool compaction_running = false;
     };
+private:
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
     std::list<lw_shared_ptr<task>> _tasks;
@@ -184,7 +185,7 @@ public:
     future<> perform_sstable_scrub(column_family* cf, bool skip_corrupted);
 
     // Submit a column family for major compaction.
-    future<> submit_major_compaction(column_family* cf);
+    lw_shared_ptr<task> submit_major_compaction(column_family* cf);
 
     // Run a resharding job for a given column family.
     // it completes when future returned by job is ready or returns immediately

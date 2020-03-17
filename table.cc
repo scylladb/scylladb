@@ -1352,7 +1352,8 @@ future<> table::rewrite_sstables(sstables::compaction_descriptor descriptor) {
 // Note: We assume that the column_family does not get destroyed during compaction.
 future<>
 table::compact_all_sstables() {
-    return _compaction_manager.submit_major_compaction(this);
+    auto task = _compaction_manager.submit_major_compaction(this);
+    return task->compaction_done.get_future().then([task] {});
 }
 
 void table::start_compaction() {

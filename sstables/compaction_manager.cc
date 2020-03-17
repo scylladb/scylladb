@@ -256,12 +256,15 @@ private:
     virtual void remove_sstable(sstables::shared_sstable sst)  override { }
 };
 
-future<> compaction_manager::submit_major_compaction(column_family* cf) {
-    if (_stopped) {
-        return make_ready_future<>();
-    }
+lw_shared_ptr<compaction_manager::task>
+compaction_manager::submit_major_compaction(column_family* cf) {
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
+    if (_stopped) {
+        task->compaction_done = make_ready_future<>();
+        return task;
+    }
+
     _tasks.push_back(task);
 
     // first take major compaction semaphore, then exclusely take compaction lock for column family.
@@ -306,7 +309,7 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
             _stats.errors++;
         }
     });
-    return task->compaction_done.get_future().then([task] {});
+    return task;
 }
 
 future<> compaction_manager::run_resharding_job(column_family* cf, std::function<future<>()> job) {
