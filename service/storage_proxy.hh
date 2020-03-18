@@ -320,6 +320,7 @@ private:
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>& meta,
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
+    void register_cdc_operation_result_tracker(const std::vector<storage_proxy::unique_response_handler>& ids, lw_shared_ptr<cdc::operation_result_tracker> tracker);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
     size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept;

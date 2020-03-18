@@ -359,6 +359,7 @@ protected:
     size_t _all_failures = 0; // total amount of failures
     size_t _total_endpoints = 0;
     storage_proxy::write_stats& _stats;
+    lw_shared_ptr<cdc::operation_result_tracker> _cdc_operation_result_tracker;
     timer<storage_proxy::clock_type> _expire_timer;
     service_permit _permit; // holds admission permit until operation completes
 
@@ -398,10 +399,17 @@ public:
             } else if (_error == error::FAILURE) {
                 _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
             }
+            if (_cdc_operation_result_tracker) {
+                _cdc_operation_result_tracker->on_mutation_failed();
+            }
         }
     }
     bool is_counter() const {
         return _type == db::write_type::COUNTER;
+    }
+
+    void set_cdc_operation_result_tracker(lw_shared_ptr<cdc::operation_result_tracker> tracker) {
+        _cdc_operation_result_tracker = std::move(tracker);
     }
 
     // While delayed, a request is not throttled.
@@ -1892,6 +1900,19 @@ storage_proxy::create_write_response_handler(const std::tuple<paxos::proposal, s
 
     return create_write_response_handler(ks, cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s), std::move(endpoints),
                     std::vector<gms::inet_address>(), std::vector<gms::inet_address>(), std::move(tr_state), get_stats(), std::move(permit));
+}
+
+void storage_proxy::register_cdc_operation_result_tracker(const std::vector<storage_proxy::unique_response_handler>& ids, lw_shared_ptr<cdc::operation_result_tracker> tracker) {
+    if (!tracker) {
+        return;
+    }
+
+    for (auto& id : ids) {
+        auto& h = get_write_response_handler(id.id);
+        if (h->get_schema()->cdc_options().enabled()) {
+            h->set_cdc_operation_result_tracker(tracker);
+        }
+    }
 }
 
 void
