@@ -1310,7 +1310,7 @@ future<> sstable::open_data() {
             c->pop_back();
             return make_ready_future<>();
         }).then([this, c] () mutable {
-            c = {};
+            *c = {};
             _open = true;
             return make_ready_future<>();
         });
