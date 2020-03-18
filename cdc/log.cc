@@ -236,7 +236,7 @@ public:
         }
     }
 
-    future<std::vector<mutation>> augment_mutation_call(
+    future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>> augment_mutation_call(
         lowres_clock::time_point timeout,
         std::vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state
@@ -1299,7 +1299,7 @@ transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_siz
 
 } // namespace cdc
 
-future<std::vector<mutation>>
+future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
 cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
@@ -1308,16 +1308,15 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     });
 
     if (i == e) {
-        return make_ready_future<std::vector<mutation>>(std::move(mutations));
+        return make_ready_future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), lw_shared_ptr<cdc::operation_result_tracker>()));
     }
 
     tracing::trace(tr_state, "CDC: Started generating mutations for log rows");
     mutations.reserve(2 * mutations.size());
 
-    return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()),
-            [this, timeout, i, tr_state = std::move(tr_state)] (std::vector<mutation>& mutations, service::query_state& qs) {
-        
-        return transform_mutations(mutations, 1, [this, &mutations, timeout, &qs, tr_state = tr_state] (int idx) mutable {
+    return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{},
+            [this, timeout, i, tr_state = std::move(tr_state)] (std::vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
+        return transform_mutations(mutations, 1, [this, &mutations, timeout, &qs, tr_state = tr_state, &details] (int idx) mutable {
             auto& m = mutations[idx];
             auto s = m.schema();
 
@@ -1345,18 +1344,22 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
 
-            return f.then([trans = std::move(trans), &mutations, idx, tr_state = std::move(tr_state)] (lw_shared_ptr<cql3::untyped_result_set> rs) {
+            return f.then([trans = std::move(trans), &mutations, idx, tr_state = std::move(tr_state), &details] (lw_shared_ptr<cql3::untyped_result_set> rs) {
                 auto& m = mutations[idx];
                 auto& s = m.schema();
+                details.had_preimage |= s->cdc_options().preimage();
+                details.had_postimage |= s->cdc_options().postimage();
                 tracing::trace(tr_state, "CDC: Generating log mutations for {}", m.decorated_key());
                 int generated_count;
                 if (should_split(m, *s)) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
+                    details.was_split = true;
                     generated_count = 0;
                     for_each_change(m, s, [&] (mutation mm, api::timestamp_type ts, bytes tuuid, int& batch_no) {
                         auto [mut, parts] = trans.transform(std::move(mm), rs.get(), ts, tuuid, batch_no);
                         mutations.push_back(std::move(mut));
                         ++generated_count;
+                        details.touched_parts.add(parts);
                     });
                 } else {
                     tracing::trace(tr_state, "CDC: No need to split {}", m.decorated_key());
@@ -1366,13 +1369,15 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                     auto [mut, parts] = trans.transform(m, rs.get(), ts, tuuid, batch_no);
                     mutations.push_back(std::move(mut));
                     generated_count = 1;
+                    details.touched_parts.add(parts);
                 }
                 // `m` might be invalidated at this point because of the push_back to the vector
                 tracing::trace(tr_state, "CDC: Generated {} log mutations from {}", generated_count, mutations[idx].decorated_key());
             });
-        }).then([tr_state](std::vector<mutation> mutations) {
+        }).then([this, tr_state, &details](std::vector<mutation> mutations) {
             tracing::trace(tr_state, "CDC: Finished generating all log mutations");
-            return make_ready_future<std::vector<mutation>>(std::move(mutations));
+            auto tracker = make_lw_shared<cdc::operation_result_tracker>(_ctxt._proxy.get_cdc_stats(), details);
+            return make_ready_future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), std::move(tracker)));
         });
     });
 }
@@ -1383,7 +1388,7 @@ bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutat
     });
 }
 
-future<std::vector<mutation>>
+future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
 cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
     return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state));
 }
