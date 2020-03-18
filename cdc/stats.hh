@@ -89,4 +89,32 @@ public:
     stats();
 };
 
+// Contains the details on what happened during a CDC operation.
+struct operation_details final {
+    stats::part_type_set touched_parts;
+    bool was_split = false;
+    bool had_preimage = false;
+    bool had_postimage = false;
+};
+
+// This object tracks the lifetime of write handlers related to one CDC operation. After all
+// write handlers for the operation finish, CDC metrics are updated.
+class operation_result_tracker final {
+    stats& _stats;
+    operation_details _details;
+    bool _failed;
+
+public:
+    operation_result_tracker(stats& stats, operation_details details)
+        : _stats(stats)
+        , _details(details)
+        , _failed(false)
+    {}
+    ~operation_result_tracker();
+
+    void on_mutation_failed() {
+        _failed = true;
+    }
+};
+
 }
