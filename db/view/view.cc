@@ -1073,7 +1073,8 @@ future<> mutate_MV(
         db::view::stats& stats,
         cf_stats& cf_stats,
         db::timeout_semaphore_units pending_view_updates,
-        service::allow_hints allow_hints)
+        service::allow_hints allow_hints,
+        wait_for_all_updates wait_for_all)
 {
     auto fs = std::make_unique<std::vector<future<>>>();
     fs->reserve(view_updates.size());
@@ -1152,9 +1153,13 @@ future<> mutate_MV(
                                  maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) mutable {
                     return maybe_account_failure(std::move(f), std::move(*paired_endpoint), is_endpoint_local, updates_pushed_remote);
                 });
-                // The update is sent to background in order to preserve availability,
-                // its parallelism is limited by view_update_concurrency_semaphore
-                (void)view_update;
+                if (wait_for_all) {
+                    fs->push_back(std::move(view_update));
+                } else {
+                    // The update is sent to background in order to preserve availability,
+                    // its parallelism is limited by view_update_concurrency_semaphore
+                    (void)view_update;
+                }
             }
         } else if (!pending_endpoints.empty()) {
             // If there is no paired endpoint, it means there's a range movement going on (decommission or move),
@@ -1182,9 +1187,13 @@ future<> mutate_MV(
                              maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) {
                 return maybe_account_failure(std::move(f), std::move(target), false, updates_pushed_remote);
             });
-            // The update is sent to background in order to preserve availability,
-            // its parallelism is limited by view_update_concurrency_semaphore
-            (void)view_update;
+            if (wait_for_all) {
+                fs->push_back(std::move(view_update));
+            } else {
+                // The update is sent to background in order to preserve availability,
+                // its parallelism is limited by view_update_concurrency_semaphore
+                (void)view_update;
+            }
         }
     }
     auto f = seastar::when_all_succeed(fs->begin(), fs->end());
