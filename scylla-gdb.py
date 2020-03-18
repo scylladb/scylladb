@@ -1253,6 +1253,62 @@ class scylla_memory(gdb.Command):
         return [(c, tables_by_count[c]) for c in reversed(sorted(tables_by_count.keys()))]
 
     @staticmethod
+    def summarize_storage_proxy_coordinator_stats(sp):
+        try:
+            return sp['_stats'], {None: sp['_stats']}
+        except gdb.error: # > 3.3
+            pass
+
+        stats_ptr_type = gdb.lookup_type('service::storage_proxy::stats').pointer()
+        key_id = int(sp['_stats_key']['_id'])
+        per_sg_stats = {}
+        for tq in get_local_task_queues():
+            stats = std_vector(tq['_scheduling_group_specific_vals'])[key_id].reinterpret_cast(stats_ptr_type).dereference()
+            if int(stats['writes']) == 0 and int(stats['background_writes']) == 0 and int(stats['foreground_reads']) == 0 and int(stats['reads']) == 0:
+                continue
+            per_sg_stats[tq] = stats
+
+        return sp['_global_stats'], per_sg_stats
+
+    @staticmethod
+    def print_coordinator_stats():
+        sp = sharded(gdb.parse_and_eval('service::_the_storage_proxy')).local()
+        global_sp_stats, per_sg_sp_stats = scylla_memory.summarize_storage_proxy_coordinator_stats(sp)
+
+        hm = std_optional(sp['_hints_manager']).get()
+        view_hm = sp['_hints_for_views_manager']
+
+        gdb.write('Coordinator:\n'
+                '  bg write bytes: {bg_wr_bytes:>13} B\n'
+                '  hints:          {regular:>13} B\n'
+                '  view hints:     {views:>13} B\n'
+                .format(
+                        bg_wr_bytes=int(global_sp_stats['background_write_bytes']),
+                        regular=int(hm['_stats']['size_of_hints_in_progress']),
+                        views=int(view_hm['_stats']['size_of_hints_in_progress'])))
+
+        for sg_tq, stats in per_sg_sp_stats.items():
+            if sg_tq is None:
+                sg_header = ''
+            else:
+                sg_header = '  {sg_id:02} {sg_name}\n'.format(sg_id=int(sg_tq['_id']), sg_name=str(sg_tq['_name']))
+
+            gdb.write(
+                    '{sg_header}'
+                    '    fg writes:  {fg_wr:>13}\n'
+                    '    bg writes:  {bg_wr:>13}\n'
+                    '    fg reads:   {fg_rd:>13}\n'
+                    '    bg reads:   {bg_rd:>13}\n'
+                    .format(
+                        sg_header=sg_header,
+                        fg_wr=int(stats['writes']) - int(stats['background_writes']),
+                        bg_wr=int(stats['background_writes']),
+                        fg_rd=int(stats['foreground_reads']),
+                        bg_rd=int(stats['reads']) - int(stats['foreground_reads'])))
+
+        gdb.write('\n')
+
+    @staticmethod
     def print_replica_stats():
         db = sharded(gdb.parse_and_eval('::debug::db')).local()
 
@@ -1353,25 +1409,7 @@ class scylla_memory(gdb.Command):
                           str_real_dirty=dirty_mem_mgr(db['_streaming_dirty_memory_manager']).real_dirty(),
                           str_virt_dirty=dirty_mem_mgr(db['_streaming_dirty_memory_manager']).virt_dirty()))
 
-        sp = sharded(gdb.parse_and_eval('service::_the_storage_proxy')).local()
-        hm = std_optional(sp['_hints_manager']).get()
-        view_hm = sp['_hints_for_views_manager']
-
-        gdb.write('Coordinator:\n'
-          '  fg writes:  {fg_wr:>13}\n'
-          '  bg writes:  {bg_wr:>13}, {bg_wr_bytes:>} B\n'
-          '  fg reads:   {fg_rd:>13}\n'
-          '  bg reads:   {bg_rd:>13}\n'
-          '  hints:      {regular:>13} B\n'
-          '  view hints: {views:>13} B\n\n'
-          .format(fg_wr=int(sp['_stats']['writes']) - int(sp['_stats']['background_writes']),
-                  bg_wr=int(sp['_stats']['background_writes']),
-                  bg_wr_bytes=int(sp['_stats']['background_write_bytes']),
-                  fg_rd=int(sp['_stats']['foreground_reads']),
-                  bg_rd=int(sp['_stats']['reads']) - int(sp['_stats']['foreground_reads']),
-                  regular=int(hm['_stats']['size_of_hints_in_progress']),
-                  views=int(view_hm['_stats']['size_of_hints_in_progress'])))
-
+        scylla_memory.print_coordinator_stats()
         scylla_memory.print_replica_stats()
 
         gdb.write('Small pools:\n')
