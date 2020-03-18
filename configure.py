@@ -296,6 +296,10 @@ scylla_tests = set([
     'test/boost/cql_auth_query_test',
     'test/boost/cql_auth_syntax_test',
     'test/boost/cql_query_test',
+    'test/boost/cql_query_large_test',
+    'test/boost/cql_query_like_test',
+    'test/boost/cql_query_group_test',
+    'test/boost/cql_functions_test',
     'test/boost/crc_test',
     'test/boost/data_listeners_test',
     'test/boost/database_test',
@@ -331,6 +335,7 @@ scylla_tests = set([
     'test/boost/mutation_fragment_test',
     'test/boost/mutation_query_test',
     'test/boost/mutation_reader_test',
+    'test/boost/multishard_combining_reader_as_mutation_source_test',
     'test/boost/mutation_test',
     'test/boost/mutation_writer_test',
     'test/boost/mvcc_test',
@@ -348,6 +353,7 @@ scylla_tests = set([
     'test/boost/schema_change_test',
     'test/boost/schema_registry_test',
     'test/boost/secondary_index_test',
+    'test/boost/index_with_paging_test',
     'test/boost/serialization_test',
     'test/boost/serialized_action_test',
     'test/boost/small_vector_test',
@@ -355,6 +361,8 @@ scylla_tests = set([
     'test/boost/sstable_3_x_test',
     'test/boost/sstable_datafile_test',
     'test/boost/sstable_mutation_test',
+    'test/boost/schema_changes_test',
+    'test/boost/sstable_conforms_to_mutation_source_test',
     'test/boost/sstable_resharding_test',
     'test/boost/sstable_test',
     'test/boost/storage_proxy_test',
@@ -368,6 +376,8 @@ scylla_tests = set([
     'test/boost/view_build_test',
     'test/boost/view_complex_test',
     'test/boost/view_schema_test',
+    'test/boost/view_schema_pkey_test',
+    'test/boost/view_schema_ckey_test',
     'test/boost/vint_serialization_test',
     'test/boost/virtual_reader_test',
     'test/manual/ec2_snitch_test',
@@ -965,7 +975,10 @@ for t in perf_tests:
 
 deps['test/boost/sstable_test'] += ['test/lib/sstable_utils.cc', 'test/lib/normalizing_reader.cc']
 deps['test/boost/sstable_datafile_test'] += ['test/lib/sstable_utils.cc', 'test/lib/normalizing_reader.cc']
-deps['test/boost/mutation_reader_test'] += ['test/lib/sstable_utils.cc']
+deps['test/boost/mutation_reader_test'] += ['test/lib/sstable_utils.cc', 'test/lib/dummy_partitioner.cc' ]
+deps['test/boost/multishard_combining_reader_as_mutation_source_test'] += ['test/lib/sstable_utils.cc', 'test/lib/dummy_partitioner.cc' ]
+deps['test/boost/sstable_mutation_test'] += ['test/lib/sstable_utils.cc']
+deps['test/boost/sstable_conforms_to_mutation_source_test'] += ['test/lib/sstable_utils.cc']
 
 deps['test/boost/bytes_ostream_test'] = [
     "test/boost/bytes_ostream_test.cc",
