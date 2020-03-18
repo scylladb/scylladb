@@ -1,90 +1,60 @@
 # Building Scylla Packages
 
-This document describes how to build Scylla's packages for supported Linux distributions.
+This document describes how to build Scylla's packages.
 
 The build system generates _relocatable packages_, which means that the packages contain all the dependencies they need, and you can, therefore, install and run the same binaries on all Linux distributions.
-The packages are built using Scylla's `dbuild` tool, which builds the packages in a Docker container.
+The relocatable package tarball is used as a base for building the Linux distribution specific packages, `.rpm`s and `.deb`s.
 
-### Scylla Server
+## Building
 
-To build a tarball, which contains the full Scylla server, run (remember to substitute `<mode>` with, for example, `release`):
+In these instructions, we use `dbuild` to build the packages, but you can also build packages without it.
 
-```
-./tools/toolchain/dbuild ./reloc/build_reloc.sh --mode <mode>
-```
-
-This step generates the following tarball:
+The first step is to run `configure.py`, which generates the `build.ninja` file (equivalent of a `Makefile`):
 
 ```
-build/<mode>/scylla-package.tar.gz
+./tools/toolchain/dbuild ./configure.py --mode=<mode>
 ```
 
-You can then generate RPM packages with:
+(where `mode` is `release`, `dev`, or `debug`)
+
+The second step is to build the packages with the `dist` target.
 
 ```
-./tools/toolchain/dbuild ./reloc/build_rpm.sh --reloc-pkg build/<mode>/scylla-package.tar.gz
+./tools/toolchain/dbuild ninja-build dist
 ```
 
-This step generates the following RPM packages:
+## Artifacts
+
+The `dist` target generates the following tarballs (*relocatable packages*), which can be installed on any Linux distribution:
+
+### Relocatable package artifacts
+
+* `build/<mode>/scylla-package.tar.gz`
+* `build/release/scylla-python3-package.tar.gz`
+* `scylla-jmx/build/scylla-jmx-package.tar.gz`
+* `scylla-tools/build/scylla-tools-package.tar.gz`
+
+### RPM package artifacts
+
+* `build/dist/<mode>/redhat/RPMS/x86_64/scylla-*.rpm`
+* `build/dist/<mode>/redhat/RPMS/x86_64/scylla-conf-*.rpm`
+* `build/dist/<mode>/redhat/RPMS/x86_64/scylla-debuginfo-*.rpm`
+* `build/dist/<mode>/redhat/RPMS/x86_64/scylla-kernel-conf-*.rpm`
+* `build/dist/<mode>/redhat/RPMS/x86_64/scylla-server-*.rpm`
+* `build/redhat/RPMS/x86_64/scylla-python3-*.rpm`
+* `scylla-jmx/build/redhat/RPMS/noarch/scylla-jmx-*.rpm`
+* `scylla-tools/build/redhat/RPMS/noarch/scylla-tools-*.rpm`
+* `scylla-tools/build/redhat/RPMS/noarch/scylla-tools-core-*.rpm`
+
+### Debian package artifacts
+
+## Verifying
+
+To verify built Scylla packages, run the following command:
 
 ```
-build/redhat/RPMS/x86_64/scylla-666.development-0.20190807.7d0c99e268.x86_64.rpm
-build/redhat/RPMS/x86_64/scylla-server-666.development-0.20190807.7d0c99e268.x86_64.rpm
-build/redhat/RPMS/x86_64/scylla-debuginfo-666.development-0.20190807.7d0c99e268.x86_64.rpm
-build/redhat/RPMS/x86_64/scylla-conf-666.development-0.20190807.7d0c99e268.x86_64.rpm
-build/redhat/RPMS/x86_64/scylla-kernel-conf-666.development-0.20190807.7d0c99e268.x86_64.rpm
+ninja-build dist-check
 ```
 
-You can also generate deb packages with:
-
-```
-./tools/toolchain/dbuild ./reloc/build_deb.sh --reloc-pkg build/debug/scylla-package.tar.gz
-```
-
-This step generates the following deb packages:
-
-```
-build/debian/scylla-server-dbg_666.development-0.20190807.7d0c99e268-1_amd64.deb
-build/debian/scylla-conf_666.development-0.20190807.7d0c99e268-1_amd64.deb
-build/debian/scylla-kernel-conf_666.development-0.20190807.7d0c99e268-1_amd64.deb
-build/debian/scylla-server_666.development-0.20190807.7d0c99e268-1_amd64.deb
-build/debian/scylla_666.development-0.20190807.7d0c99e268-1_amd64.deb
-```
-
-### Python interpreter
-
-To build a tarball, which contains a [portable Python interpreter](https://www.scylladb.com/2019/02/14/the-complex-path-for-a-simple-portable-python-interpreter-or-snakes-on-a-data-plane/), run:
-
-```
-./tools/toolchain/dbuild ./reloc/python3/build_reloc.sh
-```
-
-This step generates the following tarball:
-
-```
-build/release/scylla-python3-package.tar.gz
-```
-
-You can then generate a RPM package:
-
-```
-./tools/toolchain/dbuild ./reloc/python3/build_rpm.sh                       
-```
-
-This step generates the following RPM package:
-
-```
-build/redhat/RPMS/x86_64/scylla-python3-3.7.2-0.20190807.689fc72bab.x86_64.rpm
-```
-
-You can also generate a deb package with:
-
-```
-./tools/toolchain/dbuild ./reloc/python3/build_deb.sh                       
-```
-
-This step generates the following deb package:
-
-```
-build/debian/scylla-python3_3.7.2-0.20190807.689fc72bab-1_amd64.deb
-```
+Please note that you need to run `dist-check` on the host because it
+requires Docker to perform the verification.
