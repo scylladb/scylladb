@@ -302,6 +302,23 @@ future<> range_streamer::do_stream_async() {
                 size_t nr_ranges_total = range_vec.size();
                 size_t groups = 10;
                 size_t nr_ranges_per_stream_plan = (nr_ranges_total + groups - 1) / groups;
+                if (_reason == streaming::stream_reason::decommission) {
+                    // The receiver of the decommission stream plan invalidates
+                    // the cache for the sstable that the stream plan
+                    // generates. A single sstable is generated covering
+                    // multiple ranges. The cache between the start of the first
+                    // range and the end of the last range is invalidated. This
+                    // invalidates more caches ranges than it is necessary.
+                    // The receiver of the decommission node serves read. The
+                    // cache invalidation has a huge impact on the read latency.
+                    // To mitigate the cache invalidation impact before we fix
+                    // the cache invalidation, stream 1 range per stream plan
+                    // as a temporary fix. This will cause more sstables to be
+                    // generated on the receiver and thus generates more
+                    // compaction work. It is worth it because the cache
+                    // invalidation impact is much worse than the compaction.
+                    nr_ranges_per_stream_plan = 1;
+                }
                 dht::token_range_vector ranges_to_stream;
                 auto do_streaming = [&] {
                     auto sp = stream_plan(format("{}-{}-index-{:d}", description, keyspace, sp_index++), _reason);
