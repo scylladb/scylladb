@@ -317,6 +317,19 @@ future<> range_streamer::do_stream_async() {
                     // compaction work. It is worth it because the cache
                     // invalidation impact is much worse than the compaction.
                     nr_ranges_per_stream_plan = 1;
+                } else if (_reason == streaming::stream_reason::bootstrap) {
+                    // Compaction dominating IO bandwidth makes streaming slow
+                    // during bootstrap. To mitigate problem before we have
+                    // off-strategy compaction support, we want to reduce the
+                    // compaction work during bootstrap. The patch 'compaction:
+                    // use a larger min_threshold during bootstrap, replace'
+                    // reduces the compaction by increasing the min threshold
+                    // of sstables for compaction. Here, we reduce the number
+                    // of sstables generated during bootstrap, by increasing
+                    // the ranges per stream plan. The bootstrap node does not
+                    // server read, so it does not have cache invalidation
+                    // problem as it has in decommission.
+                    nr_ranges_per_stream_plan = nr_ranges_total / 5 + 1;
                 }
                 dht::token_range_vector ranges_to_stream;
                 auto do_streaming = [&] {
