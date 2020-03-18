@@ -147,7 +147,7 @@ with_cob(thrift_fn::function<void ()>&& cob,
         thrift_fn::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob,
         Func&& func) {
     // then_wrapped() terminates the fiber by calling one of the cob objects
-    (void)futurize<void>::apply(func).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<> f) {
+    (void)futurize_apply(func).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<> f) {
         try {
             f.get();
             cob();
@@ -162,7 +162,7 @@ template <typename Func>
 void
 with_exn_cob(thrift_fn::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob, Func&& func) {
     // then_wrapped() terminates the fiber by calling one of the cob objects
-    (void)futurize<void>::apply(func).then_wrapped([exn_cob = std::move(exn_cob)] (future<> f) {
+    (void)futurize_apply(func).then_wrapped([exn_cob = std::move(exn_cob)] (future<> f) {
         try {
             f.get();
         } catch (...) {
