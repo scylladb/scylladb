@@ -289,8 +289,19 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
                     [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] (std::unique_ptr<executor::client_state>& client_state) mutable {
                 tracing::trace_state_ptr trace_state = executor::maybe_trace_query(*client_state, op, req->content);
                 tracing::trace(trace_state, op);
-                return _json_parser.parse(req->content).then([this, callback_it = std::move(callback_it), &client_state, trace_state, req = std::move(req)] (rjson::value json_request) mutable {
-                    return callback_it->second(_executor, *client_state, trace_state, std::move(json_request), std::move(req)).finally([trace_state] {});
+                // JSON parsing can allocate up to roughly 2x the size of the raw document, + a couple of bytes for maintenance.
+                // FIXME: by this time, the whole HTTP request was already read, so some memory is already occupied.
+                // Once HTTP allows working on streams, we should grab the permit *before* reading the HTTP payload.
+                size_t mem_estimate = req->content.size() * 3 + 8000;
+                auto units_fut = get_units(*_memory_limiter, mem_estimate);
+                if (_memory_limiter->waiters()) {
+                    ++_executor._stats.requests_blocked_memory;
+                }
+                return units_fut.then([this, callback_it = std::move(callback_it), &client_state, trace_state, req = std::move(req)] (semaphore_units<> units) mutable {
+                    return _json_parser.parse(req->content).then([this, callback_it = std::move(callback_it), &client_state, trace_state,
+                            units = std::move(units), req = std::move(req)] (rjson::value json_request) mutable {
+                        return callback_it->second(_executor, *client_state, trace_state, make_service_permit(std::move(units)), std::move(json_request), std::move(req)).finally([trace_state] {});
+                    });
                 });
             });
         });
@@ -330,58 +341,60 @@ server::server(executor& exec)
         , _enabled_servers{}
         , _pending_requests{}
       , _callbacks{
-        {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.create_table(client_state, std::move(trace_state), std::move(json_request));
+        {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.create_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"DescribeTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.describe_table(client_state, std::move(trace_state), std::move(json_request));
+        {"DescribeTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.describe_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"DeleteTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.delete_table(client_state, std::move(trace_state), std::move(json_request));
+        {"DeleteTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.delete_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"PutItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.put_item(client_state, std::move(trace_state), std::move(json_request));
+        {"PutItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.put_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"UpdateItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.update_item(client_state, std::move(trace_state), std::move(json_request));
+        {"UpdateItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.update_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"GetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.get_item(client_state, std::move(trace_state), std::move(json_request));
+        {"GetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"DeleteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.delete_item(client_state, std::move(trace_state), std::move(json_request));
+        {"DeleteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.delete_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"ListTables", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.list_tables(client_state, std::move(json_request));
+        {"ListTables", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.list_tables(client_state, std::move(permit), std::move(json_request));
         }},
-        {"Scan", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.scan(client_state, std::move(trace_state), std::move(json_request));
+        {"Scan", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.scan(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"DescribeEndpoints", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.describe_endpoints(client_state, std::move(json_request), req->get_header("Host"));
+        {"DescribeEndpoints", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.describe_endpoints(client_state, std::move(permit), std::move(json_request), req->get_header("Host"));
         }},
-        {"BatchWriteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.batch_write_item(client_state, std::move(trace_state), std::move(json_request));
+        {"BatchWriteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.batch_write_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"BatchGetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.batch_get_item(client_state, std::move(trace_state), std::move(json_request));
+        {"BatchGetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.batch_get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"Query", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.query(client_state, std::move(trace_state), std::move(json_request));
+        {"Query", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.query(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
-        {"TagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.tag_resource(client_state, std::move(json_request));
+        {"TagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.tag_resource(client_state, std::move(permit), std::move(json_request));
         }},
-        {"UntagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.untag_resource(client_state, std::move(json_request));
+        {"UntagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.untag_resource(client_state, std::move(permit), std::move(json_request));
         }},
-        {"ListTagsOfResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value json_request, std::unique_ptr<request> req) {
-            return e.list_tags_of_resource(client_state, std::move(json_request));
+        {"ListTagsOfResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.list_tags_of_resource(client_state, std::move(permit), std::move(json_request));
         }},
     } {
 }
 
-future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization) {
+future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
+        bool enforce_authorization, semaphore* memory_limiter) {
+    _memory_limiter = memory_limiter;
     _enforce_authorization = enforce_authorization;
     if (!port && !https_port) {
         return make_exception_future<>(std::runtime_error("Either regular port or TLS port"

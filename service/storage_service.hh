@@ -230,6 +230,10 @@ public:
     gms::feature_service& features() { return _feature_service; }
     const gms::feature_service& features() const { return _feature_service; }
 
+    semaphore& service_memory_limiter() {
+        return _service_memory_limiter;
+    }
+
 private:
     bool is_auto_bootstrap() const;
     inet_address get_broadcast_address() const {

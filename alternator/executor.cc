@@ -314,7 +314,7 @@ static rjson::value generate_arn_for_table(const schema& schema) {
     return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", schema.ks_name(), schema.cf_name()));
 }
 
-future<executor::request_return_type> executor::describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_table++;
     elogger.trace("Describing table {}", request);
 
@@ -393,7 +393,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
 
-future<executor::request_return_type> executor::delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.delete_table++;
     elogger.trace("Deleting table {}", request);
 
@@ -623,7 +623,7 @@ static future<> add_tags(service::storage_proxy& proxy, schema_ptr schema, rjson
     return update_tags(rjson::copy(*tags), schema, std::move(tags_map), update_tags_action::add_tags);
 }
 
-future<executor::request_return_type> executor::tag_resource(client_state& client_state, rjson::value request) {
+future<executor::request_return_type> executor::tag_resource(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.tag_resource++;
 
     return seastar::async([this, &client_state, request = std::move(request)] () mutable -> request_return_type {
@@ -637,7 +637,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
     });
 }
 
-future<executor::request_return_type> executor::untag_resource(client_state& client_state, rjson::value request) {
+future<executor::request_return_type> executor::untag_resource(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.untag_resource++;
 
     return seastar::async([this, &client_state, request = std::move(request)] () -> request_return_type {
@@ -658,7 +658,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
     });
 }
 
-future<executor::request_return_type> executor::list_tags_of_resource(client_state& client_state, rjson::value request) {
+future<executor::request_return_type> executor::list_tags_of_resource(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.list_tags_of_resource++;
     const rjson::value* arn = rjson::find(request, "ResourceArn");
     if (!arn || !arn->IsString()) {
@@ -681,7 +681,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
 
-future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
     std::string table_name = get_table_name(request);
@@ -1069,6 +1069,7 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
         schema_ptr schema,
         const partition_key& pk,
         const clustering_key& ck,
+        service_permit permit,
         alternator::stats& stats);
 
 static lw_shared_ptr<query::read_command> previous_item_read_command(schema_ptr schema,
@@ -1216,6 +1217,7 @@ static future<executor::request_return_type> rmw_operation_return(rjson::value&&
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
+        service_permit permit,
         bool needs_read_before_write,
         stats& stats) {
     if (needs_read_before_write) {
@@ -1226,12 +1228,13 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         if (_write_isolation == write_isolation::UNSAFE_RMW) {
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, stats).then([this, &client_state, &proxy, trace_state] (std::unique_ptr<rjson::value> previous_item) mutable {
+            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, stats).then(
+                    [this, &client_state, &proxy, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp());
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([this] () mutable {
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
                     return rmw_operation_return(std::move(_return_attributes));
                 });
             });
@@ -1239,7 +1242,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         assert(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, empty_service_permit()).then([this] () mutable {
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
             return rmw_operation_return(std::move(_return_attributes));
         });
     }
@@ -1251,7 +1254,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             previous_item_read_command(schema(), _ck, selection) :
             read_nothing_read_command(schema());
     return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
-            {timeout, empty_service_permit(), client_state, trace_state},
+            {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command] (bool is_applied) mutable {
         if (!is_applied) {
             return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
@@ -1357,7 +1360,7 @@ public:
     virtual ~put_item_operation() = default;
 };
 
-future<executor::request_return_type> executor::put_item(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.put_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("put_item {}", request);
@@ -1369,15 +1372,19 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
         return container().invoke_on(*shard, _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state)]
+                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
                                      (service::client_state& client_state) mutable {
-                return e.put_item(client_state, std::move(trace_state), std::move(request));
+                //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
+                // to another shard - once it is solved, this place can use a similar solution. Instead of passing
+                // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
+                // so that it's destructed only after all background operations are finished as well.
+                return e.put_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
             });
         });
     }
-    return op->execute(_proxy, client_state, trace_state, needs_read_before_write, _stats).finally([op, start_time, this] {
+    return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
         _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
     });
 }
@@ -1429,7 +1436,7 @@ public:
     virtual ~delete_item_operation() = default;
 };
 
-future<executor::request_return_type> executor::delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.delete_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("delete_item {}", request);
@@ -1441,15 +1448,19 @@ future<executor::request_return_type> executor::delete_item(client_state& client
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
         return container().invoke_on(*shard, _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state)]
+                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
                                      (service::client_state& client_state) mutable {
-                return e.delete_item(client_state, std::move(trace_state), std::move(request));
+                //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
+                // to another shard - once it is solved, this place can use a similar solution. Instead of passing
+                // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
+                // so that it's destructed only after all background operations are finished as well.
+                return e.delete_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
             });
         });
     }
-    return op->execute(_proxy, client_state, trace_state, needs_read_before_write, _stats).finally([op, start_time, this] {
+    return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
         _stats.api_operations.delete_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.delete_item_latency._count + 1);
     });
 }
@@ -1505,12 +1516,13 @@ public:
     }
 };
 
-static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, dht::decorated_key dk, std::vector<put_or_delete_item>&& mutation_builders, service::client_state& client_state, tracing::trace_state_ptr trace_state) {
+static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, dht::decorated_key dk, std::vector<put_or_delete_item>&& mutation_builders,
+        service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
     auto timeout = default_timeout();
     auto read_command = read_nothing_read_command(schema);
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
     return proxy.cas(schema, op, read_command, to_partition_ranges(dk),
-            {timeout, empty_service_permit(), client_state, trace_state},
+            {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM,
             timeout, timeout).discard_result();
     // We discarded cas()'s future value ("is_applied") because BatchWriteItems
@@ -1540,6 +1552,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
+        service_permit permit,
         stats& stats) {
     if (mutation_builders.empty()) {
         return make_ready_future<>();
@@ -1564,7 +1577,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                 db::consistency_level::LOCAL_QUORUM,
                 default_timeout(),
                 trace_state,
-                empty_service_permit());
+                std::move(permit));
     } else {
         // Do the write via LWT:
         // Multiple mutations may be destined for the same partition, adding
@@ -1581,11 +1594,11 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                 it->second.push_back(std::move(b.second));
             }
         }
-        return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state, ssg] (auto& e) {
+        return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state, ssg, permit = std::move(permit)] (auto& e) {
             stats.write_using_lwt++;
             auto desired_shard = service::storage_proxy::cas_shard(*e.first.schema, e.first.dk.token());
             if (desired_shard == engine().cpu_id()) {
-                return cas_write(proxy, e.first.schema, e.first.dk, std::move(e.second), client_state, trace_state);
+                return cas_write(proxy, e.first.schema, e.first.dk, std::move(e.second), client_state, trace_state, permit);
             } else {
                 stats.shard_bounce_for_lwt++;
                 return proxy.container().invoke_on(desired_shard, ssg,
@@ -1593,13 +1606,19 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                              mb = e.second,
                              dk = e.first.dk,
                              ks = e.first.schema->ks_name(),
-                             cf = e.first.schema->cf_name(), gt =  tracing::global_trace_state_ptr(trace_state)]
+                             cf = e.first.schema->cf_name(),
+                             gt =  tracing::global_trace_state_ptr(trace_state),
+                             permit = std::move(permit)]
                             (service::storage_proxy& proxy) mutable {
                     return do_with(cs.get(), [&proxy, mb = std::move(mb), dk = std::move(dk), ks = std::move(ks), cf = std::move(cf),
                                               trace_state = tracing::trace_state_ptr(gt)]
                                               (service::client_state& client_state) mutable {
                         auto schema = proxy.get_db().local().find_schema(ks, cf);
-                        return cas_write(proxy, schema, dk, std::move(mb), client_state, std::move(trace_state));
+                        //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
+                        // to another shard - once it is solved, this place can use a similar solution. Instead of passing
+                        // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
+                        // so that it's destructed only after all background operations are finished as well.
+                        return cas_write(proxy, schema, dk, std::move(mb), client_state, std::move(trace_state), empty_service_permit());
                     });
                 });
             }
@@ -1607,7 +1626,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
     }
 }
 
-future<executor::request_return_type> executor::batch_write_item(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::batch_write_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.batch_write_item++;
     rjson::value& request_items = request["RequestItems"];
 
@@ -1651,7 +1670,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         }
     }
 
-    return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, _stats).then([] () {
+    return do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([] () {
         // FIXME: Issue #5650: If we failed writing some of the updates,
         // need to return a list of these failed updates in UnprocessedItems
         // rather than fail the whole write (issue #5650).
@@ -2285,6 +2304,7 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
         schema_ptr schema,
         const partition_key& pk,
         const clustering_key& ck,
+        service_permit permit,
         alternator::stats& stats)
 {
     stats.reads_before_write++;
@@ -2292,7 +2312,7 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     auto command = previous_item_read_command(schema, ck, selection);
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
-    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
             [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
         auto previous_item = describe_item(schema, command->slice, *selection, *qr.query_result, {});
         return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(previous_item)));
@@ -2587,7 +2607,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     return m;
 }
 
-future<executor::request_return_type> executor::update_item(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.update_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("update_item {}", request);
@@ -2599,15 +2619,19 @@ future<executor::request_return_type> executor::update_item(client_state& client
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
         return container().invoke_on(*shard, _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state)]
+                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
                                      (service::client_state& client_state) mutable {
-                return e.update_item(client_state, std::move(trace_state), std::move(request));
+                //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
+                // to another shard - once it is solved, this place can use a similar solution. Instead of passing
+                // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
+                // so that it's destructed only after all background operations are finished as well.
+                return e.update_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
             });
         });
     }
-    return op->execute(_proxy, client_state, trace_state, needs_read_before_write, _stats).finally([op, start_time, this] {
+    return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
         _stats.api_operations.update_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.update_item_latency._count + 1);
     });
 }
@@ -2631,7 +2655,7 @@ static db::consistency_level get_read_consistency(const rjson::value& request) {
     return consistent_read ? db::consistency_level::LOCAL_QUORUM : db::consistency_level::LOCAL_ONE;
 }
 
-future<executor::request_return_type> executor::get_item(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.get_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("Getting item {}", request);
@@ -2666,14 +2690,14 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
 
     auto attrs_to_get = calculate_attrs_to_get(request);
 
-    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.get_item_latency._count + 1);
         return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
     });
 }
 
-future<executor::request_return_type> executor::batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     // FIXME: In this implementation, an unbounded batch size can cause
     // unbounded response JSON object to be buffered in memory, unbounded
     // parallelism of the requests, and unbounded amount of non-preemptable
@@ -2728,7 +2752,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
-            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(default_timeout(), permit, client_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
                 std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get));
                 return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(
@@ -2867,7 +2891,8 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
         ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions,
         service::client_state& client_state,
         cql3::cql_stats& cql_stats,
-        tracing::trace_state_ptr trace_state) {
+        tracing::trace_state_ptr trace_state,
+        service_permit permit) {
     lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
 
     tracing::trace(trace_state, "Performing a database query");
@@ -2887,7 +2912,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
     auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
 
-    auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, empty_service_permit());
+    auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
@@ -2919,7 +2944,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
 // 2. Filtering - by passing appropriately created restrictions to pager as a last parameter
 // 3. Proper timeouts instead of gc_clock::now() and db::no_timeout
 // 4. Implement parallel scanning via Segments
-future<executor::request_return_type> executor::scan(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::scan(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.scan++;
     elogger.trace("Scanning {}", request);
 
@@ -2961,7 +2986,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
         partition_ranges = filtering_restrictions->get_partition_key_ranges(query_options);
         ck_bounds = filtering_restrictions->get_clustering_bounds(query_options);
     }
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats, trace_state);
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats, trace_state, std::move(permit));
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, comparison_operator_type op, const rjson::value& attrs) {
@@ -3381,7 +3406,7 @@ calculate_bounds_condition_expression(schema_ptr schema,
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
-future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, rjson::value request) {
+future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.query++;
     elogger.trace("Querying {}", request);
 
@@ -3451,10 +3476,10 @@ future<executor::request_return_type> executor::query(client_state& client_state
     }
     verify_all_are_used(request, "ExpressionAttributeValues", used_attribute_values, "KeyConditionExpression");
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "KeyConditionExpression");
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats, std::move(trace_state));
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats, std::move(trace_state), std::move(permit));
 }
 
-future<executor::request_return_type> executor::list_tables(client_state& client_state, rjson::value request) {
+future<executor::request_return_type> executor::list_tables(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.list_tables++;
     elogger.trace("Listing tables {}", request);
 
@@ -3506,7 +3531,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
 }
 
-future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, rjson::value request, std::string host_header) {
+future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header) {
     _stats.api_operations.describe_endpoints++;
     rjson::value response = rjson::empty_object();
     // Without having any configuration parameter to say otherwise, we tell

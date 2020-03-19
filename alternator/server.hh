@@ -34,7 +34,8 @@ namespace alternator {
 
 class server {
     static constexpr size_t content_length_limit = 16*MB;
-    using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&, tracing::trace_state_ptr, rjson::value, std::unique_ptr<request>)>;
+    using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&,
+            tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<request>)>;
     using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback>;
 
     http_server _http_server;
@@ -46,6 +47,8 @@ class server {
     utils::small_vector<std::reference_wrapper<seastar::httpd::http_server>, 2> _enabled_servers;
     gate _pending_requests;
     alternator_callbacks_map _callbacks;
+
+    semaphore* _memory_limiter;
 
     class json_parser {
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
@@ -67,7 +70,8 @@ class server {
 public:
     server(executor& executor);
 
-    future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds, bool enforce_authorization);
+    future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
+            bool enforce_authorization, semaphore* memory_limiter);
     future<> stop();
 private:
     void set_routes(seastar::httpd::routes& r);

@@ -103,6 +103,7 @@ public:
     future<executor::request_return_type> execute(service::storage_proxy& proxy,
             service::client_state& client_state,
             tracing::trace_state_ptr trace_state,
+            service_permit permit,
             bool needs_read_before_write,
             stats& stats);
     std::optional<shard_id> shard_for_execute(bool needs_read_before_write);
