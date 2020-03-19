@@ -325,6 +325,10 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
                     [] (const list_type_impl& type) -> data_type {
                         return map_type_impl::get_instance(type.name_comparator(), type.value_comparator(), false);
                     },
+                    // counters are represented as map<uuid, bigint> (pairs of {shard_id : value})
+                    [] (const counter_type_impl& type) -> data_type {
+                        return map_type_impl::get_instance(uuid_type, long_type, false);
+                    },
                     // everything else is just frozen self
                     [] (const abstract_type& type) {
                         return type.freeze();
@@ -660,6 +664,21 @@ private:
         m.set_cell(ck, _ttl_col, atomic_cell::make_live(*_ttl_col.type, ts, _ttl_col.type->decompose(ttl.count()), _cdc_ttl_opt));
     }
 
+    static bytes serialize_counter_cell(const atomic_cell_view& acv) {
+        std::vector<std::pair<bytes, bytes>> result;
+        if (acv.is_live()) {
+            counter_cell_view::with_linearized(acv, [&result] (counter_cell_view ccv) {
+                for (const auto& shard : ccv.shards()) {
+                    auto key = uuid_type->decompose(shard.id().to_uuid());
+                    auto value = long_type->decompose(shard.value());
+                    result.emplace_back(std::move(key), std::move(value));
+                }
+            });
+        }
+        std::vector<std::pair<bytes_view, bytes_view>> result_views(result.begin(), result.end());
+        return map_type_impl::serialize_partially_deserialized_form(result_views, cql_serialization_format::internal());
+    }
+
 public:
     transformer(db_context ctx, schema_ptr s)
         : _ctx(ctx)
@@ -798,7 +817,11 @@ public:
                     bool is_column_delete = true;
                     bytes_opt value;
                     bytes_opt deleted_elements = std::nullopt;
-                    if (cdef.is_atomic()) {
+
+                    if (cdef.is_counter()) {
+                        auto view = cell.as_atomic_cell(cdef);
+                        value = serialize_counter_cell(view);
+                    } else if (cdef.is_atomic()) {
                         value = std::nullopt;
                         auto view = cell.as_atomic_cell(cdef);
                         if (view.is_live()) {

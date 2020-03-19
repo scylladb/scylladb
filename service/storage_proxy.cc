@@ -2144,9 +2144,13 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
  */
 future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters](std::vector<mutation>&& mutations) mutable {
-            return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
-        });
+        const bool mutation_is_counter_update = mutations.front().schema()->is_counter() && !raw_counters;
+        // Counter updates (deltas) cannot be augmented.
+        if (!mutation_is_counter_update) {
+            return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters](std::vector<mutation>&& mutations) mutable {
+                return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
+            });
+        }
     }
     return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
 }
@@ -2163,8 +2167,22 @@ future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consisten
 
 future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                                       clock_type::time_point timeout, service_permit permit) {
-    // FIXME: do not send the mutation to itself, it has already been applied (it is not incorrect to do so, though)
-    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, true, std::move(tr_state), std::move(permit), timeout);
+    std::vector<mutation> mut_vec{std::move(m)};
+    auto f_cdc = make_ready_future<std::vector<mutation>>();
+    if (mut_vec.front().schema()->cdc_options().enabled() && get_cdc_service()->needs_cdc_augmentation(mut_vec)) {
+        f_cdc = get_cdc_service()->augment_mutation_call(timeout, std::move(mut_vec), tr_state);
+    }
+
+    return f_cdc.then([this, cl, tr_state, timeout, permit = std::move(permit)]
+            (std::vector<mutation>&& mutations) {
+        auto borderline = boost::range::partition(mutations, [] (auto&& m) {
+            return m.schema()->is_counter();
+        });
+        return seastar::when_all_succeed(
+            mutate_internal(boost::make_iterator_range(mutations.begin(), borderline), cl, true, tr_state, permit, timeout),
+            mutate_internal(boost::make_iterator_range(borderline, mutations.end()), cl, false, tr_state, permit, timeout)
+        );
+    });
 }
 
 /*
