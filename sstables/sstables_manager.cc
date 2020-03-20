@@ -31,6 +31,11 @@ namespace sstables {
 
 logging::logger smlogger("sstables_manager");
 
+sstables_manager::sstables_manager(
+    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat)
+    : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat) {
+}
+
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         sstring dir,
         int64_t generation,

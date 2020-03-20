@@ -55,9 +55,7 @@ class sstables_manager {
     gms::feature_service& _features;
 
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat)
-        : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat)
-    { }
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat);
 
     // Constructs a shared sstable
     shared_sstable make_sstable(schema_ptr schema,
