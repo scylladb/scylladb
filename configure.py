@@ -492,6 +492,7 @@ extra_cxxflags = {}
 cassandra_interface = Thrift(source='interface/cassandra.thrift', service='Cassandra')
 
 scylla_core = (['database.cc',
+                'absl-flat_hash_map.cc',
                 'table.cc',
                 'atomic_cell.cc',
                 'collection_mutation.cc',
