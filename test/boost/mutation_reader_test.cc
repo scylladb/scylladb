@@ -36,7 +36,6 @@
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/sstable_utils.hh"
-#include "test/boost/sstable_test.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/mutation_source_test.hh"
