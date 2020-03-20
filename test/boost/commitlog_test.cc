@@ -296,9 +296,7 @@ SEASTAR_TEST_CASE(test_commitlog_closed) {
 
 SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
     commitlog::config cfg;
-
-    constexpr auto max_size_mb = 2;
-    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_segment_size_in_mb = 2;
     cfg.commitlog_total_space_in_mb = 1;
     cfg.commitlog_sync_period_in_ms = 1;
     return cl_test(cfg, [](commitlog& log) {
@@ -331,19 +329,6 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
                         BOOST_REQUIRE(nn > 0);
                         BOOST_REQUIRE(nn <= segments->size());
                         BOOST_REQUIRE(dn <= nn);
-                    }).then([&log] {
-                        // Verify #5899 - file size should not exceed the config max. 
-                        return log.list_existing_segments().then([](std::vector<sstring> segments) {
-                            return parallel_for_each(segments, [](sstring filename) {
-                                return open_file_dma(filename, open_flags::ro).then([](file f) {
-                                    return f.size().then([](uint64_t size) {
-                                        BOOST_REQUIRE_LE(size, max_size_mb * 1024 * 1024);
-                                    }).finally([f]() mutable {
-                                        return f.close();
-                                    });
-                                });
-                            });
-                        });
                     }).finally([r = std::move(r)] {
                     });
         });
