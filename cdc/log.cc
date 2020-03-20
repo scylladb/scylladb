@@ -333,7 +333,9 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
                 type = type->freeze();
             }
             b.with_column(log_data_column_name_bytes(column.name()), type);
-            b.with_column(log_data_column_deleted_name_bytes(column.name()), boolean_type);
+            if (is_data_col) {
+                b.with_column(log_data_column_deleted_name_bytes(column.name()), boolean_type);
+            }
             if (column.type->is_multi_cell()) {
                 auto dtype = visit(*type, make_visitor(
                     // all collection deletes are set<key_type> (i.e. timeuuid for lists)
