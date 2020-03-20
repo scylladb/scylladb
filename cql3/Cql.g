@@ -752,7 +752,7 @@ createKeyspaceStatement returns [shared_ptr<cql3::statements::create_keyspace_st
         bool if_not_exists = false;
     }
     : K_CREATE K_KEYSPACE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )? ks=keyspaceName
-      K_WITH properties[attrs] { $expr = ::make_shared<cql3::statements::create_keyspace_statement>(ks, attrs, if_not_exists); }
+      K_WITH properties[*attrs] { $expr = ::make_shared<cql3::statements::create_keyspace_statement>(ks, attrs, if_not_exists); }
     ;
 
 /**
@@ -766,29 +766,29 @@ createTableStatement returns [shared_ptr<cql3::statements::create_table_statemen
     @init { bool if_not_exists = false; }
     : K_CREATE K_COLUMNFAMILY (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
       cf=columnFamilyName { $expr = make_shared<cql3::statements::create_table_statement::raw_statement>(cf, if_not_exists); }
-      cfamDefinition[expr]
+      cfamDefinition[*expr]
     ;
 
-cfamDefinition[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+cfamDefinition[cql3::statements::create_table_statement::raw_statement& expr]
     : '(' cfamColumns[expr] ( ',' cfamColumns[expr]? )* ')'
-      ( K_WITH cfamProperty[$expr->properties()] ( K_AND cfamProperty[$expr->properties()] )*)?
+      ( K_WITH cfamProperty[$expr.properties()] ( K_AND cfamProperty[$expr.properties()] )*)?
     ;
 
-cfamColumns[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+cfamColumns[cql3::statements::create_table_statement::raw_statement& expr]
     @init { bool is_static=false; }
-    : k=ident v=comparatorType (K_STATIC {is_static = true;})? { $expr->add_definition(k, v, is_static); }
-        (K_PRIMARY K_KEY { $expr->add_key_aliases(std::vector<shared_ptr<cql3::column_identifier>>{k}); })?
-    | K_PRIMARY K_KEY '(' pkDef[expr] (',' c=ident { $expr->add_column_alias(c); } )* ')'
+    : k=ident v=comparatorType (K_STATIC {is_static = true;})? { $expr.add_definition(k, v, is_static); }
+        (K_PRIMARY K_KEY { $expr.add_key_aliases(std::vector<shared_ptr<cql3::column_identifier>>{k}); })?
+    | K_PRIMARY K_KEY '(' pkDef[expr] (',' c=ident { $expr.add_column_alias(c); } )* ')'
     ;
 
-pkDef[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+pkDef[cql3::statements::create_table_statement::raw_statement& expr]
     @init { std::vector<shared_ptr<cql3::column_identifier>> l; }
-    : k=ident { $expr->add_key_aliases(std::vector<shared_ptr<cql3::column_identifier>>{k}); }
-    | '(' k1=ident { l.push_back(k1); } ( ',' kn=ident { l.push_back(kn); } )* ')' { $expr->add_key_aliases(l); }
+    : k=ident { $expr.add_key_aliases(std::vector<shared_ptr<cql3::column_identifier>>{k}); }
+    | '(' k1=ident { l.push_back(k1); } ( ',' kn=ident { l.push_back(kn); } )* ')' { $expr.add_key_aliases(l); }
     ;
 
 cfamProperty[cql3::statements::cf_properties& expr]
-    : property[$expr.properties()]
+    : property[*$expr.properties()]
     | K_COMPACT K_STORAGE { $expr.set_compact_storage(); }
     | K_CLUSTERING K_ORDER K_BY '(' cfamOrdering[expr] (',' cfamOrdering[expr])* ')'
     ;
@@ -810,11 +810,11 @@ createTypeStatement returns [::shared_ptr<create_type_statement> expr]
     @init { bool if_not_exists = false; }
     : K_CREATE K_TYPE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
          tn=userTypeName { $expr = ::make_shared<create_type_statement>(tn, if_not_exists); }
-         '(' typeColumns[expr] ( ',' typeColumns[expr]? )* ')'
+         '(' typeColumns[*expr] ( ',' typeColumns[*expr]? )* ')'
     ;
 
-typeColumns[::shared_ptr<create_type_statement> expr]
-    : k=ident v=comparatorType { $expr->add_definition(k, v); }
+typeColumns[create_type_statement& expr]
+    : k=ident v=comparatorType { $expr.add_definition(k, v); }
     ;
 
 
@@ -830,9 +830,9 @@ createIndexStatement returns [::shared_ptr<create_index_statement> expr]
         std::vector<::shared_ptr<index_target::raw>> targets;
     }
     : K_CREATE (K_CUSTOM { props->is_custom = true; })? K_INDEX (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
-        (idxName[name])? K_ON cf=columnFamilyName '(' (target1=indexIdent { targets.emplace_back(target1); } (',' target2=indexIdent { targets.emplace_back(target2); } )*)? ')'
+        (idxName[*name])? K_ON cf=columnFamilyName '(' (target1=indexIdent { targets.emplace_back(target1); } (',' target2=indexIdent { targets.emplace_back(target2); } )*)? ')'
         (K_USING cls=STRING_LITERAL { props->custom_class = sstring{$cls.text}; })?
-        (K_WITH properties[props])?
+        (K_WITH properties[*props])?
       { $expr = ::make_shared<create_index_statement>(cf, name, targets, props, if_not_exists); }
     ;
 
@@ -914,7 +914,7 @@ alterKeyspaceStatement returns [shared_ptr<cql3::statements::alter_keyspace_stat
         auto attrs = make_shared<cql3::statements::ks_prop_defs>();
     }
     : K_ALTER K_KEYSPACE ks=keyspaceName
-        K_WITH properties[attrs] { $expr = ::make_shared<cql3::statements::alter_keyspace_statement>(ks, attrs); }
+        K_WITH properties[*attrs] { $expr = ::make_shared<cql3::statements::alter_keyspace_statement>(ks, attrs); }
     ;
 
 /**
@@ -943,7 +943,7 @@ alterTableStatement returns [shared_ptr<alter_table_statement> expr]
             | '('     id1=cident { column_changes.emplace_back(alter_table_statement::column_change{id1}); }
                  (',' idn=cident { column_changes.emplace_back(alter_table_statement::column_change{idn}); } )* ')'
             )
-          | K_WITH  properties[props]                 { type = alter_table_statement::type::opts; }
+          | K_WITH  properties[*props]                 { type = alter_table_statement::type::opts; }
           | K_RENAME                                  { type = alter_table_statement::type::rename; }
                id1=cident K_TO toId1=cident { renames.emplace_back(id1, toId1); }
                ( K_AND idn=cident K_TO toIdn=cident { renames.emplace_back(idn, toIdn); } )*
@@ -985,7 +985,7 @@ alterViewStatement returns [::shared_ptr<alter_view_statement> expr]
     @init {
         auto props = make_shared<cql3::statements::cf_prop_defs>();
     }
-    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[props]
+    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[*props]
     {
         $expr = ::make_shared<alter_view_statement>(std::move(cf), std::move(props));
     }
@@ -1258,17 +1258,17 @@ ident returns [shared_ptr<cql3::column_identifier> id]
 // Keyspace & Column family names
 keyspaceName returns [sstring id]
     @init { auto name = make_shared<cql3::cf_name>(); }
-    : ksName[name] { $id = name->get_keyspace(); }
+    : ksName[*name] { $id = name->get_keyspace(); }
     ;
 
 indexName returns [::shared_ptr<cql3::index_name> name]
     @init { $name = ::make_shared<cql3::index_name>(); }
-    : (ksName[name] '.')? idxName[name]
+    : (ksName[*name] '.')? idxName[*name]
     ;
 
 columnFamilyName returns [::shared_ptr<cql3::cf_name> name]
     @init { $name = ::make_shared<cql3::cf_name>(); }
-    : (ksName[name] '.')? cfName[name]
+    : (ksName[*name] '.')? cfName[*name]
     ;
 
 userTypeName returns [uninitialized<cql3::ut_name> name]
@@ -1283,24 +1283,24 @@ userOrRoleName returns [uninitialized<cql3::role_name> name]
     | QMARK {add_recognition_error("Bind variables cannot be used for role names");}
     ;
 
-ksName[::shared_ptr<cql3::keyspace_element_name> name]
-    : t=IDENT              { $name->set_keyspace($t.text, false);}
-    | t=QUOTED_NAME        { $name->set_keyspace($t.text, true);}
-    | k=unreserved_keyword { $name->set_keyspace(k, false);}
+ksName[cql3::keyspace_element_name& name]
+    : t=IDENT              { $name.set_keyspace($t.text, false);}
+    | t=QUOTED_NAME        { $name.set_keyspace($t.text, true);}
+    | k=unreserved_keyword { $name.set_keyspace(k, false);}
     | QMARK {add_recognition_error("Bind variables cannot be used for keyspace names");}
     ;
 
-cfName[::shared_ptr<cql3::cf_name> name]
-    : t=IDENT              { $name->set_column_family($t.text, false); }
-    | t=QUOTED_NAME        { $name->set_column_family($t.text, true); }
-    | k=unreserved_keyword { $name->set_column_family(k, false); }
+cfName[cql3::cf_name& name]
+    : t=IDENT              { $name.set_column_family($t.text, false); }
+    | t=QUOTED_NAME        { $name.set_column_family($t.text, true); }
+    | k=unreserved_keyword { $name.set_column_family(k, false); }
     | QMARK {add_recognition_error("Bind variables cannot be used for table names");}
     ;
 
-idxName[::shared_ptr<cql3::index_name> name]
-    : t=IDENT              { $name->set_index($t.text, false); }
-    | t=QUOTED_NAME        { $name->set_index($t.text, true);}
-    | k=unreserved_keyword { $name->set_index(k, false); }
+idxName[cql3::index_name& name]
+    : t=IDENT              { $name.set_index($t.text, false); }
+    | t=QUOTED_NAME        { $name.set_index($t.text, true);}
+    | k=unreserved_keyword { $name.set_index(k, false); }
     | QMARK {add_recognition_error("Bind variables cannot be used for index names");}
     ;
 
@@ -1489,13 +1489,13 @@ columnCondition[conditions_type& conditions]
         )
     ;
 
-properties[::shared_ptr<cql3::statements::property_definitions> props]
+properties[cql3::statements::property_definitions& props]
     : property[props] (K_AND property[props])*
     ;
 
-property[::shared_ptr<cql3::statements::property_definitions> props]
-    : k=ident '=' simple=propertyValue { try { $props->add_property(k->to_string(), simple); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
-    | k=ident '=' map=mapLiteral { try { $props->add_property(k->to_string(), convert_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
+property[cql3::statements::property_definitions& props]
+    : k=ident '=' simple=propertyValue { try { $props.add_property(k->to_string(), simple); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
+    | k=ident '=' map=mapLiteral { try { $props.add_property(k->to_string(), convert_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
     ;
 
 propertyValue returns [sstring str]
