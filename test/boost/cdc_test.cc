@@ -288,6 +288,91 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
     }, mk_cdc_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        int required_column_count = 0;
+
+        const auto base_tbl_name = "tbl";
+        e.execute_cql("CREATE TYPE typ (x int)").get();
+        e.execute_cql(format("CREATE TABLE {} (pk int, ck int, s int static, c int, "
+                "c_list list<int>, c_map map<int, int>, c_set set<int>, c_typ typ,"
+                "PRIMARY KEY (pk, ck)) WITH cdc = {{'enabled': 'true'}}", base_tbl_name)).get();
+        const auto log_schema = e.local_db().find_schema("ks", cdc::log_name(base_tbl_name));
+
+        auto assert_has_column = [&] (sstring column_name, data_type type, column_kind kind = column_kind::regular_column) {
+            BOOST_TEST_MESSAGE(format("Checking that column {} exists", column_name));
+            const auto cdef = log_schema->get_column_definition(to_bytes(column_name));
+            BOOST_REQUIRE_NE(cdef, nullptr);
+            BOOST_TEST_MESSAGE(format("Want kind {}, has {}", (int)kind, (int)cdef->kind));
+            BOOST_REQUIRE(cdef->kind == kind);
+            BOOST_TEST_MESSAGE(format("Want type {}, has {}", type->name(), cdef->type->name()));
+            BOOST_REQUIRE(*cdef->type == *type);
+            required_column_count++;
+        };
+
+        auto assert_does_not_have_column = [&] (sstring column_name) {
+            BOOST_TEST_MESSAGE(format("Checking that column {} does not exist", column_name));
+            const auto cdef = log_schema->get_column_definition(to_bytes(column_name));
+            BOOST_REQUIRE_EQUAL(cdef, nullptr);
+        };
+
+        BOOST_TEST_MESSAGE(format("Schema of the cdc log table is: {}", log_schema));
+
+        // cdc log partition key
+        assert_has_column(cdc::log_meta_column_name("stream_id"), bytes_type, column_kind::partition_key);
+        assert_has_column(cdc::log_meta_column_name("time"), timeuuid_type, column_kind::clustering_key);
+        assert_has_column(cdc::log_meta_column_name("batch_seq_no"), int32_type, column_kind::clustering_key);
+
+        // cdc log clustering key
+        assert_has_column(cdc::log_meta_column_name("operation"), byte_type);
+        assert_has_column(cdc::log_meta_column_name("ttl"), long_type);
+
+        // pk
+        assert_has_column(cdc::log_data_column_name("pk"), int32_type);
+        assert_does_not_have_column(cdc::log_data_column_deleted_name("pk"));
+        assert_does_not_have_column(cdc::log_data_column_deleted_elements_name("pk"));
+
+        // ck
+        assert_has_column(cdc::log_data_column_name("ck"), int32_type);
+        assert_does_not_have_column(cdc::log_data_column_deleted_name("ck"));
+        assert_does_not_have_column(cdc::log_data_column_deleted_elements_name("ck"));
+
+        // static row
+        assert_has_column(cdc::log_data_column_name("s"), int32_type);
+        assert_has_column(cdc::log_data_column_deleted_name("s"), boolean_type);
+        assert_does_not_have_column(cdc::log_data_column_deleted_elements_name("s"));
+
+        // clustering row, atomic
+        assert_has_column(cdc::log_data_column_name("c"), int32_type);
+        assert_has_column(cdc::log_data_column_deleted_name("c"), boolean_type);
+        assert_does_not_have_column(cdc::log_data_column_deleted_elements_name("c"));
+
+        // clustering row, list
+        assert_has_column(cdc::log_data_column_name("c_list"), map_type_impl::get_instance(timeuuid_type, int32_type, false));
+        assert_has_column(cdc::log_data_column_deleted_name("c_list"), boolean_type);
+        assert_has_column(cdc::log_data_column_deleted_elements_name("c_list"), set_type_impl::get_instance(timeuuid_type, false));
+
+        // clustering row, map
+        assert_has_column(cdc::log_data_column_name("c_map"), map_type_impl::get_instance(int32_type, int32_type, false));
+        assert_has_column(cdc::log_data_column_deleted_name("c_map"), boolean_type);
+        assert_has_column(cdc::log_data_column_deleted_elements_name("c_map"), set_type_impl::get_instance(int32_type, false));
+
+        // clustering row, set
+        assert_has_column(cdc::log_data_column_name("c_set"), set_type_impl::get_instance(int32_type, false));
+        assert_has_column(cdc::log_data_column_deleted_name("c_set"), boolean_type);
+        assert_has_column(cdc::log_data_column_deleted_elements_name("c_set"), set_type_impl::get_instance(int32_type, false));
+
+        // clustering row, udt
+        const auto c_typ_frozen = user_type_impl::get_instance("ks", "typ", {to_bytes("x")}, {int32_type}, false);
+        assert_has_column(cdc::log_data_column_name("c_typ"), c_typ_frozen);
+        assert_has_column(cdc::log_data_column_deleted_name("c_typ"), boolean_type);
+        assert_has_column(cdc::log_data_column_deleted_elements_name("c_typ"), set_type_impl::get_instance(short_type, false));
+
+        // Check if we missed something
+        BOOST_REQUIRE_EQUAL(required_column_count, log_schema->all_columns_count());
+    }, mk_cdc_test_config()).get();
+}
+
 static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::messages::result_message::rows& rows) {
     auto rs = rows.rs().result_set().rows();
     std::vector<std::vector<bytes_opt>> results;
