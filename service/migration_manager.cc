@@ -57,8 +57,6 @@ namespace service {
 
 static logging::logger mlogger("migration_manager");
 
-distributed<service::migration_manager> _the_migration_manager;
-
 using namespace std::chrono_literals;
 
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;

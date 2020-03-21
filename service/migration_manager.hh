@@ -178,7 +178,7 @@ private:
     static future<> do_announce_new_type(user_type new_type, bool announce_locally);
 };
 
-extern distributed<migration_manager> _the_migration_manager;
+inline distributed<migration_manager> _the_migration_manager;
 
 inline distributed<migration_manager>& get_migration_manager() {
     return _the_migration_manager;
