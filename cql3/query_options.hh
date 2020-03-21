@@ -56,7 +56,6 @@
 namespace cql3 {
 
 class cql_config;
-extern const cql_config default_cql_config;
 
 /**
  * Options for a query.

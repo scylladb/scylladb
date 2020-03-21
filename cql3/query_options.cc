@@ -45,8 +45,6 @@
 
 namespace cql3 {
 
-const cql_config default_cql_config;
-
 thread_local const query_options::specific_options query_options::specific_options::DEFAULT{-1, {}, {}, api::missing_timestamp};
 
 thread_local query_options query_options::DEFAULT{default_cql_config,

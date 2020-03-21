@@ -33,6 +33,7 @@
 #include "test/lib/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>
+#include "cql3/cql_config.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
 #include "types/user.hh"

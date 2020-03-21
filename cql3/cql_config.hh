@@ -31,6 +31,6 @@ struct cql_config {
     restrictions::restrictions_config restrictions;
 };
 
-extern const cql_config default_cql_config;
+inline const cql_config default_cql_config;
 
 }
