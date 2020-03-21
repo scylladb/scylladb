@@ -92,7 +92,7 @@ namespace service {
 
 class storage_service;
 
-extern distributed<storage_service> _the_storage_service;
+inline distributed<storage_service> _the_storage_service;
 inline distributed<storage_service>& get_storage_service() {
     return _the_storage_service;
 }

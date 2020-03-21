@@ -94,9 +94,6 @@ static logging::logger slogger("storage_service");
 
 static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 
-distributed<storage_service> _the_storage_service;
-
-
 int get_generation_number() {
     using namespace std::chrono;
     auto now = high_resolution_clock::now().time_since_epoch();
