@@ -185,8 +185,6 @@ struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::ser
 
 constexpr int32_t messaging_service::current_version;
 
-distributed<messaging_service> _the_messaging_service;
-
 bool operator==(const msg_addr& x, const msg_addr& y) {
     // Ignore cpu id for now since we do not really support shard to shard connections
     return x.addr == y.addr;

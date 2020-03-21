@@ -515,7 +515,7 @@ public:
     scheduling_group scheduling_group_for_verb(messaging_verb verb) const;
 };
 
-extern distributed<messaging_service> _the_messaging_service;
+inline distributed<messaging_service> _the_messaging_service;
 
 inline distributed<messaging_service>& get_messaging_service() {
     return _the_messaging_service;
