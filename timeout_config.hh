@@ -35,8 +35,12 @@ struct timeout_config {
 };
 
 using timeout_config_selector = db::timeout_clock::duration (timeout_config::*);
+using namespace std::chrono_literals;
 
-extern const timeout_config infinite_timeout_config;
+inline const timeout_config infinite_timeout_config = {
+        // not really infinite, but long enough
+        1h, 1h, 1h, 1h, 1h, 1h, 1h,
+};
 
 namespace db { class config; }
 timeout_config make_timeout_config(const db::config& cfg);

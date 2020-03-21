@@ -92,7 +92,6 @@
 
 #include "schema_builder.hh"
 
-using namespace std::chrono_literals;
 using namespace db;
 
 logging::logger dblog("database");
@@ -2057,8 +2056,3 @@ std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {
     tmp << std::setw(12) << sec;
     return os;
 }
-
-const timeout_config infinite_timeout_config = {
-        // not really infinite, but long enough
-        1h, 1h, 1h, 1h, 1h, 1h, 1h,
-};
