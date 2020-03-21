@@ -31,8 +31,6 @@ struct partition_snapshot_reader_dummy_accounter {
    void operator()(const partition_start& ph) {}
    void operator()(const partition_end& eop) {}
 };
-extern partition_snapshot_reader_dummy_accounter no_accounter;
-
 template <typename MemoryAccounter = partition_snapshot_reader_dummy_accounter>
 class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public MemoryAccounter {
     struct rows_position {
