@@ -97,10 +97,6 @@ using namespace db;
 
 logging::logger dblog("database");
 
-// Used for tests where the CF exists without a database object. We need to pass a valid
-// dirty_memory manager in that case.
-thread_local dirty_memory_manager default_dirty_memory_manager;
-
 inline
 flush_controller
 make_flush_controller(const db::config& cfg, seastar::scheduling_group sg, const ::io_priority_class& iop, std::function<double()> fn) {

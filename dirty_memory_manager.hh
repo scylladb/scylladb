@@ -236,5 +236,7 @@ private:
     friend class flush_permit;
 };
 
-extern thread_local dirty_memory_manager default_dirty_memory_manager;
+// Used for tests where the CF exists without a database object. We need to pass a valid
+// dirty_memory manager in that case.
+inline thread_local dirty_memory_manager default_dirty_memory_manager;
 
