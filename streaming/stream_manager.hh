@@ -168,7 +168,7 @@ private:
     bool has_peer(inet_address endpoint) const;
 };
 
-extern distributed<stream_manager> _the_stream_manager;
+inline distributed<stream_manager> _the_stream_manager;
 
 inline distributed<stream_manager>& get_stream_manager() {
     return _the_stream_manager;
