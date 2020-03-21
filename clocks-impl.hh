@@ -26,7 +26,7 @@
 #include <chrono>
 #include <cstdint>
 
-extern std::atomic<int64_t> clocks_offset;
+inline std::atomic<int64_t> clocks_offset;
 
 template<typename Duration>
 static inline void forward_jump_clocks(Duration delta)

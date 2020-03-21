@@ -26,8 +26,6 @@
 
 #include "clocks-impl.hh"
 
-std::atomic<int64_t> clocks_offset;
-
 std::ostream& operator<<(std::ostream& os, db_clock::time_point tp) {
     auto t = db_clock::to_time_t(tp);
     return os << std::put_time(std::gmtime(&t), "%Y/%m/%d %T");
