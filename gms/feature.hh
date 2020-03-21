@@ -110,34 +110,34 @@ public:
 
 namespace features {
 
-extern const std::string_view RANGE_TOMBSTONES;
-extern const std::string_view LARGE_PARTITIONS;
-extern const std::string_view MATERIALIZED_VIEWS;
-extern const std::string_view COUNTERS;
-extern const std::string_view INDEXES;
-extern const std::string_view DIGEST_MULTIPARTITION_READ;
-extern const std::string_view CORRECT_COUNTER_ORDER;
-extern const std::string_view SCHEMA_TABLES_V3;
-extern const std::string_view CORRECT_NON_COMPOUND_RANGE_TOMBSTONES;
-extern const std::string_view WRITE_FAILURE_REPLY;
-extern const std::string_view XXHASH;
-extern const std::string_view UDF;
-extern const std::string_view ROLES;
-extern const std::string_view LA_SSTABLE;
-extern const std::string_view STREAM_WITH_RPC_STREAM;
-extern const std::string_view MC_SSTABLE;
-extern const std::string_view ROW_LEVEL_REPAIR;
-extern const std::string_view TRUNCATION_TABLE;
-extern const std::string_view CORRECT_STATIC_COMPACT_IN_MC;
-extern const std::string_view UNBOUNDED_RANGE_TOMBSTONES;
-extern const std::string_view VIEW_VIRTUAL_COLUMNS;
-extern const std::string_view DIGEST_INSENSITIVE_TO_EXPIRY;
-extern const std::string_view COMPUTED_COLUMNS;
-extern const std::string_view CDC;
-extern const std::string_view NONFROZEN_UDTS;
-extern const std::string_view HINTED_HANDOFF_SEPARATE_CONNECTION;
-extern const std::string_view LWT;
-extern const std::string_view PER_TABLE_PARTITIONERS;
+inline const std::string_view RANGE_TOMBSTONES = "RANGE_TOMBSTONES";
+inline const std::string_view LARGE_PARTITIONS = "LARGE_PARTITIONS";
+inline const std::string_view MATERIALIZED_VIEWS = "MATERIALIZED_VIEWS";
+inline const std::string_view COUNTERS = "COUNTERS";
+inline const std::string_view INDEXES = "INDEXES";
+inline const std::string_view DIGEST_MULTIPARTITION_READ = "DIGEST_MULTIPARTITION_READ";
+inline const std::string_view CORRECT_COUNTER_ORDER = "CORRECT_COUNTER_ORDER";
+inline const std::string_view SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
+inline const std::string_view CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
+inline const std::string_view WRITE_FAILURE_REPLY = "WRITE_FAILURE_REPLY";
+inline const std::string_view XXHASH = "XXHASH";
+inline const std::string_view UDF = "UDF";
+inline const std::string_view ROLES = "ROLES";
+inline const std::string_view LA_SSTABLE = "LA_SSTABLE_FORMAT";
+inline const std::string_view STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
+inline const std::string_view MC_SSTABLE = "MC_SSTABLE_FORMAT";
+inline const std::string_view ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
+inline const std::string_view TRUNCATION_TABLE = "TRUNCATION_TABLE";
+inline const std::string_view CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
+inline const std::string_view UNBOUNDED_RANGE_TOMBSTONES = "UNBOUNDED_RANGE_TOMBSTONES";
+inline const std::string_view VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
+inline const std::string_view DIGEST_INSENSITIVE_TO_EXPIRY = "DIGEST_INSENSITIVE_TO_EXPIRY";
+inline const std::string_view COMPUTED_COLUMNS = "COMPUTED_COLUMNS";
+inline const std::string_view CDC = "CDC";
+inline const std::string_view NONFROZEN_UDTS = "NONFROZEN_UDTS";
+inline const std::string_view HINTED_HANDOFF_SEPARATE_CONNECTION = "HINTED_HANDOFF_SEPARATE_CONNECTION";
+inline const std::string_view LWT = "LWT";
+inline const std::string_view PER_TABLE_PARTITIONERS = "PER_TABLE_PARTITIONERS";
 
 }
 
