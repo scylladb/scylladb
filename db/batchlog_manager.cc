@@ -405,6 +405,3 @@ std::unordered_set<gms::inet_address> db::batchlog_manager::endpoint_filter(cons
 
     return result;
 }
-
-
-distributed<db::batchlog_manager> db::_the_batchlog_manager;

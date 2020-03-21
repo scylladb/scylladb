@@ -112,7 +112,7 @@ public:
     std::unordered_set<gms::inet_address> endpoint_filter(const sstring&, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>&);
 };
 
-extern distributed<batchlog_manager> _the_batchlog_manager;
+inline distributed<batchlog_manager> _the_batchlog_manager;
 
 inline distributed<batchlog_manager>& get_batchlog_manager() {
     return _the_batchlog_manager;
