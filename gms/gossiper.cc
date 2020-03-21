@@ -73,8 +73,6 @@ constexpr std::chrono::milliseconds gossiper::INTERVAL;
 constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
 constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
-distributed<gossiper> _the_gossiper;
-
 netw::msg_addr gossiper::get_msg_addr(inet_address to) {
     return msg_addr{to, _default_cpuid};
 }

@@ -595,7 +595,7 @@ public:
     failure_detector& fd() { return _fd; }
 };
 
-extern distributed<gossiper> _the_gossiper;
+inline distributed<gossiper> _the_gossiper;
 
 inline gossiper& get_local_gossiper() {
     return _the_gossiper.local();
