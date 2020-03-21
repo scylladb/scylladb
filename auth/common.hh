@@ -52,10 +52,10 @@ namespace auth {
 
 namespace meta {
 
-extern const sstring DEFAULT_SUPERUSER_NAME;
-extern const sstring AUTH_KS;
-extern const sstring USERS_CF;
-extern const sstring AUTH_PACKAGE_NAME;
+inline const sstring DEFAULT_SUPERUSER_NAME("cassandra");
+inline const sstring AUTH_KS("system_auth");
+inline const sstring USERS_CF("users");
+inline const sstring AUTH_PACKAGE_NAME("org.apache.cassandra.auth.");
 
 }
 

@@ -32,15 +32,6 @@
 
 namespace auth {
 
-namespace meta {
-
-const sstring DEFAULT_SUPERUSER_NAME("cassandra");
-const sstring AUTH_KS("system_auth");
-const sstring USERS_CF("users");
-const sstring AUTH_PACKAGE_NAME("org.apache.cassandra.auth.");
-
-}
-
 static logging::logger auth_log("auth");
 
 // Func must support being invoked more than once.
