@@ -88,8 +88,16 @@ bool operator<(const permission_set&, const permission_set&);
 
 namespace permissions {
 
-extern const permission_set ALL;
-extern const permission_set NONE;
+inline const permission_set ALL = auth::permission_set::of<
+        auth::permission::CREATE,
+        auth::permission::ALTER,
+        auth::permission::DROP,
+        auth::permission::SELECT,
+        auth::permission::MODIFY,
+        auth::permission::AUTHORIZE,
+        auth::permission::DESCRIBE>();
+
+inline const permission_set NONE;
 
 const sstring& to_string(permission);
 permission from_string(const sstring&);

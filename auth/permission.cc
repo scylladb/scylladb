@@ -45,17 +45,6 @@
 
 #include <unordered_map>
 
-const auth::permission_set auth::permissions::ALL = auth::permission_set::of<
-        auth::permission::CREATE,
-        auth::permission::ALTER,
-        auth::permission::DROP,
-        auth::permission::SELECT,
-        auth::permission::MODIFY,
-        auth::permission::AUTHORIZE,
-        auth::permission::DESCRIBE>();
-
-const auth::permission_set auth::permissions::NONE;
-
 static const std::unordered_map<sstring, auth::permission> permission_names({
         {"READ", auth::permission::READ},
         {"WRITE", auth::permission::WRITE},
