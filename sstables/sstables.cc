@@ -79,9 +79,6 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include "tracing/traced_file.hh"
 
-thread_local disk_error_signal_type sstable_read_error;
-thread_local disk_error_signal_type sstable_write_error;
-
 namespace sstables {
 
 logging::logger sstlog("sstable");

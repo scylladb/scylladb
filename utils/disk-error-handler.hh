@@ -33,10 +33,10 @@ namespace bs2 = boost::signals2;
 
 using disk_error_signal_type = bs2::signal_type<void (), bs2::keywords::mutex_type<bs2::dummy_mutex>>::type;
 
-extern thread_local disk_error_signal_type commit_error;
-extern thread_local disk_error_signal_type sstable_read_error;
-extern thread_local disk_error_signal_type sstable_write_error;
-extern thread_local disk_error_signal_type general_disk_error;
+inline thread_local disk_error_signal_type commit_error;
+inline thread_local disk_error_signal_type sstable_read_error;
+inline thread_local disk_error_signal_type sstable_write_error;
+inline thread_local disk_error_signal_type general_disk_error;
 
 bool should_stop_on_system_error(const std::system_error& e);
 
@@ -48,9 +48,10 @@ io_error_handler default_io_error_handler(disk_error_signal_type& signal);
 // generates handler that handles exception for a given signal
 io_error_handler_gen default_io_error_handler_gen();
 
-extern thread_local io_error_handler commit_error_handler;
-extern thread_local io_error_handler sstable_write_error_handler;
-extern thread_local io_error_handler general_disk_error_handler;
+inline const thread_local io_error_handler commit_error_handler = default_io_error_handler(commit_error);
+inline const thread_local io_error_handler general_disk_error_handler = default_io_error_handler(general_disk_error);
+inline const thread_local io_error_handler sstable_write_error_handler = default_io_error_handler(sstable_write_error);
+
 
 template<typename Func, typename... Args>
 std::enable_if_t<!is_future<std::result_of_t<Func(Args&&...)>>::value,
