@@ -50,12 +50,6 @@ const gc_clock::duration tracing::tracing::write_period = std::chrono::seconds(2
 const std::chrono::seconds tracing::tracing::default_slow_query_record_ttl = std::chrono::seconds(86400);
 const std::chrono::microseconds tracing::tracing::default_slow_query_duraion_threshold = std::chrono::milliseconds(500);
 
-std::vector<sstring> trace_type_names = {
-    "NONE",
-    "QUERY",
-    "REPAIR"
-};
-
 tracing::tracing(const backend_registry& br, sstring tracing_backend_helper_class_name)
         : _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", engine().cpu_id()))

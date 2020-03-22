@@ -69,7 +69,12 @@ enum class trace_type : uint8_t {
     REPAIR,
 };
 
-extern std::vector<sstring> trace_type_names;
+inline const std::vector<sstring> trace_type_names = {
+    "NONE",
+    "QUERY",
+    "REPAIR"
+};
+
 
 inline const sstring& type_to_string(trace_type t) {
     return trace_type_names.at(static_cast<int>(t));
