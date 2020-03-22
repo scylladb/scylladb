@@ -85,3 +85,10 @@ inline std::vector<sstring> make_keys(unsigned n, const schema_ptr& s, size_t mi
 
 shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now());
+
+std::vector<std::pair<sstring, dht::token>>
+token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
+        unsigned ignore_msb = 0, unsigned smp_count = smp::count);
+
+std::vector<std::pair<sstring, dht::token>>
+token_generation_for_current_shard(unsigned tokens_to_generate);

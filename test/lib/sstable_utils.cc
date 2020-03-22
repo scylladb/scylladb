@@ -24,6 +24,7 @@
 #include "database.hh"
 #include "memtable-sstable.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/murmur3_partitioner.hh"
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "test/lib/flat_mutation_reader_assertions.hh"
@@ -92,3 +93,34 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
     return sst;
 }
 
+std::vector<std::pair<sstring, dht::token>>
+token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
+        unsigned ignore_msb, unsigned smp_count) {
+    unsigned tokens = 0;
+    unsigned key_id = 0;
+    std::vector<std::pair<sstring, dht::token>> key_and_token_pair;
+
+    key_and_token_pair.reserve(tokens_to_generate);
+    dht::murmur3_partitioner partitioner(smp_count, ignore_msb);
+
+    while (tokens < tokens_to_generate) {
+        sstring key = to_sstring(key_id++);
+        dht::token token = create_token_from_key(partitioner, key);
+        if (shard != partitioner.shard_of(token)) {
+            continue;
+        }
+        tokens++;
+        key_and_token_pair.emplace_back(key, token);
+    }
+    assert(key_and_token_pair.size() == tokens_to_generate);
+
+    std::sort(key_and_token_pair.begin(),key_and_token_pair.end(), [] (auto& i, auto& j) {
+        return i.second < j.second;
+    });
+
+    return key_and_token_pair;
+}
+
+std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(unsigned tokens_to_generate) {
+    return token_generation_for_shard(tokens_to_generate, engine().cpu_id());
+}
