@@ -23,8 +23,6 @@
 #include <random>
 #include "heat_load_balance.hh"
 
-logging::logger hr_logger("heat_load_balance");
-
 // Return a uniformly-distributed random number in [0,1)
 // We use per-thread state for thread safety.  We seed the random number generator
 // once with a real random value, if available,

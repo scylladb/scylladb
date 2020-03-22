@@ -43,7 +43,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include "log.hh"
 
-extern logging::logger hr_logger;
+inline logging::logger hr_logger("heat_load_balance");
 
 class rand_exception {};
 
