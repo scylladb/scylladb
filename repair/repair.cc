@@ -1559,7 +1559,11 @@ future<> sync_data_using_repair(seastar::sharded<database>& db,
             });
         }).then([id, keyspace] {
             rlogger.info("repair id {} to sync data for keyspace={}, status=succeeded", id, keyspace);
-        }).handle_exception([id, keyspace] (std::exception_ptr ep) {
+        }).handle_exception([&db, id, keyspace] (std::exception_ptr ep) {
+            if (!db.local().has_keyspace(keyspace)) {
+                rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id, keyspace, ep);
+                return make_ready_future<>();
+            }
             rlogger.info("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
             return make_exception_future<>(ep);
         });
