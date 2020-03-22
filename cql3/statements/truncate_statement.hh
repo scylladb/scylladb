@@ -50,7 +50,7 @@ namespace cql3 {
 
 namespace statements {
 
-class truncate_statement : public raw::cf_statement, public cql_statement_no_metadata, public ::enable_shared_from_this<truncate_statement> {
+class truncate_statement : public raw::cf_statement, public cql_statement_no_metadata {
 public:
     truncate_statement(::shared_ptr<cf_name> name);
 

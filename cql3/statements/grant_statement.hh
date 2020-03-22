@@ -51,6 +51,8 @@ class grant_statement : public permission_altering_statement {
 public:
     using permission_altering_statement::permission_altering_statement;
 
+    std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
+
     future<::shared_ptr<cql_transport::messages::result_message>> execute(service::storage_proxy&
                     , service::query_state&
                     , const query_options&) const override;

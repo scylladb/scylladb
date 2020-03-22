@@ -66,12 +66,12 @@ public:
 private:
     type _type;
     std::unique_ptr<attributes::raw> _attrs;
-    std::vector<shared_ptr<raw::modification_statement>> _parsed_statements;
+    std::vector<std::unique_ptr<raw::modification_statement>> _parsed_statements;
 public:
     batch_statement(
         type type_,
         std::unique_ptr<attributes::raw> attrs,
-        std::vector<shared_ptr<raw::modification_statement>> parsed_statements)
+        std::vector<std::unique_ptr<raw::modification_statement>> parsed_statements)
             : cf_statement(nullptr)
             , _type(type_)
             , _attrs(std::move(attrs))

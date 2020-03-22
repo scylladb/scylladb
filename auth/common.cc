@@ -68,13 +68,13 @@ static future<> create_metadata_table_if_missing_impl(
         return futurize_apply(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
     };
     auto& db = qp.db();
-    auto parsed_statement = static_pointer_cast<cql3::statements::raw::cf_statement>(
-            cql3::query_processor::parse_statement(cql));
+    auto parsed_statement = cql3::query_processor::parse_statement(cql);
+    auto& parsed_cf_statement = static_cast<cql3::statements::raw::cf_statement&>(*parsed_statement);
 
-    parsed_statement->prepare_keyspace(meta::AUTH_KS);
+    parsed_cf_statement.prepare_keyspace(meta::AUTH_KS);
 
     auto statement = static_pointer_cast<cql3::statements::create_table_statement>(
-            parsed_statement->prepare(db, qp.get_cql_stats())->statement);
+            parsed_cf_statement.prepare(db, qp.get_cql_stats())->statement);
 
     const auto schema = statement->get_cf_meta_data(qp.db());
     const auto uuid = generate_legacy_id(schema->ks_name(), schema->cf_name());
