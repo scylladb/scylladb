@@ -22,38 +22,9 @@
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/sstable_utils.hh"
 #include "service/storage_proxy.hh"
+#include "db/config.hh"
 
 using namespace sstables;
-
-static inline std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(shard_id shard, unsigned tokens_to_generate) {
-    unsigned tokens = 0;
-    unsigned key_id = 0;
-    std::vector<std::pair<sstring, dht::token>> key_and_token_pair;
-
-    key_and_token_pair.reserve(tokens_to_generate);
-    dht::murmur3_partitioner partitioner(smp::count, 12);
-
-    while (tokens < tokens_to_generate) {
-        sstring key = to_sstring(key_id++);
-        dht::token token = create_token_from_key(partitioner, key);
-        if (shard != partitioner.shard_of(token)) {
-            continue;
-        }
-        tokens++;
-        key_and_token_pair.emplace_back(key, token);
-    }
-    assert(key_and_token_pair.size() == tokens_to_generate);
-
-    std::sort(key_and_token_pair.begin(),key_and_token_pair.end(), [] (auto& i, auto& j) {
-        return i.second < j.second;
-    });
-
-    return key_and_token_pair;
-}
-
-static std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(unsigned tokens_to_generate) {
-    return token_generation_for_shard(engine().cpu_id(), tokens_to_generate);
-}
 
 static schema_ptr get_schema() {
     auto builder = schema_builder("tests", "sstable_resharding_test")
@@ -85,8 +56,9 @@ void run_sstable_resharding_test() {
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(value)), api::timestamp_type(0));
             return m;
         };
+        auto cfg = db::config();
         for (auto i : boost::irange(0u, smp::count)) {
-            auto key_token_pair = token_generation_for_shard(i, keys_per_shard);
+            auto key_token_pair = token_generation_for_shard(keys_per_shard, i, cfg.murmur3_partitioner_ignore_msb_bits());
             BOOST_REQUIRE(key_token_pair.size() == keys_per_shard);
             muts[i].reserve(keys_per_shard);
             for (auto k : boost::irange(0u, keys_per_shard)) {
