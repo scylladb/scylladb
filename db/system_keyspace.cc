@@ -90,8 +90,6 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
 namespace db {
 
-std::unique_ptr<query_context> qctx = {};
-
 namespace system_keyspace {
 
 static logging::logger slogger("system_keyspace");

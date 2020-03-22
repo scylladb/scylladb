@@ -81,7 +81,8 @@ struct query_context {
 };
 
 // This does not have to be thread local, because all cores will share the same context.
-extern std::unique_ptr<query_context> qctx;
+inline std::unique_ptr<query_context> qctx = {};
+
 
 template <typename... Args>
 static future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring text, Args&&... args) {
