@@ -54,7 +54,7 @@
 
 namespace db {
 
-extern logging::logger cl_logger;
+inline logging::logger cl_logger("consistency");
 
 size_t quorum_for(const keyspace& ks);
 
