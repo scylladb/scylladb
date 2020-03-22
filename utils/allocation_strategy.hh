@@ -212,7 +212,7 @@ public:
     }
 };
 
-extern standard_allocation_strategy standard_allocation_strategy_instance;
+inline standard_allocation_strategy standard_allocation_strategy_instance;
 
 inline
 standard_allocation_strategy& standard_allocator() {

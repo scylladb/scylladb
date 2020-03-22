@@ -92,8 +92,6 @@ void unpoison(const char *addr, size_t size) { }
 
 namespace bi = boost::intrusive;
 
-standard_allocation_strategy standard_allocation_strategy_instance;
-
 namespace {
 
 class migrators_base {
