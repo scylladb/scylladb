@@ -43,7 +43,7 @@ class feature_service;
 class gossiper;
 }
 
-extern logging::logger startlog;
+inline logging::logger startlog("init");
 
 class bad_configuration_error : public std::exception {};
 

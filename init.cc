@@ -30,8 +30,6 @@
 #include "seastarx.hh"
 #include "db/config.hh"
 
-logging::logger startlog("init");
-
 void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
                 , sharded<gms::feature_service>& features
                 , db::config& cfg
