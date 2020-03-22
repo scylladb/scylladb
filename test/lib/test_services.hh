@@ -25,6 +25,8 @@
 #include <memory>
 #include <seastar/core/reactor.hh>
 
+#include "db/config.hh"
+#include "gms/feature_service.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "row_cache.hh"
@@ -43,10 +45,11 @@ public:
     ~storage_service_for_tests();
 };
 
-extern db::nop_large_data_handler nop_lp_handler;
-extern db::config test_db_config;
-extern gms::feature_service test_feature_service;
-extern thread_local sstables::sstables_manager test_sstables_manager;
+inline db::nop_large_data_handler nop_lp_handler;
+inline db::config test_db_config;
+inline gms::feature_service test_feature_service(gms::feature_config_from_db_config(test_db_config));
+inline thread_local sstables::sstables_manager test_sstables_manager(nop_lp_handler, test_db_config, test_feature_service);
+
 
 column_family::config column_family_test_config();
 

@@ -21,11 +21,9 @@
 
 #include "test/lib/test_services.hh"
 #include "auth/service.hh"
-#include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/view/view_update_generator.hh"
 #include "dht/i_partitioner.hh"
-#include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
@@ -97,11 +95,6 @@ range<dht::token> create_token_range_from_keys(const dht::i_partitioner& partiti
 
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
-
-db::nop_large_data_handler nop_lp_handler;
-db::config test_db_config;
-gms::feature_service test_feature_service(gms::feature_config_from_db_config(test_db_config));
-thread_local sstables::sstables_manager test_sstables_manager(nop_lp_handler, test_db_config, test_feature_service);
 
 column_family::config column_family_test_config() {
     column_family::config cfg;
