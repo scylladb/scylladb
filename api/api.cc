@@ -36,6 +36,7 @@
 #include "endpoint_snitch.hh"
 #include "compaction_manager.hh"
 #include "hinted_handoff.hh"
+#include "error_injection.hh"
 #include <seastar/http/exception.hh>
 #include "stream_manager.hh"
 #include "system.hh"
@@ -163,6 +164,9 @@ future<> set_server_done(http_context& ctx) {
         rb->register_function(r, "collectd",
                 "The collectd API");
         set_collectd(ctx, r);
+        rb->register_function(r, "error_injection",
+                "The error injection API");
+        set_error_injection(ctx, r);
     });
 }
 
