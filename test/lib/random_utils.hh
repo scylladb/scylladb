@@ -28,6 +28,8 @@
 
 #include <seastar/testing/test_runner.hh>
 
+#include "bytes.hh"
+
 namespace tests::random {
 
 inline std::default_random_engine& gen() {

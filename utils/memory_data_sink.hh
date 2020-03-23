@@ -20,7 +20,10 @@
  */
 
 #include <seastar/core/iostream.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include "utils/small_vector.hh"
+
+#include "seastarx.hh"
 
 #pragma once
 

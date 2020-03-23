@@ -25,6 +25,7 @@
 #include <seastar/core/sstring.hh>
 #include <utility>
 #include <optional>
+#include "dht/token.hh"
 #include "seastarx.hh"
 
 namespace dht {

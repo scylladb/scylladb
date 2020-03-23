@@ -27,6 +27,8 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/shared_future.hh>
 
+#include "seastarx.hh"
+
 namespace utils {
 
 /*

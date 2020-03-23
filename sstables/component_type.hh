@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include <iosfwd>
+
 namespace sstables {
 
 enum class component_type {

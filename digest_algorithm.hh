@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace query {
 
 enum class digest_algorithm : uint8_t {

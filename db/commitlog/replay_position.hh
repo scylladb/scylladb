@@ -41,6 +41,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <seastar/core/shared_ptr.hh>
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "sstables/version.hh"

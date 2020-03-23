@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <json/json.h>
+
 #include "bytes.hh"
 
 class schema;

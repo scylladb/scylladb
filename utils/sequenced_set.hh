@@ -19,6 +19,9 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma once
+
+#include <vector>
 #include <unordered_set>
 
 namespace utils {

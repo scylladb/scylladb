@@ -22,6 +22,7 @@
  */
 
 #include "mutation_reader.hh"
+#include "db/system_keyspace.hh"
 
 namespace db {
 

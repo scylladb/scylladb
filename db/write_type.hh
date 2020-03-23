@@ -42,6 +42,7 @@
 
 #include <assert.h>
 #include <cstdint>
+#include <iosfwd>
 
 namespace db {
 

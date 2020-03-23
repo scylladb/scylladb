@@ -24,6 +24,8 @@
 #include "range.hh"
 #include <seastar/core/print.hh>
 
+#include "seastarx.hh"
+
 using int_range = nonwrapping_range<int>;
 
 inline

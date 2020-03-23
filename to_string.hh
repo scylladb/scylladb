@@ -27,6 +27,7 @@
 #include <unordered_set>
 #include <set>
 #include <optional>
+#include <list>
 
 #include "seastarx.hh"
 #include "utils/chunked_vector.hh"

@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace sstables {
 
 class sstables_stats {

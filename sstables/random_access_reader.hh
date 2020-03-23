@@ -26,8 +26,10 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/temporary_buffer.hh>
+#include <seastar/core/temporary_buffer.hh>
 
 #include "utils/disk-error-handler.hh"
+#include "log.hh"
 
 namespace sstables {
 

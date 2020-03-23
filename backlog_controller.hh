@@ -23,7 +23,11 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/file.hh>
 #include <chrono>
+#include <cmath>
+
+#include "seastarx.hh"
 
 // Simple proportional controller to adjust shares for processes for which a backlog can be clearly
 // defined.

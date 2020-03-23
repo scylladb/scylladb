@@ -22,6 +22,7 @@
 #pragma  once
 
 #include "database_fwd.hh"
+#include "utils/UUID.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/sharded.hh>
 

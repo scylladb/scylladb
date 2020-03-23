@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "database_fwd.hh"
+#include "database.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "keys.hh"

@@ -48,9 +48,10 @@
 #include <map>
 #include <optional>
 
+#include "gms/inet_address.hh"
+
 
 namespace gms {
-class inet_address;
 class i_failure_detection_event_listener;
 class endpoint_state;
 

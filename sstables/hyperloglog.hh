@@ -63,6 +63,10 @@
 #include <stdexcept>
 #include <algorithm>
 #include <seastar/core/byteorder.hh>
+#include <seastar/core/temporary_buffer.hh>
+
+#include "seastarx.hh"
+
 #if 0
 #include "murmur3.h"
 #endif
