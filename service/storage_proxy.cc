@@ -88,6 +88,7 @@
 #include "database.hh"
 #include "db/consistency_level_validations.hh"
 #include "cdc/log.hh"
+#include "cdc/stats.hh"
 
 namespace bi = boost::intrusive;
 
@@ -358,6 +359,7 @@ protected:
     size_t _all_failures = 0; // total amount of failures
     size_t _total_endpoints = 0;
     storage_proxy::write_stats& _stats;
+    lw_shared_ptr<cdc::operation_result_tracker> _cdc_operation_result_tracker;
     timer<storage_proxy::clock_type> _expire_timer;
     service_permit _permit; // holds admission permit until operation completes
 
@@ -391,14 +393,23 @@ public:
                 _proxy->_global_stats.background_write_bytes -= _mutation_holder->size();
                 _proxy->unthrottle();
             }
-        } else if (_error == error::TIMEOUT) {
-            _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
-        } else if (_error == error::FAILURE) {
-            _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
+        } else {
+            if (_error == error::TIMEOUT) {
+                _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
+            } else if (_error == error::FAILURE) {
+                _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
+            }
+            if (_cdc_operation_result_tracker) {
+                _cdc_operation_result_tracker->on_mutation_failed();
+            }
         }
     }
     bool is_counter() const {
         return _type == db::write_type::COUNTER;
+    }
+
+    void set_cdc_operation_result_tracker(lw_shared_ptr<cdc::operation_result_tracker> tracker) {
+        _cdc_operation_result_tracker = std::move(tracker);
     }
 
     // While delayed, a request is not throttled.
@@ -1192,7 +1203,9 @@ future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool a
 
         if (_proxy->get_cdc_service()->needs_cdc_augmentation(update_mut_vec)) {
             f_cdc = _proxy->get_cdc_service()->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state)
-                    .then([this, base_tbl_id] (std::vector<mutation>&& mutations) {
+                    .then([this, base_tbl_id] (std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) {
+                auto mutations = std::move(std::get<0>(t));
+                auto tracker = std::move(std::get<1>(t));
                 // Pick only the CDC ("augmenting") mutations
                 mutations.erase(std::remove_if(mutations.begin(), mutations.end(), [base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
                     return v.schema()->id() == base_tbl_id;
@@ -1200,8 +1213,7 @@ future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool a
                 if (mutations.empty()) {
                     return make_ready_future<>();
                 }
-
-                return _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout);
+                return _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker));
             });
         }
     }
@@ -1890,6 +1902,19 @@ storage_proxy::create_write_response_handler(const std::tuple<paxos::proposal, s
                     std::vector<gms::inet_address>(), std::vector<gms::inet_address>(), std::move(tr_state), get_stats(), std::move(permit));
 }
 
+void storage_proxy::register_cdc_operation_result_tracker(const std::vector<storage_proxy::unique_response_handler>& ids, lw_shared_ptr<cdc::operation_result_tracker> tracker) {
+    if (!tracker) {
+        return;
+    }
+
+    for (auto& id : ids) {
+        auto& h = get_write_response_handler(id.id);
+        if (h->get_schema()->cdc_options().enabled()) {
+            h->set_cdc_operation_result_tracker(tracker);
+        }
+    }
+}
+
 void
 storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level cl) {
     auto& h = *get_write_response_handler(id);
@@ -2144,20 +2169,22 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
  */
 future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters](std::vector<mutation>&& mutations) mutable {
-            return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
+        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+            auto mutations = std::move(std::get<0>(t));
+            auto tracker = std::move(std::get<1>(t));
+            return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, std::move(tracker));
         });
     }
-    return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters);
+    return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, nullptr);
 }
 
-future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
+future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
     auto mid = raw_counters ? mutations.begin() : boost::range::partition(mutations, [] (auto&& m) {
         return m.schema()->is_counter();
     });
     return seastar::when_all_succeed(
         mutate_counters(boost::make_iterator_range(mutations.begin(), mid), cl, tr_state, permit, timeout),
-        mutate_internal(boost::make_iterator_range(mid, mutations.end()), cl, false, tr_state, permit, timeout)
+        mutate_internal(boost::make_iterator_range(mid, mutations.end()), cl, false, tr_state, permit, timeout, std::move(cdc_tracker))
     );
 }
 
@@ -2175,7 +2202,7 @@ future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistenc
 template<typename Range>
 future<>
 storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state, service_permit permit,
-                               std::optional<clock_type::time_point> timeout_opt) {
+                               std::optional<clock_type::time_point> timeout_opt, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
     if (boost::empty(mutations)) {
         return make_ready_future<>();
     }
@@ -2192,7 +2219,8 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
     utils::latency_counter lc;
     lc.start();
 
-    return mutate_prepare(mutations, cl, type, tr_state, std::move(permit)).then([this, cl, timeout_opt] (std::vector<storage_proxy::unique_response_handler> ids) {
+    return mutate_prepare(mutations, cl, type, tr_state, std::move(permit)).then([this, cl, timeout_opt, tracker = std::move(cdc_tracker)] (std::vector<storage_proxy::unique_response_handler> ids) {
+        register_cdc_operation_result_tracker(ids, tracker);
         return mutate_begin(std::move(ids), cl, timeout_opt);
     }).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<> f) mutable {
         return p->mutate_end(std::move(f), lc, get_stats(), std::move(tr_state));
@@ -2229,6 +2257,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
     class context {
         storage_proxy& _p;
         std::vector<mutation> _mutations;
+        lw_shared_ptr<cdc::operation_result_tracker> _cdc_tracker;
         db::consistency_level _cl;
         clock_type::time_point _timeout;
         tracing::trace_state_ptr _trace_state;
@@ -2239,9 +2268,10 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         const std::unordered_set<gms::inet_address> _batchlog_endpoints;
 
     public:
-        context(storage_proxy & p, std::vector<mutation>&& mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
+        context(storage_proxy & p, std::vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
                 : _p(p)
                 , _mutations(std::move(mutations))
+                , _cdc_tracker(std::move(cdc_tracker))
                 , _cl(cl)
                 , _timeout(timeout)
                 , _trace_state(std::move(tr_state))
@@ -2273,6 +2303,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit));
             }).then([this, cl] (std::vector<unique_response_handler> ids) {
+                _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                 return _p.mutate_begin(std::move(ids), cl, _timeout);
             });
         }
@@ -2299,15 +2330,16 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state, _permit).then([this] (std::vector<unique_response_handler> ids) {
                 return sync_write_to_batchlog().then([this, ids = std::move(ids)] () mutable {
                     tracing::trace(_trace_state, "Sending batch mutations");
+                    _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                     return _p.mutate_begin(std::move(ids), _cl, _timeout);
                 }).then(std::bind(&context::async_remove_from_batchlog, this));
             });
         }
     };
 
-    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit), cl] (std::vector<mutation> mutations) mutable {
+    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit), cl] (std::vector<mutation> mutations, lw_shared_ptr<cdc::operation_result_tracker> tracker) mutable {
       try {
-          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit)));
+          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), std::move(tracker), cl, timeout, std::move(tr_state), std::move(permit)));
       } catch(...) {
           return make_exception_future<lw_shared_ptr<context>>(std::current_exception());
       }
@@ -2317,14 +2349,16 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
     };
 
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state)).then([this, mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup)](std::vector<mutation>&& mutations) mutable {
-            return std::move(mk_ctxt)(std::move(mutations)).then([this] (lw_shared_ptr<context> ctxt) {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state)).then([this, mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup)](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+            auto mutations = std::move(std::get<0>(t));
+            auto tracker = std::move(std::get<1>(t));
+            return std::move(mk_ctxt)(std::move(mutations), std::move(tracker)).then([this] (lw_shared_ptr<context> ctxt) {
                 return ctxt->run().finally([ctxt]{});
             }).then_wrapped(std::move(cleanup));
         });
     }
 
-    return mk_ctxt(std::move(mutations)).then([this] (lw_shared_ptr<context> ctxt) {
+    return mk_ctxt(std::move(mutations), nullptr).then([this] (lw_shared_ptr<context> ctxt) {
         return ctxt->run().finally([ctxt]{});
     }).then_wrapped(std::move(cleanup));
 }

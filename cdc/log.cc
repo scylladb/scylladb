@@ -25,6 +25,7 @@
 #include <boost/range/irange.hpp>
 #include <seastar/util/defer.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/metrics.hh>
 
 #include "cdc/log.hh"
 #include "cdc/generation.hh"
@@ -49,6 +50,7 @@
 #include "concrete_types.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "tracing/trace_state.hh"
+#include "stats.hh"
 
 namespace std {
 
@@ -66,6 +68,84 @@ logging::logger cdc_log("cdc");
 
 namespace cdc {
 static schema_ptr create_log_schema(const schema&, std::optional<utils::UUID> = {});
+}
+
+static constexpr auto cdc_group_name = "cdc";
+
+void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_groups& metrics, std::string_view suffix) {
+    namespace sm = seastar::metrics;
+    auto register_part = [&] (part_type part, sstring part_name) {
+        metrics.add_group(cdc_group_name, {
+                sm::make_total_operations(format("operations_on_{}_performed_{}", part_name, suffix), count[(size_t)part],
+                        sm::description(format("number of {} CDC operations that processed a {}", suffix, part_name)),
+                        {})
+            });
+    };
+
+    register_part(part_type::STATIC_ROW, "static_row");
+    register_part(part_type::CLUSTERING_ROW, "clustering_row");
+    register_part(part_type::MAP, "map");
+    register_part(part_type::SET, "set");
+    register_part(part_type::LIST, "list");
+    register_part(part_type::UDT, "udt");
+    register_part(part_type::RANGE_TOMBSTONE, "range_tombstone");
+    register_part(part_type::PARTITION_DELETE, "partition_delete");
+    register_part(part_type::ROW_DELETE, "row_delete");
+}
+
+cdc::stats::stats() {
+    namespace sm = seastar::metrics;
+
+    auto register_counters = [this] (counters& counters, sstring kind) {
+        const auto split_label = sm::label("split");
+        _metrics.add_group(cdc_group_name, {
+                sm::make_total_operations("operations_" + kind, counters.unsplit_count,
+                        sm::description(format("number of {} CDC operations", kind)),
+                        {split_label(false)}),
+
+                sm::make_total_operations("operations_" + kind, counters.split_count,
+                        sm::description(format("number of {} CDC operations", kind)),
+                        {split_label(true)}),
+
+                sm::make_total_operations("preimage_selects_" + kind, counters.preimage_selects,
+                        sm::description(format("number of {} preimage queries performed", kind)),
+                        {}),
+
+                sm::make_total_operations("operations_with_preimage_" + kind, counters.with_preimage_count,
+                        sm::description(format("number of {} operations that included preimage", kind)),
+                        {}),
+
+                sm::make_total_operations("operations_with_postimage_" + kind, counters.with_postimage_count,
+                        sm::description(format("number of {} operations that included postimage", kind)),
+                        {})
+            });
+
+        counters.touches.register_metrics(_metrics, kind);
+    };
+    register_counters(counters_total, "total");
+    register_counters(counters_failed, "failed");
+}
+
+cdc::operation_result_tracker::~operation_result_tracker() {
+    auto update_stats = [this] (stats::counters& counters) {
+        if (_details.was_split) {
+            counters.split_count++;
+        } else {
+            counters.unsplit_count++;
+        }
+        counters.touches.apply(_details.touched_parts);
+        if (_details.had_preimage) {
+            counters.with_preimage_count++;
+        }
+        if (_details.had_postimage) {
+            counters.with_postimage_count++;
+        }
+    };
+
+    update_stats(_stats.counters_total);
+    if (_failed) {
+        update_stats(_stats.counters_failed);
+    }
 }
 
 class cdc::cdc_service::impl : service::migration_listener::empty_listener {
@@ -156,7 +236,7 @@ public:
         }
     }
 
-    future<std::vector<mutation>> augment_mutation_call(
+    future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>> augment_mutation_call(
         lowres_clock::time_point timeout,
         std::vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state
@@ -736,18 +816,21 @@ public:
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
     // more details like tombstones/ttl? Probably not but keep in mind.
-    mutation transform(const mutation& m, const cql3::untyped_result_set* rs, api::timestamp_type ts, bytes tuuid, int& batch_no) const {
+    std::tuple<mutation, stats::part_type_set> transform(const mutation& m, const cql3::untyped_result_set* rs, api::timestamp_type ts, bytes tuuid, int& batch_no) const {
         auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token());
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
         const auto postimage = _schema->cdc_options().postimage();
+        stats::part_type_set touched_parts;
         auto& p = m.partition();
         if (p.partition_tombstone()) {
             // Partition deletion
+            touched_parts.set<stats::part_type::PARTITION_DELETE>();
             auto log_ck = set_pk_columns(m.key(), ts, tuuid, 0, res);
             set_operation(log_ck, ts, operation::partition_delete, res);
             ++batch_no;
         } else if (!p.row_tombstones().empty()) {
             // range deletion
+            touched_parts.set<stats::part_type::RANGE_TOMBSTONE>();
             for (auto& rt : p.row_tombstones()) {
                 auto set_bound = [&] (const clustering_key& log_ck, const clustering_key_prefix& ckp) {
                     auto exploded = ckp.explode(*_schema);
@@ -847,6 +930,7 @@ public:
                             return visit(*cdef.type, make_visitor(
                                 // maps and lists are just flattened
                                 [&] (const collection_type_impl& type) -> bytes_opt {
+                                    touched_parts.set(type.is_list() ? stats::part_type::LIST : stats::part_type::MAP);
                                     std::vector<std::pair<bytes_view, bytes_view>> result;
                                     process_collection([&](const bytes_view& key, const bytes_view& value, bool live) {
                                         if (live) {
@@ -865,6 +949,7 @@ public:
                                 },
                                 // set need to transform from mutation view
                                 [&] (const set_type_impl& type) -> bytes_opt  {
+                                    touched_parts.set<stats::part_type::SET>();
                                     std::vector<bytes_view> result;
                                     process_collection([&](const bytes_view& key, const bytes_view& value, bool live) {
                                         if (live) {
@@ -885,6 +970,7 @@ public:
                                 // tuple of value or tuple of null in case of delete.
                                 // fields not in the mutation are null in the enclosing tuple, signifying "no info"
                                 [&](const user_type_impl& type) -> bytes_opt  {
+                                    touched_parts.set<stats::part_type::UDT>();
                                     std::vector<bytes_opt> result(type.size());
                                     process_collection([&](const bytes_view& key, const bytes_view& value, bool live) {
                                         if (live) {
@@ -965,6 +1051,7 @@ public:
             };
 
             if (!p.static_row().empty()) {
+                touched_parts.set<stats::part_type::STATIC_ROW>();
                 std::optional<clustering_key> pikey, poikey;
                 const cql3::untyped_result_set_row * pirow = nullptr;
 
@@ -992,6 +1079,7 @@ public:
                 }
                 ++batch_no;
             } else {
+                touched_parts.set_if<stats::part_type::CLUSTERING_ROW>(!p.clustered_rows().empty());
                 for (const rows_entry& r : p.clustered_rows()) {
                     auto ck_value = r.key().explode(*_schema);
 
@@ -1045,6 +1133,7 @@ public:
                     
                     operation cdc_op;
                     if (r.row().deleted_at()) {
+                        touched_parts.set<stats::part_type::ROW_DELETE>();
                         cdc_op = operation::row_delete;
                         if (pirow) {
                             for (const column_definition& column: _schema->regular_columns()) {
@@ -1073,7 +1162,7 @@ public:
             }
         }
 
-        return res;
+        return std::make_tuple(std::move(res), touched_parts);
     }
 
     static bytes get_preimage_col_value(const column_definition& cdef, const cql3::untyped_result_set_row *pirow) {
@@ -1210,7 +1299,7 @@ transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_siz
 
 } // namespace cdc
 
-future<std::vector<mutation>>
+future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
 cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
@@ -1219,15 +1308,15 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     });
 
     if (i == e) {
-        return make_ready_future<std::vector<mutation>>(std::move(mutations));
+        return make_ready_future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), lw_shared_ptr<cdc::operation_result_tracker>()));
     }
 
     tracing::trace(tr_state, "CDC: Started generating mutations for log rows");
     mutations.reserve(2 * mutations.size());
 
-    return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()),
-            [this, timeout, i, tr_state = std::move(tr_state)] (std::vector<mutation>& mutations, service::query_state& qs) {
-        return transform_mutations(mutations, 1, [this, &mutations, timeout, &qs, tr_state = tr_state] (int idx) mutable {
+    return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{},
+            [this, timeout, i, tr_state = std::move(tr_state)] (std::vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
+        return transform_mutations(mutations, 1, [this, &mutations, timeout, &qs, tr_state = tr_state, &details] (int idx) mutable {
             auto& m = mutations[idx];
             auto s = m.schema();
 
@@ -1243,37 +1332,52 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
                 tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
-                f = trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m);
+                f = trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
+                    auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
+                    cdc_stats.counters_total.preimage_selects++;
+                    if (f.failed()) {
+                        cdc_stats.counters_failed.preimage_selects++;
+                    }
+                    return f;
+                });
             } else {
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
 
-            return f.then([trans = std::move(trans), &mutations, idx, tr_state = std::move(tr_state)] (lw_shared_ptr<cql3::untyped_result_set> rs) {
+            return f.then([trans = std::move(trans), &mutations, idx, tr_state = std::move(tr_state), &details] (lw_shared_ptr<cql3::untyped_result_set> rs) {
                 auto& m = mutations[idx];
                 auto& s = m.schema();
+                details.had_preimage |= s->cdc_options().preimage();
+                details.had_postimage |= s->cdc_options().postimage();
                 tracing::trace(tr_state, "CDC: Generating log mutations for {}", m.decorated_key());
                 int generated_count;
                 if (should_split(m, *s)) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
+                    details.was_split = true;
                     generated_count = 0;
                     for_each_change(m, s, [&] (mutation mm, api::timestamp_type ts, bytes tuuid, int& batch_no) {
-                        mutations.push_back(trans.transform(std::move(mm), rs.get(), ts, tuuid, batch_no));
+                        auto [mut, parts] = trans.transform(std::move(mm), rs.get(), ts, tuuid, batch_no);
+                        mutations.push_back(std::move(mut));
                         ++generated_count;
+                        details.touched_parts.add(parts);
                     });
                 } else {
                     tracing::trace(tr_state, "CDC: No need to split {}", m.decorated_key());
                     int batch_no = 0;
                     auto ts = find_timestamp(*s, m);
                     auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
-                    mutations.push_back(trans.transform(m, rs.get(), ts, tuuid, batch_no));
+                    auto [mut, parts] = trans.transform(m, rs.get(), ts, tuuid, batch_no);
+                    mutations.push_back(std::move(mut));
                     generated_count = 1;
+                    details.touched_parts.add(parts);
                 }
                 // `m` might be invalidated at this point because of the push_back to the vector
                 tracing::trace(tr_state, "CDC: Generated {} log mutations from {}", generated_count, mutations[idx].decorated_key());
             });
-        }).then([tr_state](std::vector<mutation> mutations) {
+        }).then([this, tr_state, &details](std::vector<mutation> mutations) {
             tracing::trace(tr_state, "CDC: Finished generating all log mutations");
-            return make_ready_future<std::vector<mutation>>(std::move(mutations));
+            auto tracker = make_lw_shared<cdc::operation_result_tracker>(_ctxt._proxy.get_cdc_stats(), details);
+            return make_ready_future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), std::move(tracker)));
         });
     });
 }
@@ -1284,7 +1388,7 @@ bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutat
     });
 }
 
-future<std::vector<mutation>>
+future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
 cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
     return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state));
 }

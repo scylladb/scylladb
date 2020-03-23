@@ -66,6 +66,7 @@ class partition_key;
 
 namespace cdc {
 
+struct operation_result_tracker;
 class db_context;
 class metadata;
 
@@ -87,7 +88,7 @@ public:
     // appropriate augments to set the log entries.
     // Iff post-image is enabled for any of these, a non-empty callback is also
     // returned to be invoked post the mutation query.
-    future<std::vector<mutation>> augment_mutation_call(
+    future<std::tuple<std::vector<mutation>, lw_shared_ptr<operation_result_tracker>>> augment_mutation_call(
         lowres_clock::time_point timeout,
         std::vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state
