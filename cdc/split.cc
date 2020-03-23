@@ -433,7 +433,7 @@ void for_each_change(const mutation& base_mutation, const schema_ptr& base_schem
                 row.apply(cdef, collection_mutation_description{nonatomic_delete.t, {}}.serialize(*cdef.type));
             }
             for (auto& nonatomic_update : cr_update.nonatomic_updates) {
-                auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
+                auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
                 row.apply(cdef, collection_mutation_description{{}, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
 
