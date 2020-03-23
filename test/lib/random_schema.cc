@@ -894,7 +894,7 @@ void decorate_with_timestamps(const schema& schema, std::mt19937& engine, timest
                                 ts--;
                             }
                             auto expiry_opt = exp_gen(engine, timestamp_destination::collection_tombstone);
-                            const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now() + schema.gc_grace_seconds();
+                            const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now();
                             c.tomb = tombstone(ts, deletion_time);
                         }
                         for (auto& [ key, value ] : c.elements) {
@@ -1017,7 +1017,7 @@ void random_schema::set_partition_tombstone(std::mt19937& engine, data_model::mu
         expiry_generator exp_gen) {
     if (const auto ts = ts_gen(engine, timestamp_destination::partition_tombstone, api::min_timestamp); ts != api::missing_timestamp) {
         auto expiry_opt = exp_gen(engine, timestamp_destination::partition_tombstone);
-        const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now() + _schema->gc_grace_seconds();
+        const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now();
         md.set_partition_tombstone(tombstone(ts, deletion_time));
     }
 }
@@ -1039,7 +1039,7 @@ void random_schema::add_row(std::mt19937& engine, data_model::mutation_descripti
     }
     if (auto ts = ts_gen(engine, timestamp_destination::row_tombstone, api::min_timestamp); ts != api::missing_timestamp) {
         auto expiry_opt = exp_gen(engine, timestamp_destination::row_tombstone);
-        const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now() + _schema->gc_grace_seconds();
+        const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now();
         md.add_clustered_row_tombstone(ckey, row_tombstone{tombstone{ts, deletion_time}});
     }
 }
@@ -1065,7 +1065,7 @@ void random_schema::delete_range(
         timestamp_generator ts_gen,
         expiry_generator exp_gen) {
     auto expiry_opt = exp_gen(engine, timestamp_destination::range_tombstone);
-    const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now() + _schema->gc_grace_seconds();
+    const auto deletion_time = expiry_opt ? expiry_opt->expiry_point : gc_clock::now();
     md.add_range_tombstone(std::move(range), tombstone{ts_gen(engine, timestamp_destination::range_tombstone, api::min_timestamp), deletion_time});
 }
 
