@@ -32,7 +32,7 @@
 #include "test/lib/test_services.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/cql_test_env.hh"
-#include "test/lib/dummy_partitioner.hh"
+#include "test/lib/dummy_sharding_info.hh"
 #include "test/lib/reader_lifecycle_policy.hh"
 #include "test/lib/log.hh"
 

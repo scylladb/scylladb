@@ -20,7 +20,7 @@
  */
 
 #include <boost/range/algorithm/find.hpp>
-#include "test/lib/dummy_partitioner.hh"
+#include "test/lib/dummy_sharding_info.hh"
 
 unsigned dummy_sharding_info::shard_of(const dht::token& t) const {
     auto it = boost::find(_tokens, t);
