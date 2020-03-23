@@ -106,3 +106,38 @@ def test_select():
         raise Exception('Expect that `SELECT 16` does not work')
     except redis.exceptions.ResponseError as ex:
         assert str(ex) == 'DB index is out of range'
+
+def test_exists_existent_key():
+    r = connect()
+    key = random_string(10)
+    val = random_string(10)
+
+    r.set(key, val)
+    assert r.get(key) == val
+    assert r.exists(key) == 1
+
+def test_exists_non_existent_key():
+    r = connect()
+    key = random_string(10)
+    r.delete(key)
+    assert r.exists(key) == 0
+
+def test_exists_multiple_existent_key():
+    r = connect()
+    key1 = random_string(10)
+    val1 = random_string(10)
+    key2 = random_string(10)
+    val2 = random_string(10)
+    key3 = random_string(10)
+    val3 = random_string(10)
+    key4 = random_string(10)
+
+    r.set(key1, val1)
+    r.set(key2, val2)
+    r.set(key3, val3)
+    r.delete(key4)
+    assert r.get(key1) == val1
+    assert r.get(key2) == val2
+    assert r.get(key3) == val3
+    assert r.get(key4) == None
+    assert r.exists(key1, key2, key3, key4) == 3

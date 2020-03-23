@@ -53,6 +53,27 @@ future<redis_message> get::execute(service::storage_proxy& proxy, redis::redis_o
     });
 }
 
+exists::exists(bytes&& name, std::vector<bytes>&& keys) : abstract_command(std::move(name)) , _keys(std::move(keys)) {}
+
+shared_ptr<abstract_command> exists::prepare(service::storage_proxy& proxy, request&& req) {
+    if (req.arguments_size() < 1) {
+        throw wrong_arguments_exception(1, req.arguments_size(), req._command);
+    }
+    return seastar::make_shared<exists>(std::move(req._command), std::move(req._args));
+}
+
+future<redis_message> exists::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
+    return seastar::do_for_each(_keys, [&proxy, &options, &permit, this] (bytes key) {
+        return redis::read_strings(proxy, options, key, permit).then([this] (lw_shared_ptr<strings_result> result) {
+            if (result->has_result()) {
+                _count++;
+            }
+        });
+    }).then([this] () {
+        return redis_message::number(_count);
+    });
+}
+
 shared_ptr<abstract_command> set::prepare(service::storage_proxy& proxy, request&& req) {
     if (req.arguments_size() != 2) {
         throw wrong_arguments_exception(2, req.arguments_size(), req._command);

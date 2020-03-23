@@ -39,6 +39,15 @@ public:
     virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
 };
 
+class exists : public abstract_command {
+    std::vector<bytes> _keys;
+    size_t _count = 0;
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    exists(bytes&& name, std::vector<bytes>&& keys);
+    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
 class set : public abstract_command {
     bytes _key;
     bytes _data;

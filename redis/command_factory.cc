@@ -35,6 +35,7 @@ shared_ptr<abstract_command> command_factory::create(service::storage_proxy& pro
         { "ping",  [] (service::storage_proxy& proxy, request&& req) { return commands::ping::prepare(proxy, std::move(req)); } }, 
         { "select",  [] (service::storage_proxy& proxy, request&& req) { return commands::select::prepare(proxy, std::move(req)); } }, 
         { "get",  [] (service::storage_proxy& proxy, request&& req) { return commands::get::prepare(proxy, std::move(req)); } }, 
+        { "exists", [] (service::storage_proxy& proxy, request&& req) { return commands::exists::prepare(proxy, std::move(req)); } },
         { "set",  [] (service::storage_proxy& proxy, request&& req) { return commands::set::prepare(proxy, std::move(req)); } }, 
         { "del",  [] (service::storage_proxy& proxy, request&& req) { return commands::del::prepare(proxy, std::move(req)); } }, 
         { "echo",  [] (service::storage_proxy& proxy, request&& req) { return commands::echo::prepare(proxy, std::move(req)); } },
