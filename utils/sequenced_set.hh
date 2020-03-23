@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <unordered_set>
+
 namespace utils {
 /**
  * This class implements an add-only vector that ensures that the elements are
