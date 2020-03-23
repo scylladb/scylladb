@@ -1403,6 +1403,36 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
             // A delete from a degenerate row range should produce no rows in CDC log
             BOOST_REQUIRE_EQUAL(result.size(), 0);
         }
+
+        // Regression test for #6050
+        cquery_nofail(e, "create table ks.t2 (pk int, ck int, s int static, cs set<text>, cm map<int, int>, primary key (pk, ck)) with cdc = {'enabled':true};");
+        cquery_nofail(e, format("insert into ks.t2 (pk, ck, s, cs, cm) VALUES (1, 2, 3, {{'4'}}, {{5:6}}) using timestamp {};", now));
+
+        {
+            auto cs_type = set_type_impl::get_instance(ascii_type, false);
+            auto cs_null = data_value::make_null(cs_type);
+            auto cs_value = make_set_value(cs_type, {"4"});
+
+            auto cm_type = map_type_impl::get_instance(int32_type, int32_type, false);
+            auto cm_null = data_value::make_null(cm_type);
+            auto cm_value = make_map_value(cm_type, {{3, 3}});
+
+            auto result = get_result(
+                {int32_type, int32_type, cs_type, cm_type, boolean_type, boolean_type, oper_type},
+                "select \"cdc$batch_seq_no\", s, cs, cm, \"cdc$deleted_cs\", "
+                "\"cdc$deleted_cm\", \"cdc$operation\" from ks.t2_scylla_cdc_log "
+                "where pk = 1 allow filtering"
+            );
+
+            BOOST_REQUIRE_EQUAL(result.size(), 4);
+
+            std::vector<std::vector<data_value>> expected = {
+                {int32_t(0), int_null, cs_null, cm_null, true, true, oper_ut(cdc::operation::update)},
+                {int32_t(0), int32_t(3), cs_null, cm_null, bool_null, bool_null, oper_ut(cdc::operation::update)},
+                {int32_t(1), int_null, cs_null, cm_null, bool_null, bool_null, oper_ut(cdc::operation::insert)},
+                {int32_t(2), int_null, cs_value, cm_value, bool_null, bool_null, oper_ut(cdc::operation::update)}
+            };
+        }
     }, mk_cdc_test_config()).get();
 }
 
