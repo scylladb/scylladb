@@ -296,7 +296,9 @@ SEASTAR_TEST_CASE(test_commitlog_closed) {
 
 SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
     commitlog::config cfg;
-    cfg.commitlog_segment_size_in_mb = 2;
+
+    constexpr auto max_size_mb = 2;
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
     cfg.commitlog_total_space_in_mb = 1;
     cfg.commitlog_sync_period_in_ms = 1;
     return cl_test(cfg, [](commitlog& log) {
@@ -306,8 +308,15 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
             // add a flush handler that simply says we're done with the range.
             auto r = log.add_flush_handler([&log, sem, segments](cf_id_type id, replay_position pos) {
                 *segments = log.get_active_segment_names();
-                log.discard_completed_segments(id);
-                sem->signal();
+                // Verify #5899 - file size should not exceed the config max. 
+                return parallel_for_each(*segments, [](sstring filename) {
+                    return file_size(filename).then([](uint64_t size) {
+                        BOOST_REQUIRE_LE(size, max_size_mb * 1024 * 1024);
+                    });
+                }).then([&log, sem, id] {
+                    log.discard_completed_segments(id);
+                    sem->signal();
+                });
             });
 
             auto set = make_lw_shared<std::set<segment_id_type>>();
