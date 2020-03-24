@@ -116,7 +116,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
         , _token_metadata(tm)
-        , _la_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::la)
         , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
@@ -130,7 +129,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
 
     if (!for_testing) {
         if (engine().cpu_id() == 0) {
-            _feature_service.cluster_supports_la_sstable().when_enabled(_la_feature_listener);
             _feature_service.cluster_supports_mc_sstable().when_enabled(_mc_feature_listener);
         }
     } else {

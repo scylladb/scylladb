@@ -83,7 +83,6 @@ private:
     gms::feature _xxhash_feature;
     gms::feature _udf_feature;
     gms::feature _roles_feature;
-    gms::feature _la_sstable_feature;
     gms::feature _stream_with_rpc_stream_feature;
     gms::feature _mc_sstable_feature;
     gms::feature _row_level_repair_feature;
@@ -150,10 +149,6 @@ public:
 
     bool cluster_supports_roles() const {
         return bool(_roles_feature);
-    }
-
-    const feature& cluster_supports_la_sstable() const {
-        return _la_sstable_feature;
     }
 
     bool cluster_supports_stream_with_rpc_stream() const {

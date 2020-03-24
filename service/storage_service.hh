@@ -320,7 +320,6 @@ private:
     // in the system table).
     sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::la;
     seastar::named_semaphore _feature_listeners_sem = {1, named_semaphore_exception_factory{"feature listeners"}};
-    feature_enabled_listener _la_feature_listener;
     feature_enabled_listener _mc_feature_listener;
 public:
     sstables::sstable_version_types sstables_format() const { return _sstables_format; }

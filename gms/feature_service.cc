@@ -74,7 +74,6 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _xxhash_feature(*this, features::XXHASH)
         , _udf_feature(*this, features::UDF)
         , _roles_feature(*this, features::ROLES)
-        , _la_sstable_feature(*this, features::LA_SSTABLE)
         , _stream_with_rpc_stream_feature(*this, features::STREAM_WITH_RPC_STREAM)
         , _mc_sstable_feature(*this, features::MC_SSTABLE)
         , _row_level_repair_feature(*this, features::ROW_LEVEL_REPAIR)
@@ -246,7 +245,6 @@ void feature_service::enable(const std::set<std::string_view>& list) {
         std::ref(_xxhash_feature),
         std::ref(_udf_feature),
         std::ref(_roles_feature),
-        std::ref(_la_sstable_feature),
         std::ref(_stream_with_rpc_stream_feature),
         std::ref(_mc_sstable_feature),
         std::ref(_row_level_repair_feature),
