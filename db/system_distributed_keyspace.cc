@@ -124,7 +124,7 @@ future<> system_distributed_keyspace::start() {
     }
 
     static auto ignore_existing = [] (seastar::noncopyable_function<future<>()> func) {
-        return futurize_apply(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
+        return futurize_invoke(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
     };
 
     // We use min_timestamp so that the default keyspace metadata will lose with any manual adjustments.

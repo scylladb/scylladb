@@ -69,7 +69,7 @@ class api_handler : public handler_base {
 public:
     api_handler(const std::function<future<executor::request_return_type>(std::unique_ptr<request> req)>& _handle) : _f_handle(
          [this, _handle](std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
-         return seastar::futurize_apply(_handle, std::move(req)).then_wrapped([this, rep = std::move(rep)](future<executor::request_return_type> resf) mutable {
+         return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped([this, rep = std::move(rep)](future<executor::request_return_type> resf) mutable {
              if (resf.failed()) {
                  // Exceptions of type api_error are wrapped as JSON and
                  // returned to the client as expected. Other types of

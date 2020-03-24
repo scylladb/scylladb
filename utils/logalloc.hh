@@ -197,7 +197,7 @@ class region_group {
         Func func;
     public:
         void allocate() override {
-            futurator::apply(func).forward_to(std::move(pr));
+            futurator::invoke(func).forward_to(std::move(pr));
         }
         void fail(std::exception_ptr e) override {
             pr.set_exception(e);
@@ -346,7 +346,7 @@ public:
         });
 
         if (!blocked_at) {
-            return futurator::apply(func);
+            return futurator::invoke(func);
         }
 
         auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));

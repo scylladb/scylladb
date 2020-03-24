@@ -149,7 +149,7 @@ void memtable::clear() noexcept {
 }
 
 future<> memtable::clear_gently() noexcept {
-    return futurize_apply([this] {
+    return futurize_invoke([this] {
         auto t = std::make_unique<seastar::thread>([this] {
             auto& alloc = allocator();
 

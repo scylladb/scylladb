@@ -235,7 +235,7 @@ public:
                 // get_shared_future() may throw, so make sure to call it before invoking the loader(key)
                 f = e->loaded().get_shared_future();
                 // Future indirectly forwarded to `e`.
-                (void)futurize_apply([&] { return loader(key); }).then_wrapped([e](future<value_type>&& val_fut) mutable {
+                (void)futurize_invoke([&] { return loader(key); }).then_wrapped([e](future<value_type>&& val_fut) mutable {
                     if (val_fut.failed()) {
                         e->loaded().set_exception(val_fut.get_exception());
                     } else {

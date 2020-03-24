@@ -1320,7 +1320,7 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
                     .with_rows({{
                          {long_type->decompose(int64_t(ts1))},
                      }});
-                auto msg2f = futurize_apply([&] { return e.execute_cql("SELECT writetime(c) FROM cf"); });
+                auto msg2f = futurize_invoke([&] { return e.execute_cql("SELECT writetime(c) FROM cf"); });
                 msg2f.wait();
                 assert_that_failed(msg2f);
             });
@@ -1442,7 +1442,7 @@ auto validate_request_failure(
         const sstring& request,
         const sstring& expected_message,
         const source_location& loc = source_location::current()) {
-    return futurize_apply([&] { return env.execute_cql(request); })
+    return futurize_invoke([&] { return env.execute_cql(request); })
         .then_wrapped([expected_message, loc] (future<shared_ptr<cql_transport::messages::result_message>> f) {
                           BOOST_REQUIRE_EXCEPTION(f.get(),
                                                   exceptions::invalid_request_exception,

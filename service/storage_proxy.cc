@@ -919,7 +919,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
             [this, ballot] (paxos::prepare_summary& summary, auto& request_tracker, shared_ptr<paxos_response_handler>& prh) mutable {
         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: sending ballot {} to {}", _id, ballot, _live_endpoints);
         return parallel_for_each(_live_endpoints, [this, &summary, ballot, &request_tracker] (gms::inet_address peer) mutable {
-            return futurize_apply([&] {
+            return futurize_invoke([&] {
                 // To generate less network traffic, only the closest replica (first one in the list of participants)
                 // sends query result content while other replicas send digests needed to check consistency.
                 bool only_digest = peer != _live_endpoints[0];
@@ -1083,7 +1083,7 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
                            (auto& request_tracker, shared_ptr<paxos_response_handler>& prh) {
         paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: sending commit {} to {}", _id, proposal, _live_endpoints);
         return parallel_for_each(_live_endpoints, [this, &request_tracker, timeout_if_partially_accepted, &proposal] (gms::inet_address peer) mutable {
-            return futurize_apply([&] {
+            return futurize_invoke([&] {
                 if (fbu::is_me(peer)) {
                     tracing::trace(tr_state, "accept_proposal: accept {} locally", proposal);
                     return paxos::paxos_state::accept(tr_state, _schema, proposal.update.decorated_key(*_schema).token(), proposal, _timeout);
@@ -1930,7 +1930,7 @@ storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level
 template<typename Range, typename CreateWriteHandler>
 future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler create_handler) {
     // apply is used to convert exceptions to exceptional future
-    return futurize<std::vector<storage_proxy::unique_response_handler>>::apply([this] (Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler create_handler) {
+    return futurize<std::vector<storage_proxy::unique_response_handler>>::invoke([this] (Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler create_handler) {
         std::vector<unique_response_handler> ids;
         ids.reserve(std::distance(std::begin(mutations), std::end(mutations)));
         for (auto& m : mutations) {
@@ -2565,9 +2565,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             }
 
             if (coordinator == my_address) {
-                f = futurize_apply(lmutate);
+                f = futurize_invoke(lmutate);
             } else {
-                f = futurize_apply(rmutate, coordinator, std::move(forward));
+                f = futurize_invoke(rmutate, coordinator, std::move(forward));
             }
         }
 
@@ -3398,8 +3398,8 @@ protected:
     virtual future<> make_requests(digest_resolver_ptr resolver, clock_type::time_point timeout) {
         resolver->add_wait_targets(_targets.size());
         auto want_digest = _targets.size() > 1;
-        auto f_data = futurize_apply([&] { return make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout, want_digest); });
-        auto f_digest = futurize_apply([&] { return make_digest_requests(resolver, _targets.begin() + 1, _targets.end(), timeout); });
+        auto f_data = futurize_invoke([&] { return make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout, want_digest); });
+        auto f_digest = futurize_invoke([&] { return make_digest_requests(resolver, _targets.begin() + 1, _targets.end(), timeout); });
         return when_all_succeed(std::move(f_data), std::move(f_digest)).handle_exception([] (auto&&) { });
     }
     virtual void got_cl() {}
@@ -4647,7 +4647,7 @@ void storage_proxy::init_messaging_service() {
             p->get_stats().forwarded_mutations += forward.size();
             return when_all(
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                futurize_apply([timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr), schema_version,
+                futurize_invoke([timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr), schema_version,
                                       apply_fn = std::move(apply_fn), trace_state_ptr] () mutable {
                     // FIXME: get_schema_for_write() doesn't timeout
                     return get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard})

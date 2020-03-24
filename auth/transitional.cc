@@ -158,7 +158,7 @@ public:
             }
 
             virtual future<authenticated_user> get_authenticated_user() const {
-                return futurize_apply([this] {
+                return futurize_invoke([this] {
                     return _sasl->get_authenticated_user().handle_exception([](auto ep) {
                         try {
                             std::rethrow_exception(ep);

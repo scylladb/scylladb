@@ -313,7 +313,7 @@ bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const froze
 future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
     manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
 
-    return futurize_apply([this] {
+    return futurize_invoke([this] {
         return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this] () {
             commitlog::config cfg;
 
@@ -349,7 +349,7 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
 future<> manager::end_point_hints_manager::flush_current_hints() noexcept {
     // flush the currently created hints to disk
     if (_hints_store_anchor) {
-        return futurize_apply([this] {
+        return futurize_invoke([this] {
             return with_lock(file_update_mutex(), [this]() -> future<> {
                 return get_or_load().then([] (hints_store_ptr cptr) {
                     return cptr->shutdown();
@@ -397,7 +397,7 @@ future<timespec> manager::end_point_hints_manager::sender::get_last_file_modific
 }
 
 future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, const std::vector<gms::inet_address>& natural_endpoints) noexcept {
-    return futurize_apply([this, m = std::move(m), &natural_endpoints] () mutable -> future<> {
+    return futurize_invoke([this, m = std::move(m), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
         if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
@@ -538,7 +538,7 @@ void manager::drain_for(gms::inet_address endpoint) {
     // Future is waited on indirectly in `stop()` (via `_draining_eps_gate`).
     (void)with_gate(_draining_eps_gate, [this, endpoint] {
         return with_semaphore(drain_lock(), 1, [this, endpoint] {
-            return futurize_apply([this, endpoint] () {
+            return futurize_invoke([this, endpoint] () {
                 if (utils::fb_utilities::is_me(endpoint)) {
                     return parallel_for_each(_ep_managers, [] (auto& pair) {
                         return pair.second.stop(drain::yes).finally([&pair] {

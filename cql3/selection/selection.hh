@@ -268,7 +268,7 @@ public:
         if (_selectors->requires_thread()) {
             return async(std::move(func));
         } else {
-            return futurize_apply(std::move(func));
+            return futurize_invoke(std::move(func));
         }
     }
 

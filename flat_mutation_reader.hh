@@ -720,7 +720,7 @@ future<> consume_partitions(flat_mutation_reader& reader, Consumer consumer, db:
                 if (!mo) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
-                return futurator::apply(c, std::move(*mo));
+                return futurator::invoke(c, std::move(*mo));
             });
         });
     });

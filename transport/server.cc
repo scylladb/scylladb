@@ -245,7 +245,7 @@ cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
             ++_connects;
             ++_connections;
             // Move the processing into the background.
-            (void)futurize_apply([this, conn] {
+            (void)futurize_invoke([this, conn] {
                 return advertise_new_connection(conn); // Notify any listeners about new connection.
             }).then_wrapped([this, conn] (future<> f) {
                 try {
@@ -394,7 +394,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
-    return futurize_apply([this, cqlop, stream, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state] () mutable {
+    return futurize_invoke([this, cqlop, stream, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {

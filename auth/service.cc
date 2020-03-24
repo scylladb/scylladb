@@ -419,7 +419,7 @@ future<> create_role(
             return make_ready_future<>();
         }
 
-        return futurize_apply(
+        return futurize_invoke(
                 &validate_authentication_options_are_supported,
                 options,
                 ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
@@ -443,7 +443,7 @@ future<> alter_role(
             return make_ready_future<>();
         }
 
-        return futurize_apply(
+        return futurize_invoke(
                 &validate_authentication_options_are_supported,
                 options,
                 ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {

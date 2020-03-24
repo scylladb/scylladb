@@ -864,7 +864,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     }
 
     return create_keyspace(keyspace_name).then([this, table_name, request = std::move(request), schema, view_builders = std::move(view_builders)] () mutable {
-        return futurize_apply([&] { return _mm.announce_new_column_family(schema, false); }).then([this, table_info = std::move(request), schema, view_builders = std::move(view_builders)] () mutable {
+        return futurize_invoke([&] { return _mm.announce_new_column_family(schema, false); }).then([this, table_info = std::move(request), schema, view_builders = std::move(view_builders)] () mutable {
             return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
                 return service::get_local_migration_manager().announce_new_view(view_ptr(builder.build()));
             }).then([this, table_info = std::move(table_info), schema] () mutable {

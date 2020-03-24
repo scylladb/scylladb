@@ -39,7 +39,7 @@ private:
 private:
     future<> do_trigger(seastar::shared_promise<> pr) {
         _pending = {};
-        return futurize_apply(_func).then_wrapped([pr = std::move(pr)] (auto&& f) mutable {
+        return futurize_invoke(_func).then_wrapped([pr = std::move(pr)] (auto&& f) mutable {
             if (f.failed()) {
                 pr.set_exception(f.get_exception());
             } else {

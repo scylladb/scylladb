@@ -113,7 +113,7 @@ public:
 
         using futurator = futurize<std::result_of_t<Func()>>;
 
-        return futurator::apply(std::forward<Func>(func)).then_wrapped([this, rp, post = std::forward<Post>(post)](typename futurator::type f) mutable {
+        return futurator::invoke(std::forward<Func>(func)).then_wrapped([this, rp, post = std::forward<Post>(post)](typename futurator::type f) mutable {
             auto i = _map.find(rp);
             assert(i != _map.end());
 

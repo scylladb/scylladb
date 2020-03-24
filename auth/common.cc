@@ -65,7 +65,7 @@ static future<> create_metadata_table_if_missing_impl(
         std::string_view cql,
         ::service::migration_manager& mm) {
     static auto ignore_existing = [] (seastar::noncopyable_function<future<>()> func) {
-        return futurize_apply(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
+        return futurize_invoke(std::move(func)).handle_exception_type([] (exceptions::already_exists_exception& ignored) { });
     };
     auto& db = qp.db();
     auto parsed_statement = cql3::query_processor::parse_statement(cql);
@@ -92,7 +92,7 @@ future<> create_metadata_table_if_missing(
         cql3::query_processor& qp,
         std::string_view cql,
         ::service::migration_manager& mm) noexcept {
-    return futurize_apply(create_metadata_table_if_missing_impl, table_name, qp, cql, mm);
+    return futurize_invoke(create_metadata_table_if_missing_impl, table_name, qp, cql, mm);
 }
 
 future<> wait_for_schema_agreement(::service::migration_manager& mm, const database& db, seastar::abort_source& as) {

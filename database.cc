@@ -1470,7 +1470,7 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
     }
-  return update_write_metrics(seastar::futurize_apply([&] {
+  return update_write_metrics(seastar::futurize_invoke([&] {
     if (!s->is_synced()) {
         throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
                                         s->ks_name(), s->cf_name(), s->version()));

@@ -194,7 +194,7 @@ SEASTAR_TEST_CASE(test_secondary_index_if_exists) {
         e.execute_cql("drop index if exists cf_a_idx").get();
         // Expect exceptions::invalid_request_exception: Index 'cf_a_idx'
         // could not be found in any of the tables of keyspace 'ks'
-        assert_that_failed(seastar::futurize_apply([&e] { return e.execute_cql("drop index cf_a_idx"); }));
+        assert_that_failed(seastar::futurize_invoke([&e] { return e.execute_cql("drop index cf_a_idx"); }));
     });
 }
 

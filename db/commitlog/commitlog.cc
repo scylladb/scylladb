@@ -1277,7 +1277,7 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
 template <typename Func>
 static auto close_on_failure(future<file> file_fut, Func func) {
     return file_fut.then([func = std::move(func)](file f) {
-        return futurize_apply(func, f).handle_exception([f] (std::exception_ptr e) mutable {
+        return futurize_invoke(func, f).handle_exception([f] (std::exception_ptr e) mutable {
             return f.close().then_wrapped([f, e = std::move(e)] (future<> x) {
                 using futurator = futurize<std::result_of_t<Func(file)>>;
                 return futurator::make_exception_future(e);
@@ -1424,7 +1424,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 promise<> p;
                 _segment_allocating.emplace(p.get_future());
                 auto f = _segment_allocating->get_future(timeout);
-                futurize_apply([this] {
+                futurize_invoke([this] {
                     return with_gate(_gate, [this] {
                         return new_segment().discard_result().finally([this]() {
                             _segment_allocating = std::nullopt;

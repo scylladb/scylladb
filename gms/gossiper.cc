@@ -274,7 +274,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
 }
 
 future<> gossiper::do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg) {
-    return futurize_apply([this, from, syn_msg = std::move(syn_msg)] () mutable {
+    return futurize_invoke([this, from, syn_msg = std::move(syn_msg)] () mutable {
         auto g_digest_list = syn_msg.get_gossip_digests();
         do_sort(g_digest_list);
         utils::chunked_vector<gossip_digest> delta_gossip_digest_list;
@@ -379,7 +379,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
 }
 
 future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest) {
-    return futurize_apply([this, from, ack_msg_digest = std::move(ack_msg_digest)] () mutable {
+    return futurize_invoke([this, from, ack_msg_digest = std::move(ack_msg_digest)] () mutable {
         /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
         std::map<inet_address, endpoint_state> delta_ep_state_map;
         for (auto g_digest : ack_msg_digest) {

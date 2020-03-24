@@ -124,7 +124,7 @@ future<> redis_server::do_accepts(int which, bool keepalive, socket_address serv
 }
 
 future<redis_server::result> redis_server::connection::process_request_one(redis::request&& request, redis::redis_options& opts, service_permit permit) {
-    return futurize_apply([this, request = std::move(request), &opts, permit] () mutable {
+    return futurize_invoke([this, request = std::move(request), &opts, permit] () mutable {
         return _server._query_processor.local().process(std::move(request), seastar::ref(opts), permit).then([] (auto&& message) {
             return make_ready_future<redis_server::result> (std::move(message));
         });

@@ -68,8 +68,8 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
             if (ballot.timestamp() > state._promised_ballot.timestamp()) {
                 logger.debug("Promising ballot {}", ballot);
                 tracing::trace(tr_state, "Promising ballot {}", ballot);
-                auto f1 = futurize_apply(db::system_keyspace::save_paxos_promise, *schema, std::ref(key), ballot, timeout);
-                auto f2 = futurize_apply([&] {
+                auto f1 = futurize_invoke(db::system_keyspace::save_paxos_promise, *schema, std::ref(key), ballot, timeout);
+                auto f2 = futurize_invoke([&] {
                     return do_with(dht::partition_range_vector({dht::partition_range::make_singular({token, key})}),
                             [tr_state, schema, &cmd, only_digest, da, timeout] (const dht::partition_range_vector& prv) {
                         return get_local_storage_proxy().get_db().local().query(schema, cmd,
