@@ -832,15 +832,15 @@ public:
     std::tuple<mutation, stats::part_type_set> transform(const mutation& m, const cql3::untyped_result_set* rs, api::timestamp_type ts, bytes tuuid, int& batch_no) {
         auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token());
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
+        const auto preimage = _schema->cdc_options().preimage();
         const auto postimage = _schema->cdc_options().postimage();
         stats::part_type_set touched_parts;
         auto& p = m.partition();
         if (p.partition_tombstone()) {
             // Partition deletion
             touched_parts.set<stats::part_type::PARTITION_DELETE>();
-            auto log_ck = set_pk_columns(m.key(), ts, tuuid, 0, res);
+            auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
             set_operation(log_ck, ts, operation::partition_delete, res);
-            ++batch_no;
         } else if (!p.row_tombstones().empty()) {
             // range deletion
             touched_parts.set<stats::part_type::RANGE_TOMBSTONE>();
@@ -862,31 +862,25 @@ public:
                     }
                 };
                 {
-                    auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                    auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
                     set_bound(log_ck, rt.start);
                     const auto start_operation = rt.start_kind == bound_kind::incl_start
                             ? operation::range_delete_start_inclusive
                             : operation::range_delete_start_exclusive;
                     set_operation(log_ck, ts, start_operation, res);
-                    ++batch_no;
                 }
                 {
-                    auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                    auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
                     set_bound(log_ck, rt.end);
                     const auto end_operation = rt.end_kind == bound_kind::incl_end
                             ? operation::range_delete_end_inclusive
                             : operation::range_delete_end_exclusive;
                     set_operation(log_ck, ts, end_operation, res);
-                    ++batch_no;
                 }
             }
         } else {
             // should be insert, update or deletion
             auto process_cells = [&](const row& r, column_kind ckind, const clustering_key& log_ck, std::optional<clustering_key> pikey, const cql3::untyped_result_set_row* pirow, std::optional<clustering_key> poikey) -> std::optional<gc_clock::duration> {
-                if (postimage && !poikey) {
-                    poikey = set_pk_columns(m.key(), ts, tuuid, ++batch_no, res);
-                    set_operation(*poikey, ts, operation::post_image, res);
-                }
                 std::optional<gc_clock::duration> ttl;
                 std::unordered_set<column_id> columns_assigned;
                 r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
@@ -1014,7 +1008,7 @@ public:
 
                     bytes_opt prev = get_preimage_col_value(cdef, pirow);
 
-                    if (prev) {
+                    if (prev && pikey) {
                         assert(std::addressof(res.partition().clustered_row(*_log_schema, *pikey)) != std::addressof(res.partition().clustered_row(*_log_schema, log_ck)));
                         assert(pikey->explode() != log_ck.explode());
                         res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, *prev, _cdc_ttl_opt));
@@ -1033,7 +1027,7 @@ public:
                         res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
                     }
 
-                    if (postimage) {
+                    if (poikey) {
                         // keep track of actually assigning this already
                         columns_assigned.emplace(id);
                         if (cdef.is_atomic() && !is_column_delete && value) {
@@ -1048,7 +1042,7 @@ public:
                 });
 
                 // fill in all columns not already processed. Note that column nulls are also marked.
-                if (postimage && pirow) {
+                if (poikey) {
                     for (auto& cdef : _schema->columns(ckind)) {
                         if (!columns_assigned.count(cdef.id)) {
                             auto v = pirow->get_view_opt(cdef.name_as_text());
@@ -1070,16 +1064,18 @@ public:
 
                 if (rs && !rs->empty()) {
                     // For static rows, only one row from the result set is needed
-                    pikey = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
-                    set_operation(*pikey, ts, operation::pre_image, res);
                     pirow = &rs->front();
-                    ++batch_no;
                 }
 
-                auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                if (preimage && pirow) {
+                    pikey = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
+                    set_operation(*pikey, ts, operation::pre_image, res);
+                }
+
+                auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
 
                 if (postimage) {
-                     poikey = set_pk_columns(m.key(), ts, tuuid, ++batch_no, res);
+                     poikey = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
                      set_operation(*poikey, ts, operation::post_image, res);
                 }
 
@@ -1090,7 +1086,6 @@ public:
                 if (ttl) {
                     set_ttl(log_ck, ts, *ttl, res);
                 }
-                ++batch_no;
             } else {
                 touched_parts.set_if<stats::part_type::CLUSTERING_ROW>(!p.clustered_rows().empty());
                 for (const rows_entry& r : p.clustered_rows()) {
@@ -1111,19 +1106,21 @@ public:
                                 }
                             }
                             if (match) {
-                                pikey = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
-                                set_operation(*pikey, ts, operation::pre_image, res);
                                 pirow = &utr;
-                                ++batch_no;
                                 break;
                             }
                         }
                     }
 
-                    auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no, res);
+                    if (preimage && pirow) {
+                        pikey = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
+                        set_operation(*pikey, ts, operation::pre_image, res);
+                    }
+
+                    auto log_ck = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
 
                     if (postimage) {
-                        poikey = set_pk_columns(m.key(), ts, tuuid, ++batch_no, res);
+                        poikey = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
                         set_operation(*poikey, ts, operation::post_image, res);
                     }
 
@@ -1133,7 +1130,7 @@ public:
                         auto cdef = _log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
                         res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
 
-                        if (pirow) {
+                        if (pikey) {
                             assert(pirow->has(column.name_as_text()));
                             res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
                         }
@@ -1170,7 +1167,6 @@ public:
                         }
                     }
                     set_operation(log_ck, ts, cdc_op, res);
-                    ++batch_no;
                 }
             }
         }

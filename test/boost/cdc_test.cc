@@ -514,15 +514,15 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
 
 SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
-        auto test = [&e] (bool enabled, bool with_ttl) {
+        auto test = [&e] (bool pre_enabled, bool post_enabled, bool with_ttl) {
             cquery_nofail(e, format("CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, val2 int, PRIMARY KEY((pk, pk2), ck, ck2)) "
-                "WITH cdc = {{'enabled':'true', 'preimage':'{0}', 'postimage':'{0}'}}", enabled));
+                "WITH cdc = {{'enabled':'true', 'preimage':'{}', 'postimage':'{}'}}", pre_enabled, post_enabled));
             cquery_nofail(e, "UPDATE ks.tbl"s + (with_ttl ? " USING TTL 654" : "") + " SET val = 11111, val2 = 22222 WHERE pk=1 AND pk2=11 AND ck=111 AND ck2=1111");
 
             auto rows = select_log(e, "tbl");
 
             BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
-            BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::post_image).empty() == !enabled);
+            BOOST_REQUIRE_EQUAL(!post_enabled, to_bytes_filtered(*rows, cdc::operation::post_image).empty());
 
             auto first = to_bytes_filtered(*rows, cdc::operation::update);
 
@@ -552,13 +552,14 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
                 auto second = to_bytes_filtered(*rows, cdc::operation::update);
                 auto post_image = to_bytes_filtered(*rows, cdc::operation::post_image);
 
-                if (!enabled) {
-                    BOOST_REQUIRE(pre_image.empty());
-                    BOOST_REQUIRE(post_image.empty());
-                } else {
-                    sort_by_time(*rows, second);
-                    sort_by_time(*rows, pre_image);
-                    sort_by_time(*rows, post_image);
+                BOOST_REQUIRE_EQUAL(!pre_enabled, pre_image.empty());
+                BOOST_REQUIRE_EQUAL(!post_enabled, post_image.empty());
+
+                sort_by_time(*rows, second);
+                sort_by_time(*rows, pre_image);
+                sort_by_time(*rows, post_image);
+
+                if (pre_enabled) {
                     BOOST_REQUIRE_EQUAL(pre_image.size(), i + 1);
 
                     val = *pre_image.back()[val_index];
@@ -566,20 +567,22 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
                     BOOST_REQUIRE_EQUAL(int32_type->decompose(1111), *pre_image.back()[ck2_index]);
                     BOOST_REQUIRE_EQUAL(data_value(last), val_type->deserialize(bytes_view(val)));
                     BOOST_REQUIRE_EQUAL(bytes_opt(), pre_image.back()[ttl_index]);
+                }
 
+                if (post_enabled) {
                     val = *post_image.back()[val_index];
                     val2 = *post_image.back()[val2_index];
 
                     BOOST_REQUIRE_EQUAL(int32_type->decompose(1111), *post_image.back()[ck2_index]);
                     BOOST_REQUIRE_EQUAL(data_value(nv), val_type->deserialize(bytes_view(val)));
                     BOOST_REQUIRE_EQUAL(data_value(22222), val_type->deserialize(bytes_view(val2)));
+                }
 
-                    const auto& ttl_cell = second[second.size() - 2][ttl_index];
-                    if (with_ttl) {
-                        BOOST_REQUIRE_EQUAL(long_type->decompose(last_ttl), ttl_cell);
-                    } else {
-                        BOOST_REQUIRE(!ttl_cell);
-                    }
+                const auto& ttl_cell = second[second.size() - 2][ttl_index];
+                if (with_ttl) {
+                    BOOST_REQUIRE_EQUAL(long_type->decompose(last_ttl), ttl_cell);
+                } else {
+                    BOOST_REQUIRE(!ttl_cell);
                 }
 
                 last = nv;
@@ -587,10 +590,13 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
             }
             e.execute_cql("DROP TABLE ks.tbl").get();
         };
-        test(true, true);
-        test(true, false);
-        test(false, true);
-        test(false, false);
+        for (auto pre : { true, false}) {
+            for (auto post : { true, false }) {
+                for (auto ttl : { true, false}) {
+                    test(pre, post, ttl);
+                }
+            }
+        }
     }, mk_cdc_test_config()).get();
 }
 
