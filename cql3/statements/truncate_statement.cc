@@ -63,7 +63,7 @@ uint32_t truncate_statement::get_bound_terms() const
 
 std::unique_ptr<prepared_statement> truncate_statement::prepare(database& db,cql_stats& stats)
 {
-    return std::make_unique<prepared_statement>(this->shared_from_this());
+    return std::make_unique<prepared_statement>(::make_shared<truncate_statement>(*this));
 }
 
 bool truncate_statement::uses_function(const sstring& ks_name, const sstring& function_name) const

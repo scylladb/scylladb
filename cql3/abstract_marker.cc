@@ -99,13 +99,13 @@ abstract_marker::in_raw::in_raw(int32_t bind_index)
     : raw{bind_index}
 { }
 
-::shared_ptr<column_specification> abstract_marker::in_raw::make_in_receiver(::shared_ptr<column_specification> receiver) {
-    auto in_name = ::make_shared<column_identifier>(sstring("in(") + receiver->name->to_string() + sstring(")"), true);
-    return ::make_shared<column_specification>(receiver->ks_name, receiver->cf_name, in_name, list_type_impl::get_instance(receiver->type, false));
+::shared_ptr<column_specification> abstract_marker::in_raw::make_in_receiver(const column_specification& receiver) {
+    auto in_name = ::make_shared<column_identifier>(sstring("in(") + receiver.name->to_string() + sstring(")"), true);
+    return ::make_shared<column_specification>(receiver.ks_name, receiver.cf_name, in_name, list_type_impl::get_instance(receiver.type, false));
 }
 
 ::shared_ptr<term> abstract_marker::in_raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const {
-    return ::make_shared<lists::marker>(_bind_index, make_in_receiver(receiver));
+    return ::make_shared<lists::marker>(_bind_index, make_in_receiver(*receiver));
 }
 
 }

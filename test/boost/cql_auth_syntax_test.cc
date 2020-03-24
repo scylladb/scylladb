@@ -127,7 +127,7 @@ static auto make_tester(modifier_rule_ptr<T> rule) {
 ///
 /// Assert that the semicolon-terminated CQL query is valid syntax, and return the parsed statement.
 ///
-static ::shared_ptr<cql3::statements::raw::parsed_statement>
+static std::unique_ptr<cql3::statements::raw::parsed_statement>
 test_valid(std::string_view cql_query) {
     return test_valid(cql_query, &cql3_parser::CqlParser::query);
 }

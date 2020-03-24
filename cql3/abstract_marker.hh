@@ -87,7 +87,7 @@ public:
     public:
         in_raw(int32_t bind_index);
     private:
-        static ::shared_ptr<column_specification> make_in_receiver(::shared_ptr<column_specification> receiver);
+        static ::shared_ptr<column_specification> make_in_receiver(const column_specification& receiver);
     public:
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override;
     };

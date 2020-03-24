@@ -54,10 +54,6 @@ namespace statements {
 class create_role_statement final : public authentication_statement {
     sstring _role;
 
-    bool _is_superuser;
-
-    bool _can_login;
-
     role_options _options;
 
     bool _if_not_exists;
@@ -69,6 +65,8 @@ public:
                 , _options(std::move(options))
                 , _if_not_exists(if_not_exists) {
     }
+
+    std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 
     future<> grant_permissions_to_creator(const service::client_state&) const;
 

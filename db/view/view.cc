@@ -84,7 +84,7 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
 
 cql3::statements::select_statement& view_info::select_statement() const {
     if (!_select_statement) {
-        shared_ptr<cql3::statements::raw::select_statement> raw;
+        std::unique_ptr<cql3::statements::raw::select_statement> raw;
         // FIXME(sarna): legacy code, should be removed after "computed_columns" feature is guaranteed
         // to be available on every node. Then, we won't need to check if this view is backing a secondary index.
         const column_definition* legacy_token_column = nullptr;

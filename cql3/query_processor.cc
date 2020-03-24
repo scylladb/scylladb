@@ -607,10 +607,10 @@ prepared_cache_key_type query_processor::compute_thrift_id(
 
 std::unique_ptr<prepared_statement>
 query_processor::get_statement(const sstring_view& query, const service::client_state& client_state) {
-    ::shared_ptr<raw::parsed_statement> statement = parse_statement(query);
+    std::unique_ptr<raw::parsed_statement> statement = parse_statement(query);
 
     // Set keyspace for statement that require login
-    auto cf_stmt = dynamic_pointer_cast<raw::cf_statement>(statement);
+    auto cf_stmt = dynamic_cast<raw::cf_statement*>(statement.get());
     if (cf_stmt) {
         cf_stmt->prepare_keyspace(client_state);
     }
@@ -620,7 +620,7 @@ query_processor::get_statement(const sstring_view& query, const service::client_
     return p;
 }
 
-::shared_ptr<raw::parsed_statement>
+std::unique_ptr<raw::parsed_statement>
 query_processor::parse_statement(const sstring_view& query) {
     try {
         auto statement = util::do_with_parser(query,  std::mem_fn(&cql3_parser::CqlParser::query));
