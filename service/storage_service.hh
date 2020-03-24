@@ -312,7 +312,13 @@ private:
      */
     std::optional<db_clock::time_point> _cdc_streams_ts;
 
-    sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::ka;
+    // _sstables_format is the format used for writing new sstables.
+    // Here we set its default value, but if we discover that all the nodes
+    // in the cluster support a newer format, _sstables_format will be set to
+    // that format. read_sstables_format() also overwrites _sstables_format
+    // if an sstable format was chosen earlier (and this choice was persisted
+    // in the system table).
+    sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::la;
     seastar::named_semaphore _feature_listeners_sem = {1, named_semaphore_exception_factory{"feature listeners"}};
     feature_enabled_listener _la_feature_listener;
     feature_enabled_listener _mc_feature_listener;

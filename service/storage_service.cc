@@ -3409,10 +3409,13 @@ void feature_enabled_listener::on_enabled() {
 
 future<> read_sstables_format(distributed<storage_service>& ss) {
     return db::system_keyspace::get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME).then([&ss] (std::optional<sstring> format_opt) {
-        sstables::sstable_version_types format = sstables::from_string(format_opt.value_or("ka"));
-        return ss.invoke_on_all([format] (storage_service& s) {
-            s._sstables_format = format;
-        });
+        if (format_opt) {
+            sstables::sstable_version_types format = sstables::from_string(*format_opt);
+            return ss.invoke_on_all([format] (storage_service& s) {
+                s._sstables_format = format;
+            });
+        }
+        return make_ready_future<>();
     });
 }
 
