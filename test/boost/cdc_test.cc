@@ -863,17 +863,12 @@ static void test_collection(cql_test_env& e, data_type val_type, data_type del_t
         auto update = updates.end()  - t.changes.size();
         auto pre = pre_image.end()  - t.changes.size();
 
+        if (!t.prev.is_null()) {
+            auto val = *(*pre)[val_index];
+            BOOST_REQUIRE_EQUAL(t.prev, f(col_type->deserialize(bytes_view(val))));
+        }
+
         for (auto& change : t.changes) {
-            // note: setting a collection to a value causes a tombstone
-            // with timestamp orgts - 1 -> we split the mutation into two, 
-            // which with the currect logic means we get two (or more)
-            // pre-image rows. This is a little wonky/wasteful, but
-            // since we effectively get two timestamps for two cdc rows
-            // it is "correct". We check each...
-            if (!t.prev.is_null()) {
-                auto val = *(*pre++)[val_index];
-                BOOST_REQUIRE_EQUAL(t.prev, f(col_type->deserialize(bytes_view(val))));
-            }
             auto& update_row = *update++;
             if (!change.next.is_null()) {
                 auto val = col_type->deserialize(bytes_view(*update_row[val_index]));
@@ -889,6 +884,7 @@ static void test_collection(cql_test_env& e, data_type val_type, data_type del_t
                 BOOST_REQUIRE_EQUAL(data_value(true), boolean_type->deserialize(bytes_view(*update_row[val_deleted_index])));
             }
         }
+
         if (!t.post.is_null()) {
             auto val = *post_image.back()[val_index];
             BOOST_REQUIRE_EQUAL(t.post, f(col_type->deserialize(bytes_view(val))));
@@ -967,7 +963,24 @@ SEASTAR_THREAD_TEST_CASE(test_map_logging) {
                     }
                 },
                 ::make_map_value(map_type, { { "ola", "kokos" } })
+            },
+            { 
+                "UPDATE ks.tbl set val = { 'bolla':'trolla', 'kork':'skruv' } where pk=1 and pk2=11 and ck=111",
+                ::make_map_value(map_type, { { "ola", "kokos" } }), 
+                { // two deltas: one sets the column to null, the other adds cells
+                    {
+                        data_value::make_null(map_type), // no added cells
+                        data_value::make_null(map_keys_type), // no deleted cells
+                        true // setting entire column to null -> expect delete marker
+                    },
+                    {
+                        ::make_map_value(map_type, { { "bolla", "trolla" }, { "kork", "skruv" } }),
+                        data_value::make_null(map_keys_type),
+                    }
+                },
+                ::make_map_value(map_type, { { "bolla", "trolla" }, { "kork", "skruv" } })
             }
+
         });
     }, mk_cdc_test_config()).get();
 }
@@ -1031,6 +1044,21 @@ SEASTAR_THREAD_TEST_CASE(test_set_logging) {
                     }
                 },
                 ::make_set_value(set_type, { "ko", "nils", "ninja" })
+            },
+            {
+                "UPDATE ks.tbl set val = { 'bolla', 'trolla' } where pk=1 and pk2=11 and ck=111",
+                ::make_set_value(set_type, { "ko", "nils", "ninja" }),
+                { // two deltas: one sets the column to null, the other adds cells
+                    {
+                        data_value::make_null(set_type), // no added cells
+                        data_value::make_null(set_type), // no deleted cells
+                        true // setting entire column to null -> expect delete marker
+                    },                    {
+                        ::make_set_value(set_type, { "bolla", "trolla" }),
+                        data_value::make_null(set_type), // no deleted cells
+                    }
+                },
+                ::make_set_value(set_type, { "bolla", "trolla" })
             }
         });
     }, mk_cdc_test_config()).get();
@@ -1108,6 +1136,22 @@ SEASTAR_THREAD_TEST_CASE(test_list_logging) {
                     }
                 },
                 ::make_list_value(list_type, { "babar", "ko", "ninja", "mission" })
+            },
+            {
+                "UPDATE ks.tbl set val = ['bolla', 'trolla'] where pk=1 and pk2=11 and ck=111",
+                ::make_list_value(list_type, { "babar", "ko", "ninja", "mission" }),
+                { // two deltas: one sets the column to null, the other adds cells
+                    {
+                        data_value::make_null(list_type), // no added cells
+                        data_value::make_null(uuids_type), // no deleted cells
+                        true // setting entire column to null -> expect delete marker
+                    },
+                    {
+                        ::make_list_value(list_type, { "bolla", "trolla" }),
+                        data_value::make_null(uuids_type),
+                    }
+                },
+                ::make_list_value(list_type, { "bolla", "trolla" })
             }
         }, [&](data_value v) {
             auto map = value_cast<map_type_impl::native_type>(std::move(v));
@@ -1192,6 +1236,23 @@ SEASTAR_THREAD_TEST_CASE(test_udt_logging) {
                     }
                 },
                 make_tuple(13, std::nullopt)
+            },
+            {
+                "UPDATE ks.tbl set val = { field0: 1, field1: 'bolla' } where pk=1 and pk2=11 and ck=111",
+                make_tuple(13, std::nullopt),
+                { // two deltas: one sets the column to null, the other adds cells
+                    {
+                        data_value::make_null(udt_type), // no added cells
+                        data_value::make_null(index_set_type), // no deleted cells
+                        true // setting entire column to null -> expect delete marker
+                    },
+                    {
+                        make_tuple(1, "bolla"),
+                        data_value::make_null(index_set_type), // no deleted cells
+                        // just adding cells -> no delete marker
+                    }
+                },
+                make_tuple(1, "bolla")
             },
         });
     }, mk_cdc_test_config()).get();
