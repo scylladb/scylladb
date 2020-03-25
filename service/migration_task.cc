@@ -51,11 +51,12 @@ namespace service {
 
 static logging::logger mlogger("migration_task");
 
-future<> migration_task::run_may_throw(const gms::inet_address& endpoint)
+future<> migration_task::run_may_throw(const gms::inet_address& endpoint, bool can_ignore_down_node)
 {
     if (!gms::get_local_gossiper().is_alive(endpoint)) {
-        mlogger.warn("Can't send migration request: node {} is down.", endpoint);
-        return make_ready_future<>();
+        auto msg = format("Can't send migration request: node {} is down.", endpoint);
+        mlogger.warn("{}", msg);
+        return can_ignore_down_node ? make_ready_future<>() : make_exception_future<>(std::runtime_error(msg));
     }
     netw::messaging_service::msg_addr id{endpoint, 0};
     return service::get_local_migration_manager().merge_schema_from(id).handle_exception([](std::exception_ptr e) {

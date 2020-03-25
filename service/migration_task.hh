@@ -47,7 +47,7 @@ namespace service {
 
 class migration_task {
 public:
-    static future<> run_may_throw(const gms::inet_address& endpoint);
+    static future<> run_may_throw(const gms::inet_address& endpoint, bool can_ignore_down_node);
 };
 
 }

@@ -277,9 +277,9 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
     }).finally([me = shared_from_this()] {});
 }
 
-future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint)
+future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node)
 {
-    return service::migration_task::run_may_throw(endpoint);
+    return service::migration_task::run_may_throw(endpoint, can_ignore_down_node);
 }
 
 future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
@@ -1132,7 +1132,8 @@ future<> migration_manager::sync_schema(const database& db, const std::vector<gm
         }).then([this, &schema_map] {
             return parallel_for_each(schema_map, [this] (auto& x) {
                 mlogger.debug("Pulling schema {} from {}", x.first, x.second.front());
-                return submit_migration_task(x.second.front());
+                bool can_ignore_down_node = false;
+                return submit_migration_task(x.second.front(), can_ignore_down_node);
             });
         });
     });
