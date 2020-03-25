@@ -640,8 +640,8 @@ future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstri
 }
 
 static
-const dht::i_partitioner&
-get_partitioner_for_tables(seastar::sharded<database>& db, const sstring& keyspace, const std::vector<sstring>& names) {
+const dht::sharding_info&
+get_sharding_info_for_tables(seastar::sharded<database>& db, const sstring& keyspace, const std::vector<sstring>& names) {
     schema_ptr last_s;
     for (auto& name : names) {
         schema_ptr s;
@@ -650,20 +650,20 @@ get_partitioner_for_tables(seastar::sharded<database>& db, const sstring& keyspa
         } catch(...) {
             throw std::runtime_error(format("No column family '{}' in keyspace '{}'", name, keyspace));
         }
-        if (last_s && last_s->get_partitioner() != s->get_partitioner()) {
+        if (last_s && last_s->get_sharding_info() != s->get_sharding_info()) {
             throw std::runtime_error(
-                    format("All tables repaired together have to have the same partitioner. "
-                        "Different partitioners found: {} (for table {}) and {} (for table {})",
-                        last_s->get_partitioner(), last_s->cf_name(),
-                        s->get_partitioner(), s->cf_name()));
+                    format("All tables repaired together have to have the same sharding logic. "
+                        "Different sharding logic found: {} (for table {}) and {} (for table {})",
+                        last_s->get_sharding_info(), last_s->cf_name(),
+                        s->get_sharding_info(), s->cf_name()));
         }
         last_s = std::move(s);
     }
     if (!last_s) {
-        throw std::runtime_error(format("Failed to find partitioner for keyspace={}, tables={}, no table in this keyspace",
+        throw std::runtime_error(format("Failed to find sharding_info for keyspace={}, tables={}, no table in this keyspace",
                 keyspace, names));
     }
-    return last_s->get_partitioner();
+    return last_s->get_sharding_info();
 }
 
 repair_info::repair_info(seastar::sharded<database>& db_,
@@ -674,7 +674,7 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     const std::vector<sstring>& data_centers_,
     const std::vector<sstring>& hosts_)
     : db(db_)
-    , partitioner(get_partitioner_for_tables(db_, keyspace_, cfs_))
+    , sharding_info(get_sharding_info_for_tables(db_, keyspace_, cfs_))
     , keyspace(keyspace_)
     , ranges(ranges_)
     , cfs(cfs_)
@@ -1329,7 +1329,7 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
             ri->ranges_index++;
             rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
                 ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->cfs, range);
-            return do_with(dht::selective_token_range_sharder(ri->partitioner.get_sharding_info(), range, ri->shard), [ri] (auto& sharder) {
+            return do_with(dht::selective_token_range_sharder(ri->sharding_info, range, ri->shard), [ri] (auto& sharder) {
                 return repeat([ri, &sharder] () {
                     check_in_shutdown();
                     ri->check_in_abort();
