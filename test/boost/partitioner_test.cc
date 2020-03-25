@@ -326,116 +326,6 @@ normalize(dht::partition_range pr) {
 
 static
 void
-test_exponential_sharder(const dht::i_partitioner& part, const schema& s, const dht::partition_range& pr) {
-
-    // Step 1: run the exponential sharder fully, and collect all results
-
-    debug("input range: %s\n", pr);
-    auto results = std::vector<dht::ring_position_exponential_sharder_result>();
-    auto sharder = dht::ring_position_exponential_sharder(part, pr);
-    auto partial_result = sharder.next(s);
-    while (partial_result) {
-        results.push_back(std::move(*partial_result));
-        partial_result = sharder.next(s);
-    }
-
-    // Step 2: "de-exponentialize" the result by fragmenting large ranges
-
-    struct fragmented_sharder_result {
-        bool inorder;
-        struct shard_result {
-            shard_id shard;
-            std::vector<dht::partition_range> ranges;
-        };
-        std::vector<shard_result> shards;
-    };
-    auto fragmented_results = std::vector<fragmented_sharder_result>();
-    for (auto&& partial_result : results) {
-        auto fsr = fragmented_sharder_result();
-        fsr.inorder = partial_result.inorder;
-        debug("looking at partial result\n");
-        for (auto&& per_shard_range : partial_result.per_shard_ranges) {
-            debug("partial_result: looking at %s (shard %d)\n", per_shard_range.ring_range, per_shard_range.shard);
-            auto sr = fragmented_sharder_result::shard_result();
-            sr.shard = per_shard_range.shard;
-            auto sharder = dht::ring_position_range_sharder(part, per_shard_range.ring_range);
-            auto next = sharder.next(s);
-            while (next) {
-                debug("seeing: shard %d frag %s\n", next->shard, next->ring_range);
-                if (next->shard == sr.shard) {
-                    debug("fragmented to %d\n", next->ring_range);
-                    sr.ranges.push_back(std::move(next->ring_range));
-                }
-                next = sharder.next(s);
-            }
-            fsr.shards.push_back(std::move(sr));
-        }
-        fragmented_results.push_back(std::move(fsr));
-    }
-
-    // Step 3: collect all fragmented ranges
-
-    auto all_fragments = std::vector<dht::partition_range>();
-    for (auto&& fr : fragmented_results) {
-        for (auto&& sr : fr.shards) {
-            for (auto&& f : sr.ranges) {
-                all_fragments.push_back(f);
-            }
-        }
-    }
-
-    // Step 4: verify no overlaps
-
-    bool no_overlaps = true;
-    if (all_fragments.size() > 1) {
-        for (auto i : boost::irange<size_t>(1, all_fragments.size() - 1)) {
-            for (auto j : boost::irange<size_t>(0, i)) {
-                no_overlaps &= !all_fragments[i].overlaps(all_fragments[j], dht::ring_position_comparator(s));
-            }
-        }
-    }
-    BOOST_REQUIRE(no_overlaps);  // We OOM if BOOST_REQUIRE() is run in the inner loop
-
-    // Step 5: verify all fragments are contiguous
-
-    auto rplc = dht::ring_position_less_comparator(s);
-    auto rptc = dht::ring_position_comparator(s);
-    boost::sort(all_fragments, [&] (const dht::partition_range& a, const dht::partition_range b) {
-        if (!a.start() || !b.start()) {
-            return unsigned(bool(a.start())) < unsigned(bool(b.start()));
-        } else {
-            return rplc(a.start()->value(), b.start()->value());
-        }
-    });
-    auto not_adjacent = [&] (const dht::partition_range& a, const dht::partition_range b) {
-        return !a.end() || !b.start() || rptc(a.end()->value(), b.start()->value()) != 0;
-    };
-    BOOST_REQUIRE(boost::adjacent_find(all_fragments, not_adjacent) == all_fragments.end());
-
-    // Step 6: verify inorder is accurate; allow a false negative
-
-    for (auto&& fsr : fragmented_results) {
-        auto has_one_fragment = [] (const fragmented_sharder_result::shard_result& sr) {
-            return sr.ranges.size() <= 1;  // the sharder may return a range that does not intersect the shard
-        };
-        BOOST_REQUIRE(!fsr.inorder || boost::algorithm::all_of(fsr.shards, has_one_fragment));
-    }
-
-    // Step 7: verify that the fragmented range matches the input range (since the fragments are
-    //         contiguous, we need only test the edges).
-
-    auto reconstructed = normalize(dht::partition_range(all_fragments.front().start(), all_fragments.back().end()));
-    auto original = normalize(pr);
-    debug("original %s reconstructed %s\n", original, reconstructed);
-    BOOST_REQUIRE(original.contains(reconstructed, rptc) && reconstructed.contains(original, rptc));
-
-    // Step 8: verify exponentiality
-    debug("sizes %d %d\n", results.size(), 1 + log2ceil(div_ceil(all_fragments.size(), part.shard_count())) + log2ceil(part.shard_count()));
-    BOOST_REQUIRE(results.size() <= 1 + log2ceil(div_ceil(all_fragments.size(), part.shard_count())) + log2ceil(part.shard_count()));
-}
-
-static
-void
 test_something_with_some_interesting_ranges_and_partitioners(std::function<void (const dht::i_partitioner&, const schema&, const dht::partition_range&)> func_to_test) {
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
@@ -475,10 +365,6 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
             func_to_test(part, *schema, range);
         }
     }
-}
-
-SEASTAR_THREAD_TEST_CASE(test_exponential_sharders) {
-    return test_something_with_some_interesting_ranges_and_partitioners(test_exponential_sharder);
 }
 
 static

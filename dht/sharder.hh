@@ -50,26 +50,6 @@ struct ring_position_range_and_shard_and_element : ring_position_range_and_shard
     unsigned element;
 };
 
-struct ring_position_exponential_sharder_result {
-    std::vector<ring_position_range_and_shard> per_shard_ranges;
-    bool inorder = true;
-};
-
-// given a ring_position range, generates exponentially increasing
-// sets per-shard sub-ranges
-class ring_position_exponential_sharder {
-    const i_partitioner& _partitioner;
-    partition_range _range;
-    unsigned _spans_per_iteration = 1;
-    unsigned _first_shard = 0;
-    unsigned _next_shard = 0;
-    std::vector<std::optional<token>> _last_ends; // index = shard
-public:
-    explicit ring_position_exponential_sharder(partition_range pr);
-    explicit ring_position_exponential_sharder(const i_partitioner& partitioner, partition_range pr);
-    std::optional<ring_position_exponential_sharder_result> next(const schema& s);
-};
-
 class ring_position_range_vector_sharder {
     using vec_type = dht::partition_range_vector;
     vec_type _ranges;
