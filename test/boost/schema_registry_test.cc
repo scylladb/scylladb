@@ -44,10 +44,11 @@ static schema_ptr random_schema() {
 }
 
 struct dummy_init {
-    db::config config;
+    std::unique_ptr<db::config> config;
 
     dummy_init() {
-        local_schema_registry().init(config);
+        config = std::make_unique<db::config>();
+        local_schema_registry().init(*config);
     }
 };
 
