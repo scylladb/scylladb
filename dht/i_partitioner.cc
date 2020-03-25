@@ -182,7 +182,7 @@ std::ostream& operator<<(std::ostream& out, const i_partitioner& p) {
 }
 
 unsigned shard_of(const schema& s, const token& t) {
-    return s.get_partitioner().shard_of(t);
+    return s.get_sharding_info().shard_of(t);
 }
 
 std::optional<dht::token_range>
