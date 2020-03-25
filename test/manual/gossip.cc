@@ -65,17 +65,17 @@ int main(int ac, char ** av) {
         ("seed", bpo::value<std::vector<std::string>>(), "IP address of seed node")
         ("listen-address", bpo::value<std::string>()->default_value("0.0.0.0"), "IP address to listen");
     return app.run_deprecated(ac, av, [&auth_service, &db, &app] {
-        auto config = app.configuration();
-        logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
-        const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
-        utils::fb_utilities::set_broadcast_address(listen);
-        utils::fb_utilities::set_broadcast_rpc_address(listen);
-        auto vv = std::make_shared<gms::versioned_value::factory>();
-        return async([&] {
-            db::config cfg;
+        return async([&auth_service, &db, &app] {
+            auto config = app.configuration();
+            logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
+            const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
+            utils::fb_utilities::set_broadcast_address(listen);
+            utils::fb_utilities::set_broadcast_rpc_address(listen);
+            gms::versioned_value::factory vv;
+            auto cfg = std::make_unique<db::config>();
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             sharded<gms::feature_service> feature_service;
-            feature_service.start(gms::feature_config_from_db_config(cfg)).get();
+            feature_service.start(gms::feature_config_from_db_config(*cfg)).get();
             sharded<db::system_distributed_keyspace> sys_dist_ks;
             sharded<db::view::view_update_generator> view_update_generator;
             sharded<abort_source> abort_sources;
@@ -90,13 +90,13 @@ int main(int ac, char ** av) {
             auto stop_mnotifier = defer([&] { mnotif.stop().get(); });
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
+            gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(*cfg)).get();
             service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg, mnotif, token_metadata).get();
             netw::get_messaging_service().start(listen).get();
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();
-            auto listen = server.listen_address();
-            fmt::print("Messaging server listening on ip {} port {:d} ...\n", listen, port);
-            gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(cfg)).get();
+            auto msg_listen = server.listen_address();
+            fmt::print("Messaging server listening on ip {} port {:d} ...\n", msg_listen, port);
             std::set<gms::inet_address> seeds;
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
                 seeds.emplace(std::move(s));
@@ -108,22 +108,20 @@ int main(int ac, char ** av) {
             gossiper.set_cluster_name("Test Cluster");
 
             std::map<gms::application_state, gms::versioned_value> app_states = {
-                { gms::application_state::LOAD, vv->load(0.5) },
+                { gms::application_state::LOAD, vv.load(0.5) },
             };
 
             using namespace std::chrono;
             auto now = high_resolution_clock::now().time_since_epoch();
             int generation_number = duration_cast<seconds>(now).count();
             gossiper.start_gossiping(generation_number, app_states).get();
-            return seastar::async([vv] {
-                static double load = 0.5;
-                for (;;) {
-                    auto value = vv->load(load);
-                    load += 0.0001;
-                    gms::get_local_gossiper().add_local_application_state(gms::application_state::LOAD, value).get();
-                    sleep(std::chrono::seconds(1)).get();
-                }
-            }).get();
+            static double load = 0.5;
+            for (;;) {
+                auto value = vv.load(load);
+                load += 0.0001;
+                gms::get_local_gossiper().add_local_application_state(gms::application_state::LOAD, value).get();
+                sleep(std::chrono::seconds(1)).get();
+           }
         });
     });
 }
