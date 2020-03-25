@@ -47,6 +47,7 @@
 namespace dht {
 
 class i_partitioner;
+class sharding_info;
 
 }
 
@@ -818,6 +819,7 @@ public:
 
     static void set_default_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
     const dht::i_partitioner& get_partitioner() const;
+    const dht::sharding_info& get_sharding_info() const;
     bool has_custom_partitioner() const;
 
     const column_definition* get_column_definition(const bytes& name) const;

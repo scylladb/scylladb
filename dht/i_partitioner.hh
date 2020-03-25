@@ -222,6 +222,10 @@ public:
         return _sharding_info.shard_count();
     }
 
+    const dht::sharding_info& get_sharding_info() const {
+        return _sharding_info;
+    }
+
     unsigned sharding_ignore_msb() const {
         return _sharding_info.sharding_ignore_msb();
     }

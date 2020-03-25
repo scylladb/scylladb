@@ -38,6 +38,7 @@
 #include "database.hh"
 #include "service/storage_service.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/token-sharding.hh"
 #include "cdc/cdc_extension.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
@@ -123,6 +124,10 @@ void schema::set_default_partitioner(const sstring& class_name, unsigned ignore_
 
 const dht::i_partitioner& schema::get_partitioner() const {
     return _raw._partitioner.get();
+}
+
+const dht::sharding_info& schema::get_sharding_info() const {
+    return get_partitioner().get_sharding_info();
 }
 
 bool schema::has_custom_partitioner() const {
