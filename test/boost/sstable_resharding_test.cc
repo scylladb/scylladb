@@ -56,9 +56,9 @@ void run_sstable_resharding_test() {
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(value)), api::timestamp_type(0));
             return m;
         };
-        auto cfg = db::config();
+        auto cfg = std::make_unique<db::config>();
         for (auto i : boost::irange(0u, smp::count)) {
-            auto key_token_pair = token_generation_for_shard(keys_per_shard, i, cfg.murmur3_partitioner_ignore_msb_bits());
+            auto key_token_pair = token_generation_for_shard(keys_per_shard, i, cfg->murmur3_partitioner_ignore_msb_bits());
             BOOST_REQUIRE(key_token_pair.size() == keys_per_shard);
             muts[i].reserve(keys_per_shard);
             for (auto k : boost::irange(0u, keys_per_shard)) {
