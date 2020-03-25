@@ -358,7 +358,7 @@ future<> read_context::stop() {
 
 read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer,
         const dht::decorated_key& pkey) {
-    auto& partitioner = _schema->get_partitioner();
+    auto& sinfo = _schema->get_sharding_info();
 
     std::vector<mutation_fragment> tmp_buffer;
     dismantle_buffer_stats stats;
@@ -367,7 +367,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
     const auto rend = std::reverse_iterator(combined_buffer.begin());
     for (;rit != rend; ++rit) {
         if (rit->is_partition_start()) {
-            const auto shard = partitioner.shard_of(rit->as_partition_start().key().token());
+            const auto shard = sinfo.shard_of(rit->as_partition_start().key().token());
 
             // It is possible that the reader this partition originates from
             // does not exist anymore. Either because we failed stopping it or
@@ -394,7 +394,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
         }
     }
 
-    const auto shard = partitioner.shard_of(pkey.token());
+    const auto shard = sinfo.shard_of(pkey.token());
     auto& shard_buffer = _readers[shard].buffer;
     for (auto& smf : tmp_buffer) {
         stats.add(*_schema, smf);
@@ -406,8 +406,8 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
 
 read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(detached_compaction_state compaction_state) {
     auto stats = dismantle_buffer_stats();
-    auto& partitioner = _schema->get_partitioner();
-    const auto shard = partitioner.shard_of(compaction_state.partition_start.key().token());
+    auto& sinfo = _schema->get_sharding_info();
+    const auto shard = sinfo.shard_of(compaction_state.partition_start.key().token());
 
     // It is possible that the reader this partition originates from does not
     // exist anymore. Either because we failed stopping it or because it was
