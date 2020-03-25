@@ -59,7 +59,7 @@ private:
     std::function<future<> (flat_mutation_reader)> _consumer;
 private:
     unsigned shard_for_mf(const mutation_fragment& mf) {
-        return _s->get_partitioner().shard_of(mf.as_partition_start().key().token());
+        return _s->get_sharding_info().shard_of(mf.as_partition_start().key().token());
     }
     future<> make_shard_writer(unsigned shard);
     future<stop_iteration> handle_mutation_fragment(mutation_fragment mf);
