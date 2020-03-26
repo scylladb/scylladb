@@ -4,9 +4,10 @@
 set -e
 
 script_path=$(dirname $(readlink -e $0))
+source_path=$script_path/../..
 
 # By default, we take the latest build/*/scylla as the executable:
-SCYLLA=${SCYLLA-$(ls -t "$script_path/../build/"*"/scylla" | head -1)}
+SCYLLA=${SCYLLA-$(ls -t "$source_path/build/"*"/scylla" | head -1)}
 SCYLLA=$(readlink -f "$SCYLLA")
 CPUSET=${CPUSET-0}
 
