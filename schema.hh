@@ -639,6 +639,9 @@ private:
         // Partitioner is not stored in the schema mutation and does not affect
         // schema digest. It is also not set locally on a schema tables.
         std::reference_wrapper<const dht::i_partitioner> _partitioner;
+        // Sharding info is not stored in the schema mutation and does not affect
+        // schema digest. It is also not set locally on a schema tables.
+        std::reference_wrapper<const dht::sharding_info> _sharding_info;
     };
     raw_schema _raw;
     thrift_schema _thrift;

@@ -4160,13 +4160,13 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             auto muts = boost::copy_range<std::vector<mutation>>(shards
                 | boost::adaptors::transformed([&] (auto shard) { return mut(shard); }));
             auto sst_gen = [&env, s, &tmp, gen, ignore_msb] () mutable {
-                auto schema = schema_builder(s).with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner", 1, ignore_msb).build();
+                auto schema = schema_builder(s).with_sharding_info(1, ignore_msb).build();
                 auto sst = env.make_sstable(std::move(schema), tmp.path().string(), (*gen)++, la, big);
                 sst->set_unshared();
                 return sst;
             };
             auto sst = make_sstable_containing(sst_gen, std::move(muts));
-            auto schema = schema_builder(s).with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner", smp_count, ignore_msb).build();
+            auto schema = schema_builder(s).with_sharding_info(smp_count, ignore_msb).build();
             sst = env.reusable_sst(std::move(schema), tmp.path().string(), sst->generation()).get0();
             return sst;
         };

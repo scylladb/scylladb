@@ -356,7 +356,7 @@ test_something_with_some_interesting_ranges_and_sharding_info(std::function<void
     };
     for (auto&& sinfo : some_sharding_infos) {
         auto schema = schema_builder(s)
-            .with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner", sinfo.shard_count(), sinfo.sharding_ignore_msb()).build();
+            .with_sharding_info(sinfo.shard_count(), sinfo.sharding_ignore_msb()).build();
         for (auto&& range : some_murmur3_ranges) {
             func_to_test(*schema, range);
         }
