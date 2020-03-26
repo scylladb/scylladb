@@ -203,6 +203,17 @@ class CqlTestSuite(TestSuite):
     def pattern(self):
         return "*_test.cql"
 
+class RunTestSuite(TestSuite):
+    """TestSuite for test directory with a 'run' script """
+
+    def add_test(self, shortname, mode, options):
+        test = RunTest(self.next_id, shortname, self, mode, options)
+        self.tests.append(test)
+
+    @property
+    def pattern(self):
+        return "run"
+
 
 class Test:
     """Base class for CQL, Unit and Boost tests"""
@@ -332,6 +343,23 @@ class CqlTest(Test):
         if self.is_equal_result is False:
             print_unidiff(self.result, self.reject)
 
+class RunTest(Test):
+    """Run tests in a directory started by a run script"""
+
+    def __init__(self, test_no, shortname, suite, mode, options):
+        super().__init__(test_no, shortname, suite, mode, options)
+        self.path = os.path.join(suite.path, shortname)
+        self.args = ""
+
+    def print_summary(self):
+        print("Output of {} {}:".format(self.path, " ".join(self.args)))
+        print(read_log(self.log_filename))
+
+    async def run(self, options):
+        # This test can and should be killed gently, with SIGTERM, not with SIGKILL
+        self.success = await run_test(self, options, gentle_kill=True)
+        logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
+        return self
 
 class TabularConsoleOutput:
     """Print test progress to the console"""
