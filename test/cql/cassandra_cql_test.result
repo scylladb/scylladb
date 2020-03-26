@@ -1,0 +1,2160 @@
+-- 
+-- Modified by ScyllaDB
+-- from Cassandra cassandra-dtest/cql_test.py
+--
+-- Licensed to the Apache Software Foundation (ASF) under one
+-- or more contributor license agreements.  See the NOTICE file
+-- distributed with this work for additional information
+-- regarding copyright ownership.  The ASF licenses this file
+-- to you under the Apache License, Version 2.0 (the
+-- "License"); you may not use this file except in compliance
+-- with the License.  You may obtain a copy of the License at
+--
+--     http://www.apache.org/licenses/LICENSE-2.0
+--
+-- Unless required by applicable law or agreed to in writing, software
+-- distributed under the License is distributed on an "AS IS" BASIS,
+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-- See the License for the specific language governing permissions and
+-- limitations under the License.
+--
+--------------------------------------------------------------------------------
+--
+-- Copyright (C) 2016 ScyllaDB
+-- 
+-- Modified by ScyllaDB
+-- 
+-- This file is part of Scylla.
+-- 
+-- Scylla is free software: you can redistribute it and/or modify
+-- it under the terms of the GNU Affero General Public License as published by
+-- the Free Software Foundation, either version 3 of the License, or
+-- (at your option) any later version.
+-- 
+-- Scylla is distributed in the hope that it will be useful,
+-- but WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-- GNU General Public License for more details.
+-- 
+-- You should have received a copy of the GNU General Public License
+-- along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+-- setup
+CREATE KEYSPACE ks1 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
+        AND DURABLE_WRITES = true;
+{
+	"status" : "ok"
+}
+ALTER KEYSPACE ks1 WITH replication = { 'class' : 'NetworkTopologyStrategy', 'datacenter1' : 1 };
+{
+	"status" : "ok"
+}
+SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'ks1';
+{
+	"rows" : 
+	[
+		{
+			"durable_writes" : "true",
+			"keyspace_name" : "\"ks1\"",
+			"replication" : "{\"class\": \"org.apache.cassandra.locator.NetworkTopologyStrategy\", \"datacenter1\": \"1\"}"
+		}
+	]
+}
+USE ks1;
+{
+	"status" : "ok"
+}
+
+-- test_table
+CREATE TABLE test1 (k int PRIMARY KEY, v1 int);
+{
+	"status" : "ok"
+}
+ALTER TABLE test1 ADD v2 int;
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (0, 0, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (1, 1, 1);
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (2, 2, 2);
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (3, 3, 3);
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (4, 4, 4);
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (5, 5, 5);
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (6, 6, 6);
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (7, 7, 7);
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (8, 8, 8);
+{
+	"status" : "ok"
+}
+INSERT INTO test1 (k, v1, v2) VALUES (9, 9, 9);
+{
+	"status" : "ok"
+}
+SELECT * FROM test1;
+{
+	"rows" : 
+	[
+		{
+			"k" : "5",
+			"v1" : "5",
+			"v2" : "5"
+		},
+		{
+			"k" : "1",
+			"v1" : "1",
+			"v2" : "1"
+		},
+		{
+			"k" : "8",
+			"v1" : "8",
+			"v2" : "8"
+		},
+		{
+			"k" : "0",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"k" : "2",
+			"v1" : "2",
+			"v2" : "2"
+		},
+		{
+			"k" : "4",
+			"v1" : "4",
+			"v2" : "4"
+		},
+		{
+			"k" : "7",
+			"v1" : "7",
+			"v2" : "7"
+		},
+		{
+			"k" : "6",
+			"v1" : "6",
+			"v2" : "6"
+		},
+		{
+			"k" : "9",
+			"v1" : "9",
+			"v2" : "9"
+		},
+		{
+			"k" : "3",
+			"v1" : "3",
+			"v2" : "3"
+		}
+	]
+}
+-- TRUNCATE TABLE test1;
+-- SELECT * FROM test1;
+DROP TABLE test1;
+{
+	"status" : "ok"
+}
+
+-- test_table_compact_storage
+CREATE TABLE test2 (k int, c1 int, v1 int, PRIMARY KEY (k, c1)) WITH COMPACT STORAGE;
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (0, 0, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (1, 1, 1);
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (2, 2, 2);
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (3, 3, 3);
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (4, 4, 4);
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (5, 5, 5);
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (6, 6, 6);
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (7, 7, 7);
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (8, 8, 8);
+{
+	"status" : "ok"
+}
+INSERT INTO test2 (k, c1, v1) VALUES (9, 9, 9);
+{
+	"status" : "ok"
+}
+-- TRUNCATE TABLE test2;
+-- SELECT * FROM test2;
+DROP TABLE test2;
+{
+	"status" : "ok"
+}
+
+-- test_index
+CREATE TABLE test3 (k int PRIMARY KEY, v1 int, v2 int);
+{
+	"status" : "ok"
+}
+CREATE INDEX testidx ON test3 (v1);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (0, 0, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (1, 1, 1);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (2, 2, 2);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (3, 3, 3);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (4, 4, 4);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (5, 5, 5);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (6, 6, 6);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (7, 7, 7);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (8, 8, 8);
+{
+	"status" : "ok"
+}
+INSERT INTO test3 (k, v1, v2) VALUES (9, 9, 9);
+{
+	"status" : "ok"
+}
+
+-- test_type
+CREATE TYPE address_t (street text, city text, zip_code int);
+{
+	"status" : "ok"
+}
+CREATE TABLE test4 (id int PRIMARY KEY, address frozen<address_t>);
+{
+	"status" : "ok"
+}
+ALTER TYPE address_t ADD phones set<text>;
+{
+	"status" : "ok"
+}
+DROP TABLE test4;
+{
+	"status" : "ok"
+}
+DROP TYPE address_t;
+{
+	"status" : "ok"
+}
+
+-- test_statements
+CREATE TABLE test7 (kind text, time int, v1 int, v2 int, PRIMARY KEY(kind, time));
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 0, 0, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 1, 1, 1);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 2, 2, 2);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 3, 3, 3);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 4, 4, 4);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 5, 5, 5);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 6, 6, 6);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 7, 7, 7);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 8, 8, 8);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 9, 9, 9);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 0, 0, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 1, 1, 1);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 2, 2, 2);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 3, 3, 3);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 4, 4, 4);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 5, 5, 5);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 6, 6, 6);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 7, 7, 7);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 8, 8, 8);
+{
+	"status" : "ok"
+}
+INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 9, 9, 9);
+{
+	"status" : "ok"
+}
+
+SELECT COUNT(*) FROM test7 WHERE kind = 'ev1';
+{
+	"rows" : 
+	[
+		{
+			"count" : "10"
+		}
+	]
+}
+SELECT COUNT(*) FROM test7 WHERE kind IN ('ev1', 'ev2');
+{
+	"rows" : 
+	[
+		{
+			"count" : "20"
+		}
+	]
+}
+SELECT COUNT(*) FROM test7 WHERE kind IN ('ev1', 'ev2') AND time=0;
+{
+	"rows" : 
+	[
+		{
+			"count" : "2"
+		}
+	]
+}
+SELECT * FROM test7 WHERE kind = 'ev1';
+{
+	"rows" : 
+	[
+		{
+			"kind" : "\"ev1\"",
+			"time" : "0",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "1",
+			"v1" : "1",
+			"v2" : "1"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "2",
+			"v1" : "2",
+			"v2" : "2"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "3",
+			"v1" : "3",
+			"v2" : "3"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "4",
+			"v1" : "4",
+			"v2" : "4"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "5",
+			"v1" : "5",
+			"v2" : "5"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "6",
+			"v1" : "6",
+			"v2" : "6"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "7",
+			"v1" : "7",
+			"v2" : "7"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "8",
+			"v1" : "8",
+			"v2" : "8"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "9",
+			"v1" : "9",
+			"v2" : "9"
+		}
+	]
+}
+SELECT * FROM test7 WHERE kind = 'ev2';
+{
+	"rows" : 
+	[
+		{
+			"kind" : "\"ev2\"",
+			"time" : "0",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev2\"",
+			"time" : "1",
+			"v1" : "1",
+			"v2" : "1"
+		},
+		{
+			"kind" : "\"ev2\"",
+			"time" : "2",
+			"v1" : "2",
+			"v2" : "2"
+		},
+		{
+			"kind" : "\"ev2\"",
+			"time" : "3",
+			"v1" : "3",
+			"v2" : "3"
+		},
+		{
+			"kind" : "\"ev2\"",
+			"time" : "4",
+			"v1" : "4",
+			"v2" : "4"
+		},
+		{
+			"kind" : "\"ev2\"",
+			"time" : "5",
+			"v1" : "5",
+			"v2" : "5"
+		},
+		{
+			"kind" : "\"ev2\"",
+			"time" : "6",
+			"v1" : "6",
+			"v2" : "6"
+		},
+		{
+			"kind" : "\"ev2\"",
+			"time" : "7",
+			"v1" : "7",
+			"v2" : "7"
+		},
+		{
+			"kind" : "\"ev2\"",
+			"time" : "8",
+			"v1" : "8",
+			"v2" : "8"
+		},
+		{
+			"kind" : "\"ev2\"",
+			"time" : "9",
+			"v1" : "9",
+			"v2" : "9"
+		}
+	]
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=0;
+{
+	"status" : "ok"
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=1;
+{
+	"status" : "ok"
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=2;
+{
+	"status" : "ok"
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=3;
+{
+	"status" : "ok"
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=4;
+{
+	"status" : "ok"
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=5;
+{
+	"status" : "ok"
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=6;
+{
+	"status" : "ok"
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=7;
+{
+	"status" : "ok"
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=8;
+{
+	"status" : "ok"
+}
+UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=9;
+{
+	"status" : "ok"
+}
+SELECT * FROM test7 WHERE kind = 'ev1';
+{
+	"rows" : 
+	[
+		{
+			"kind" : "\"ev1\"",
+			"time" : "0",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "1",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "2",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "3",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "4",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "5",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "6",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "7",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "8",
+			"v1" : "0",
+			"v2" : "0"
+		},
+		{
+			"kind" : "\"ev1\"",
+			"time" : "9",
+			"v1" : "0",
+			"v2" : "0"
+		}
+	]
+}
+DELETE FROM test7 WHERE kind = 'ev1';
+{
+	"status" : "ok"
+}
+SELECT * FROM test7 WHERE kind = 'ev1';
+{
+	"rows" : null
+}
+SELECT COUNT(*) FROM test7 WHERE kind = 'ev1';
+{
+	"rows" : 
+	[
+		{
+			"count" : "0"
+		}
+	]
+}
+DROP TABLE test7;
+{
+	"status" : "ok"
+}
+
+-- test_partition_key_allow_filtering(self):
+CREATE TABLE IF NOT EXISTS test_filter (
+    k1  int,
+    k2  int,
+    ck1 int,
+    v   int,
+    PRIMARY KEY ((k1, k2), ck1));
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 0, 0, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 0, 1, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 0, 2, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 0, 3, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 1, 0, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 1, 1, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 1, 2, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 1, 3, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 0, 0, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 0, 1, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 0, 2, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 0, 3, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 1, 0, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 1, 1, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 1, 2, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 1, 3, 0);
+{
+	"status" : "ok"
+}
+SELECT * FROM test_filter WHERE k1 = 0 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"ck1" : "0",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "1",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "2",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "3",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "0",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "1",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "2",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "3",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		}
+	]
+}
+SELECT * FROM test_filter WHERE k1 = 2 ALLOW FILTERING;
+{
+	"rows" : null
+}
+SELECT * FROM test_filter WHERE k1 <=0 AND k2 > 1 ALLOW FILTERING;
+{
+	"rows" : null
+}
+SELECT * FROM test_filter WHERE k2 <= 0 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"ck1" : "0",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "1",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "2",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "3",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "0",
+			"k1" : "1",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "1",
+			"k1" : "1",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "2",
+			"k1" : "1",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "3",
+			"k1" : "1",
+			"k2" : "0",
+			"v" : "0"
+		}
+	]
+}
+SELECT * FROM test_filter WHERE k1 <= 0 AND k2 = 0 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"ck1" : "0",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "1",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "2",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "3",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		}
+	]
+}
+SELECT * FROM test_filter WHERE k2 = 1 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"ck1" : "0",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "1",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "2",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "3",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "0",
+			"k1" : "1",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "1",
+			"k1" : "1",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "2",
+			"k1" : "1",
+			"k2" : "1",
+			"v" : "0"
+		},
+		{
+			"ck1" : "3",
+			"k1" : "1",
+			"k2" : "1",
+			"v" : "0"
+		}
+	]
+}
+SELECT * FROM test_filter WHERE k2 = 2 ALLOW FILTERING;
+{
+	"rows" : null
+}
+SELECT * FROM test_filter WHERE k1 = 0 AND ck1=0 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"ck1" : "0",
+			"k1" : "0",
+			"k2" : "0",
+			"v" : "0"
+		},
+		{
+			"ck1" : "0",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		}
+	]
+}
+SELECT * FROM test_filter WHERE k1 = 0 AND k2=1 AND ck1=0 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"ck1" : "0",
+			"k1" : "0",
+			"k2" : "1",
+			"v" : "0"
+		}
+	]
+}
+SELECT count(*) FROM test_filter WHERE k2 = 0 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"count" : "8",
+			"k2" : "0"
+		}
+	]
+}
+SELECT count(*) FROM test_filter WHERE k2 = 1 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"count" : "8",
+			"k2" : "1"
+		}
+	]
+}
+SELECT count(*) FROM test_filter WHERE k2 = 2 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"count" : "0"
+		}
+	]
+}
+SELECT * FROM test_filter WHERE k1 = 0;
+{
+	"message" : "exceptions::invalid_request_exception (Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING)",
+	"status" : "error"
+}
+SELECT * FROM test_filter WHERE k1 = 0 AND k2 > 0;
+{
+	"message" : "exceptions::invalid_request_exception (Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering))",
+	"status" : "error"
+}
+SELECT * FROM test_filter WHERE k1 >= 0 AND k2 in (0,1,2);
+{
+	"message" : "exceptions::invalid_request_exception (Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering))",
+	"status" : "error"
+}
+SELECT * FROM test_filter WHERE k2 > 0;
+{
+	"message" : "exceptions::invalid_request_exception (Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering))",
+	"status" : "error"
+}
+DROP TABLE test_filter;
+{
+	"status" : "ok"
+}
+
+-- test_lwt_with_static_columns
+CREATE TABLE lwt_with_static (a int, b int, s int static, d text, PRIMARY KEY (a, b));
+{
+	"status" : "ok"
+}
+UPDATE lwt_with_static SET s = 1 WHERE a = 1 IF s = NULL;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM lwt_with_static;
+{
+	"rows" : 
+	[
+		{
+			"a" : "1",
+			"s" : "1"
+		}
+	]
+}
+UPDATE lwt_with_static SET s = 2 WHERE a = 2 IF EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM lwt_with_static WHERE a = 1;
+{
+	"rows" : 
+	[
+		{
+			"a" : "1",
+			"s" : "1"
+		}
+	]
+}
+INSERT INTO lwt_with_static (a, s) VALUES (2, 2) IF NOT EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM lwt_with_static WHERE a = 2;
+{
+	"rows" : 
+	[
+		{
+			"a" : "2",
+			"s" : "2"
+		}
+	]
+}
+BEGIN BATCH
+INSERT INTO lwt_with_static (a, b, d) values (3, 3, 'a')
+UPDATE lwt_with_static SET s = 3 WHERE a = 3 IF s = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM lwt_with_static WHERE a = 3;
+{
+	"rows" : 
+	[
+		{
+			"a" : "3",
+			"b" : "3",
+			"d" : "\"a\"",
+			"s" : "3"
+		}
+	]
+}
+--        # LWT applies before INSERT
+BEGIN BATCH
+INSERT INTO lwt_with_static (a, b, d) values (4, 4, 'a')
+UPDATE lwt_with_static SET s = 4 WHERE a = 4 IF s = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM lwt_with_static WHERE a = 4;
+{
+	"rows" : 
+	[
+		{
+			"a" : "4",
+			"b" : "4",
+			"d" : "\"a\"",
+			"s" : "4"
+		}
+	]
+}
+
+-- test_conditional_updates_on_static_columns_with_null_values(self):
+CREATE TABLE conditional_updates_on_static_columns_with_null (a int, b int, s int static, d text, PRIMARY KEY (a, b));
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (1, 1);
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (2, 2);
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (3, 3);
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (4, 4);
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (5, 5);
+{
+	"status" : "ok"
+}
+-- sub _validate_non_existing_or_null_values
+UPDATE conditional_updates_on_static_columns_with_null SET s = 1 WHERE a = 1 IF s = NULL;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT a, s, d FROM conditional_updates_on_static_columns_with_null WHERE a = 1;
+{
+	"rows" : 
+	[
+		{
+			"a" : "1",
+			"s" : "1"
+		}
+	]
+}
+UPDATE conditional_updates_on_static_columns_with_null SET s = 2 WHERE a = 2 IF s IN (10,20,NULL);
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT a, s, d FROM conditional_updates_on_static_columns_with_null WHERE a = 2;
+{
+	"rows" : 
+	[
+		{
+			"a" : "2",
+			"s" : "2"
+		}
+	]
+}
+UPDATE conditional_updates_on_static_columns_with_null SET s = 4 WHERE a = 4 IF s != 4;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT a, s, d FROM conditional_updates_on_static_columns_with_null WHERE a = 4;
+{
+	"rows" : 
+	[
+		{
+			"a" : "4",
+			"s" : "4"
+		}
+	]
+}
+
+UPDATE conditional_updates_on_static_columns_with_null  SET s = 30 WHERE a = 3 IF s IN (10,20,30);
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 3;
+{
+	"rows" : 
+	[
+		{
+			"a" : "3",
+			"b" : "3"
+		}
+	]
+}
+
+UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s > 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5"
+		}
+	]
+}
+UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s < 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5"
+		}
+	]
+}
+UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s >= 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5"
+		}
+	]
+}
+UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s <= 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5"
+		}
+	]
+}
+UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s = 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5"
+		}
+	]
+}
+
+-- test_conditional_updates_on_static_columns_with_non_existing_values
+--         conditional_updates_on_static_columns_with_ne
+CREATE TABLE conditional_updates_on_static_columns_with_ne (a int, b int, s int static, d text, PRIMARY KEY (a, b));
+{
+	"status" : "ok"
+}
+
+-- sub _validate_non_existing_or_null_values
+UPDATE conditional_updates_on_static_columns_with_ne SET s = 1 WHERE a = 1 IF s = NULL;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT a, s, d FROM conditional_updates_on_static_columns_with_ne WHERE a = 1;
+{
+	"rows" : 
+	[
+		{
+			"a" : "1",
+			"s" : "1"
+		}
+	]
+}
+UPDATE conditional_updates_on_static_columns_with_ne SET s = 2 WHERE a = 2 IF s IN (10,20,NULL);
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT a, s, d FROM conditional_updates_on_static_columns_with_ne WHERE a = 2;
+{
+	"rows" : 
+	[
+		{
+			"a" : "2",
+			"s" : "2"
+		}
+	]
+}
+UPDATE conditional_updates_on_static_columns_with_ne SET s = 4 WHERE a = 4 IF s != 4;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT a, s, d FROM conditional_updates_on_static_columns_with_ne WHERE a = 4;
+{
+	"rows" : 
+	[
+		{
+			"a" : "4",
+			"s" : "4"
+		}
+	]
+}
+
+UPDATE conditional_updates_on_static_columns_with_ne SET s = 30 WHERE a = 3 IF s IN (10,20,30);
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 3;
+{
+	"rows" : null
+}
+
+UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s > 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
+{
+	"rows" : null
+}
+UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s < 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
+{
+	"rows" : null
+}
+UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s >= 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
+{
+	"rows" : null
+}
+UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s <= 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
+{
+	"rows" : null
+}
+UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s = 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
+{
+	"rows" : null
+}
+
+-- test_conditional_updates_on_static_columns_with_null_values_batch(self):
+CREATE TABLE lwt_on_static_columns_with_null_batch (a int, b int, s int static, d text, PRIMARY KEY (a, b));
+{
+	"status" : "ok"
+}
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (1, 1);
+{
+	"status" : "ok"
+}
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (2, 2);
+{
+	"status" : "ok"
+}
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (3, 3);
+{
+	"status" : "ok"
+}
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (4, 4);
+{
+	"status" : "ok"
+}
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (5, 5);
+{
+	"status" : "ok"
+}
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (6, 6);
+{
+	"status" : "ok"
+}
+
+--    sub _validate_non_existing_or_null_values_batch
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, d) values (2, 2, 'a')
+UPDATE lwt_on_static_columns_with_null_batch  SET s = 2 WHERE a = 2 IF s = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"a" : "2",
+			"b" : "2"
+		}
+	]
+}
+
+SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 2;
+{
+	"rows" : 
+	[
+		{
+			"a" : "2",
+			"b" : "2",
+			"d" : "\"a\"",
+			"s" : "2"
+		}
+	]
+}
+
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (4, 4, 4, 'a')
+UPDATE lwt_on_static_columns_with_null_batch SET s = 5 WHERE a = 4 IF s = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"a" : "4",
+			"b" : "4"
+		}
+	]
+}
+
+SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 4;
+{
+	"rows" : 
+	[
+		{
+			"a" : "4",
+			"b" : "4",
+			"d" : "\"a\"",
+			"s" : "5"
+		}
+	]
+}
+
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (5, 5, 5, 'a')
+UPDATE lwt_on_static_columns_with_null_batch SET s = 6 WHERE a = 5 IF s IN (1,2,null)
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"a" : "5",
+			"b" : "5"
+		}
+	]
+}
+
+SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5",
+			"d" : "\"a\"",
+			"s" : "6"
+		}
+	]
+}
+
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (7, 7, 7, 'a')
+UPDATE lwt_on_static_columns_with_null_batch SET s = 8 WHERE a = 7 IF s != 7
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+
+SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 7;
+{
+	"rows" : 
+	[
+		{
+			"a" : "7",
+			"b" : "7",
+			"d" : "\"a\"",
+			"s" : "8"
+		}
+	]
+}
+
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s > 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false",
+			"a" : "3",
+			"b" : "3"
+		}
+	]
+}
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s < 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false",
+			"a" : "3",
+			"b" : "3"
+		}
+	]
+}
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s >= 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false",
+			"a" : "3",
+			"b" : "3"
+		}
+	]
+}
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s <= 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false",
+			"a" : "3",
+			"b" : "3"
+		}
+	]
+}
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s = 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false",
+			"a" : "3",
+			"b" : "3"
+		}
+	]
+}
+
+SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 3;
+{
+	"rows" : 
+	[
+		{
+			"a" : "3",
+			"b" : "3"
+		}
+	]
+}
+
+BEGIN BATCH
+INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (6, 6, 70, 'a')
+UPDATE lwt_on_static_columns_with_null_batch SET s = 60 WHERE a = 6 IF s IN (1,2,3)
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false",
+			"a" : "6",
+			"b" : "6"
+		}
+	]
+}
+
+SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 6;
+{
+	"rows" : 
+	[
+		{
+			"a" : "6",
+			"b" : "6"
+		}
+	]
+}
+
+-- test_conditional_deletes_on_static_columns_with_null_values
+CREATE TABLE conditional_deletes_on_static_with_null (a int, b int, s1 int static, s2 int static, v int, PRIMARY KEY (a, b));
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (1, 1, 1, null, 1);
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (2, 2, 2, null, 2);
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (3, 3, 3, null, 3);
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (4, 4, 4, null, 4);
+{
+	"status" : "ok"
+}
+INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (5, 5, 5, null, 5);
+{
+	"status" : "ok"
+}
+
+DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 1 IF s2 = null;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 1;
+{
+	"rows" : 
+	[
+		{
+			"a" : "1",
+			"b" : "1",
+			"v" : "1"
+		}
+	]
+}
+DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 2 IF s2 IN (10,20,30);
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 2;
+{
+	"rows" : 
+	[
+		{
+			"a" : "2",
+			"b" : "2",
+			"s1" : "2",
+			"v" : "2"
+		}
+	]
+}
+DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 3 IF s2 IN (null,20,30);
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 3;
+{
+	"rows" : 
+	[
+		{
+			"a" : "3",
+			"b" : "3",
+			"v" : "3"
+		}
+	]
+}
+DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 4 IF s2 != 4;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 4;
+{
+	"rows" : 
+	[
+		{
+			"a" : "4",
+			"b" : "4",
+			"v" : "4"
+		}
+	]
+}
+
+DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 > 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5",
+			"s1" : "5",
+			"v" : "5"
+		}
+	]
+}
+DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 < 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5",
+			"s1" : "5",
+			"v" : "5"
+		}
+	]
+}
+DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 >= 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5",
+			"s1" : "5",
+			"v" : "5"
+		}
+	]
+}
+DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 <= 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5",
+			"s1" : "5",
+			"v" : "5"
+		}
+	]
+}
+DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 = 3;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5",
+			"s1" : "5",
+			"v" : "5"
+		}
+	]
+}
+
+-- test_conditional_deletes_on_static_columns_with_null_values_batch(self):
+CREATE TABLE conditional_deletes_on_static_with_null_batch (a int, b int, s1 int static, s2 int static, v int, PRIMARY KEY (a, b));
+{
+	"status" : "ok"
+}
+
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch  (a, b, s1, v) values (2, 2, 2, 2)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch  WHERE a = 2 IF s2 = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+
+SELECT * FROM conditional_deletes_on_static_with_null_batch  WHERE a = 2;
+{
+	"rows" : 
+	[
+		{
+			"a" : "2",
+			"b" : "2",
+			"v" : "2"
+		}
+	]
+}
+
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 < 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
+{
+	"rows" : null
+}
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 < 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
+{
+	"rows" : null
+}
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 >= 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
+{
+	"rows" : null
+}
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 <= 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
+{
+	"rows" : null
+}
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 = 5
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
+{
+	"rows" : null
+}
+-- none
+
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (6, 6, 6, 6)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 6 IF s2 IN (1,2,3)
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "false"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null_batch    WHERE a = 6;
+{
+	"rows" : null
+}
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (4, 4, 4, 4)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 4 IF s2 = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null_batch     WHERE a = 4;
+{
+	"rows" : 
+	[
+		{
+			"a" : "4",
+			"b" : "4",
+			"v" : "4"
+		}
+	]
+}
+
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) VALUES (5, 5, 5, 5)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 5 IF s1 IN (1,2,null)
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null_batch      WHERE a = 5;
+{
+	"rows" : 
+	[
+		{
+			"a" : "5",
+			"b" : "5",
+			"v" : "5"
+		}
+	]
+}
+
+BEGIN BATCH
+INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (7, 7, 7, 7)
+DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 7 IF s2 != 7
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+SELECT * FROM conditional_deletes_on_static_with_null_batch       WHERE a = 7;
+{
+	"rows" : 
+	[
+		{
+			"a" : "7",
+			"b" : "7",
+			"v" : "7"
+		}
+	]
+}
+

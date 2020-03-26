@@ -1,5 +1,7 @@
 This project includes code developed by the Apache Software Foundation (http://www.apache.org/),
 especially Apache Cassandra.
 
-It also includes files from https://github.com/antonblanchard/crc32-vpmsum (author Anton Blanchard <anton@au.ibm.com>, IBM).
+It includes files from https://github.com/antonblanchard/crc32-vpmsum (author Anton Blanchard <anton@au.ibm.com>, IBM).
 These files are located in utils/arch/powerpc/crc32-vpmsum. Their license may be found in licenses/LICENSE-crc32-vpmsum.TXT.
+
+It includes modified code from https://gitbox.apache.org/repos/asf?p=cassandra-dtest.git (owned by The Apache Software Foundation)
