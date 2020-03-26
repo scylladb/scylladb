@@ -735,6 +735,7 @@ public:
     val(shutdown_announce_in_ms, uint32_t, 2 * 1000, Used, "Time a node waits after sending gossip shutdown message in milliseconds. Same as -Dcassandra.shutdown_announce_in_ms in cassandra.") \
     val(developer_mode, bool, false, Used, "Relax environment checks. Setting to true can reduce performance and reliability significantly.") \
     val(skip_wait_for_gossip_to_settle, int32_t, -1, Used, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.") \
+    val(force_gossip_generation, int32_t, -1, Used, "Force gossip to use the generation number provided by user") \
     val(experimental, bool, false, Used, "Set to true to unlock experimental features.") \
     val(lsa_reclamation_step, size_t, 1, Used, "Minimum number of segments to reclaim in a single step") \
     val(prometheus_port, uint16_t, 9180, Used, "Prometheus port, set to zero to disable") \
