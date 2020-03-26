@@ -187,7 +187,7 @@ schema_ptr batchlog() {
         {{"cf_id", uuid_type}},
         // regular columns
         {
-            {"in_progress_ballot", timeuuid_type},
+            {"promise", timeuuid_type},
             {"most_recent_commit", bytes_type}, // serialization format is defined by frozen_mutation idl
             {"most_recent_commit_at", timeuuid_type},
             {"proposal", bytes_type}, // serialization format is defined by frozen_mutation idl
@@ -2201,8 +2201,8 @@ future<service::paxos::paxos_state> load_paxos_state(const partition_key& key, s
             return service::paxos::paxos_state();
         }
         auto& row = results->one();
-        auto promised = row.has("in_progress_ballot")
-                        ? row.get_as<utils::UUID>("in_progress_ballot") : utils::UUID_gen::min_time_UUID(0);
+        auto promised = row.has("promise")
+                        ? row.get_as<utils::UUID>("promise") : utils::UUID_gen::min_time_UUID(0);
 
         std::optional<service::paxos::proposal> accepted;
         if (row.has("proposal")) {
@@ -2228,7 +2228,7 @@ static int32_t paxos_ttl_sec(const schema& s) {
 }
 
 future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
-    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET in_progress_ballot = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
+    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET promise = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
     return execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(ballot),
