@@ -510,7 +510,7 @@ query_processor::execute_prepared(
     if (needs_authorization) {
         fut = statement->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, prepared = std::move(prepared), cache_key = std::move(cache_key)] () mutable {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), std::move(cache_key), std::move(prepared)).handle_exception([this] (auto eptr) {
-                log.error("failed to cache the entry", eptr);
+                log.error("failed to cache the entry: {}", eptr);
             });
         });
     }
@@ -853,7 +853,7 @@ query_processor::execute_batch(
     return batch->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
         return parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second)).handle_exception([this] (auto eptr) {
-                log.error("failed to cache the entry", eptr);
+                log.error("failed to cache the entry: {}", eptr);
             });
         }).then([this, &query_state, &options, batch] {
             batch->validate();
