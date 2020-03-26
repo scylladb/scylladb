@@ -322,17 +322,17 @@ normalize(dht::partition_range pr) {
 
 static
 void
-test_something_with_some_interesting_ranges_and_partitioners(std::function<void (const dht::i_partitioner&, const schema&, const dht::partition_range&)> func_to_test) {
+test_something_with_some_interesting_ranges_and_sharding_info(std::function<void (const schema&, const dht::partition_range&)> func_to_test) {
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
         .with_column("v", int32_type)
         .build();
-    auto some_murmur3_partitioners = {
-            dht::murmur3_partitioner(1, 0),
-            dht::murmur3_partitioner(7, 4),
-            dht::murmur3_partitioner(4, 0),
-            dht::murmur3_partitioner(32, 8),  // More, and we OOM since memory isn't configured
+    auto some_sharding_infos = {
+            dht::sharding_info(1, 0),
+            dht::sharding_info(7, 4),
+            dht::sharding_info(4, 0),
+            dht::sharding_info(32, 8),  // More, and we OOM since memory isn't configured
     };
     auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
     auto t2 = token_from_long(int64_t(-1));
@@ -354,19 +354,19 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
             dht::partition_range(make_bound(dht::ring_position::starting_at(t2)), make_bound(dht::ring_position::ending_at(t3))),
             dht::partition_range(make_bound(dht::ring_position::ending_at(t1)), make_bound(dht::ring_position::starting_at(t4))),
     };
-    for (auto&& part : some_murmur3_partitioners) {
+    for (auto&& sinfo : some_sharding_infos) {
         auto schema = schema_builder(s)
-            .with_partitioner(part.name(), part.shard_count(), part.sharding_ignore_msb()).build();
+            .with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner", sinfo.shard_count(), sinfo.sharding_ignore_msb()).build();
         for (auto&& range : some_murmur3_ranges) {
-            func_to_test(part, *schema, range);
+            func_to_test(*schema, range);
         }
     }
 }
 
 static
 void
-do_test_split_range_to_single_shard(const dht::i_partitioner& part, const schema& s, const dht::partition_range& pr) {
-    for (auto shard : boost::irange(0u, part.shard_count())) {
+do_test_split_range_to_single_shard(const schema& s, const dht::partition_range& pr) {
+    for (auto shard : boost::irange(0u, s.get_sharding_info().shard_count())) {
         auto ranges = dht::split_range_to_single_shard(s, pr, shard).get0();
         auto sharder = dht::ring_position_range_sharder(s.get_sharding_info(), pr);
         auto x = sharder.next(s);
@@ -389,7 +389,7 @@ do_test_split_range_to_single_shard(const dht::i_partitioner& part, const schema
 }
 
 SEASTAR_THREAD_TEST_CASE(test_split_range_single_shard) {
-    return test_something_with_some_interesting_ranges_and_partitioners(do_test_split_range_to_single_shard);
+    return test_something_with_some_interesting_ranges_and_sharding_info(do_test_split_range_to_single_shard);
 }
 
 // tests for range_split() utility function in repair/range_split.hh
