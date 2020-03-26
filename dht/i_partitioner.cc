@@ -44,10 +44,6 @@ sharding_info::sharding_info(unsigned shard_count, unsigned sharding_ignore_msb_
     , _shard_start(init_zero_based_shard_start(_shard_count, _sharding_ignore_msb_bits))
 {}
 
-i_partitioner::i_partitioner(unsigned shard_count, unsigned sharding_ignore_msb_bits)
-    : _sharding_info(shard_count, sharding_ignore_msb_bits)
-{}
-
 unsigned
 sharding_info::shard_of(const token& t) const {
     return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
@@ -82,9 +78,9 @@ std::ostream& operator<<(std::ostream& out, partition_ranges_view v) {
     return out;
 }
 
-std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name, unsigned shard_count, unsigned sharding_ignore_msb_bits) {
+std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name) {
     try {
-        return create_object<i_partitioner, const unsigned&, const unsigned&>(partitioner_name, shard_count, sharding_ignore_msb_bits);
+        return create_object<i_partitioner>(partitioner_name);
     } catch (std::exception& e) {
         auto supported_partitioners = ::join(", ", class_registry<i_partitioner>::classes() |
                 boost::adaptors::map_keys);

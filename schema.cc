@@ -104,16 +104,16 @@ std::ostream& operator<<(std::ostream& os, ordinal_column_id id)
     return os << static_cast<column_count_type>(id);
 }
 
-thread_local std::map<std::tuple<sstring, unsigned, unsigned>, std::unique_ptr<dht::i_partitioner>> partitioners;
+thread_local std::map<sstring, std::unique_ptr<dht::i_partitioner>> partitioners;
 thread_local std::map<std::pair<unsigned, unsigned>, std::unique_ptr<dht::sharding_info>> sharding_infos;
 sstring default_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
 unsigned default_partitioner_ignore_msb = 12;
 
-static const dht::i_partitioner& get_partitioner(const sstring& name, unsigned shard_count, unsigned ignore_msb) {
-    auto it = partitioners.find({name, shard_count, ignore_msb});
+static const dht::i_partitioner& get_partitioner(const sstring& name) {
+    auto it = partitioners.find(name);
     if (it == partitioners.end()) {
-        auto p = dht::make_partitioner(name, shard_count, ignore_msb);
-        it = partitioners.insert({{name, shard_count, ignore_msb}, std::move(p)}).first;
+        auto p = dht::make_partitioner(name);
+        it = partitioners.insert({name, std::move(p)}).first;
     }
     return *it->second;
 }
@@ -296,7 +296,7 @@ const column_mapping& schema::get_column_mapping() const {
 
 schema::raw_schema::raw_schema(utils::UUID id)
     : _id(id)
-    , _partitioner(::get_partitioner(default_partitioner_name, smp::count, default_partitioner_ignore_msb))
+    , _partitioner(::get_partitioner(default_partitioner_name))
     , _sharding_info(::get_sharding_info(smp::count, default_partitioner_ignore_msb))
 { }
 
@@ -880,8 +880,8 @@ bool thrift_schema::is_dynamic() const {
     return _is_dynamic;
 }
 
-schema_builder& schema_builder::with_partitioner(sstring name, unsigned shard_count, unsigned sharding_ignore_msb_bits) {
-    _raw._partitioner = get_partitioner(name, shard_count, sharding_ignore_msb_bits);
+schema_builder& schema_builder::with_partitioner(sstring name) {
+    _raw._partitioner = get_partitioner(name);
     return *this;
 }
 

@@ -149,9 +149,8 @@ public:
 using decorated_key_opt = std::optional<decorated_key>;
 
 class i_partitioner {
-    sharding_info _sharding_info;
 public:
-    i_partitioner(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
+    i_partitioner() = default;
     virtual ~i_partitioner() {}
 
     /**
@@ -198,7 +197,7 @@ public:
     virtual const sstring name() const = 0;
 
     bool operator==(const i_partitioner& o) const {
-        return name() == o.name() && _sharding_info == o._sharding_info;
+        return name() == o.name();
     }
     bool operator!=(const i_partitioner& o) const {
         return !(*this == o);
@@ -651,7 +650,7 @@ split_range_to_shards(dht::partition_range pr, const schema& s);
 // Intersect a partition_range with a shard and return the the resulting sub-ranges, in sorted order
 future<utils::chunked_vector<partition_range>> split_range_to_single_shard(const schema& s, const dht::partition_range& pr, shard_id shard);
 
-std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name, unsigned shard_count, unsigned sharding_ignore_msb_bits);
+std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name);
 
 } // dht
 

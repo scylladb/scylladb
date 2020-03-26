@@ -56,7 +56,7 @@ murmur3_partitioner::get_token(const schema& s, partition_key_view key) const {
     return get_token(hash[0]);
 }
 
-using registry = class_registrator<i_partitioner, murmur3_partitioner, const unsigned&, const unsigned&>;
+using registry = class_registrator<i_partitioner, murmur3_partitioner>;
 static registry registrator("org.apache.cassandra.dht.Murmur3Partitioner");
 static registry registrator_short_name("Murmur3Partitioner");
 
