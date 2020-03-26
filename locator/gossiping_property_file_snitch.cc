@@ -69,7 +69,7 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
 gossiping_property_file_snitch::gossiping_property_file_snitch(
     const sstring& fname, unsigned io_cpuid)
 : production_snitch_base(fname), _file_reader_cpu_id(io_cpuid) {
-    if (engine().cpu_id() == _file_reader_cpu_id) {
+    if (this_shard_id() == _file_reader_cpu_id) {
         io_cpu_id() = _file_reader_cpu_id;
     }
 }
@@ -82,7 +82,7 @@ future<> gossiping_property_file_snitch::start() {
     reset_io_state();
 
     // Run a timer only on specific CPU
-    if (engine().cpu_id() == _file_reader_cpu_id) {
+    if (this_shard_id() == _file_reader_cpu_id) {
         //
         // Here we will create a timer that will read the properties file every
         // minute and load its contents into the gossiper.endpoint_state_map
@@ -214,7 +214,7 @@ future<> gossiping_property_file_snitch::reload_configuration() {
             [this] (snitch_ptr& local_s) {
 
             // Distribute the new values on all CPUs but the current one
-            if (engine().cpu_id() != _file_reader_cpu_id) {
+            if (this_shard_id() != _file_reader_cpu_id) {
                 local_s->set_my_dc(_my_dc);
                 local_s->set_my_rack(_my_rack);
                 local_s->set_prefer_local(_prefer_local);
@@ -270,7 +270,7 @@ void gossiping_property_file_snitch::set_stopped() {
 }
 
 future<> gossiping_property_file_snitch::stop_io() {
-    if (engine().cpu_id() == _file_reader_cpu_id) {
+    if (this_shard_id() == _file_reader_cpu_id) {
         _file_reader.cancel();
 
         // If timer is not running then set the STOPPED state right away.
@@ -292,7 +292,7 @@ void gossiping_property_file_snitch::resume_io() {
 
 void gossiping_property_file_snitch::start_io() {
     // Run a timer only on specific CPU
-    if (engine().cpu_id() == _file_reader_cpu_id) {
+    if (this_shard_id() == _file_reader_cpu_id) {
         _file_reader.arm(reload_property_file_period());
     }
 }

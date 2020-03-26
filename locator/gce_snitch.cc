@@ -44,7 +44,7 @@
 namespace locator {
 
 gce_snitch::gce_snitch(const sstring& fname, unsigned io_cpuid, const sstring& meta_server_url) : production_snitch_base(fname) {
-    if (engine().cpu_id() == io_cpuid) {
+    if (this_shard_id() == io_cpuid) {
         io_cpu_id() = io_cpuid;
         _meta_server_url = std::move(meta_server_url);
     }
@@ -58,7 +58,7 @@ gce_snitch::gce_snitch(const sstring& fname, unsigned io_cpuid, const sstring& m
 future<> gce_snitch::load_config() {
     using namespace boost::algorithm;
 
-    if (engine().cpu_id() == io_cpu_id()) {
+    if (this_shard_id() == io_cpu_id()) {
         sstring meta_server_url(GCE_QUERY_SERVER_ADDR);
         if (!_meta_server_url.empty()) {
             meta_server_url = _meta_server_url;
@@ -86,7 +86,7 @@ future<> gce_snitch::load_config() {
 
                 return _my_distributed->invoke_on_all([this] (snitch_ptr& local_s) {
                     // Distribute the new values on all CPUs but the current one
-                    if (engine().cpu_id() != io_cpu_id()) {
+                    if (this_shard_id() != io_cpu_id()) {
                         local_s->set_my_dc(_my_dc);
                         local_s->set_my_rack(_my_rack);
                     }

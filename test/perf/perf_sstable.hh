@@ -48,7 +48,7 @@ public:
 
 private:
     sstring dir() {
-        return _cfg.dir + "/" + to_sstring(engine().cpu_id());
+        return _cfg.dir + "/" + to_sstring(this_shard_id());
     }
 
     sstring random_string(unsigned size) {

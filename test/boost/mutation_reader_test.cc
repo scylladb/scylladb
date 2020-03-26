@@ -1563,7 +1563,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
 
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         auto populate = [] (schema_ptr s, const std::vector<mutation>& mutations) {
-            const auto remote_shard = (engine().cpu_id() + 1) % smp::count;
+            const auto remote_shard = (this_shard_id() + 1) % smp::count;
             auto frozen_mutations = boost::copy_range<std::vector<frozen_mutation>>(
                 mutations
                 | boost::adaptors::transformed([] (const mutation& m) { return freeze(m); })
@@ -1967,7 +1967,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
-            shards_touched[engine().cpu_id()] = true;
+            shards_touched[this_shard_id()] = true;
             return make_empty_flat_reader(s);
         };
 
@@ -2104,7 +2104,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
     }
 
     do_with_cql_env([] (cql_test_env& env) -> future<> {
-        const auto shard_of_interest = (engine().cpu_id() + 1) % smp::count;
+        const auto shard_of_interest = (this_shard_id() + 1) % smp::count;
         auto s = simple_schema();
         auto [remote_control, remote_reader] = smp::submit_to(shard_of_interest, [gs = global_simple_schema(s)] {
             using control_type = foreign_ptr<std::unique_ptr<puppet_reader::control>>;
@@ -2212,7 +2212,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding) mutable {
-            const auto shard = engine().cpu_id();
+            const auto shard = this_shard_id();
             auto action = shard == 0 ? puppet_reader::fill_buffer_action::fill : puppet_reader::fill_buffer_action::block;
             return make_flat_mutation_reader<puppet_reader>(gs.get(), *remote_controls.at(shard), action, shard_pkeys.at(shard));
         };
@@ -2409,7 +2409,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
                 mutation_reader::forwarding fwd_mr) {
             auto s = gs.get();
             auto pkey = s.make_pkey(pk);
-            if (s.schema()->get_partitioner().shard_of(pkey.token()) != engine().cpu_id()) {
+            if (s.schema()->get_partitioner().shard_of(pkey.token()) != this_shard_id()) {
                 return make_empty_flat_reader(s.schema());
             }
             auto fragments = make_fragments_with_non_monotonic_positions(s, std::move(pkey), max_buffer_size, tombstone_deletion_time);

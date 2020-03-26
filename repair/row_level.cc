@@ -945,7 +945,7 @@ private:
         return _schema->get_partitioner().name() == _master_node_shard_config.partitioner_name
                && _schema->get_partitioner().shard_count() == _master_node_shard_config.shard_count
                && _schema->get_partitioner().sharding_ignore_msb() == _master_node_shard_config.ignore_msb
-               && engine().cpu_id() == _master_node_shard_config.shard;
+               && this_shard_id() == _master_node_shard_config.shard;
     }
 
     future<size_t> get_repair_rows_size(const std::list<repair_row>& rows) const {
@@ -1785,7 +1785,7 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
         auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(current_set_diff)));
         return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, fp = std::move(fp)] {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-            if (fp.get_owner_shard() == engine().cpu_id()) {
+            if (fp.get_owner_shard() == this_shard_id()) {
                 return rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows));
             } else {
                 return rm->get_row_diff_handler(*fp, repair_meta::needs_all_rows_t(needs_all_rows));
@@ -1830,7 +1830,7 @@ static future<stop_iteration> repair_put_row_diff_with_rpc_stream_process_op(
         auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(current_rows)));
         return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] () mutable {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-            if (fp.get_owner_shard() == engine().cpu_id()) {
+            if (fp.get_owner_shard() == this_shard_id()) {
                 return rm->put_row_diff_handler(std::move(*fp), from);
             } else {
                 return rm->put_row_diff_handler(*fp, from);
@@ -2081,7 +2081,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(set_diff)));
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp), needs_all_rows] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                if (fp.get_owner_shard() == engine().cpu_id()) {
+                if (fp.get_owner_shard() == this_shard_id()) {
                     return rm->get_row_diff_handler(std::move(*fp), repair_meta::needs_all_rows_t(needs_all_rows));
                 } else {
                     return rm->get_row_diff_handler(*fp, repair_meta::needs_all_rows_t(needs_all_rows));
@@ -2095,7 +2095,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             auto fp = make_foreign(std::make_unique<repair_rows_on_wire>(std::move(row_diff)));
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp)] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                if (fp.get_owner_shard() == engine().cpu_id()) {
+                if (fp.get_owner_shard() == this_shard_id()) {
                     return rm->put_row_diff_handler(std::move(*fp), from);
                 } else {
                     return rm->put_row_diff_handler(*fp, from);
@@ -2425,7 +2425,7 @@ public:
             auto algorithm = get_common_diff_detect_algorithm(_all_live_peer_nodes);
             auto max_row_buf_size = get_max_row_buf_size(algorithm);
             auto master_node_shard_config = shard_config {
-                    engine().cpu_id(),
+                    this_shard_id(),
                     _ri.partitioner.shard_count(),
                     _ri.partitioner.sharding_ignore_msb(),
                     _ri.partitioner.name()

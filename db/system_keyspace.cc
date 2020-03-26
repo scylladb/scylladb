@@ -2111,7 +2111,7 @@ future<> register_view_for_building(sstring ks_name, sstring view_name, const dh
             std::move(ks_name),
             std::move(view_name),
             0,
-            int32_t(engine().cpu_id()),
+            int32_t(this_shard_id()),
             token.to_sstring()).discard_result();
 }
 
@@ -2123,7 +2123,7 @@ future<> update_view_build_progress(sstring ks_name, sstring view_name, const dh
             std::move(ks_name),
             std::move(view_name),
             token.to_sstring(),
-            int32_t(engine().cpu_id())).discard_result();
+            int32_t(this_shard_id())).discard_result();
 }
 
 future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name) {
@@ -2138,7 +2138,7 @@ future<> remove_view_build_progress(sstring ks_name, sstring view_name) {
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ? AND cpu_id = ?", v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
             std::move(ks_name),
             std::move(view_name),
-            int32_t(engine().cpu_id())).discard_result();
+            int32_t(this_shard_id())).discard_result();
 }
 
 future<> mark_view_as_built(sstring ks_name, sstring view_name) {

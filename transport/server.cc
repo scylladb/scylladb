@@ -556,7 +556,7 @@ client_data cql_server::connection::make_client_data() const {
     cd.ip = _client_state.get_client_address().addr();
     cd.port = _client_state.get_client_port();
     cd.ct = client_type::cql;
-    cd.shard_id = engine().cpu_id();
+    cd.shard_id = this_shard_id();
     cd.protocol_version = _version;
     if (const auto user_ptr = _client_state.user(); user_ptr) {
         cd.username = user_ptr->name;
@@ -838,7 +838,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
     tracing::add_query(trace_state, query);
     tracing::begin(trace_state, "Preparing CQL3 query", client_state.get_client_address());
 
-    auto cpu_id = engine().cpu_id();
+    auto cpu_id = this_shard_id();
     auto cpus = boost::irange(0u, smp::count);
     return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &client_state] (unsigned int c) mutable {
         if (c != cpu_id) {
@@ -1196,7 +1196,7 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     opts.insert({"COMPRESSION", "lz4"});
     opts.insert({"COMPRESSION", "snappy"});
     if (_server._config.allow_shard_aware_drivers) {
-        opts.insert({"SCYLLA_SHARD", format("{:d}", engine().cpu_id())});
+        opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
         opts.insert({"SCYLLA_SHARDING_ALGORITHM", dht::cpu_sharding_algorithm_name()});
         opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _server._config.sharding_ignore_msb)});

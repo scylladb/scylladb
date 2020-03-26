@@ -1149,10 +1149,10 @@ future<> db::commitlog::segment_manager::init() {
         }
 
         // base id counter is [ <shard> | <base> ]
-        _ids = replay_position(engine().cpu_id(), id).id;
+        _ids = replay_position(this_shard_id(), id).id;
         // always run the timer now, since we need to handle segment pre-alloc etc as well.
         _timer.set_callback(std::bind(&segment_manager::on_timer, this));
-        auto delay = engine().cpu_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
+        auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
         clogger.trace("Delaying timer loop {} ms", delay);
         // We need to wait until we have scanned all other segments to actually start serving new
         // segments. We are ready now

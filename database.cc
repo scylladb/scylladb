@@ -524,7 +524,7 @@ database::setup_metrics() {
         sm::make_total_operations("total_view_updates_failed_remote", _cf_stats.total_view_updates_failed_remote,
                 sm::description("Total number of view updates generated for tables and failed to be sent to remote replicas.")),
     });
-    if (engine().cpu_id() == 0) {
+    if (this_shard_id() == 0) {
         _metrics.add_group("database", {
                 sm::make_derive("schema_changed", _schema_change_count,
                         sm::description("The number of times the schema changed")),
@@ -2016,7 +2016,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr,
                 mutation_reader::forwarding fwd_mr) override {
-            const auto shard = engine().cpu_id();
+            const auto shard = this_shard_id();
             auto& cf = _db.local().find_column_family(schema);
 
             _contexts[shard].range = make_foreign(std::make_unique<const dht::partition_range>(range));
@@ -2036,7 +2036,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             });
         }
         virtual reader_concurrency_semaphore& semaphore() override {
-            return *_contexts[engine().cpu_id()].semaphore;
+            return *_contexts[this_shard_id()].semaphore;
         }
     };
     auto ms = mutation_source([&db] (schema_ptr s,

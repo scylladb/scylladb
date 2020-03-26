@@ -344,7 +344,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                      "SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time");
         }
         unsigned shard = dht::shard_of(*_schema, key_ranges[0].start()->value().as_decorated_key().token());
-        if (engine().cpu_id() != shard) {
+        if (this_shard_id() != shard) {
             proxy.get_stats().replica_cross_shard_ops++;
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));

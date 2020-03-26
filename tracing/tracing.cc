@@ -58,7 +58,7 @@ std::vector<sstring> trace_type_names = {
 
 tracing::tracing(const backend_registry& br, sstring tracing_backend_helper_class_name)
         : _write_timer([this] { write_timer_callback(); })
-        , _thread_name(seastar::format("shard {:d}", engine().cpu_id()))
+        , _thread_name(seastar::format("shard {:d}", this_shard_id()))
         , _backend_registry(br)
         , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
         , _gen(std::random_device()())

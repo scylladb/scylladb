@@ -339,7 +339,7 @@ void messaging_service::start_listen() {
         }
     }
     // Do this on just cpu 0, to avoid duplicate logs.
-    if (engine().cpu_id() == 0) {
+    if (this_shard_id() == 0) {
         if (_server_tls[0]) {
             mlogger.info("Starting Encrypted Messaging Service on SSL port {}", _ssl_port);
         }
@@ -639,7 +639,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     auto res = _clients[idx].emplace(id, shard_info(std::move(client)));
     assert(res.second);
     it = res.first;
-    uint32_t src_cpu_id = engine().cpu_id();
+    uint32_t src_cpu_id = this_shard_id();
     // No reply is received, nothing to wait for.
     (void)_rpc->make_client<rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id,
                                                                                                            query::result_memory_limiter::maximum_result_size).handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {

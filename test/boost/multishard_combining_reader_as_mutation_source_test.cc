@@ -94,7 +94,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                             const io_priority_class& pc,
                             tracing::trace_state_ptr trace_state,
                             mutation_reader::forwarding fwd_mr) {
-                            auto reader = remote_memtables->at(engine().cpu_id())->make_flat_reader(s, range, slice, pc, std::move(trace_state),
+                            auto reader = remote_memtables->at(this_shard_id())->make_flat_reader(s, range, slice, pc, std::move(trace_state),
                                     streamed_mutation::forwarding::no, fwd_mr);
                             if (single_fragment_buffer) {
                                 reader.set_max_buffer_size(1);

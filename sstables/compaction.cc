@@ -751,7 +751,7 @@ public:
 
     virtual flat_mutation_reader::filter make_partition_filter() const override {
         return [&s = *_schema] (const dht::decorated_key& dk){
-            return dht::shard_of(s, dk.token()) == engine().cpu_id();
+            return dht::shard_of(s, dk.token()) == this_shard_id();
         };
     }
 
@@ -926,8 +926,8 @@ public:
 
     flat_mutation_reader::filter make_partition_filter() const override {
         return [this] (const dht::decorated_key& dk) {
-            if (dht::shard_of(*_schema, dk.token()) != engine().cpu_id()) {
-                clogger.trace("Token {} does not belong to CPU {}, skipping", dk.token(), engine().cpu_id());
+            if (dht::shard_of(*_schema, dk.token()) != this_shard_id()) {
+                clogger.trace("Token {} does not belong to CPU {}, skipping", dk.token(), this_shard_id());
                 return false;
             }
 

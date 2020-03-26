@@ -3,7 +3,7 @@
 namespace locator {
 
 ec2_snitch::ec2_snitch(const sstring& fname, unsigned io_cpuid) : production_snitch_base(fname) {
-    if (engine().cpu_id() == io_cpuid) {
+    if (this_shard_id() == io_cpuid) {
         io_cpu_id() = io_cpuid;
     }
 }
@@ -16,7 +16,7 @@ ec2_snitch::ec2_snitch(const sstring& fname, unsigned io_cpuid) : production_sni
 future<> ec2_snitch::load_config() {
     using namespace boost::algorithm;
 
-    if (engine().cpu_id() == io_cpu_id()) {
+    if (this_shard_id() == io_cpu_id()) {
         return aws_api_call(AWS_QUERY_SERVER_ADDR, AWS_QUERY_SERVER_PORT, ZONE_NAME_QUERY_REQ).then([this](sstring az) {
             assert(az.size());
 
@@ -42,7 +42,7 @@ future<> ec2_snitch::load_config() {
                     [this] (snitch_ptr& local_s) {
 
                     // Distribute the new values on all CPUs but the current one
-                    if (engine().cpu_id() != io_cpu_id()) {
+                    if (this_shard_id() != io_cpu_id()) {
                         local_s->set_my_dc(_my_dc);
                         local_s->set_my_rack(_my_rack);
                     }

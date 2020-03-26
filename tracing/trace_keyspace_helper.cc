@@ -308,7 +308,7 @@ cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const o
 
     std::vector<cql3::raw_value> values({
         cql3::raw_value::make_value(inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr())),
-        cql3::raw_value::make_value(int32_type->decompose((int32_t)(engine().cpu_id()))),
+        cql3::raw_value::make_value(int32_type->decompose((int32_t)(this_shard_id()))),
         cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
         cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
         cql3::raw_value::make_value(timeuuid_type->decompose(start_time_id)),
@@ -338,7 +338,7 @@ cql3::query_options trace_keyspace_helper::make_slow_query_time_idx_mutation_dat
         cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
         cql3::raw_value::make_value(timeuuid_type->decompose(start_time_id)),
         cql3::raw_value::make_value(inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr())),
-        cql3::raw_value::make_value(int32_type->decompose(int32_t(engine().cpu_id()))),
+        cql3::raw_value::make_value(int32_type->decompose(int32_t(this_shard_id()))),
         cql3::raw_value::make_value(int32_type->decompose(int32_t(session_records.session_rec.slow_query_record_ttl.count())))
     });
 

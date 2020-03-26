@@ -1017,7 +1017,7 @@ int main(int ac, char** av) {
                         return cf_cache_hitrate_calculator.stop().get();
                     }
             );
-            cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
+            cf_cache_hitrate_calculator.local().run_on(this_shard_id());
 
             supervisor::notify("starting view update backlog broker");
             static sharded<service::view_update_backlog_broker> view_backlog_broker;

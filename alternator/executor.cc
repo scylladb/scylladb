@@ -1192,7 +1192,7 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
     // find the appropriate shard to run it on:
     auto token = dht::get_token(*_schema, _pk);
     auto desired_shard = service::storage_proxy::cas_shard(*_schema, token);
-    if (desired_shard == engine().cpu_id()) {
+    if (desired_shard == this_shard_id()) {
         return {};
     }
     return desired_shard;
@@ -1597,7 +1597,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state, ssg, permit = std::move(permit)] (auto& e) {
             stats.write_using_lwt++;
             auto desired_shard = service::storage_proxy::cas_shard(*e.first.schema, e.first.dk.token());
-            if (desired_shard == engine().cpu_id()) {
+            if (desired_shard == this_shard_id()) {
                 return cas_write(proxy, e.first.schema, e.first.dk, std::move(e.second), client_state, trace_state, permit);
             } else {
                 stats.shard_bounce_for_lwt++;

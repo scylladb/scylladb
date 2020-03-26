@@ -152,7 +152,7 @@ void cache_hitrate_calculator::recalculate_timer() {
         } else {
             d = f.get0();
         }
-        p->run_on((engine().cpu_id() + 1) % smp::count, d);
+        p->run_on((this_shard_id() + 1) % smp::count, d);
     });
 }
 
@@ -191,7 +191,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         _slen = 0;
         _rates = std::move(rates);
         // set calculated rates on all shards
-        return _db.invoke_on_all([this, cpuid = engine().cpu_id(), non_system_filter] (database& db) {
+        return _db.invoke_on_all([this, cpuid = this_shard_id(), non_system_filter] (database& db) {
             return do_for_each(_rates, [this, cpuid, &db] (auto&& r) mutable {
                 auto it = db.get_column_families().find(r.first);
                 if (it == db.get_column_families().end()) { // a table may be added before map/reduce completes and this code runs
@@ -203,7 +203,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
                 if (s.h) {
                     rate = s.h / (s.h + s.m);
                 }
-                if (engine().cpu_id() == cpuid) {
+                if (this_shard_id() == cpuid) {
                     // calculate max difference between old rate and new one for all cfs
                     _diff = std::max(_diff, std::abs(float(cf.second->get_global_cache_hit_rate()) - rate));
                     _gstate += format("{}.{}:{:0.6f};", cf.second->schema()->ks_name(), cf.second->schema()->cf_name(), rate);
@@ -245,7 +245,7 @@ view_update_backlog_broker::view_update_backlog_broker(
 
 future<> view_update_backlog_broker::start() {
     _gossiper.register_(shared_from_this());
-    if (engine().cpu_id() == 0) {
+    if (this_shard_id() == 0) {
         // Gossiper runs only on shard 0, and there's no API to add multiple, per-shard application states.
         // Also, right now we aggregate all backlogs, since the coordinator doesn't keep per-replica shard backlogs.
         _started = seastar::async([this] {

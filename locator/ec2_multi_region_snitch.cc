@@ -50,7 +50,7 @@ future<> ec2_multi_region_snitch::start() {
 
     return seastar::async([this] {
         ec2_snitch::load_config().get();
-        if (engine().cpu_id() == io_cpu_id()) {
+        if (this_shard_id() == io_cpu_id()) {
             sstring pub_addr;
             inet_address local_public_address;
 
@@ -81,7 +81,7 @@ future<> ec2_multi_region_snitch::start() {
             // going to invoke gossiper_starting() method.
             //
             _my_distributed->invoke_on(0, [this] (snitch_ptr& local_s) {
-                if (engine().cpu_id() != io_cpu_id()) {
+                if (this_shard_id() != io_cpu_id()) {
                     local_s->set_local_private_addr(_local_private_address);
                 }
             }).get();

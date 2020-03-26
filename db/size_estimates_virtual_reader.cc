@@ -143,7 +143,7 @@ static std::vector<sstring> get_keyspaces(const schema& s, const database& db, d
             // If this is a range query, results are divided between shards by the partition key (keyspace_name).
             return shard_of(s, dht::get_token(s,
                         partition_key::from_single_value(s, utf8_type->decompose(ks))))
-                == engine().cpu_id();
+                == this_shard_id();
         })
     );
 }

@@ -275,16 +275,16 @@ void tracker::check_in_shutdown() {
 }
 
 void tracker::add_repair_info(int id, lw_shared_ptr<repair_info> ri) {
-    _repairs[engine().cpu_id()].emplace(id, ri);
+    _repairs[this_shard_id()].emplace(id, ri);
 }
 
 void tracker::remove_repair_info(int id) {
-    _repairs[engine().cpu_id()].erase(id);
+    _repairs[this_shard_id()].erase(id);
 }
 
 lw_shared_ptr<repair_info> tracker::get_repair_info(int id) {
-    auto it = _repairs[engine().cpu_id()].find(id);
-    if (it != _repairs[engine().cpu_id()].end()) {
+    auto it = _repairs[this_shard_id()].find(id);
+    if (it != _repairs[this_shard_id()].end()) {
         return it->second;
     }
     return {};
@@ -300,7 +300,7 @@ std::vector<int> tracker::get_active() const {
 
 size_t tracker::nr_running_repair_jobs() {
     size_t count = 0;
-    if (engine().cpu_id() != 0) {
+    if (this_shard_id() != 0) {
         return count;
     }
     for (auto& x : _status) {
@@ -314,7 +314,7 @@ size_t tracker::nr_running_repair_jobs() {
 
 void tracker::abort_all_repairs() {
     size_t count = nr_running_repair_jobs();
-    for (auto& x : _repairs[engine().cpu_id()]) {
+    for (auto& x : _repairs[this_shard_id()]) {
         auto& ri = x.second;
         ri->abort();
     }
@@ -322,7 +322,7 @@ void tracker::abort_all_repairs() {
 }
 
 named_semaphore& tracker::range_parallelism_semaphore() {
-    return _range_parallelism_semaphores[engine().cpu_id()];
+    return _range_parallelism_semaphores[this_shard_id()];
 }
 
 future<> tracker::run(int id, std::function<future<> ()> func) {
@@ -679,7 +679,7 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     , ranges(ranges_)
     , cfs(cfs_)
     , id(id_)
-    , shard(engine().cpu_id())
+    , shard(this_shard_id())
     , data_centers(data_centers_)
     , hosts(hosts_)
     , _row_level_repair(db.local().features().cluster_supports_row_level_repair()) {
@@ -1363,7 +1363,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
         repair_tracker().remove_repair_info(ri->id);
         return make_ready_future<>();
     }).handle_exception([ri] (std::exception_ptr eptr) {
-        rlogger.info("repair id {} on shard {} failed: {}", ri->id, engine().cpu_id(), eptr);
+        rlogger.info("repair id {} on shard {} failed: {}", ri->id, this_shard_id(), eptr);
         repair_tracker().remove_repair_info(ri->id);
         return make_exception_future<>(std::move(eptr));
     });

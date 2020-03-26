@@ -96,7 +96,7 @@ future<> table_helper::insert(service::query_state& qs, noncopyable_function<cql
 }
 
 future<> table_helper::setup_keyspace(const sstring& keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
-    if (engine().cpu_id() == 0) {
+    if (this_shard_id() == 0) {
         size_t n = tables.size();
         for (size_t i = 0; i < n; ++i) {
             if (tables[i]->_keyspace != keyspace_name) {

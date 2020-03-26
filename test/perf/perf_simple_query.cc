@@ -263,7 +263,7 @@ int main(int argc, char** argv) {
         auto seed = conf_seed.empty() ? std::random_device()() : conf_seed.as<unsigned>();
         std::cout << "random-seed=" << seed << '\n';
         smp::invoke_on_all([seed] {
-            seastar::testing::local_random_engine.seed(seed + engine().cpu_id());
+            seastar::testing::local_random_engine.seed(seed + this_shard_id());
         }).get();
 
         return do_with_cql_env_thread([&app] (auto&& env) {

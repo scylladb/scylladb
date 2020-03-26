@@ -116,7 +116,7 @@ future<> db::batchlog_manager::start() {
     // we use the _timer and _sem on shard zero only. Replaying batchlog can
     // generate a lot of work, so we distrute the real work on all cpus with
     // round-robin scheduling.
-    if (engine().cpu_id() == 0) {
+    if (this_shard_id() == 0) {
         _timer.set_callback([this] {
             // Do it in the background.
             (void)do_batch_log_replay().handle_exception([] (auto ep) {
@@ -295,7 +295,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
     };
 
     return seastar::with_gate(_gate, [this, batch = std::move(batch)] {
-        blogger.debug("Started replayAllFailedBatches (cpu {})", engine().cpu_id());
+        blogger.debug("Started replayAllFailedBatches (cpu {})", this_shard_id());
 
         typedef ::shared_ptr<cql3::untyped_result_set> page_ptr;
         sstring query = format("SELECT id, data, written_at, version FROM {}.{} LIMIT {:d}", system_keyspace::NAME, system_keyspace::BATCHLOG, page_size);

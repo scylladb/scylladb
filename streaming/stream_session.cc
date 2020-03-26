@@ -107,7 +107,7 @@ void stream_session::init_messaging_service_handler() {
     ms().register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        auto dst_cpu_id = engine().cpu_id();
+        auto dst_cpu_id = this_shard_id();
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id, reason] () mutable {
             auto sr = stream_result_future::init_receiving_side(plan_id, description, from);
@@ -450,7 +450,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
             prepare.summaries.emplace_back(task.get_summary());
         }
     }
-    prepare.dst_cpu_id = engine().cpu_id();;
+    prepare.dst_cpu_id = this_shard_id();
     if (_stream_result) {
         _stream_result->handle_session_prepared(shared_from_this());
     }

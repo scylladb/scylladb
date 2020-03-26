@@ -274,7 +274,7 @@ public:
         const sstable_writer_config&,
         encoding_stats enc_stats,
         const io_priority_class& pc = default_priority_class(),
-        shard_id shard = engine().cpu_id());
+        shard_id shard = this_shard_id());
 
     encoding_stats get_encoding_stats_for_compaction() const;
 
@@ -920,7 +920,7 @@ private:
 public:
     sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
             const sstable_writer_config&, encoding_stats enc_stats,
-            const io_priority_class& pc, shard_id shard = engine().cpu_id());
+            const io_priority_class& pc, shard_id shard = this_shard_id());
 
     sstable_writer(sstable_writer&& o);
     sstable_writer& operator=(sstable_writer&& o);

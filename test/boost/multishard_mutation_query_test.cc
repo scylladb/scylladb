@@ -869,7 +869,7 @@ struct fuzzy_test_config {
 static void
 run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<database>& db, schema_ptr schema,
         const std::vector<test::partition_description>& part_descs) {
-    const auto seed = cfg.seed + (i + 1) * engine().cpu_id();
+    const auto seed = cfg.seed + (i + 1) * this_shard_id();
     auto rnd_engine = std::mt19937(seed);
 
     auto partition_index_range = generate_range(rnd_engine, 0, part_descs.size() - 1);

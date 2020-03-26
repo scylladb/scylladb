@@ -132,7 +132,7 @@ gossiper::gossiper(abort_source& as, feature_service& features, locator::token_m
                 std::chrono::milliseconds(cfg.fd_initial_value_ms()),
                 std::chrono::milliseconds(cfg.fd_max_interval_ms())) {
     // Gossiper's stuff below runs only on CPU0
-    if (engine().cpu_id() != 0) {
+    if (this_shard_id() != 0) {
         return;
     }
 
@@ -823,7 +823,7 @@ void gossiper::run() {
 
                 _the_gossiper.invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed, es = endpoint_state_map] (gossiper& local_gossiper) {
                     // Don't copy gossiper(CPU0) maps into themselves!
-                    if (engine().cpu_id() != 0) {
+                    if (this_shard_id() != 0) {
                         if (live_endpoint_changed) {
                             local_gossiper._live_endpoints = _shadow_live_endpoints;
                         }
@@ -1041,16 +1041,16 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
 }
 
 future<> gossiper::replicate(inet_address ep, const endpoint_state& es) {
-    return container().invoke_on_all([ep, es, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
-        if (engine().cpu_id() != orig) {
+    return container().invoke_on_all([ep, es, orig = this_shard_id(), self = shared_from_this()] (gossiper& g) {
+        if (this_shard_id() != orig) {
             g.endpoint_state_map[ep].add_application_state(es);
         }
     });
 }
 
 future<> gossiper::replicate(inet_address ep, const std::map<application_state, versioned_value>& src, const utils::chunked_vector<application_state>& changed) {
-    return container().invoke_on_all([ep, &src, &changed, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
-        if (engine().cpu_id() != orig) {
+    return container().invoke_on_all([ep, &src, &changed, orig = this_shard_id(), self = shared_from_this()] (gossiper& g) {
+        if (this_shard_id() != orig) {
             for (auto&& key : changed) {
                 g.endpoint_state_map[ep].add_application_state(key, src.at(key));
             }
@@ -1059,8 +1059,8 @@ future<> gossiper::replicate(inet_address ep, const std::map<application_state, 
 }
 
 future<> gossiper::replicate(inet_address ep, application_state key, const versioned_value& value) {
-    return container().invoke_on_all([ep, key, &value, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
-        if (engine().cpu_id() != orig) {
+    return container().invoke_on_all([ep, key, &value, orig = this_shard_id(), self = shared_from_this()] (gossiper& g) {
+        if (this_shard_id() != orig) {
             g.endpoint_state_map[ep].add_application_state(key, value);
         }
     });
@@ -1960,7 +1960,7 @@ future<> gossiper::do_stop_gossiping() {
         seastar::with_semaphore(_callback_running, 1, [] {
             logger.info("Disable and wait for gossip loop finished");
             return get_gossiper().invoke_on_all([] (gossiper& g) {
-                if (engine().cpu_id() == 0) {
+                if (this_shard_id() == 0) {
                     g.fd().unregister_failure_detection_event_listener(&g);
                 }
                 g._features_condvar.broken();

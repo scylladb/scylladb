@@ -96,7 +96,7 @@ void migration_manager::init_messaging_service()
         });
     };
 
-    if (engine().cpu_id() == 0) {
+    if (this_shard_id() == 0) {
         _feature_listeners.push_back(_feat.cluster_supports_view_virtual_columns().when_enabled(update_schema));
         _feature_listeners.push_back(_feat.cluster_supports_digest_insensitive_to_expiry().when_enabled(update_schema));
         _feature_listeners.push_back(_feat.cluster_supports_cdc().when_enabled(update_schema));
@@ -1088,7 +1088,7 @@ static future<> maybe_sync(const schema_ptr& s, netw::messaging_service::msg_add
         };
 
         // Serialize schema sync by always doing it on shard 0.
-        if (engine().cpu_id() == 0) {
+        if (this_shard_id() == 0) {
             return merge();
         } else {
             return smp::submit_to(0, [gs = global_schema_ptr(s), endpoint, merge] {

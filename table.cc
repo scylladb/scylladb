@@ -344,7 +344,7 @@ table::make_sstable_reader(schema_ptr s,
     auto ms = [&] () -> mutation_source {
         if (pr.is_singular() && pr.start()->value().has_key()) {
             const dht::ring_position& pos = pr.start()->value();
-            if (dht::shard_of(*s, pos.token()) != engine().cpu_id()) {
+            if (dht::shard_of(*s, pos.token()) != this_shard_id()) {
                 return mutation_source([] (
                         schema_ptr s,
                         reader_permit permit,
@@ -564,7 +564,7 @@ table::for_all_partitions_slow(schema_ptr s, std::function<bool (const dht::deco
 }
 
 static bool belongs_to_current_shard(const std::vector<shard_id>& shards) {
-    return boost::find(shards, engine().cpu_id()) != shards.end();
+    return boost::find(shards, this_shard_id()) != shards.end();
 }
 
 static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
@@ -588,7 +588,7 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
                 trace_state, fwd, fwd_mr, monitor_generator(sst));
         if (sst->is_shared()) {
             auto filter = [&s = *s](const dht::decorated_key& dk) -> bool {
-                return dht::shard_of(s, dk.token()) == engine().cpu_id();
+                return dht::shard_of(s, dk.token()) == this_shard_id();
             };
             reader = make_filtering_reader(std::move(reader), std::move(filter));
         }
@@ -673,7 +673,7 @@ void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
 
 void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept {
     assert(!shards_for_the_sstable.empty());
-    if (*boost::min_element(shards_for_the_sstable) == engine().cpu_id()) {
+    if (*boost::min_element(shards_for_the_sstable) == this_shard_id()) {
         _stats.live_disk_space_used += disk_space_used_by_sstable;
         _stats.total_disk_space_used += disk_space_used_by_sstable;
         _stats.live_sstable_count++;
@@ -706,7 +706,7 @@ table::add_sstable_and_update_cache(sstables::shared_sstable sst) {
     return get_row_cache().invalidate([this, sst] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
-        add_sstable(sst, {engine().cpu_id()});
+        add_sstable(sst, {this_shard_id()});
         trigger_compaction();
     }, dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
 }
@@ -715,7 +715,7 @@ future<>
 table::update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable sst) {
     auto adder = [this, m, sst] {
         auto newtab_ms = sst->as_mutation_source();
-        add_sstable(sst, {engine().cpu_id()});
+        add_sstable(sst, {this_shard_id()});
         m->mark_flushed(std::move(newtab_ms));
         try_trigger_compaction();
     };
@@ -837,7 +837,7 @@ table::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
                 }).then([this, old, newtab] () {
                     return with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, newtab, old] {
                       auto adder = [this, newtab] {
-                          add_sstable(newtab, {engine().cpu_id()});
+                          add_sstable(newtab, {this_shard_id()});
                           try_trigger_compaction();
                           tlogger.debug("Flushing to {} done", newtab->get_filename());
                       };
@@ -1747,7 +1747,7 @@ future<> table::snapshot(sstring name) {
                     auto rf = f.substr(sst->get_dir().size() + 1);
                     table_names.insert(std::move(rf));
                 }
-                return smp::submit_to(shard, [requester = engine().cpu_id(), jsondir = std::move(jsondir), this,
+                return smp::submit_to(shard, [requester = this_shard_id(), jsondir = std::move(jsondir), this,
                                               tables = std::move(table_names), datadir = _config.datadir] {
 
                     if (pending_snapshots.count(jsondir) == 0) {
@@ -1760,7 +1760,7 @@ future<> table::snapshot(sstring name) {
 
                     snapshot->requests.signal(1);
                     auto my_work = make_ready_future<>();
-                    if (requester == engine().cpu_id()) {
+                    if (requester == this_shard_id()) {
                         my_work = snapshot->requests.wait(smp::count).then([jsondir = std::move(jsondir),
                                                                             snapshot, this] {
                             return write_schema_as_cql(jsondir).handle_exception([jsondir](std::exception_ptr ptr) {
@@ -1875,7 +1875,7 @@ future<> table::flush_streaming_mutations(utils::UUID plan_id, dht::partition_ra
                     // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
                     for (auto&& sst : sstables) {
                         // seal_active_streaming_memtable_big() ensures sst is unshared.
-                        this->add_sstable(sst.sstable, {engine().cpu_id()});
+                        this->add_sstable(sst.sstable, {this_shard_id()});
                     }
                     this->try_trigger_compaction();
                 }, std::move(ranges));
@@ -1953,7 +1953,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
                 for (auto& p : *cf._sstables->all()) {
                     if (p->max_data_age() <= gc_trunc) {
                         // Only one shard that own the sstable will submit it for deletion to avoid race condition in delete procedure.
-                        if (*boost::min_element(p->get_shards_for_this_sstable()) == engine().cpu_id()) {
+                        if (*boost::min_element(p->get_shards_for_this_sstable()) == this_shard_id()) {
                             rp = std::max(p->get_stats_metadata().position, rp);
                             remove.emplace_back(p);
                         }

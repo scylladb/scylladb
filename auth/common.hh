@@ -61,7 +61,7 @@ extern const sstring AUTH_PACKAGE_NAME;
 
 template <class Task>
 future<> once_among_shards(Task&& f) {
-    if (engine().cpu_id() == 0u) {
+    if (this_shard_id() == 0u) {
         return f();
     }
 

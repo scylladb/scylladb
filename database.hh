@@ -597,7 +597,7 @@ private:
         assert(_sstable_generation);
         // FIXME: better way of ensuring we don't attempt to
         // overwrite an existing table.
-        return (*_sstable_generation)++ * smp::count + engine().cpu_id();
+        return (*_sstable_generation)++ * smp::count + this_shard_id();
     }
 
     // inverse of calculate_generation_for_new_table(), used to determine which

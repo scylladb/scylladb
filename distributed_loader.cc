@@ -367,7 +367,7 @@ static std::vector<sstables::shared_sstable> sstables_for_shard(const std::vecto
 }
 
 void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sstring cf_name) {
-    assert(engine().cpu_id() == 0); // NOTE: should always run on shard 0!
+    assert(this_shard_id() == 0); // NOTE: should always run on shard 0!
 
     // ensures that only one column family is resharded at a time (that's okay because
     // actual resharding is parallelized), and that's needed to prevent the same column
@@ -728,7 +728,7 @@ future<> distributed_loader::do_populate_column_family(distributed<database>& db
                     sstables::sstable::version_types version = v.second.version;
                     sstables::sstable::format_types format = v.second.format;
 
-                    if (engine().cpu_id() != 0) {
+                    if (this_shard_id() != 0) {
                         dblog.debug("At directory: {}, partial SSTable with generation {} not relevant for this shard, ignoring", sstdir, v.first);
                         return make_ready_future<>();
                     }
@@ -747,7 +747,7 @@ future<> distributed_loader::do_populate_column_family(distributed<database>& db
 future<> distributed_loader::populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf) {
     return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf)] {
         // First pass, cleanup temporary sstable directories and sstables pending delete.
-        if (engine().cpu_id() == 0) {
+        if (this_shard_id() == 0) {
             cleanup_column_family_temp_sst_dirs(sstdir).get();
             auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();
             auto exists = file_exists(pending_delete_dir).get0();
@@ -804,7 +804,7 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
             return db.init_commitlog();
         }).get();
         db.invoke_on_all([] (database& db) {
-            if (engine().cpu_id() == 0) {
+            if (this_shard_id() == 0) {
                 return make_ready_future<>();
             }
             return db.init_commitlog();

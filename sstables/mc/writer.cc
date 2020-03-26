@@ -735,7 +735,7 @@ public:
 
     writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats,
-        const io_priority_class& pc, shard_id shard = engine().cpu_id())
+        const io_priority_class& pc, shard_id shard = this_shard_id())
         : sstable_writer::writer_impl(sst, s, pc, cfg)
         , _enc_stats(enc_stats)
         , _shard(shard)

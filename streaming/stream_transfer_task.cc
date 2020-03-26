@@ -104,7 +104,7 @@ struct send_info {
             return do_until(std::move(stop_cond), [this, &found_relevant_range, &ranges_it] {
                 dht::token_range range = *ranges_it++;
                 if (!found_relevant_range) {
-                    auto sharder = dht::selective_token_range_sharder(cf.schema()->get_partitioner(), std::move(range), engine().cpu_id());
+                    auto sharder = dht::selective_token_range_sharder(cf.schema()->get_partitioner(), std::move(range), this_shard_id());
                     auto range_shard = sharder.next();
                     if (range_shard) {
                         found_relevant_range = true;
@@ -251,7 +251,7 @@ future<> stream_transfer_task::execute() {
         return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
             if (!has_relevant_range_on_this_shard) {
                 sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
-                        plan_id, cf_id, engine().cpu_id());
+                        plan_id, cf_id, this_shard_id());
                 return make_ready_future<>();
             }
             if (si->db.features().cluster_supports_stream_with_rpc_stream()) {

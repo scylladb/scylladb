@@ -1393,7 +1393,7 @@ future<> view_builder::calculate_shard_build_step(
         } catch (const no_such_column_family&) {
             // Fall-through
         }
-        if (engine().cpu_id() == 0) {
+        if (this_shard_id() == 0) {
             bookkeeping_ops->push_back(_sys_dist_ks.remove_view(name.first, name.second));
             bookkeeping_ops->push_back(system_keyspace::remove_built_view(name.first, name.second));
             bookkeeping_ops->push_back(
@@ -1413,7 +1413,7 @@ future<> view_builder::calculate_shard_build_step(
     for (auto& [view_name, first_token, next_token_opt, cpu_id] : in_progress) {
         if (auto view = maybe_fetch_view(view_name)) {
             if (built_views.find(view->id()) != built_views.end()) {
-                if (engine().cpu_id() == 0) {
+                if (this_shard_id() == 0) {
                     auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([view = std::move(view)] {
                         //FIXME: discarded future.
                         (void)system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
@@ -1448,7 +1448,7 @@ future<> view_builder::calculate_shard_build_step(
     if (view_build_status_per_shard.size() != smp::count) {
         reshard(std::move(view_build_status_per_shard), loaded_views);
     } else if (!view_build_status_per_shard.empty()) {
-        for (auto& status : view_build_status_per_shard[engine().cpu_id()]) {
+        for (auto& status : view_build_status_per_shard[this_shard_id()]) {
             load_view_status(std::move(status), loaded_views);
         }
     }
@@ -1485,7 +1485,7 @@ future<> view_builder::calculate_shard_build_step(
 future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     vlogger.info0("Building view {}.{}, starting at token {}", view->ks_name(), view->cf_name(), step.current_token());
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
-    auto f = engine().cpu_id() == 0 ? _sys_dist_ks.start_view_build(view->ks_name(), view->cf_name()) : make_ready_future<>();
+    auto f = this_shard_id() == 0 ? _sys_dist_ks.start_view_build(view->ks_name(), view->cf_name()) : make_ready_future<>();
     return when_all_succeed(
             std::move(f),
             system_keyspace::register_view_for_building(view->ks_name(), view->cf_name(), step.current_token()));
@@ -1564,7 +1564,7 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
                 }
             }
         })();
-        if (engine().cpu_id() != 0) {
+        if (this_shard_id() != 0) {
             // Shard 0 can't remove the entry in the build progress system table on behalf of the
             // current shard, since shard 0 may have already processed the notification, and this
             // shard may since have updated the system table if the drop happened concurrently
@@ -1815,7 +1815,7 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
             }).then([this, view, next_token = std::move(next_token)] (bool built) {
         if (built) {
             return container().invoke_on_all([view_id = view->id()] (view_builder& builder) {
-                if (builder._built_views.erase(view_id) == 0 || engine().cpu_id() != 0) {
+                if (builder._built_views.erase(view_id) == 0 || this_shard_id() != 0) {
                     return make_ready_future<>();
                 }
                 auto view = builder._db.find_schema(view_id);

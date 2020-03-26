@@ -365,7 +365,7 @@ future<> utils::config_file::broadcast_to_all_shards() {
         if (_per_shard_values.size() != smp::count) {
             _per_shard_values.resize(smp::count);
             smp::invoke_on_all([this] {
-                auto cpu = engine().cpu_id();
+                auto cpu = this_shard_id();
                 if (cpu != 0) {
                     s_shard_id = cpu;
                     auto& shard_0_values = _per_shard_values[0];

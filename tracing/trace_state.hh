@@ -749,7 +749,7 @@ class global_trace_state_ptr {
 public:
     // Note: the trace_state_ptr must come from the current shard
     global_trace_state_ptr(trace_state_ptr t)
-            : _cpu_of_origin(engine().cpu_id())
+            : _cpu_of_origin(this_shard_id())
             , _ptr(std::move(t))
     { }
 
@@ -772,7 +772,7 @@ public:
             return nullptr;
         }
 
-        if (_cpu_of_origin != engine().cpu_id()) {
+        if (_cpu_of_origin != this_shard_id()) {
             auto opt_trace_info = make_trace_info(_ptr);
             if (opt_trace_info) {
                 trace_state_ptr new_trace_state = tracing::get_local_tracing_instance().create_session(*opt_trace_info);

@@ -212,7 +212,7 @@ feature& feature::operator=(feature&& other) {
 
 void feature::enable() {
     if (!_enabled) {
-        if (engine().cpu_id() == 0) {
+        if (this_shard_id() == 0) {
             logger.info("Feature {} is enabled", name());
         }
         _enabled = true;

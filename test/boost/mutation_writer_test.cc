@@ -78,7 +78,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
                                         auto shard = partitioner.shard_of(mf_opt->as_partition_start().key().token());
-                                        BOOST_REQUIRE_EQUAL(shard, engine().cpu_id());
+                                        BOOST_REQUIRE_EQUAL(shard, this_shard_id());
                                         shards_after[shard]++;
                                     }
                                     return make_ready_future<stop_iteration>(stop_iteration::no);

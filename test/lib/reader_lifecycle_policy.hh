@@ -60,7 +60,7 @@ public:
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override {
-        const auto shard = engine().cpu_id();
+        const auto shard = this_shard_id();
         _contexts[shard].params = make_foreign(std::make_unique<const reader_params>(reader_params{range, slice}));
         return _factory_function(std::move(schema), _contexts[shard].params->range, _contexts[shard].params->slice, pc,
                 std::move(trace_state), fwd_mr);
@@ -74,7 +74,7 @@ public:
         }).finally([zis = shared_from_this()] {});
     }
     virtual reader_concurrency_semaphore& semaphore() override {
-        const auto shard = engine().cpu_id();
+        const auto shard = this_shard_id();
         if (!_contexts[shard].semaphore) {
             if (_evict_paused_readers) {
                 _contexts[shard].semaphore = make_foreign(std::make_unique<reader_concurrency_semaphore>(0, std::numeric_limits<ssize_t>::max(),

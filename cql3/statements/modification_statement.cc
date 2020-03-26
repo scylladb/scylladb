@@ -346,7 +346,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     request->add_row_update(*this, std::move(ranges), std::move(json_cache), options);
 
     auto shard = service::storage_proxy::cas_shard(*s, request->key()[0].start()->value().as_decorated_key().token());
-    if (shard != engine().cpu_id()) {
+    if (shard != this_shard_id()) {
         proxy.get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));

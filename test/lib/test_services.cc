@@ -88,9 +88,9 @@ dht::token create_token_from_key(const dht::i_partitioner& partitioner, sstring 
 
 range<dht::token> create_token_range_from_keys(const dht::i_partitioner& partitioner, sstring start_key, sstring end_key) {
     dht::token start = create_token_from_key(partitioner, start_key);
-    assert(engine().cpu_id() == partitioner.shard_of(start));
+    assert(this_shard_id() == partitioner.shard_of(start));
     dht::token end = create_token_from_key(partitioner, end_key);
-    assert(engine().cpu_id() == partitioner.shard_of(end));
+    assert(this_shard_id() == partitioner.shard_of(end));
     assert(end >= start);
     return range<dht::token>::make(start, end);
 }

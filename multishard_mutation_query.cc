@@ -236,7 +236,7 @@ public:
     virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
-        return _readers[engine().cpu_id()].rparts->semaphore;
+        return _readers[this_shard_id()].rparts->semaphore;
     }
 
     future<> lookup_readers();
@@ -270,7 +270,7 @@ flat_mutation_reader read_context::create_reader(
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding) {
-    const auto shard = engine().cpu_id();
+    const auto shard = this_shard_id();
     auto& rm = _readers[shard];
 
     if (rm.state != reader_state::used && rm.state != reader_state::successful_lookup && rm.state != reader_state::inexistent) {

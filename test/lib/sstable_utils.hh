@@ -61,7 +61,7 @@ static std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t
         auto dk = dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes(raw_key)));
         key_id++;
         if (lso) {
-            if (engine_is_ready() && engine().cpu_id() != shard_of(*s, dk.token())) {
+            if (engine_is_ready() && this_shard_id() != shard_of(*s, dk.token())) {
                 continue;
             }
         }

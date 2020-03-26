@@ -49,12 +49,12 @@ public:
 
     joinpoint(func_type f)
         : _func(std::move(f))
-        , _shard(engine().cpu_id())
+        , _shard(this_shard_id())
         , _enter(0)
         , _wait(0)
     {}
     type value() {
-        return smp::submit_to(_shard, [this, id = engine().cpu_id()] {
+        return smp::submit_to(_shard, [this, id = this_shard_id()] {
             _enter.signal();
             if (id == _shard) {
                 // We should not generate to common value until all shards

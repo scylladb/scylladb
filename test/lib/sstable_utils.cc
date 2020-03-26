@@ -122,5 +122,5 @@ token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
 }
 
 std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(unsigned tokens_to_generate) {
-    return token_generation_for_shard(tokens_to_generate, engine().cpu_id());
+    return token_generation_for_shard(tokens_to_generate, this_shard_id());
 }

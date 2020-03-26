@@ -378,7 +378,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     }
 
     auto shard = service::storage_proxy::cas_shard(*_statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
-    if (shard != engine().cpu_id()) {
+    if (shard != this_shard_id()) {
         proxy.get_stats().replica_cross_shard_ops++;
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
