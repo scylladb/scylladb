@@ -636,8 +636,6 @@ private:
         // The flag is not stored in the schema mutation and does not affects schema digest.
         // It is set locally on a system tables that should be extra durable
         bool _wait_for_sync = false; // true if all writes using this schema have to be synced immediately by commitlog
-        // Partitioner is not stored in the schema mutation and does not affect
-        // schema digest. It is also not set locally on a schema tables.
         std::reference_wrapper<const dht::i_partitioner> _partitioner;
         // Sharding info is not stored in the schema mutation and does not affect
         // schema digest. It is also not set locally on a schema tables.
