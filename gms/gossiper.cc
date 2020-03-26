@@ -1726,8 +1726,12 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
     // message on all cpus and forard them to cpu0 to process.
     return get_gossiper().invoke_on_all([do_bind] (gossiper& g) {
         g.init_messaging_service_handler(do_bind);
-    }).then([this, generation_nbr, preload_local_states] {
+    }).then([this, generation_nbr, preload_local_states] () mutable {
         build_seeds_list();
+        if (_cfg.force_gossip_generation() > 0) {
+            generation_nbr = _cfg.force_gossip_generation();
+            logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
+        }
         endpoint_state& local_state = endpoint_state_map[get_broadcast_address()];
         local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
         local_state.mark_alive();
