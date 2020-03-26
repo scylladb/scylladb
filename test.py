@@ -375,7 +375,7 @@ class TabularConsoleOutput:
             print(msg)
 
 
-async def run_test(test, options):
+async def run_test(test, options, gentle_kill=False):
     """Run test program, return True if success else False"""
 
     with open(test.log_filename, "wb") as log:
@@ -423,7 +423,10 @@ async def run_test(test, options):
             return True
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
             if process is not None:
-                process.kill()
+                if gentle_kill:
+                    process.terminate()
+                else:
+                    process.kill()
                 stdout, _ = await process.communicate()
             if isinstance(e, asyncio.TimeoutError):
                 report_error("Test timed out")
