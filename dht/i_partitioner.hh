@@ -197,10 +197,6 @@ public:
      */
     virtual const sstring name() const = 0;
 
-    const dht::sharding_info& get_sharding_info() const {
-        return _sharding_info;
-    }
-
     bool operator==(const i_partitioner& o) const {
         return name() == o.name() && _sharding_info == o._sharding_info;
     }
