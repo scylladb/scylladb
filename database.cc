@@ -1282,8 +1282,35 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
-future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
-                                                   db::timeout_clock::time_point timeout,tracing::trace_state_ptr trace_state) {
+static bool has_deleted_counter_cell(const mutation& state) {
+    bool result = false;
+    for (auto&& cr : state.partition().clustered_rows()) {
+        cr.row().cells().for_each_cell_until([&] (auto id, const atomic_cell_or_collection& ac_o_c) {
+            const auto& cdef = state.schema()->column_at(column_kind::regular_column, id);
+            if (ac_o_c.as_atomic_cell(cdef).is_dead(gc_clock::now())) {
+                result = true;
+                return stop_iteration::yes;
+            }
+            return stop_iteration::no;
+        });
+        if (result) {
+            return result;
+        }
+    }
+    state.partition().static_row().for_each_cell_until([&] (auto id, const atomic_cell_or_collection& ac_o_c) {
+        const auto& cdef = state.schema()->column_at(column_kind::static_column, id);
+        if (ac_o_c.as_atomic_cell(cdef).is_dead(gc_clock::now())) {
+            result = true;
+            return stop_iteration::yes;
+        }
+        return stop_iteration::no;
+    });
+    return result;
+}
+
+future<std::tuple<mutation, mutation_opt>> database::do_apply_counter_update(
+        column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
+        db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state, bool return_previous_state) {
     auto m = fm.unfreeze(m_schema);
     m.upgrade(cf.schema());
 
@@ -1313,8 +1340,9 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     auto slice = query::partition_slice(std::move(cr_ranges), std::move(static_columns),
         std::move(regular_columns), { }, { }, cql_serialization_format::internal(), query::max_rows);
 
-    return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(),
-                   [this, &cf, timeout, trace_state = std::move(trace_state), op = cf.write_in_progress()] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
+    return do_with(std::move(slice), std::move(m), mutation_opt{}, std::vector<locked_cell>(),
+                   [this, &cf, timeout, trace_state = std::move(trace_state), op = cf.write_in_progress(), return_previous_state]
+                   (const query::partition_slice& slice, mutation& m, mutation_opt& mopt_persist, std::vector<locked_cell>& locks) mutable {
         tracing::trace(trace_state, "Acquiring counter locks");
         return cf.lock_counter_cells(m, timeout).then([&, m_schema = cf.schema(), trace_state = std::move(trace_state), timeout, this] (std::vector<locked_cell> lcs) mutable {
             locks = std::move(lcs);
@@ -1325,15 +1353,22 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
 
             tracing::trace(trace_state, "Reading counter values from the CF");
             return counter_write_query(m_schema, cf.as_mutation_source(), m.decorated_key(), slice, trace_state)
-                    .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
+                    .then([this, &cf, &m, &mopt_persist, m_schema, timeout, trace_state, return_previous_state] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
                 // its clock and apply the delta.
                 transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable());
                 tracing::trace(trace_state, "Applying counter update");
+
+                // If current state has some deleted cells we should return the preimage to CDC.
+                // That's how CDC will know about ineffective writes, so it can omit them (don't log them).
+                if (return_previous_state || (mopt && m_schema->cdc_options().enabled() && has_deleted_counter_cell(*mopt))) {
+                    mopt_persist = std::move(mopt);
+                }
                 return this->apply_with_commitlog(cf, m, timeout);
-            }).then([&m] {
-                return std::move(m);
+            }).then([&m, &mopt_persist] () {
+                // `mopt` can be needed in CDC: as a preimage and to detect dead counters
+                return std::make_tuple(std::move(m), std::move(mopt_persist));
             });
         });
     });
@@ -1461,10 +1496,12 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
     }, timeout);
 }
 
-future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+future<std::tuple<mutation, mutation_opt>> database::apply_counter_update(
+        schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state,
+        bool return_previous_state) {
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
-        return make_exception_future<mutation>(timed_out_error{});
+        return make_exception_future<std::tuple<mutation, mutation_opt>>(timed_out_error{});
     }
   return update_write_metrics(seastar::futurize_invoke([&] {
     if (!s->is_synced()) {
@@ -1473,7 +1510,7 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
     }
     try {
         auto& cf = find_column_family(m.column_family_id());
-        return do_apply_counter_update(cf, m, s, timeout, std::move(trace_state));
+        return do_apply_counter_update(cf, m, s, timeout, std::move(trace_state), return_previous_state);
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;

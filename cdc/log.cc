@@ -239,6 +239,7 @@ public:
     future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>> augment_mutation_call(
         lowres_clock::time_point timeout,
         std::vector<mutation>&& mutations,
+        mutation_opt&& counter_preimage,
         tracing::trace_state_ptr tr_state
     );
 
@@ -404,6 +405,10 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
                     // lists are represented as map<timeuuid, value_type>. Otherwise we cannot express delta
                     [] (const list_type_impl& type) -> data_type {
                         return map_type_impl::get_instance(type.name_comparator(), type.value_comparator(), false);
+                    },
+                    // counters and their deltas are represented as bigints
+                    [] (const counter_type_impl& type) -> data_type {
+                        return long_type;
                     },
                     // everything else is just frozen self
                     [] (const abstract_type& type) {
@@ -828,7 +833,7 @@ public:
     }
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
-    // more details like tombstones/ttl? Probably not but keep in mind.
+    // more details like tombstones/ttl? Probably not (except counters) but keep in mind.
     std::tuple<mutation, stats::part_type_set> transform(const mutation& m, const cql3::untyped_result_set* rs, api::timestamp_type ts, bytes tuuid, int& batch_no) {
         auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token());
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
@@ -1174,6 +1179,275 @@ public:
         return std::make_tuple(std::move(res), touched_parts);
     }
 
+    std::tuple<mutation, stats::part_type_set> counter_transform(const mutation& delta, const mutation_opt& preimg_mut, const cql3::untyped_result_set* postimg_rs, api::timestamp_type ts, bytes tuuid, int& batch_no) {
+        auto stream_id = _ctx._cdc_metadata.get_stream(ts, delta.token());
+        mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
+        const auto preimage = _schema->cdc_options().preimage();
+        const auto postimage = _schema->cdc_options().postimage();
+        stats::part_type_set touched_parts;
+        auto& p = delta.partition();
+
+        if (p.partition_tombstone()) {
+            // Partition deletion
+            touched_parts.set<stats::part_type::PARTITION_DELETE>();
+            auto log_ck = set_pk_columns(delta.key(), ts, tuuid, batch_no++, res);
+            set_operation(log_ck, ts, operation::partition_delete, res);
+        } else if (!p.row_tombstones().empty()) {
+            // range deletion
+            touched_parts.set<stats::part_type::RANGE_TOMBSTONE>();
+            if (!p.row_tombstones().empty()) {
+                const auto& rt = *p.row_tombstones().begin();
+                auto set_bound = [&] (const clustering_key& log_ck, const clustering_key_prefix& ckp) {
+                    auto exploded = ckp.explode(*_schema);
+                    size_t pos = 0;
+                    for (const auto& column : _schema->clustering_key_columns()) {
+                        if (pos >= exploded.size()) {
+                            break;
+                        }
+                        auto cdef = _log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
+                        auto value = atomic_cell::make_live(*column.type,
+                                                            ts,
+                                                            bytes_view(exploded[pos]),
+                                                            _cdc_ttl_opt);
+                        res.set_cell(log_ck, *cdef, std::move(value));
+                        ++pos;
+                    }
+                };
+                {
+                    auto log_ck = set_pk_columns(delta.key(), ts, tuuid, batch_no++, res);
+                    set_bound(log_ck, rt.start);
+                    const auto start_operation = rt.start_kind == bound_kind::incl_start
+                            ? operation::range_delete_start_inclusive
+                            : operation::range_delete_start_exclusive;
+                    set_operation(log_ck, ts, start_operation, res);
+                }
+                {
+                    auto log_ck = set_pk_columns(delta.key(), ts, tuuid, batch_no++, res);
+                    set_bound(log_ck, rt.end);
+                    const auto end_operation = rt.end_kind == bound_kind::incl_end
+                            ? operation::range_delete_end_inclusive
+                            : operation::range_delete_end_exclusive;
+                    set_operation(log_ck, ts, end_operation, res);
+                }
+            }
+        } else {
+            // Should be update or row deletion
+            auto process_cells = [&] (const row& r, column_kind ckind, const clustering_key& log_ck, std::optional<clustering_key> pikey, std::optional<clustering_key> poikey, const cql3::untyped_result_set_row* poirow) {
+                bool anything_updated = false;
+                r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+                    const auto& cdef = _schema->column_at(ckind, id);
+
+                    if (preimg_mut) {
+                        const atomic_cell_or_collection* preimg_ac_o_c = nullptr;
+                        if (ckind == column_kind::regular_column && !preimg_mut->partition().clustered_rows().empty()) {
+                            preimg_ac_o_c = preimg_mut->partition().clustered_rows().begin()->row().cells().find_cell(id);
+                        } else if (ckind == column_kind::static_column && !preimg_mut->partition().static_row().empty()) {
+                            preimg_ac_o_c = preimg_mut->partition().static_row().get().find_cell(id);
+                        }
+                        // Maybe it's unnecessary, but safer to have separate `cdef` for deltas
+                        const auto* preimg_cdef = preimg_mut->schema()->get_column_definition(cdef.name());
+                        if (preimg_ac_o_c && preimg_cdef) {
+                            auto preimg_acv = preimg_ac_o_c->as_atomic_cell(*preimg_cdef);
+                            if (preimg_acv.is_live()) {
+                                anything_updated = true;
+                            } else {
+                                return;
+                            }
+                        }
+                    }
+
+                    auto* dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
+                    bool is_column_delete = true;
+                    bytes_opt value = std::nullopt;
+                    auto view = cell.as_atomic_cell(cdef);
+                    if (view.is_live()) {
+                        is_column_delete = false;
+                        assert (view.is_counter_update() && "Non-delta mutation encountered");
+                        value = data_value(view.counter_update_value()).serialize();
+                    }
+
+                    if (is_column_delete) {
+                        res.set_cell(log_ck, log_data_column_deleted_name_bytes(cdef.name()), data_value(true), ts, _cdc_ttl_opt);
+                    }
+                    if (value) {
+                        anything_updated = true;
+                        res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
+                    }
+
+                    if (pikey && preimg_mut) {
+                        auto prev_value = get_preimage_counter_value(cdef.name(), *preimg_mut);
+                        if (prev_value) {
+                            auto dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
+                            res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, *prev_value, _cdc_ttl_opt));
+                        }
+                    }
+                });
+
+                if (poikey && poirow) {
+                    for (auto& cdef : _schema->columns(ckind)) {
+                        // Yes, for counters postimage is already in the DB
+                        auto post_value = get_preimage_col_value(cdef, poirow);
+                        if (post_value) {
+                            auto dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
+                            res.set_cell(*poikey, *dst, atomic_cell::make_live(*dst->type, ts, *post_value, _cdc_ttl_opt));
+                        }
+                    }
+                }
+
+                return anything_updated;
+            };
+
+            const auto* poirow = postimg_rs && !postimg_rs->empty()
+                    ? &postimg_rs->front()
+                    : nullptr;
+
+            if (!p.static_row().empty()) {
+                touched_parts.set<stats::part_type::STATIC_ROW>();
+                std::optional<clustering_key> pikey, poikey;
+
+                if (preimage && preimg_mut) {
+                    bool should_set_pikey = false;
+                    // Set `pikey` iff delta affects any live cell that existed before.
+                    p.static_row().get().for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& delta_ac_o_c) {
+                        if (preimg_mut->partition().static_row().empty()) {
+                            return stop_iteration::yes;
+                        }
+                        const auto* preimg_ac_o_c = preimg_mut->partition().static_row().get().find_cell(id);
+                        const auto& preimg_cdef = preimg_mut->schema()->column_at(column_kind::static_column, id);
+                        if (preimg_ac_o_c && preimg_ac_o_c->as_atomic_cell(preimg_cdef).is_live()) {
+                            should_set_pikey = true;
+                            return stop_iteration::yes;
+                        }
+                        return stop_iteration::no;
+                    });
+                    if (should_set_pikey) {
+                        pikey = set_pk_columns(delta.key(), ts, tuuid, batch_no++, res);
+                        set_operation(*pikey, ts, operation::pre_image, res);
+                    }
+                }
+
+                auto log_ck = set_pk_columns(delta.key(), ts, tuuid, batch_no++, res);
+
+                if (postimage) {
+                     poikey = set_pk_columns(delta.key(), ts, tuuid, batch_no++, res);
+                     set_operation(*poikey, ts, operation::post_image, res);
+                }
+
+                const bool anything_updated = process_cells(p.static_row().get(), column_kind::static_column, log_ck, pikey, poikey, poirow);
+                if (!anything_updated) {
+                    // Delta mutation has 0 effect => return empty log
+                    return std::make_tuple(mutation{_log_schema, stream_id.to_partition_key(*_log_schema)}, stats::part_type_set{});
+                }
+                set_operation(log_ck, ts, operation::update, res);
+            } else {
+                assert (!p.clustered_rows().empty() && "Empty delta");
+                const rows_entry& r = *p.clustered_rows().begin();
+                auto ck_value = r.key().explode(*_schema);
+
+                std::optional<clustering_key> pikey, poikey;
+
+                if (preimage && preimg_mut) {
+                    bool should_set_pikey = false;
+                    // Set `pikey` iff delta affects any live cell that existed before.
+                    r.row().cells().for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& delta_ac_o_c) {
+                        if (preimg_mut->partition().clustered_rows().empty()) {
+                            return stop_iteration::yes;
+                        }
+                        const auto* preimg_ac_o_c = preimg_mut->partition().clustered_rows().begin()->row().cells().find_cell(id);
+                        const auto& preimg_cdef = preimg_mut->schema()->column_at(column_kind::regular_column, id);
+                        if (preimg_ac_o_c && preimg_ac_o_c->as_atomic_cell(preimg_cdef).is_live()) {
+                            should_set_pikey = true;
+                            return stop_iteration::yes;
+                        }
+                        return stop_iteration::no;
+                    });
+                    if (should_set_pikey) {
+                        pikey = set_pk_columns(delta.key(), ts, tuuid, batch_no++, res);
+                        set_operation(*pikey, ts, operation::pre_image, res);
+                    }
+                }
+
+                auto log_ck = set_pk_columns(delta.key(), ts, tuuid, batch_no++, res);
+
+                if (postimage) {
+                    poikey = set_pk_columns(delta.key(), ts, tuuid, batch_no++, res);
+                    set_operation(*poikey, ts, operation::post_image, res);
+                }
+
+                size_t pos = 0;
+                for (const auto& column : _schema->clustering_key_columns()) {
+                    assert (pos < ck_value.size());
+                    auto cdef = _log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
+                    res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
+
+                    if (pikey) {
+                        res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
+                    }
+                    if (poikey) {
+                        res.set_cell(*poikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
+                    }
+
+                    ++pos;
+                }
+                
+                operation cdc_op;
+                if (r.row().deleted_at()) {
+                    touched_parts.set<stats::part_type::ROW_DELETE>();
+                    cdc_op = operation::row_delete;
+                    if (preimage && preimg_mut && pikey) {
+                        // On row delete return full preimage
+                        for (const auto& preimage_col : preimg_mut->schema()->regular_columns()) {
+                            auto prev_value = get_preimage_counter_value(preimage_col.name(), *preimg_mut);
+                            if (prev_value) {
+                                auto dst = _log_schema->get_column_definition(log_data_column_name_bytes(preimage_col.name()));
+                                res.set_cell(*pikey, *dst, atomic_cell::make_live(*dst->type, ts, *prev_value, _cdc_ttl_opt));
+                            }
+                        }
+                    }
+                } else {
+                    const bool anything_updated = process_cells(r.row().cells(), column_kind::regular_column, log_ck, pikey, poikey, poirow);
+                    if (!anything_updated) {
+                        // Delta mutation has 0 effect => return empty log
+                        return std::make_tuple(mutation{_log_schema, stream_id.to_partition_key(*_log_schema)}, stats::part_type_set{});
+                    }
+                    cdc_op = operation::update;
+                }
+                set_operation(log_ck, ts, cdc_op, res);
+                
+                touched_parts.set_if<stats::part_type::CLUSTERING_ROW>(!p.clustered_rows().empty());
+            }
+        }
+
+        return std::make_tuple(res, touched_parts);
+    }
+
+    bytes_opt get_preimage_counter_value(const bytes& cname, const mutation& preimg_mut) {
+        const auto* cdef = preimg_mut.schema()->get_column_definition(cname);
+        if (!cdef) {
+            return std::nullopt;
+        }
+
+        const atomic_cell_or_collection* preimg_ac_o_c = nullptr;
+        if (cdef->kind == column_kind::regular_column && !preimg_mut.partition().clustered_rows().empty()) {
+            preimg_ac_o_c = preimg_mut.partition().clustered_rows().begin()->row().cells().find_cell(cdef->id);
+        } else if (cdef->kind == column_kind::static_column && !preimg_mut.partition().static_row().empty()) {
+            preimg_ac_o_c = preimg_mut.partition().static_row().get().find_cell(cdef->id);
+        }
+
+        const auto* preimg_cdef = preimg_mut.schema()->get_column_definition(cdef->name());
+        if (preimg_ac_o_c && preimg_cdef) {
+            const auto preimg_acv = preimg_ac_o_c->as_atomic_cell(*preimg_cdef);
+            if (preimg_acv.is_live()) {
+                int64_t ret_val;
+                counter_cell_view::with_linearized(preimg_acv, [&] (counter_cell_view ccv) {
+                    ret_val = ccv.total_value();
+                });
+                return long_type->decompose(ret_val);
+            }
+        }
+        return std::nullopt;
+    }
+
     bytes_opt get_preimage_col_value(const column_definition& cdef, const cql3::untyped_result_set_row *pirow) {
         /**
          * #6070 - see comment for _non_atomic_column_deletes
@@ -1315,7 +1589,7 @@ transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_siz
 } // namespace cdc
 
 future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
-cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
+cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, mutation_opt&& counter_preimage, tracing::trace_state_ptr tr_state) {
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
@@ -1329,9 +1603,9 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     tracing::trace(tr_state, "CDC: Started generating mutations for log rows");
     mutations.reserve(2 * mutations.size());
 
-    return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{},
-            [this, timeout, i, tr_state = std::move(tr_state)] (std::vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
-        return transform_mutations(mutations, 1, [this, &mutations, timeout, &qs, tr_state = tr_state, &details] (int idx) mutable {
+    return do_with(std::move(mutations), std::move(counter_preimage), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{},
+            [this, timeout, i, tr_state = std::move(tr_state)] (std::vector<mutation>& mutations, mutation_opt& counter_preimage, service::query_state& qs, operation_details& details) {
+        return transform_mutations(mutations, 1, [this, &mutations, &counter_preimage, timeout, &qs, tr_state = tr_state, &details] (int idx) mutable {
             auto& m = mutations[idx];
             auto s = m.schema();
 
@@ -1342,10 +1616,12 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             transformer trans(_ctxt, s);
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
-            if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
+            if ((s->is_counter() && s->cdc_options().postimage())
+                    || (!s->is_counter() && (s->cdc_options().preimage() || s->cdc_options().postimage()))) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
+                // Note #2: for counters, this select returns postimage (deltas are already applied)
                 tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
                 f = trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
                     auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
@@ -1359,19 +1635,22 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
 
-            return f.then([trans = std::move(trans), &mutations, idx, tr_state = std::move(tr_state), &details] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+            return f.then([trans = std::move(trans), &mutations, &counter_preimage, idx, tr_state = std::move(tr_state), &details] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
                 auto& m = mutations[idx];
                 auto& s = m.schema();
                 details.had_preimage |= s->cdc_options().preimage();
                 details.had_postimage |= s->cdc_options().postimage();
                 tracing::trace(tr_state, "CDC: Generating log mutations for {}", m.decorated_key());
                 int generated_count;
+
                 if (should_split(m, *s)) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
                     details.was_split = true;
                     generated_count = 0;
                     for_each_change(m, s, [&] (mutation mm, api::timestamp_type ts, bytes tuuid, int& batch_no) {
-                        auto [mut, parts] = trans.transform(std::move(mm), rs.get(), ts, tuuid, batch_no);
+                        auto [mut, parts] = s->is_counter()
+                                ? trans.counter_transform(std::move(mm), counter_preimage, rs.get(), ts, tuuid, batch_no)
+                                : trans.transform(std::move(mm), rs.get(), ts, tuuid, batch_no);
                         mutations.push_back(std::move(mut));
                         ++generated_count;
                         details.touched_parts.add(parts);
@@ -1381,7 +1660,9 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                     int batch_no = 0;
                     auto ts = find_timestamp(*s, m);
                     auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
-                    auto [mut, parts] = trans.transform(m, rs.get(), ts, tuuid, batch_no);
+                    auto [mut, parts] = s->is_counter()
+                            ? trans.counter_transform(m, counter_preimage, rs.get(), ts, tuuid, batch_no)
+                            : trans.transform(m, rs.get(), ts, tuuid, batch_no);
                     mutations.push_back(std::move(mut));
                     generated_count = 1;
                     details.touched_parts.add(parts);
@@ -1390,6 +1671,10 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 tracing::trace(tr_state, "CDC: Generated {} log mutations from {}", generated_count, mutations[idx].decorated_key());
             });
         }).then([this, tr_state, &details](std::vector<mutation> mutations) {
+            // Counter deltas are already applied at this point, return just the augmentation
+            if (mutations.size() > 1 && mutations.front().schema()->is_counter()) {
+                mutations.erase(mutations.begin());
+            }
             tracing::trace(tr_state, "CDC: Finished generating all log mutations");
             auto tracker = make_lw_shared<cdc::operation_result_tracker>(_ctxt._proxy.get_cdc_stats(), details);
             return make_ready_future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), std::move(tracker)));
@@ -1403,7 +1688,16 @@ bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutat
     });
 }
 
+bool cdc::cdc_service::counter_needs_cdc_augmentation(const mutation& m) const {
+    return m.schema()->cdc_options().enabled();
+}
+
 future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
 cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
-    return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state));
+    return _impl->augment_mutation_call(timeout, std::move(mutations), mutation_opt{}, std::move(tr_state));
+}
+
+future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
+cdc::cdc_service::calc_counter_mutation_augmentation(lowres_clock::time_point timeout, mutation&& delta, mutation_opt&& counter_preimage, tracing::trace_state_ptr tr_state) {
+    return _impl->augment_mutation_call(timeout, {std::move(delta)}, std::move(counter_preimage), std::move(tr_state));
 }

@@ -93,7 +93,13 @@ public:
         std::vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state
         );
+
+    future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>> calc_counter_mutation_augmentation(
+            lowres_clock::time_point timeout, mutation&& delta,
+            mutation_opt&& counter_preimage, tracing::trace_state_ptr tr_state);
+
     bool needs_cdc_augmentation(const std::vector<mutation>&) const;
+    bool counter_needs_cdc_augmentation(const mutation& m) const;
 };
 
 struct db_context final {

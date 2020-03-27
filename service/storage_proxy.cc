@@ -1817,11 +1817,32 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
     auto shard = _db.local().shard_of(fm);
     bool local = shard == this_shard_id();
     get_stats().replica_cross_shard_ops += !local;
-    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (database& db) {
+    bool preimage_needed = s->cdc_options().preimage();
+    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [this, gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local, preimage_needed] (database& db) {
         auto trace_state = gt.get();
         auto p = local ? std::move(permit) : /* FIXME: either obtain a real permit on this shard or hold original one across shard */ empty_service_permit();
-        return db.apply_counter_update(gs, fm, timeout, trace_state).then([cl, timeout, trace_state, p = std::move(p)] (mutation m) mutable {
-            return service::get_local_storage_proxy().replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(p));
+        return db.apply_counter_update(gs, fm, timeout, trace_state, preimage_needed).then([cl, timeout, trace_state, p = std::move(p), delta = fm.unfreeze(gs)]
+                (std::tuple<mutation, mutation_opt>&& state_with_opt_preimage) mutable {
+            auto new_state = std::get<0>(std::move(state_with_opt_preimage));
+            auto old_state = std::get<1>(std::move(state_with_opt_preimage));
+            
+            future<> cdc_fut = make_ready_future<>();
+            auto cdc_ptr = service::get_local_storage_proxy()._cdc;
+            if (cdc_ptr && cdc_ptr->counter_needs_cdc_augmentation({delta})) {
+                cdc_fut = cdc_ptr->calc_counter_mutation_augmentation(timeout, std::move(delta), std::move(old_state), trace_state).then(
+                        [cl, timeout, trace_state, p](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>> t) mutable {
+                    auto cdc_mutations = std::move(std::get<0>(t));
+                    if (cdc_mutations.empty()) {
+                        return make_ready_future<>();
+                    }
+                    auto cdc_tracker = std::move(std::get<1>(t));
+                    return service::get_local_storage_proxy().mutate_internal(std::move(cdc_mutations), cl, false, trace_state, p, timeout, std::move(cdc_tracker));
+                });
+            }
+
+            return cdc_fut.then([ns = std::move(new_state), cl, ts = std::move(trace_state), timeout, p = std::move(p)] {
+                return service::get_local_storage_proxy().replicate_counter_from_leader(std::move(ns), cl, std::move(ts), timeout, std::move(p));
+            });
         });
     });
 }
@@ -2222,11 +2243,36 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
  */
 future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
-            auto mutations = std::move(std::get<0>(t));
-            auto tracker = std::move(std::get<1>(t));
-            return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, std::move(tracker));
+        // Separate counters from non-counters for CDC
+        auto cnt_begin = boost::range::partition(mutations, [] (const mutation& m) {
+            return !m.schema()->is_counter();
         });
+        // Counter "shards" mutations are not augmented. Counter "delta" mutations are augmented upon applying on leader.
+        if (cnt_begin != mutations.end()) {
+            // There are some counter mutations, so isolate them from augmenting
+            std::vector<mutation> counter_mutations;
+            counter_mutations.insert(counter_mutations.end(),
+                    std::make_move_iterator(cnt_begin),
+                    std::make_move_iterator(mutations.end()));
+            mutations.erase(cnt_begin, mutations.end());
+
+            return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state).then(
+                    [this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cmut = std::move(counter_mutations)]
+                    (std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+                auto mutations_with_cdc = std::move(std::get<0>(t));
+                auto tracker = std::move(std::get<1>(t));
+                cmut.insert(cmut.end(),
+                        std::make_move_iterator(mutations_with_cdc.begin()),
+                        std::make_move_iterator(mutations_with_cdc.end()));
+                return _mutate_stage(this, std::move(cmut), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, std::move(tracker));
+            });
+        } else {
+            return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+                auto mutations = std::move(std::get<0>(t));
+                auto tracker = std::move(std::get<1>(t));
+                return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, std::move(tracker));
+            });
+        }
     }
     return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, nullptr);
 }
