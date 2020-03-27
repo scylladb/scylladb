@@ -1818,11 +1818,32 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
     auto shard = _db.local().shard_of(fm);
     bool local = shard == this_shard_id();
     get_stats().replica_cross_shard_ops += !local;
-    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (database& db) {
+    const bool get_sanitized_deltas = s->cdc_options().enabled();
+    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local, get_sanitized_deltas] (database& db) {
         auto trace_state = gt.get();
         auto p = local ? std::move(permit) : /* FIXME: either obtain a real permit on this shard or hold original one across shard */ empty_service_permit();
-        return db.apply_counter_update(gs, fm, timeout, trace_state).then([cl, timeout, trace_state, p = std::move(p)] (mutation m) mutable {
-            return service::get_local_storage_proxy().replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(p));
+        return db.apply_counter_update(gs, fm, timeout, trace_state, get_sanitized_deltas).then([cl, timeout, trace_state, p = std::move(p), delta = fm.unfreeze(gs)]
+                (std::tuple<mutation, mutation_opt>&& state_with_opt_sandeltas) mutable {
+            auto new_state = std::get<0>(std::move(state_with_opt_sandeltas));
+            auto sanitized_deltas = std::get<1>(std::move(state_with_opt_sandeltas));
+
+            future<> cdc_fut = make_ready_future<>();
+            auto cdc_ptr = service::get_local_storage_proxy()._cdc;
+            if (cdc_ptr && sanitized_deltas && cdc_ptr->needs_cdc_augmentation({*sanitized_deltas})) {
+                cdc_fut = cdc_ptr->augment_mutation_call(timeout, std::vector<mutation>{*sanitized_deltas}, trace_state).then(
+                        [cl, timeout, trace_state, p](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+                    if (std::get<0>(t).empty() || std::get<0>(t).back().partition().empty()) {
+                        return make_ready_future<>();
+                    }
+                    auto cdc_mutation = std::get<0>(t).back();
+                    auto cdc_tracker = std::move(std::get<1>(t));
+                    return service::get_local_storage_proxy().mutate_internal(std::vector<mutation>{cdc_mutation}, cl, false, trace_state, p, timeout, std::move(cdc_tracker));
+                });
+            }
+
+            return cdc_fut.then([ns = std::move(new_state), cl, ts = std::move(trace_state), timeout, p = std::move(p)] {
+                return service::get_local_storage_proxy().replicate_counter_from_leader(std::move(ns), cl, std::move(ts), timeout, std::move(p));
+            });
         });
     });
 }
@@ -2223,11 +2244,16 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
  */
 future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters) {
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
-            auto mutations = std::move(std::get<0>(t));
-            auto tracker = std::move(std::get<1>(t));
-            return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, std::move(tracker));
-        });
+        const bool is_one_counter_mutation = mutations.size() == 1 && mutations.front().schema()->is_counter();
+        // Counter "shards" mutations are not augmented. Counter "delta" mutations are augmented upon applying on leader.
+        if (!is_one_counter_mutation) {
+            return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state).then(
+                    [this, cl, timeout, tr_state, permit = std::move(permit), raw_counters](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+                auto mutations = std::move(std::get<0>(t));
+                auto tracker = std::move(std::get<1>(t));
+                return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, std::move(tracker));
+            });
+        }
     }
     return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, nullptr);
 }

@@ -215,6 +215,44 @@ std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, ato
  });
 }
 
+void nullify_dead_updates(mutation& update, const mutation* current_state) {
+    auto nullify_dead_update_cells = [&s = *update.schema()] (column_kind kind, auto& update, auto& state) {
+        std::set<column_id> dead_columns;
+        state.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+            auto& cdef = s.column_at(kind, id);
+            auto acv = ac_o_c.as_atomic_cell(cdef);
+            if (!acv.is_live()) {
+                dead_columns.insert(id);
+            }
+        });
+
+        update.for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
+            auto& cdef = s.column_at(kind, id);
+            auto acv = ac_o_c.as_atomic_cell(cdef);
+            if (!acv.is_live() || dead_columns.count(id)) {
+                ac_o_c = atomic_cell::make_live_counter_update(acv.timestamp(), 0);
+            }
+        });
+    };
+
+    nullify_dead_update_cells(column_kind::static_column, update.partition().static_row(), current_state->partition().static_row());
+
+    clustering_key::less_compare cmp(*update.schema());
+    auto& cstate = current_state->partition();
+    auto it = cstate.clustered_rows().begin();
+    auto end = cstate.clustered_rows().end();
+    for (auto& cr : update.partition().clustered_rows()) {
+        while (it != end && cmp(it->key(), cr.key())) {
+            ++it;
+        }
+        if (it == end || cmp(cr.key(), it->key())) {
+            // New row - ignore.
+            continue;
+        }
+
+        nullify_dead_update_cells(column_kind::regular_column, cr.row().cells(), it->row().cells());
+    }
+}
 
 void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset) {
     // FIXME: allow current_state to be frozen_mutation

@@ -1282,9 +1282,13 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
-future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
-                                                   db::timeout_clock::time_point timeout,tracing::trace_state_ptr trace_state) {
+future<std::tuple<mutation, mutation_opt>> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
+                                                   db::timeout_clock::time_point timeout,tracing::trace_state_ptr trace_state, bool get_sanitized_delta) {
     auto m = fm.unfreeze(m_schema);
+    mutation_opt sanitized_delta_mut;
+    if (get_sanitized_delta) {
+        sanitized_delta_mut = m;
+    }
     m.upgrade(cf.schema());
 
     // prepare partition slice
@@ -1313,8 +1317,8 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     auto slice = query::partition_slice(std::move(cr_ranges), std::move(static_columns),
         std::move(regular_columns), { }, { }, cql_serialization_format::internal(), query::max_rows);
 
-    return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(),
-                   [this, &cf, timeout, trace_state = std::move(trace_state), op = cf.write_in_progress()] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
+    return do_with(std::move(slice), std::move(m), std::move(sanitized_delta_mut), std::vector<locked_cell>(),
+                   [this, &cf, timeout, trace_state = std::move(trace_state), op = cf.write_in_progress()] (const query::partition_slice& slice, mutation& m, mutation_opt& sanitized_delta_mut, std::vector<locked_cell>& locks) mutable {
         tracing::trace(trace_state, "Acquiring counter locks");
         return cf.lock_counter_cells(m, timeout).then([&, m_schema = cf.schema(), trace_state = std::move(trace_state), timeout, this] (std::vector<locked_cell> lcs) mutable {
             locks = std::move(lcs);
@@ -1325,15 +1329,18 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
 
             tracing::trace(trace_state, "Reading counter values from the CF");
             return counter_write_query(m_schema, cf.as_mutation_source(), m.decorated_key(), slice, trace_state)
-                    .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
+                    .then([this, &cf, &m, m_schema, timeout, trace_state, &sanitized_delta_mut] (auto mopt) {
+                if (mopt && sanitized_delta_mut) {
+                    nullify_dead_updates(*sanitized_delta_mut, &*mopt);
+                }
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
                 // its clock and apply the delta.
                 transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable());
                 tracing::trace(trace_state, "Applying counter update");
                 return this->apply_with_commitlog(cf, m, timeout);
-            }).then([&m] {
-                return std::move(m);
+            }).then([&m, &sanitized_delta_mut] {
+                return std::make_tuple(std::move(m), std::move(sanitized_delta_mut));
             });
         });
     });
@@ -1461,10 +1468,10 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
     }, timeout);
 }
 
-future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+future<std::tuple<mutation, mutation_opt>> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state, bool get_sanitized_delta) {
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
-        return make_exception_future<mutation>(timed_out_error{});
+        return make_exception_future<std::tuple<mutation, mutation_opt>>(timed_out_error{});
     }
   return update_write_metrics(seastar::futurize_invoke([&] {
     if (!s->is_synced()) {
@@ -1473,7 +1480,7 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
     }
     try {
         auto& cf = find_column_family(m.column_family_id());
-        return do_apply_counter_update(cf, m, s, timeout, std::move(trace_state));
+        return do_apply_counter_update(cf, m, s, timeout, std::move(trace_state), get_sanitized_delta);
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;

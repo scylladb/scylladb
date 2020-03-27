@@ -440,6 +440,8 @@ struct counter_cell_mutable_view : basic_counter_cell_view<mutable_view::yes> {
     void set_timestamp(api::timestamp_type ts) { _cell.set_timestamp(ts); }
 };
 
+void nullify_dead_updates(mutation& update, const mutation* current_state);
+
 // Transforms mutation dst from counter updates to counter shards using state
 // stored in current_state.
 // If current_state is present it has to be in the same schema as dst.
