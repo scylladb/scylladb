@@ -1449,13 +1449,8 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
 
     data_listeners().on_write(m_schema, m);
 
-    return cf.dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
-        try {
-            auto& cf = find_column_family(m.column_family_id());
-            cf.apply(m, m_schema, std::move(h));
-        } catch (no_such_column_family&) {
-            dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
-        }
+    return cf.dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cf]() mutable {
+        cf.apply(m, m_schema, std::move(h));
     }, timeout);
 }
 
