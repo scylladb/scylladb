@@ -405,6 +405,10 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
                     [] (const list_type_impl& type) -> data_type {
                         return map_type_impl::get_instance(type.name_comparator(), type.value_comparator(), false);
                     },
+                    // counters and their deltas are represented as bigints
+                    [] (const counter_type_impl& type) -> data_type {
+                        return long_type;
+                    },
                     // everything else is just frozen self
                     [] (const abstract_type& type) {
                         return type.freeze();
@@ -887,6 +891,7 @@ public:
                     auto& cdef = _schema->column_at(ckind, id);
                     auto* dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
                     bool is_column_delete = true;
+                    bool is_counter_update = false;
                     bytes_opt value;
                     bytes_opt deleted_elements = std::nullopt;
                     if (cdef.is_atomic()) {
@@ -894,7 +899,10 @@ public:
                         auto view = cell.as_atomic_cell(cdef);
                         if (view.is_live()) {
                             is_column_delete = false;
-                            value = view.value().linearize();
+                            is_counter_update = view.is_counter_update();
+                            value = is_counter_update
+                                    ? data_value(view.counter_update_value()).serialize()
+                                    : view.value().linearize();
                             if (view.is_live_and_has_ttl()) {
                                 ttl = view.ttl();
                             }
@@ -1031,7 +1039,20 @@ public:
                         // keep track of actually assigning this already
                         columns_assigned.emplace(id);
                         if (cdef.is_atomic() && !is_column_delete && value) {
-                            res.set_cell(*poikey, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
+                            if (is_counter_update) {
+                                // counters calculate postimage by adding preimage to delta
+                                struct sum_int64_visitor {
+                                    int64_t accumulator;
+                                    void operator()(const long_type_impl&, const emptyable<int64_t>* v) { accumulator += v->get(); }
+                                    void operator()(const abstract_type& t, const void*) {}
+                                };
+                                const auto value_prev = prev ? long_type->deserialize(*prev) : data_value((int64_t)0);
+                                sum_int64_visitor vis{cell.as_atomic_cell(cdef).counter_update_value()};
+                                ::visit(value_prev, vis);
+                                res.set_cell(*poikey, *dst, atomic_cell::make_live(*dst->type, ts, *data_value{vis.accumulator}.serialize(), _cdc_ttl_opt));                                
+                            } else {
+                                res.set_cell(*poikey, *dst, atomic_cell::make_live(*dst->type, ts, *value, _cdc_ttl_opt));
+                            }
                         } else if (!cdef.is_atomic() && (value || (deleted_elements && prev))) {
                             auto v = visit(*cdef.type, [&] (const auto& type) -> bytes {
                                 return merge(type, prev, value, deleted_elements);
