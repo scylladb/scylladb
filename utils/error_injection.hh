@@ -239,14 +239,14 @@ public:
     }
 
     static void enable_on_all(const std::string_view& injection_name, bool one_shot = false) {
-        (void) smp::invoke_on_all([injection_name, one_shot] {
+        (void) smp::invoke_on_all([injection_name = sstring(injection_name), one_shot] {
             auto& errinj = utils::get_local_injector();
             errinj.enable(injection_name, one_shot);
         });
     }
 
     static void disable_on_all(const std::string_view& injection_name) {
-        (void) smp::invoke_on_all([injection_name] {
+        (void) smp::invoke_on_all([injection_name = sstring(injection_name)] {
             auto& errinj = utils::get_local_injector();
             errinj.disable(injection_name);
         });
