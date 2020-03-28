@@ -137,16 +137,17 @@ SEASTAR_TEST_CASE(test_inject_future_sleep_timeout_short) {
 
         // Inject sleep, deadline before sleep ms, should truncate sleep
         auto f = make_ready_future<>();
+        constexpr milliseconds sleep_msec_x(500); // Long sleep, truncate
         auto start_time = steady_clock::now();
-        auto actual_sleep = sleep_msec/2;
+        auto actual_sleep = sleep_msec;           // Deadline in 10ms
         auto future_time = start_time + actual_sleep;
         errinj.enable("futi_timeout_trunc");
-        errinj.inject("futi_timeout_trunc", sleep_msec, f, future_time);
+        errinj.inject("futi_timeout_trunc", sleep_msec_x, f, future_time);
         auto wait = f.then([start_time] {
             auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
             return make_ready_future<milliseconds>(wait_time);
         }).get0();
-        BOOST_REQUIRE_LE(wait.count(), actual_sleep.count());
+        BOOST_REQUIRE_LE(wait.count(), sleep_msec_x.count());
     });
 }
 
