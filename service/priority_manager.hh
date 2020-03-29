@@ -20,9 +20,7 @@
 
 #pragma once
 
-#include <seastar/core/future.hh>
-#include <seastar/core/distributed.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/file.hh>
 
 #include "seastarx.hh"
 
@@ -66,15 +64,7 @@ public:
         return _compaction_priority;
     }
 
-    priority_manager()
-        : _commitlog_priority(engine().register_one_priority_class("commitlog", 1000))
-        , _mt_flush_priority(engine().register_one_priority_class("memtable_flush", 1000))
-        , _stream_read_priority(engine().register_one_priority_class("streaming_read", 200))
-        , _stream_write_priority(engine().register_one_priority_class("streaming_write", 200))
-        , _sstable_query_read(engine().register_one_priority_class("query", 1000))
-        , _compaction_priority(engine().register_one_priority_class("compaction", 1000))
-
-    {}
+    priority_manager();
 };
 
 priority_manager& get_local_priority_manager();
