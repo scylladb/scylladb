@@ -76,6 +76,8 @@ fedora_packages=(
     python3-psutil
     python3-cassandra-driver
     python3-colorama
+    python3-boto3
+    python3-pytest
     dnf-utils
     pigz
     net-tools
