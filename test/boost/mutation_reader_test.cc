@@ -42,7 +42,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/make_random_string.hh"
-#include "test/lib/dummy_sharding_info.hh"
+#include "test/lib/dummy_sharder.hh"
 #include "test/lib/reader_lifecycle_policy.hh"
 
 #include "dht/sharder.hh"

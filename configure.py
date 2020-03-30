@@ -981,8 +981,8 @@ for t in perf_tests:
 deps['test/boost/sstable_test'] += ['test/lib/sstable_utils.cc', 'test/lib/normalizing_reader.cc']
 deps['test/boost/sstable_datafile_test'] += ['test/lib/sstable_utils.cc', 'test/lib/normalizing_reader.cc']
 deps['test/boost/sstable_resharding_test'] += ['test/lib/sstable_utils.cc' ]
-deps['test/boost/mutation_reader_test'] += ['test/lib/sstable_utils.cc', 'test/lib/dummy_sharding_info.cc' ]
-deps['test/boost/multishard_combining_reader_as_mutation_source_test'] += ['test/lib/sstable_utils.cc', 'test/lib/dummy_sharding_info.cc' ]
+deps['test/boost/mutation_reader_test'] += ['test/lib/sstable_utils.cc', 'test/lib/dummy_sharder.cc' ]
+deps['test/boost/multishard_combining_reader_as_mutation_source_test'] += ['test/lib/sstable_utils.cc', 'test/lib/dummy_sharder.cc' ]
 deps['test/boost/sstable_mutation_test'] += ['test/lib/sstable_utils.cc']
 deps['test/boost/sstable_conforms_to_mutation_source_test'] += ['test/lib/sstable_utils.cc']
 
