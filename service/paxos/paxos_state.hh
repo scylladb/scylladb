@@ -124,6 +124,9 @@ public:
             clock_type::time_point timeout);
     // Replica RPC endpoint for Paxos "learn".
     static future<> learn(schema_ptr schema, proposal decision, clock_type::time_point timeout, tracing::trace_state_ptr tr_state);
+    // Replica RPC endpoint for pruning Paxos table
+    static future<> prune(schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
+            tracing::trace_state_ptr tr_state);
 };
 
 } // end of namespace "service::paxos"

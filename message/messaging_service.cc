@@ -452,6 +452,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::PAXOS_PREPARE:
     case messaging_verb::PAXOS_ACCEPT:
     case messaging_verb::PAXOS_LEARN:
+    case messaging_verb::PAXOS_PRUNE:
         return 0;
     // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
     // sent on a different connection to avoid potential deadlocks
@@ -1279,6 +1280,19 @@ future<> messaging_service::send_paxos_learn(msg_addr id, clock_type::time_point
     std::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::PAXOS_LEARN, std::move(id), decision, std::move(forward),
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
+}
+
+void messaging_service::register_paxos_prune(std::function<future<rpc::no_wait_type>(
+        const rpc::client_info&, rpc::opt_time_point, UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info>)>&& func) {
+    register_handler(this, messaging_verb::PAXOS_PRUNE, std::move(func));
+}
+future<> messaging_service::unregister_paxos_prune() {
+    return unregister_handler(netw::messaging_verb::PAXOS_PRUNE);
+}
+future<>
+messaging_service::send_paxos_prune(gms::inet_address peer, clock_type::time_point timeout, UUID schema_id,
+        const partition_key& key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+    return send_message_oneway_timeout(this, timeout, messaging_verb::PAXOS_PRUNE, netw::msg_addr(peer), schema_id, key, ballot, std::move(trace_info));
 }
 
 void messaging_service::register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,

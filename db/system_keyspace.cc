@@ -2274,6 +2274,20 @@ future<> save_paxos_decision(const schema& s, const service::paxos::proposal& de
         ).discard_result();
 }
 
+future<> delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
+    // This should be called only if a learn stage succeeded on all replicas.
+    // In this case we can remove the paxos row using ballot's timestamp which
+    // guarantees that if there is more recent round it will not be affected.
+    static auto cql = format("DELETE FROM system.{} USING TIMESTAMP ?  WHERE row_key = ? AND cf_id = ?", PAXOS);
+
+    return execute_cql_with_timeout(cql,
+            timeout,
+            utils::UUID_gen::micros_timestamp(ballot),
+            to_legacy(*key.get_compound_type(s), key.representation()),
+            s.id()
+        ).discard_result();
+}
+
 } // namespace system_keyspace
 
 sstring system_keyspace_name() {
