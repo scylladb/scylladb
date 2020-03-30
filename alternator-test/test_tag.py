@@ -103,6 +103,15 @@ def test_tag_resource_overwrite(test_table):
 PREDEFINED_TAGS = [{'Key': 'str1', 'Value': 'str2'}, {'Key': 'kkk', 'Value': 'vv'}, {'Key': 'keykey', 'Value': 'valvalvalval'}]
 @pytest.fixture(scope="session")
 def test_table_tags(dynamodb):
+    # The feature of creating a table already with tags was only added to
+    # DynamoDB in April 2019, and to the botocore library in version 1.12.136
+    # https://aws.amazon.com/about-aws/whats-new/2019/04/now-you-can-tag-amazon-dynamodb-tables-when-you-create-them/
+    # so older versions of the library cannot run this test.
+    import botocore
+    from distutils.version import LooseVersion
+    if (LooseVersion(botocore.__version__) < LooseVersion('1.12.136')):
+        pytest.skip("Botocore version 1.12.136 or above required to run this test")
+
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'N' } ],
