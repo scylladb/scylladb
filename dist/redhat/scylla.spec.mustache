@@ -146,12 +146,6 @@ Obsoletes:	scylla-server < 1.1
 %description conf
 This package contains the main scylla configuration file.
 
-%post conf
-grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
-echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> /tmp/scylla.yaml
-echo "api_doc_dir: /opt/scylladb/api/api-doc/" >> /tmp/scylla.yaml
-mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
-
 # we need to refuse upgrade if current scylla < 1.7.3 && commitlog remains
 %pretrans conf
 ver=$(rpm -qi scylla-server | grep Version | awk '{print $3}')

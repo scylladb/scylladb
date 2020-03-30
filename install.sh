@@ -34,6 +34,7 @@ Options:
   --nonroot                install Scylla without required root priviledge
   --sysconfdir /etc/sysconfig   specify sysconfig directory name
   --packaging               use install.sh for packaging
+  --upgrade                 upgrade existing scylla installation (don't overwrite config files)
   --help                   this helpful message
 EOF
     exit 1
@@ -45,6 +46,7 @@ python3=/opt/scylladb/python3/bin/python3
 sysconfdir=/etc/sysconfig
 nonroot=false
 packaging=false
+upgrade=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -74,6 +76,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--packaging")
             packaging=true
+            shift 1
+            ;;
+        "--upgrade")
+            upgrade=true
             shift 1
             ;;
         "--help")
@@ -142,6 +148,25 @@ EOF
     chmod +x "$install"
 }
 
+installconfig() {
+    local perm="$1"
+    local src="$2"
+    local dest="$3"
+    local bname=$(basename "$src")
+
+    # do not overwrite config file when upgrade mode
+    if $upgrade && [ -e "$dest/$bname" ]; then
+        local oldsum=$(md5sum "$dest/$bname" | cut -f 1 -d " ")
+        local newsum=$(md5sum "$src" | cut -f 1 -d " ")
+        # if old one and new one are same, we can skip installing
+        if [ "$oldsum" != "$newsum" ]; then
+            install "-m$perm" "$src" -T "$dest/$bname.new"
+        fi
+    else
+        install "-m$perm" "$src" -Dt "$dest"
+    fi
+}
+
 if [ -z "$prefix" ]; then
     if $nonroot; then
         prefix=~/scylladb
@@ -174,21 +199,30 @@ fi
 # scylla-conf
 install -d -m755 "$retc"/scylla
 install -d -m755 "$retc"/scylla.d
-install -m644 conf/scylla.yaml -Dt "$retc"/scylla
-install -m644 conf/cassandra-rackdc.properties -Dt "$retc"/scylla
+grep -v api_ui_dir conf/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
+echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> /tmp/scylla.yaml
+echo "api_doc_dir: /opt/scylladb/api/api-doc/" >> /tmp/scylla.yaml
+installconfig 644 /tmp/scylla.yaml "$retc"/scylla
+installconfig 644 conf/cassandra-rackdc.properties "$retc"/scylla
 if $housekeeping; then
-    install -m644 conf/housekeeping.cfg -Dt "$retc"/scylla.d
+    installconfig 644 conf/housekeeping.cfg "$retc"/scylla.d
 fi
 # scylla-kernel-conf
 if ! $nonroot; then
     install -m755 -d "$rusr/lib/sysctl.d"
-    install -m644 dist/common/sysctl.d/*.conf -Dt "$rusr"/lib/sysctl.d
+    for file in dist/common/sysctl.d/*.conf; do
+        installconfig 644 "$file" "$rusr"/lib/sysctl.d
+    done
 fi
 # scylla-server
 install -m755 -d "$rsysconfdir"
 install -m755 -d "$retc/scylla.d"
-install -m644 dist/common/sysconfig/* -Dt "$rsysconfdir"
-install -m644 dist/common/scylla.d/*.conf -Dt "$retc"/scylla.d
+for file in dist/common/sysconfig/*; do
+    installconfig 644 "$file" "$rsysconfdir"
+done
+for file in dist/common/scylla.d/*.conf; do
+    installconfig 644 "$file" "$retc"/scylla.d
+done
 
 install -d -m755 "$retc"/scylla "$rsystemd" "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts" "$rprefix/bin"
 install -m644 dist/common/systemd/*.service -Dt "$rsystemd"
@@ -343,12 +377,6 @@ elif ! $packaging; then
     fi
     chown -R scylla:scylla $rdata
     chown -R scylla:scylla $rhkdata
-
-    grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
-    echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> /tmp/scylla.yaml
-    echo "api_doc_dir: /opt/scylladb/api/api-doc/" >> /tmp/scylla.yaml
-    mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
-
 
     $rprefix/scripts/scylla_post_install.sh
 fi

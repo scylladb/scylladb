@@ -25,11 +25,6 @@ fi
 
 ln -sfT /etc/scylla /var/lib/scylla/conf
 
-grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
-echo "api_ui_dir: /opt/scylladb/swagger-ui/dist/" >> /tmp/scylla.yaml
-echo "api_doc_dir: /opt/scylladb/api/api-doc/" >> /tmp/scylla.yaml
-mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
-
 /opt/scylladb/scripts/scylla_post_install.sh
 
 #DEBHELPER#
