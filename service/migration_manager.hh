@@ -82,7 +82,7 @@ public:
 
     future<> maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint);
 
-    future<> submit_migration_task(const gms::inet_address& endpoint);
+    future<> submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node = true);
 
     // Makes sure that this node knows about all schema changes known by "nodes" that were made prior to this call.
     future<> sync_schema(const database& db, const std::vector<gms::inet_address>& nodes);
