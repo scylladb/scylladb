@@ -648,7 +648,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::set_trace_probability.set(r, [](std::unique_ptr<request> req) {
         auto probability = req->get_query_param("probability");
-        return futurize<json::json_return_type>::invoke([probability] {
+        return futurize_invoke([probability] {
             double real_prob = std::stod(probability.c_str());
             return tracing::tracing::tracing_instance().invoke_on_all([real_prob] (auto& local_tracing) {
                 local_tracing.set_trace_probability(real_prob);

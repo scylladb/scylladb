@@ -95,7 +95,7 @@ private:
 template<typename Func, typename T = std::result_of_t<Func()>>
 joinpoint<T> make_joinpoint(Func && f) {
     return joinpoint<T>([f = std::forward<Func>(f)] {
-        return futurize<T>::invoke(f);
+        return futurize_invoke(f);
     });
 }
 

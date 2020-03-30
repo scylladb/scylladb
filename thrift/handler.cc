@@ -129,7 +129,7 @@ with_cob(thrift_fn::function<void (const T& ret)>&& cob,
         thrift_fn::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob,
         Func&& func) {
     // then_wrapped() terminates the fiber by calling one of the cob objects
-    (void)futurize<noexcept_movable_t<T>>::invoke([func = std::forward<Func>(func)] {
+    (void)futurize_invoke([func = std::forward<Func>(func)] {
         return noexcept_movable<T>::wrap(func());
     }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (auto&& f) {
         try {

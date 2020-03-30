@@ -339,14 +339,13 @@ public:
         // We disallow future-returning functions here, because otherwise memory may be available
         // when we start executing it, but no longer available in the middle of the execution.
         static_assert(!is_future<std::result_of_t<Func()>>::value, "future-returning functions are not permitted.");
-        using futurator = futurize<std::result_of_t<Func()>>;
 
         auto blocked_at = do_for_each_parent(this, [] (auto rg) {
             return (rg->_blocked_requests.empty() && !rg->under_pressure()) ? stop_iteration::no : stop_iteration::yes;
         });
 
         if (!blocked_at) {
-            return futurator::invoke(func);
+            return futurize_invoke(func);
         }
 
         auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
