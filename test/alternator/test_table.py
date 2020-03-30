@@ -244,11 +244,12 @@ def test_table_streams_off(dynamodb):
     table.delete();
     # DynamoDB doesn't allow StreamSpecification to be empty map - if it
     # exists, it must have a StreamEnabled
-    with pytest.raises(ClientError, match='ValidationException'):
-        table = create_test_table(dynamodb, StreamSpecification={},
-            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
-            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]);
-        table.delete();
+    # Unfortunately, new versions of boto3 doesn't let us pass this...
+    #with pytest.raises(ClientError, match='ValidationException'):
+    #    table = create_test_table(dynamodb, StreamSpecification={},
+    #        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+    #        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]);
+    #    table.delete();
     # Unfortunately, boto3 doesn't allow us to pass StreamSpecification=None.
     # This is what we had in issue #5796.
 
