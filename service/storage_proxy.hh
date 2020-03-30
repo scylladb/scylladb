@@ -242,6 +242,7 @@ public:
         std::vector<gms::inet_address> endpoints;
         // How many participants are required for a quorum (i.e. is it SERIAL or LOCAL_SERIAL).
         size_t required_participants;
+        bool has_dead_endpoints;
     };
 
     const gms::feature_service& features() const { return _features; }
@@ -317,7 +318,7 @@ private:
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
-    response_id_type create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, dht::token>& proposal,
+    response_id_type create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>& proposal,
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>& meta,
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
@@ -634,6 +635,11 @@ private:
     db::consistency_level _cl_for_learn;
     // Live endpoints, as per get_paxos_participants()
     std::vector<gms::inet_address> _live_endpoints;
+    // True if there are dead endpoints
+    // We don't include endpoints known to be unavailable in pending
+    // endpoints list, but need to be aware of them to avoid pruning
+    // system.paxos data if some endpoint is missing a Paxos write.
+    bool _has_dead_endpoints;
     // How many endpoints need to respond favourably for the protocol to progress to the next step.
     size_t _required_participants;
     // A deadline when the entire CAS operation timeout expires, derived from write_request_timeout_in_ms
@@ -650,6 +656,9 @@ private:
 
     // Unique request id for logging purposes.
     const uint64_t _id = next_id++;
+
+    // max pruning operations to run in parralel
+    static constexpr uint16_t pruning_limit = 1000;
 
 public:
     tracing::trace_state_ptr tr_state;
@@ -674,6 +683,7 @@ public:
         storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(_schema->ks_name(), _key.token(), _cl_for_paxos);
         _live_endpoints = std::move(pp.endpoints);
         _required_participants = pp.required_participants;
+        _has_dead_endpoints = pp.has_dead_endpoints;
         tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
                 _key.token(), _live_endpoints, _required_participants);
     }
@@ -691,6 +701,7 @@ public:
     future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
     future<bool> accept_proposal(const paxos::proposal& proposal, bool timeout_if_partially_accepted = true);
     future<> learn_decision(paxos::proposal decision, bool allow_hints = false);
+    void prune(utils::UUID ballot);
     uint64_t id() const {
         return _id;
     }

@@ -190,4 +190,11 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
     });
 }
 
+future<> paxos_state::prune(schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
+        tracing::trace_state_ptr tr_state) {
+    logger.debug("Delete paxos state for ballot {}", ballot);
+    tracing::trace(tr_state, "Delete paxos state for ballot {}", ballot);
+    return db::system_keyspace::delete_paxos_decision(*schema, key, ballot, timeout);
+}
+
 } // end of namespace "service::paxos"

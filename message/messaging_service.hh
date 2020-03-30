@@ -139,7 +139,8 @@ enum class messaging_verb : int32_t {
     PAXOS_ACCEPT = 40,
     PAXOS_LEARN = 41,
     HINT_MUTATION = 42,
-    LAST = 43,
+    PAXOS_PRUNE = 43,
+    LAST = 44,
 };
 
 } // namespace netw
@@ -492,6 +493,14 @@ public:
     future<> send_paxos_learn(msg_addr id, clock_type::time_point timeout, const service::paxos::proposal& decision,
             std::vector<inet_address> forward, inet_address reply_to, unsigned shard, response_id_type response_id,
             std::optional<tracing::trace_info> trace_info = std::nullopt);
+
+    void register_paxos_prune(std::function<future<rpc::no_wait_type>(const rpc::client_info&, rpc::opt_time_point, UUID schema_id, partition_key key,
+            utils::UUID ballot, std::optional<tracing::trace_info>)>&& func);
+
+    future<> unregister_paxos_prune();
+
+    future<> send_paxos_prune(gms::inet_address peer, clock_type::time_point timeout, UUID schema_id, const partition_key& key,
+            utils::UUID ballot, std::optional<tracing::trace_info> trace_info);
 
     void register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);

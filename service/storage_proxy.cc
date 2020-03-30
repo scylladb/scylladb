@@ -171,6 +171,7 @@ public:
     const schema_ptr& schema() {
         return _schema;
     }
+    // called only when all replicas replied
     virtual void release_mutation() = 0;
 };
 
@@ -300,9 +301,10 @@ public:
 
 class cas_mutation : public mutation_holder {
     lw_shared_ptr<paxos::proposal> _proposal;
+    shared_ptr<paxos_response_handler> _handler;
 public:
-    explicit cas_mutation(paxos::proposal proposal , schema_ptr s)
-            : _proposal(make_lw_shared<paxos::proposal>(std::move(proposal))) {
+    explicit cas_mutation(paxos::proposal proposal, schema_ptr s, shared_ptr<paxos_response_handler> handler)
+            : _proposal(make_lw_shared<paxos::proposal>(std::move(proposal))), _handler(std::move(handler)) {
         _size = _proposal->update.representation().size();
         _schema = std::move(s);
     }
@@ -327,7 +329,11 @@ public:
         return true;
     }
     virtual void release_mutation() override {
-        _proposal.release();
+        // The handler will be set for "learn", but not for PAXOS repair
+        // since repair may not include all replicas
+        if (_handler) {
+            _handler->prune(_proposal->ballot);
+        }
     }
 };
 
@@ -1184,6 +1190,12 @@ future<bool> paxos_response_handler::accept_proposal(const paxos::proposal& prop
     return f;
 }
 
+// debug output in mutate_internal needs this
+std::ostream& operator<<(std::ostream& os, const paxos_response_handler& h) {
+    os << "paxos_response_handler{" << h.id() << "}";
+    return os;
+}
+
 // This function implements learning stage of Paxos protocol
 future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool allow_hints) {
     tracing::trace(tr_state, "learn_decision: committing {} with cl={}", decision, _cl_for_learn);
@@ -1219,10 +1231,39 @@ future<> paxos_response_handler::learn_decision(paxos::proposal decision, bool a
     }
 
     // Path for the "base" mutations
-    std::array<std::tuple<paxos::proposal, schema_ptr, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, _key.token())};
+    std::array<std::tuple<paxos::proposal, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, shared_from_this(), _key.token())};
     future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout);
 
     return when_all_succeed(std::move(f_cdc), std::move(f_lwt));
+}
+
+void paxos_response_handler::prune(utils::UUID ballot) {
+    if (_has_dead_endpoints) {
+        return;
+    }
+    if ( _proxy->get_stats().cas_now_pruning >= pruning_limit) {
+        _proxy->get_stats().cas_coordinator_dropped_prune++;
+        return;
+    }
+     _proxy->get_stats().cas_now_pruning++;
+    _proxy->get_stats().cas_prune++;
+    // running in the background, but the amount of the bg job is limited by pruning_limit
+    // it is waited by holding shared pointer to storage_proxy which guaranties
+    // that storage_proxy::stop() will wait for this to complete
+    (void)parallel_for_each(_live_endpoints, [this, ballot] (gms::inet_address peer) mutable {
+        return futurize_apply([&] {
+            if (fbu::is_me(peer)) {
+                tracing::trace(tr_state, "prune: prune {} locally", ballot);
+                return paxos::paxos_state::prune(_schema, _key.key(), ballot, _timeout, tr_state);
+            } else {
+                tracing::trace(tr_state, "prune: send prune of {} to {}", ballot, peer);
+                netw::messaging_service& ms = netw::get_local_messaging_service();
+                return ms.send_paxos_prune(peer, _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
+            }
+        });
+    }).finally([h = shared_from_this()] {
+        h->_proxy->get_stats().cas_now_pruning++;
+    });
 }
 
 static std::vector<gms::inet_address>
@@ -1571,6 +1612,14 @@ void storage_proxy_stats::stats::register_stats() {
         sm::make_histogram("cas_write_contention", sm::description("how many contended writes were encountered"),
                        {storage_proxy_stats::current_scheduling_group_label()},
                        [this]{ return cas_write_contention.get_histogram(1, 8);}),
+
+        sm::make_total_operations("cas_prune", cas_prune,
+                       sm::description("how many times paxos prune was done after successful cas operation"),
+                       {storage_proxy_stats::current_scheduling_group_label()}),
+
+        sm::make_total_operations("cas_dropped_prune", cas_coordinator_dropped_prune,
+                       sm::description("how many times a coordinator did not perfom prune after cas"),
+                       {storage_proxy_stats::current_scheduling_group_label()}),
     });
 
     _metrics.add_group(REPLICA_STATS_CATEGORY, {
@@ -1606,6 +1655,9 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("number of operations that crossed a shard boundary"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
 
+        sm::make_total_operations("cas_dropped_prune", cas_replica_dropped_prune,
+                       sm::description("how many times a coordinator did not perfom prune after cas"),
+                       {storage_proxy_stats::current_scheduling_group_label()}),
     });
 }
 
@@ -1879,11 +1931,11 @@ storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_
 }
 
 storage_proxy::response_id_type
-storage_proxy::create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, dht::token>& meta,
+storage_proxy::create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>& meta,
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit) {
-    auto& [commit, s, t] = meta;
+    auto& [commit, s, h, t] = meta;
 
-    return create_write_response_handler_helper(s, t, std::make_unique<cas_mutation>(std::move(commit), s), cl,
+    return create_write_response_handler_helper(s, t, std::make_unique<cas_mutation>(std::move(commit), s, std::move(h)), cl,
             db::write_type::CAS, tr_state, std::move(permit));
 }
 
@@ -1898,7 +1950,7 @@ storage_proxy::create_write_response_handler(const std::tuple<paxos::proposal, s
     auto keyspace_name = s->ks_name();
     keyspace& ks = _db.local().find_keyspace(keyspace_name);
 
-    return create_write_response_handler(ks, cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s), std::move(endpoints),
+    return create_write_response_handler(ks, cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
                     std::vector<gms::inet_address>(), std::vector<gms::inet_address>(), std::move(tr_state), get_stats(), std::move(permit));
 }
 
@@ -2146,6 +2198,8 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
                 cl_for_paxos, participants + 1, live_endpoints.size());
     }
 
+    bool dead = participants != live_endpoints.size();
+
     // Apart from the ballot, paxos_state::prepare() also sends the current value of the requested key.
     // If the values received from different replicas match, we skip a separate query stage thus saving
     // one network round trip. To generate less traffic, only closest replicas send data, others send
@@ -2153,7 +2207,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     // list of participants by proximity to this instance.
     sort_endpoints_by_proximity(live_endpoints);
 
-    return paxos_participants{std::move(live_endpoints), required_participants};
+    return paxos_participants{std::move(live_endpoints), required_participants, dead};
 }
 
 
@@ -4942,6 +4996,42 @@ void storage_proxy::init_messaging_service() {
 
         return f;
     });
+    ms.register_paxos_prune([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+                utils::UUID schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+        static thread_local uint16_t pruning = 0;
+        static constexpr uint16_t pruning_limit = 1000; // since PRUNE verb is one way replica side has its own queue limit
+        auto src_addr = netw::messaging_service::get_source(cinfo);
+        auto src_ip = src_addr.addr;
+        tracing::trace_state_ptr tr_state;
+        if (trace_info) {
+            tr_state = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(tr_state);
+            tracing::trace(tr_state, "paxos_prune: message received from /{} ballot {}", src_ip, ballot);
+        }
+
+        if (pruning >= pruning_limit) {
+            get_stats().cas_replica_dropped_prune++;
+            tracing::trace(tr_state, "paxos_prune: do not prune due to overload", src_ip);
+            return make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
+        }
+
+        pruning++;
+        return get_schema_for_read(schema_id, src_addr).then([this, key = std::move(key), ballot,
+                         timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
+            dht::token token = dht::get_token(*schema, key);
+            unsigned shard = dht::shard_of(*schema, token);
+            bool local = shard == engine().cpu_id();
+            get_stats().replica_cross_shard_ops += !local;
+            return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+                                     local,  key = std::move(key), ballot, timeout, src_ip, d = defer([] { pruning--; })] () {
+                tracing::trace_state_ptr tr_state = gt;
+                return paxos::paxos_state::prune(gs, key, ballot,  *timeout, tr_state).then([src_ip, tr_state] () {
+                    tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_ip);
+                    return netw::messaging_service::no_wait();
+                });
+            });
+        });
+    });
 }
 
 future<> storage_proxy::uninit_messaging_service() {
@@ -4956,7 +5046,8 @@ future<> storage_proxy::uninit_messaging_service() {
         ms.unregister_truncate(),
         ms.unregister_paxos_prepare(),
         ms.unregister_paxos_accept(),
-        ms.unregister_paxos_learn()
+        ms.unregister_paxos_learn(),
+        ms.unregister_paxos_prune()
     );
 }
 
