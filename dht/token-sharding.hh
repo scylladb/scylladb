@@ -35,13 +35,13 @@ unsigned shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const
 
 token token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t, shard_id shard, unsigned spans);
 
-class sharding_info {
+class sharder {
 protected:
     unsigned _shard_count;
     unsigned _sharding_ignore_msb_bits;
     std::vector<uint64_t> _shard_start;
 public:
-    sharding_info(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
+    sharder(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
     /**
      * Calculates the shard that handles a particular token.
      */
@@ -71,19 +71,19 @@ public:
         return _sharding_ignore_msb_bits;
     }
 
-    bool operator==(const sharding_info& o) const {
+    bool operator==(const sharder& o) const {
         return _shard_count == o._shard_count && _sharding_ignore_msb_bits == o._sharding_ignore_msb_bits;
     }
 
-    bool operator!=(const sharding_info& o) const {
+    bool operator!=(const sharder& o) const {
         return !(*this == o);
     }
 
 };
 
-inline std::ostream& operator<<(std::ostream& os, const sharding_info& si) {
-    os << "sharding_info[shard_count=" << si.shard_count()
-       << ", ignore_msb_bits="<< si.sharding_ignore_msb() << "]";
+inline std::ostream& operator<<(std::ostream& os, const sharder& sharder) {
+    os << "sharder[shard_count=" << sharder.shard_count()
+       << ", ignore_msb_bits="<< sharder.sharding_ignore_msb() << "]";
     return os;
 }
 

@@ -62,22 +62,22 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                 schema_ptr s = gen.schema();
 
                 for (auto& m : muts) {
-                    auto shard = s->get_sharding_info().shard_of(m.token());
+                    auto shard = s->get_sharder().shard_of(m.token());
                     shards_before[shard]++;
                 }
                 auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(muts) : make_empty_flat_reader(s);
-                auto& sinfo = s->get_sharding_info();
+                auto& sharder = s->get_sharder();
                 size_t partitions_received = distribute_reader_and_consume_on_shards(s,
                     std::move(source_reader),
-                    [&sinfo, &shards_after, error] (flat_mutation_reader reader) mutable {
+                    [&sharder, &shards_after, error] (flat_mutation_reader reader) mutable {
                         if (error) {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
                         }
-                        return repeat([&sinfo, &shards_after, reader = std::move(reader), error] () mutable {
-                            return reader(db::no_timeout).then([&sinfo, &shards_after, error] (mutation_fragment_opt mf_opt) mutable {
+                        return repeat([&sharder, &shards_after, reader = std::move(reader), error] () mutable {
+                            return reader(db::no_timeout).then([&sharder, &shards_after, error] (mutation_fragment_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
-                                        auto shard = sinfo.shard_of(mf_opt->as_partition_start().key().token());
+                                        auto shard = sharder.shard_of(mf_opt->as_partition_start().key().token());
                                         BOOST_REQUIRE_EQUAL(shard, this_shard_id());
                                         shards_after[shard]++;
                                     }

@@ -173,7 +173,7 @@ public:
 class repair_info {
 public:
     seastar::sharded<database>& db;
-    const dht::sharding_info& sharding_info;
+    const dht::sharder& sharder;
     sstring keyspace;
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;

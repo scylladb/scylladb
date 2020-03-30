@@ -86,7 +86,7 @@ dht::token create_token_from_key(const dht::i_partitioner& partitioner, sstring 
     return token;
 }
 
-range<dht::token> create_token_range_from_keys(const dht::sharding_info& sinfo, const dht::i_partitioner& partitioner, sstring start_key, sstring end_key) {
+range<dht::token> create_token_range_from_keys(const dht::sharder& sinfo, const dht::i_partitioner& partitioner, sstring start_key, sstring end_key) {
     dht::token start = create_token_from_key(partitioner, start_key);
     assert(this_shard_id() == sinfo.shard_of(start));
     dht::token end = create_token_from_key(partitioner, end_key);

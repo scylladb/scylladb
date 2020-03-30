@@ -381,13 +381,13 @@ public:
             column_family& cf,
             schema_ptr s,
             dht::token_range range,
-            const dht::sharding_info& remote_sharding_info,
+            const dht::sharder& remote_sharder,
             unsigned remote_shard,
             uint64_t seed,
             is_local_reader local_reader)
             : _schema(s)
             , _range(dht::to_partition_range(range))
-            , _sharder(remote_sharding_info, range, remote_shard)
+            , _sharder(remote_sharder, range, remote_shard)
             , _seed(seed)
             , _local_read_op(local_reader ? std::optional(cf.read_in_progress()) : std::nullopt)
             , _reader(make_reader(db, cf, local_reader)) {
@@ -591,7 +591,7 @@ private:
     // Repair master's sharding configuration
     shard_config _master_node_shard_config;
     // sharding info of repair master
-    dht::sharding_info _remote_sharding_info;
+    dht::sharder _remote_sharder;
     bool _same_sharding_config = false;
     uint64_t _estimated_partitions = 0;
     // For repair master nr peers is the number of repair followers, for repair
@@ -665,7 +665,7 @@ public:
             , _myip(utils::fb_utilities::get_broadcast_address())
             , _repair_meta_id(repair_meta_id)
             , _master_node_shard_config(std::move(master_node_shard_config))
-            , _remote_sharding_info(make_remote_sharding_info())
+            , _remote_sharder(make_remote_sharder())
             , _same_sharding_config(is_same_sharding_config())
             , _nr_peer_nodes(nr_peer_nodes)
             , _repair_reader(
@@ -673,7 +673,7 @@ public:
                     _cf,
                     _schema,
                     _range,
-                    _remote_sharding_info,
+                    _remote_sharder,
                     _master_node_shard_config.shard,
                     _seed,
                     repair_reader::is_local_reader(_repair_master || _same_sharding_config)
@@ -907,7 +907,7 @@ private:
         if (_repair_master || _same_sharding_config) {
             return do_estimate_partitions_on_local_shard();
         } else {
-            return do_with(dht::selective_token_range_sharder(_remote_sharding_info, _range, _master_node_shard_config.shard), uint64_t(0), [this] (auto& sharder, auto& partitions_sum) mutable {
+            return do_with(dht::selective_token_range_sharder(_remote_sharder, _range, _master_node_shard_config.shard), uint64_t(0), [this] (auto& sharder, auto& partitions_sum) mutable {
                 return repeat([this, &sharder, &partitions_sum] () mutable {
                     auto shard_range = sharder.next();
                     if (shard_range) {
@@ -932,15 +932,15 @@ private:
         });
     }
 
-    dht::sharding_info make_remote_sharding_info() {
-        return dht::sharding_info(_master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb);
+    dht::sharder make_remote_sharder() {
+        return dht::sharder(_master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb);
     }
 
     bool is_same_sharding_config() {
         rlogger.debug("is_same_sharding_config: remote_shard={}, remote_shard_count={}, remote_ignore_msb={}",
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb);
-        return _schema->get_sharding_info().shard_count() == _master_node_shard_config.shard_count
-               && _schema->get_sharding_info().sharding_ignore_msb() == _master_node_shard_config.ignore_msb
+        return _schema->get_sharder().shard_count() == _master_node_shard_config.shard_count
+               && _schema->get_sharder().sharding_ignore_msb() == _master_node_shard_config.ignore_msb
                && this_shard_id() == _master_node_shard_config.shard;
     }
 
@@ -2429,8 +2429,8 @@ public:
             auto max_row_buf_size = get_max_row_buf_size(algorithm);
             auto master_node_shard_config = shard_config {
                     this_shard_id(),
-                    _ri.sharding_info.shard_count(),
-                    _ri.sharding_info.sharding_ignore_msb()
+                    _ri.sharder.shard_count(),
+                    _ri.sharder.sharding_ignore_msb()
             };
             auto s = _cf.schema();
             auto schema_version = s->version();

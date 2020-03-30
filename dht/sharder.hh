@@ -34,12 +34,12 @@ struct ring_position_range_and_shard {
 };
 
 class ring_position_range_sharder {
-    const sharding_info& _sharding_info;
+    const sharder& _sharder;
     dht::partition_range _range;
     bool _done = false;
 public:
-    ring_position_range_sharder(const sharding_info& sharding_info, nonwrapping_range<ring_position> rrp)
-            : _sharding_info(sharding_info), _range(std::move(rrp)) {}
+    ring_position_range_sharder(const sharder& sharder, nonwrapping_range<ring_position> rrp)
+            : _sharder(sharder), _range(std::move(rrp)) {}
     std::optional<ring_position_range_and_shard> next(const schema& s);
 };
 
@@ -53,23 +53,23 @@ struct ring_position_range_and_shard_and_element : ring_position_range_and_shard
 class ring_position_range_vector_sharder {
     using vec_type = dht::partition_range_vector;
     vec_type _ranges;
-    const sharding_info& _sharding_info;
+    const sharder& _sharder;
     vec_type::iterator _current_range;
     std::optional<ring_position_range_sharder> _current_sharder;
 private:
     void next_range() {
         if (_current_range != _ranges.end()) {
-            _current_sharder.emplace(_sharding_info, std::move(*_current_range++));
+            _current_sharder.emplace(_sharder, std::move(*_current_range++));
         }
     }
 public:
-    ring_position_range_vector_sharder(const sharding_info& si, dht::partition_range_vector ranges);
+    ring_position_range_vector_sharder(const sharder& sharder, dht::partition_range_vector ranges);
     // results are returned sorted by index within the vector first, then within each vector item
     std::optional<ring_position_range_and_shard_and_element> next(const schema& s);
 };
 
 class selective_token_range_sharder {
-    const sharding_info& _sharding_info;
+    const sharder& _sharder;
     dht::token_range _range;
     shard_id _shard;
     bool _done = false;
@@ -77,14 +77,14 @@ class selective_token_range_sharder {
     dht::token _start_token;
     std::optional<range_bound<dht::token>> _start_boundary;
 public:
-    selective_token_range_sharder(const sharding_info& sharding_info, dht::token_range range, shard_id shard)
-            : _sharding_info(sharding_info)
+    selective_token_range_sharder(const sharder& sharder, dht::token_range range, shard_id shard)
+            : _sharder(sharder)
             , _range(std::move(range))
             , _shard(shard)
-            , _next_shard(_shard + 1 == _sharding_info.shard_count() ? 0 : _shard + 1)
+            , _next_shard(_shard + 1 == _sharder.shard_count() ? 0 : _shard + 1)
             , _start_token(_range.start() ? _range.start()->value() : minimum_token())
-            , _start_boundary(_sharding_info.shard_of(_start_token) == shard ?
-                _range.start() : range_bound<dht::token>(_sharding_info.token_for_next_shard(_start_token, shard))) {
+            , _start_boundary(_sharder.shard_of(_start_token) == shard ?
+                _range.start() : range_bound<dht::token>(_sharder.token_for_next_shard(_start_token, shard))) {
     }
     std::optional<dht::token_range> next();
 };

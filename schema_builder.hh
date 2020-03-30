@@ -232,7 +232,7 @@ public:
         return *this;
     }
     schema_builder& with_partitioner(sstring name);
-    schema_builder& with_sharding_info(unsigned shard_count, unsigned sharding_ignore_msb_bits);
+    schema_builder& with_sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits);
     class default_names {
     public:
         default_names(const schema_builder&);

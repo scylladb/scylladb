@@ -96,12 +96,12 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
 }
 
 static std::vector<mutation> read_all_partitions_one_by_one(distributed<database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
-    const auto& sinfo = s->get_sharding_info();
+    const auto& sharder = s->get_sharder();
     std::vector<mutation> results;
     results.reserve(pkeys.size());
 
     for (const auto& pkey : pkeys) {
-        const auto res = db.invoke_on(sinfo.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey] (database& db) {
+        const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey] (database& db) {
             return async([s = gs.get(), &pkey, &db] () mutable {
                 auto accounter = db.get_result_memory_limiter().new_mutation_read(std::numeric_limits<size_t>::max()).get0();
                 const auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), query::max_rows);

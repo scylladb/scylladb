@@ -47,7 +47,7 @@
 namespace dht {
 
 class i_partitioner;
-class sharding_info;
+class sharder;
 
 }
 
@@ -639,7 +639,7 @@ private:
         std::reference_wrapper<const dht::i_partitioner> _partitioner;
         // Sharding info is not stored in the schema mutation and does not affect
         // schema digest. It is also not set locally on a schema tables.
-        std::reference_wrapper<const dht::sharding_info> _sharding_info;
+        std::reference_wrapper<const dht::sharder> _sharder;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -820,7 +820,7 @@ public:
 
     static void set_default_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
     const dht::i_partitioner& get_partitioner() const;
-    const dht::sharding_info& get_sharding_info() const;
+    const dht::sharder& get_sharder() const;
     bool has_custom_partitioner() const;
 
     const column_definition* get_column_definition(const bytes& name) const;

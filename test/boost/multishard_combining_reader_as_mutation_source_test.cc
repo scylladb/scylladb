@@ -49,11 +49,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
     }
 
     // It has to be a container that does not invalidate pointers
-    std::list<dummy_sharding_info> keep_alive_sharding_info;
+    std::list<dummy_sharder> keep_alive_sharder;
 
-    do_with_cql_env([&keep_alive_sharding_info] (cql_test_env& env) -> future<> {
-        auto make_populate = [&keep_alive_sharding_info, &env] (bool evict_paused_readers, bool single_fragment_buffer) {
-            return [&keep_alive_sharding_info, &env, evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
+    do_with_cql_env([&keep_alive_sharder] (cql_test_env& env) -> future<> {
+        auto make_populate = [&keep_alive_sharder, &env] (bool evict_paused_readers, bool single_fragment_buffer) {
+            return [&keep_alive_sharder, &env, evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
                 // We need to group mutations that have the same token so they land on the same shard.
                 std::map<dht::token, std::vector<frozen_mutation>> mutations_by_token;
 
@@ -61,17 +61,17 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     mutations_by_token[mut.token()].push_back(freeze(mut));
                 }
 
-                dummy_sharding_info sharding_info(s->get_sharding_info(), mutations_by_token);
+                dummy_sharder sharder(s->get_sharder(), mutations_by_token);
 
                 auto merged_mutations = boost::copy_range<std::vector<std::vector<frozen_mutation>>>(mutations_by_token | boost::adaptors::map_values);
 
                 auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<memtable>>>>();
-                for (unsigned shard = 0; shard < sharding_info.shard_count(); ++shard) {
-                    auto remote_mt = smp::submit_to(shard, [shard, gs = global_schema_ptr(s), &merged_mutations, sharding_info] {
+                for (unsigned shard = 0; shard < sharder.shard_count(); ++shard) {
+                    auto remote_mt = smp::submit_to(shard, [shard, gs = global_schema_ptr(s), &merged_mutations, sharder] {
                         auto s = gs.get();
                         auto mt = make_lw_shared<memtable>(s);
 
-                        for (unsigned i = shard; i < merged_mutations.size(); i += sharding_info.shard_count()) {
+                        for (unsigned i = shard; i < merged_mutations.size(); i += sharder.shard_count()) {
                             for (auto& mut : merged_mutations[i]) {
                                 mt->apply(mut.unfreeze(s));
                             }
@@ -81,9 +81,9 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     }).get0();
                     remote_memtables->emplace_back(std::move(remote_mt));
                 }
-                keep_alive_sharding_info.push_back(sharding_info);
+                keep_alive_sharder.push_back(sharder);
 
-                return mutation_source([&keep_alive_sharding_info, remote_memtables, evict_paused_readers, single_fragment_buffer] (schema_ptr s,
+                return mutation_source([&keep_alive_sharder, remote_memtables, evict_paused_readers, single_fragment_buffer] (schema_ptr s,
                         reader_permit,
                         const dht::partition_range& range,
                         const query::partition_slice& slice,
@@ -107,7 +107,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     };
 
                     auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), evict_paused_readers);
-                    auto mr = make_multishard_combining_reader_for_tests(keep_alive_sharding_info.back(), std::move(lifecycle_policy), s, range, slice, pc, trace_state, fwd_mr);
+                    auto mr = make_multishard_combining_reader_for_tests(keep_alive_sharder.back(), std::move(lifecycle_policy), s, range, slice, pc, trace_state, fwd_mr);
                     if (fwd_sm == streamed_mutation::forwarding::yes) {
                         return make_forwardable(std::move(mr));
                     }

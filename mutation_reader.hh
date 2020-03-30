@@ -492,7 +492,7 @@ flat_mutation_reader make_multishard_combining_reader(
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
 flat_mutation_reader make_multishard_combining_reader_for_tests(
-        const dht::sharding_info& sinfo,
+        const dht::sharder& sharder,
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,
         const dht::partition_range& pr,

@@ -2353,7 +2353,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
 
     if (auto partitioner = sm.partitioner()) {
         builder.with_partitioner(*partitioner);
-        builder.with_sharding_info(smp::count, ctxt.murmur3_partitioner_ignore_msb_bits());
+        builder.with_sharder(smp::count, ctxt.murmur3_partitioner_ignore_msb_bits());
     }
 
     if (is_system_keyspace(ks_name) && is_extra_durable(cf_name)) {

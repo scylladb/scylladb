@@ -105,7 +105,7 @@ std::ostream& operator<<(std::ostream& os, ordinal_column_id id)
 }
 
 thread_local std::map<sstring, std::unique_ptr<dht::i_partitioner>> partitioners;
-thread_local std::map<std::pair<unsigned, unsigned>, std::unique_ptr<dht::sharding_info>> sharding_infos;
+thread_local std::map<std::pair<unsigned, unsigned>, std::unique_ptr<dht::sharder>> sharders;
 sstring default_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
 unsigned default_partitioner_ignore_msb = 12;
 
@@ -123,11 +123,11 @@ void schema::set_default_partitioner(const sstring& class_name, unsigned ignore_
     default_partitioner_ignore_msb = ignore_msb;
 }
 
-static const dht::sharding_info& get_sharding_info(unsigned shard_count, unsigned ignore_msb) {
-    auto it = sharding_infos.find({shard_count, ignore_msb});
-    if (it == sharding_infos.end()) {
-        auto si = std::make_unique<dht::sharding_info>(shard_count, ignore_msb);
-        it = sharding_infos.insert({{shard_count, ignore_msb}, std::move(si)}).first;
+static const dht::sharder& get_sharder(unsigned shard_count, unsigned ignore_msb) {
+    auto it = sharders.find({shard_count, ignore_msb});
+    if (it == sharders.end()) {
+        auto sharder = std::make_unique<dht::sharder>(shard_count, ignore_msb);
+        it = sharders.insert({{shard_count, ignore_msb}, std::move(sharder)}).first;
     }
     return *it->second;
 }
@@ -136,8 +136,8 @@ const dht::i_partitioner& schema::get_partitioner() const {
     return _raw._partitioner.get();
 }
 
-const dht::sharding_info& schema::get_sharding_info() const {
-    return _raw._sharding_info.get();
+const dht::sharder& schema::get_sharder() const {
+    return _raw._sharder.get();
 }
 
 bool schema::has_custom_partitioner() const {
@@ -297,7 +297,7 @@ const column_mapping& schema::get_column_mapping() const {
 schema::raw_schema::raw_schema(utils::UUID id)
     : _id(id)
     , _partitioner(::get_partitioner(default_partitioner_name))
-    , _sharding_info(::get_sharding_info(smp::count, default_partitioner_ignore_msb))
+    , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
 { }
 
 schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info)
@@ -885,8 +885,8 @@ schema_builder& schema_builder::with_partitioner(sstring name) {
     return *this;
 }
 
-schema_builder& schema_builder::with_sharding_info(unsigned shard_count, unsigned sharding_ignore_msb_bits) {
-    _raw._sharding_info = get_sharding_info(shard_count, sharding_ignore_msb_bits);
+schema_builder& schema_builder::with_sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits) {
+    _raw._sharder = get_sharder(shard_count, sharding_ignore_msb_bits);
     return *this;
 }
 

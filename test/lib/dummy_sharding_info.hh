@@ -26,7 +26,7 @@
 #include "dht/token-sharding.hh"
 
 // Shards tokens such that tokens are owned by shards in a round-robin manner.
-class dummy_sharding_info : public dht::sharding_info {
+class dummy_sharder : public dht::sharder {
     std::vector<dht::token> _tokens;
 
 public:
@@ -36,8 +36,8 @@ public:
     // ordered associative container (std::map) that has dht::token as keys.
     // Values will be ignored.
     template <typename T>
-    dummy_sharding_info(const dht::sharding_info& sharding, const std::map<dht::token, T>& something_by_token)
-        : sharding_info(sharding)
+    dummy_sharder(const dht::sharder& sharding, const std::map<dht::token, T>& something_by_token)
+        : sharder(sharding)
         , _tokens(boost::copy_range<std::vector<dht::token>>(something_by_token | boost::adaptors::map_keys)) {
     }
 
