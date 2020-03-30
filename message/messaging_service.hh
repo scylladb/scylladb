@@ -54,6 +54,7 @@ namespace gms {
     class gossip_digest_syn;
     class gossip_digest_ack;
     class gossip_digest_ack2;
+    class cluster_ring_status_response;
 }
 
 namespace utils {
@@ -139,7 +140,8 @@ enum class messaging_verb : int32_t {
     PAXOS_ACCEPT = 40,
     PAXOS_LEARN = 41,
     HINT_MUTATION = 42,
-    LAST = 43,
+    CLUSTER_RING_STATUS = 43,
+    LAST = 44,
 };
 
 } // namespace netw
@@ -369,6 +371,11 @@ public:
     void register_gossip_echo(std::function<future<> ()>&& func);
     future<> unregister_gossip_echo();
     future<> send_gossip_echo(msg_addr id);
+
+    // Wrapper for CLUSTER_RING_STATUS verb
+    void register_cluster_ring_status(std::function<future<gms::cluster_ring_status_response> (const rpc::client_info& cinfo)>&& func);
+    future<> unregister_cluster_ring_status();
+    future<gms::cluster_ring_status_response> send_cluster_ring_status(msg_addr id);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);

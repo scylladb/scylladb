@@ -276,6 +276,8 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     if (get_replace_tokens().size() > 0 || get_replace_node()) {
          throw std::runtime_error("Replace method removed; use replace_address instead");
     }
+    bool replacing_a_node_with_same_ip = false;
+    bool replacing_a_node_with_diff_ip = false;
     if (db().local().is_replacing()) {
         if (db::system_keyspace::bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
@@ -290,6 +292,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens));
         app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(_cdc_streams_ts));
         app_states.emplace(gms::application_state::STATUS, value_factory.hibernate(true));
+        auto replace_address = db().local().get_replace_address();
+        replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
+        replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
     } else if (should_bootstrap()) {
         check_for_endpoint_collision(loaded_peer_features).get();
     } else {
@@ -361,6 +366,26 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
                     "Restarting node in NORMAL status with CDC enabled, but no streams timestamp was proposed"
                     " by this node according to its local tables. Are we upgrading from a non-CDC supported version?");
         }
+    }
+
+    if (replacing_a_node_with_same_ip) {
+        slogger.info("Replacing a node with same IP address, my address={}, node being replaced={}",
+                    get_broadcast_address(), get_broadcast_address());
+        slogger.info("Update tokens for replacing node early, replacing node has the same IP address of the node being replaced");
+        // We want the replacing node and the rest of the cluster has the same view of the normal tokens.
+        _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
+    }
+
+    if (replacing_a_node_with_diff_ip) {
+        // replacing_a_node_with_diff_ip guarantees replace_address contains a value
+        auto replace_address = db().local().get_replace_address();
+        // Unlike replacing_a_node_with_same_ip case above, we do not update
+        // the normal tokens for the replacing node in token_metadata because
+        // the rest of the cluster updates the tokens for the replacing node
+        // only after the replace operaiton is finished.
+        slogger.info("Replacing a node with different IP address, my address={}, node to being replaced={}",
+                get_broadcast_address(), *replace_address);
+        _gossiper.set_node_to_be_replaced(*replace_address);
     }
 
     // have to start the gossip service before we can see any info on other nodes.  this is necessary
@@ -699,12 +724,6 @@ void storage_service::join_token_ring(int delay) {
     set_gossip_tokens(_bootstrap_tokens, _cdc_streams_ts);
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
-    // remove the existing info about the replaced node.
-    if (!current.empty()) {
-        for (auto existing : current) {
-            _gossiper.replaced_endpoint(existing);
-        }
-    }
     if (_token_metadata.sorted_tokens().empty()) {
         auto err = format("join_token_ring: Sorted token in token_metadata is empty");
         slogger.error("{}", err);
@@ -888,6 +907,7 @@ void storage_service::bootstrap() {
 
     if (!db().local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
+        set_mode(mode::JOINING, sprint("Wait until local node knows tokens of peer nodes"), true);
         _gossiper.wait_for_range_setup().get();
 
         // Even if we reached this point before but crashed, we will make a new CDC generation.
@@ -913,6 +933,7 @@ void storage_service::bootstrap() {
             assert(!_feature_service.cluster_supports_cdc());
         }
 
+        set_mode(mode::JOINING, sprint("Announce bootstrap tokens of local node"), true);
         _gossiper.add_local_application_state({
             // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
             { gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens) },
@@ -920,7 +941,7 @@ void storage_service::bootstrap() {
             { gms::application_state::STATUS, value_factory.bootstrapping(_bootstrap_tokens) },
         }).get();
 
-        set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
+        set_mode(mode::JOINING, format("Wait until peer nodes know the bootstrap tokens of local node"), true);
         _gossiper.wait_for_range_setup().get();
     } else {
         // Dont set any state for the node which is bootstrapping the existing token...
@@ -1066,11 +1087,24 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     if (_gossiper.uses_host_id(endpoint)) {
         auto host_id = _gossiper.get_host_id(endpoint);
         auto existing = _token_metadata.get_endpoint_for_host_id(host_id);
+        auto replace_addr = db().local().get_replace_address();
         if (db().local().is_replacing() &&
-            db().local().get_replace_address() &&
-                _gossiper.get_endpoint_state_for_endpoint_ptr(db().local().get_replace_address().value())  &&
-            (host_id == _gossiper.get_host_id(db().local().get_replace_address().value()))) {
-            slogger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
+            replace_addr &&
+            _gossiper.get_endpoint_state_for_endpoint_ptr(*replace_addr) &&
+            host_id == _gossiper.get_host_id(*replace_addr)) {
+            slogger.warn("Not updating token metadata for {} because I am replacing it, myip={}, node={} becomes normal status, existing node={}, node to be replaced={}",
+                    endpoint, get_broadcast_address(), endpoint, existing, *replace_addr);
+            // If the replacing node becomes NORMAL status, we can remove the
+            // node to be replaced from token_metadata. However, if the
+            // replacing node has the same ip address as the node to be
+            // replaced, we should not remove the node itself from
+            // token_metadata.
+            if (endpoint == get_broadcast_address() && *replace_addr != get_broadcast_address()) {
+               slogger.info("Remove the node to be replaced={} from token_metadata because the replacing node={} has become NORMAL status",
+                        *replace_addr, get_broadcast_address());
+                _token_metadata.remove_endpoint(*replace_addr);
+                endpoints_to_remove.insert(*replace_addr);
+            }
         } else {
             if (existing && *existing != endpoint) {
                 if (*existing == get_broadcast_address()) {
@@ -1142,10 +1176,6 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
-        auto replace_addr = db().local().get_replace_address();
-        if (db().local().is_replacing() && replace_addr && *replace_addr == ep) {
-            _gossiper.replacement_quarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
-        }
     }
     slogger.debug("handle_state_normal: endpoint={} owned_tokens = {}", endpoint, owned_tokens);
     if (!owned_tokens.empty()) {

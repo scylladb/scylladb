@@ -313,6 +313,11 @@ public:
     long get_ring_version() const;
     void invalidate_cached_rings();
 
+    uint64_t get_normal_token_hash();
+    uint64_t get_bootstrap_token_hash();
+    uint64_t get_leaving_endpoints_hash();
+    uint64_t get_pending_ranges_hash();
+
     friend class token_metadata_impl;
 };
 
