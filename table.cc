@@ -1294,12 +1294,12 @@ table::compact_sstables(sstables::compaction_descriptor descriptor) {
     }
 
     return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor)] () mutable {
-        auto create_sstable = [this] {
+        descriptor.creator = [this] (shard_id dummy) {
                 auto sst = make_sstable();
                 sst->set_unshared();
                 return sst;
         };
-        auto replace_sstables = [this, release_exhausted = descriptor.release_exhausted] (sstables::compaction_completion_desc desc) {
+        descriptor.replacer = [this, release_exhausted = descriptor.release_exhausted] (sstables::compaction_completion_desc desc) {
             _compaction_strategy.notify_completion(desc.input_sstables, desc.output_sstables);
             _compaction_manager.propagate_replacement(this, desc.input_sstables, desc.output_sstables);
             this->on_compaction_completion(desc);
@@ -1308,7 +1308,7 @@ table::compact_sstables(sstables::compaction_descriptor descriptor) {
             }
         };
 
-        return sstables::compact_sstables(std::move(descriptor), *this, create_sstable, replace_sstables);
+        return sstables::compact_sstables(std::move(descriptor), *this);
     }).then([this] (auto info) {
         if (info.type != sstables::compaction_type::Compaction) {
             return make_ready_future<>();
