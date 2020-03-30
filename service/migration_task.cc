@@ -64,6 +64,7 @@ future<> migration_task::run_may_throw(const gms::inet_address& endpoint, bool c
             std::rethrow_exception(e);
         } catch (const exceptions::configuration_exception& e) {
             mlogger.error("Configuration exception merging remote schema: {}", e.what());
+            return make_exception_future<>(e);
         }
     });
 }
