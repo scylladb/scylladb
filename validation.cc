@@ -50,10 +50,10 @@ namespace validation {
  * Based on org.apache.cassandra.thrift.ThriftValidation#validate_key()
  */
 void
-validate_cql_key(schema_ptr schema, const partition_key& key) {
+validate_cql_key(const schema& schema, partition_key_view key) {
     // C* validates here that the thrift key is not empty.
     // It can only be empty if it is not composite and its only component in CQL form is empty.
-    if (schema->partition_key_size() == 1 && key.begin(*schema)->empty()) {
+    if (schema.partition_key_size() == 1 && key.begin(schema)->empty()) {
         throw exceptions::invalid_request_exception("Key may not be empty");
     }
 
@@ -64,7 +64,7 @@ validate_cql_key(schema_ptr schema, const partition_key& key) {
     }
 
     try {
-        key.validate(*schema);
+        key.validate(schema);
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
