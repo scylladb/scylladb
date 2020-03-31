@@ -60,6 +60,7 @@
 #include "service/priority_manager.hh"
 #include "db/extensions.hh"
 #include "utils/fragmented_temporary_buffer.hh"
+#include "validation.hh"
 
 static logging::logger rlogger("commitlog_replayer");
 
@@ -283,6 +284,10 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
             if (rlogger.is_enabled(logging::log_level::debug)) {
                 rlogger.debug("replaying at {} v={} {}:{} at {}", fm.column_family_id(), fm.schema_version(),
                         cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
+            }
+            if (const auto err = validation::is_cql_key_invalid(*cf.schema(), fm.key()); err) {
+                throw std::runtime_error(fmt::format("found entry with invalid key {} at {} v={} {}:{} at {}: {}.", fm.key(), fm.column_family_id(),
+                        fm.schema_version(), cf.schema()->ks_name(), cf.schema()->cf_name(), rp, *err));
             }
             // Removed forwarding "new" RP. Instead give none/empty.
             // This is what origin does, and it should be fine.

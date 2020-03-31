@@ -39,10 +39,14 @@
 #include "utils/UUID_gen.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/rp_set.hh"
 #include "log.hh"
 #include "service/priority_manager.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/cql_test_env.hh"
+#include "test/lib/data_model.hh"
+#include "test/lib/sstable_utils.hh"
 
 using namespace db;
 
@@ -598,3 +602,50 @@ SEASTAR_TEST_CASE(test_allocation_failure){
 }
 
 #endif
+
+SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.execute_cql("create table t (pk text primary key, v text)").get();
+
+        auto& db = env.local_db();
+        auto& table = db.find_column_family("ks", "t");
+        auto& cl = *table.commitlog();
+        auto s = table.schema();
+        auto& mt = table.active_memtable();
+
+        auto add_entry = [&db, &cl, s] (bytes key) mutable {
+            auto md = tests::data_model::mutation_description({ key });
+            md.add_clustered_cell({}, "v", to_bytes("val"));
+            auto m = md.build(s);
+
+            auto fm = freeze(m);
+            commitlog_entry_writer cew(s, fm, db::commitlog::force_sync::yes);
+            cl.add_entry(m.column_family_id(), cew, db::no_timeout).get();
+            return db.shard_of(m);
+        };
+
+        const auto shard = add_entry(bytes{});
+        auto pk1_raw = make_key_for_shard(shard, s);
+
+        add_entry(to_bytes(pk1_raw));
+
+        BOOST_REQUIRE(mt.empty());
+
+        {
+            auto paths = cl.get_active_segment_names();
+            BOOST_REQUIRE(!paths.empty());
+            auto rp = db::commitlog_replayer::create_replayer(env.db()).get0();
+            rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+        }
+
+        {
+            auto rd = mt.make_flat_reader(s);
+            auto mopt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
+            BOOST_REQUIRE(mopt);
+
+            mopt = {};
+            mopt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
+            BOOST_REQUIRE(!mopt);
+        }
+    });
+}
