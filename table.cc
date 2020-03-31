@@ -723,8 +723,7 @@ table::update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable sst) {
     if (cache_enabled()) {
         return _cache.update(adder, *m);
     } else {
-        adder();
-        return m->clear_gently();
+        return _cache.invalidate(adder).then([m] { return m->clear_gently(); });
     }
 }
 
@@ -844,8 +843,7 @@ table::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
                       if (cache_enabled()) {
                         return _cache.update_invalidating(adder, *old);
                       } else {
-                        adder();
-                        return old->clear_gently();
+                        return _cache.invalidate(adder).then([old] { return old->clear_gently(); });
                       }
                     });
                 }).handle_exception([old, permit = std::move(permit), newtab] (auto ep) {
