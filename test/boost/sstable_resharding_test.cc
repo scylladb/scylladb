@@ -81,7 +81,9 @@ void run_sstable_resharding_test() {
     auto filter_fname = sstables::test(sst).filename(component_type::Filter);
     uint64_t bloom_filter_size_before = file_size(filter_fname).get0();
 
-    auto creator = [&env, &cf, &tmp, version] (shard_id shard) mutable {
+    auto descriptor = sstables::compaction_descriptor({sst}, 0, std::numeric_limits<uint64_t>::max());
+    descriptor.options = sstables::compaction_options::make_reshard();
+    descriptor.creator = [&env, &cf, &tmp, version] (shard_id shard) mutable {
         // we need generation calculated by instance of cf at requested shard,
         // or resource usage wouldn't be fairly distributed among shards.
         auto gen = smp::submit_to(shard, [&cf] () {
@@ -91,7 +93,8 @@ void run_sstable_resharding_test() {
         return env.make_sstable(cf->schema(), tmp.path().string(), gen,
             version, sstables::sstable::format_types::big);
     };
-    auto new_sstables = sstables::reshard_sstables({ sst }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
+    auto info = sstables::compact_sstables(std::move(descriptor), *cf).get0();
+    auto new_sstables = std::move(info.new_sstables);
     BOOST_REQUIRE(new_sstables.size() == smp::count);
 
     uint64_t bloom_filter_size_after = 0;

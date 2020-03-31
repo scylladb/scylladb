@@ -1290,7 +1290,7 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c, GCConsume
 
 compaction_type compaction_options::type() const {
     // Maps options_variant indexes to the corresponding compaction_type member.
-    static const compaction_type index_to_type[] = {compaction_type::Compaction, compaction_type::Cleanup, compaction_type::Upgrade, compaction_type::Scrub};
+    static const compaction_type index_to_type[] = {compaction_type::Compaction, compaction_type::Cleanup, compaction_type::Upgrade, compaction_type::Scrub, compaction_type::Reshard};
     return index_to_type[_options.index()];
 }
 
@@ -1299,6 +1299,9 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
         column_family& cf;
         sstables::compaction_descriptor&& descriptor;
 
+        std::unique_ptr<compaction> operator()(compaction_options::reshard) {
+            return std::make_unique<resharding_compaction>(cf, std::move(descriptor));
+        }
         std::unique_ptr<compaction> operator()(compaction_options::regular) {
             return std::make_unique<regular_compaction>(cf, std::move(descriptor));
         }
@@ -1328,21 +1331,6 @@ compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf) 
         return compaction::run(std::move(c), std::move(gc_writer));
     }
     return compaction::run(std::move(c));
-}
-
-future<std::vector<shared_sstable>>
-reshard_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable(shard_id)> creator,
-        uint64_t max_sstable_size, uint32_t sstable_level) {
-    if (sstables.empty()) {
-        throw std::runtime_error(format("Called resharding with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
-    }
-    sstables::compaction_descriptor descriptor(std::move(sstables), sstable_level, max_sstable_size);
-    descriptor.creator = std::move(creator);
-
-    auto c = std::make_unique<resharding_compaction>(cf, std::move(descriptor));
-    return compaction::run(std::move(c)).then([] (auto ret) {
-        return std::move(ret.new_sstables);
-    });
 }
 
 std::unordered_set<sstables::shared_sstable>
