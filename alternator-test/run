@@ -10,15 +10,14 @@ SCYLLA=${SCYLLA-$(ls -t "$script_path/../build/"*"/scylla" | head -1)}
 SCYLLA=$(readlink -f "$SCYLLA")
 SCYLLA_IP=${IP-127.0.0.1}
 CPUSET=${CPUSET-0}
-CQLSH=${CQLSH-cqlsh}
 
-# We need to use cqlsh to set up the authentication credentials expected by
-# some of the tests that check check authentication. If cqlsh is not installed
-# there isn't much point of even starting Scylla
-if ! type "$CQLSH" >/dev/null 2>&1
+# Below, we need to use python3 and the Cassandra drive to set up the
+# authentication credentials expected by some of the tests that check
+# authentication. If they are not installed there isn't much point of
+# even starting Scylla
+if ! python3 -c 'from cassandra.cluster import Cluster' >/dev/null 2>&1
 then
-    echo "Error: cannot find '$CQLSH', needed for configuring Alternator authentication." >&2
-    echo "Please install $CQLSH in your path, or set CQLSH to its location." >&2
+    echo "Error: python3 and python3-cassandra-driver must be installed to configure Alternator authentication." >&2
     exit 1
 fi
 
@@ -79,8 +78,11 @@ done
 SCYLLA_PROCESS=$!
 
 # Set up the the proper authentication credentials needed by the Alternator
-# test. This requires connecting to Scylla with cqlsh - we'll wait up for
+# test. This requires connecting to Scylla with CQL - we'll wait up for
 # one minute for this to work:
+setup_authentication() {
+    python3 -c 'from cassandra.cluster import Cluster; Cluster().connect().execute("INSERT INTO system_auth.roles (role, salted_hash) VALUES ('\''alternator'\'', '\''secret_pass'\'')")'
+}
 echo "Scylla is: $SCYLLA."
 echo -n "Booting Scylla..."
 ok=
@@ -94,18 +96,18 @@ do
         summary="Error: Scylla failed to boot after $SECONDS seconds."
         break
     fi
-    err=`"$CQLSH" -e "INSERT INTO system_auth.roles (role, salted_hash) VALUES ('alternator', 'secret_pass')" 2>&1` && ok=yes && break
+    err=`setup_authentication 2>&1` && ok=yes && break
     case "$err" in
-    "Connection error:"*)
+    *NoHostAvailable:*)
         # This is what we expect while Scylla is still booting.
         ;;
-    *"command not found")
-        summary="Error: need 'cqlsh' in your path, to configure Alternator authentication."
+    *ImportError:*|*"command not found"*)
+        summary="Error: need python3 and python3-cassandra-driver to configure Alternator authentication."
         echo
         echo $summary
         break;;
     *)
-        summary="Unknown cqlsh error, can't set authentication credentials: '$err'"
+        summary="Unknown error trying to set authentication credentials: '$err'"
         echo
         echo $summary
         break;;
