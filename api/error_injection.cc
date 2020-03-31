@@ -37,8 +37,9 @@ void set_error_injection(http_context& ctx, routes& r) {
         sstring injection = req->param["injection"];
         bool one_shot = req->get_query_param("one_shot") == "True";
         auto& errinj = utils::get_local_injector();
-        errinj.enable_on_all(injection, one_shot);
-        return make_ready_future<json::json_return_type>(json::json_void());
+        return errinj.enable_on_all(injection, one_shot).then([] {
+            return make_ready_future<json::json_return_type>(json::json_void());
+        });
     });
 
     hf::get_enabled_injections_on_all.set(r, [](std::unique_ptr<request> req) {
@@ -51,14 +52,16 @@ void set_error_injection(http_context& ctx, routes& r) {
         sstring injection = req->param["injection"];
 
         auto& errinj = utils::get_local_injector();
-        errinj.disable_on_all(injection);
-        return make_ready_future<json::json_return_type>(json::json_void());
+        return errinj.disable_on_all(injection).then([] {
+            return make_ready_future<json::json_return_type>(json::json_void());
+        });
     });
 
     hf::disable_on_all.set(r, [](std::unique_ptr<request> req) {
         auto& errinj = utils::get_local_injector();
-        errinj.disable_on_all();
-        return make_ready_future<json::json_return_type>(json::json_void());
+        return errinj.disable_on_all().then([] {
+            return make_ready_future<json::json_return_type>(json::json_void());
+        });
     });
 
 }

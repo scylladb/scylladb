@@ -45,10 +45,8 @@ SEASTAR_TEST_CASE(test_inject_noop) {
 
     BOOST_ASSERT(errinj.enabled_injections().empty());
 
-    auto f = make_ready_future<>();
     auto start_time = steady_clock::now();
-    errinj.inject("noop2", sleep_msec, f);
-    return f.then([start_time] {
+    return errinj.inject("noop2", sleep_msec).then([start_time] {
         auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
         BOOST_REQUIRE_LT(wait_time.count(), sleep_msec.count());
         return make_ready_future<>();
@@ -60,14 +58,14 @@ SEASTAR_TEST_CASE(test_inject_lambda) {
 
     errinj.enable("lambda");
     BOOST_REQUIRE_THROW(errinj.inject("lambda",
-            [] () { throw std::runtime_error("test"); }),
+            [] () -> void { throw std::runtime_error("test"); }),
             std::runtime_error);
     errinj.disable("lambda");
     BOOST_REQUIRE_NO_THROW(errinj.inject("lambda",
-            [] () { throw std::runtime_error("test"); }));
+            [] () -> void { throw std::runtime_error("test"); }));
     errinj.enable("lambda");
     BOOST_REQUIRE_THROW(errinj.inject("lambda",
-            [] () { throw std::runtime_error("test"); }),
+            [] () -> void { throw std::runtime_error("test"); }),
             std::runtime_error);
     return make_ready_future<>();
 }
@@ -75,11 +73,9 @@ SEASTAR_TEST_CASE(test_inject_lambda) {
 SEASTAR_TEST_CASE(test_inject_sleep_duration) {
     utils::error_injection<true> errinj;
 
-    auto f = make_ready_future<>();
     auto start_time = steady_clock::now();
     errinj.enable("future_sleep");
-    errinj.inject("future_sleep", sleep_msec, f);
-    return f.then([start_time] {
+    return errinj.inject("future_sleep", sleep_msec).then([start_time] {
         auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
         BOOST_REQUIRE_GE(wait_time.count(), sleep_msec.count());
         return make_ready_future<>();
@@ -91,11 +87,9 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_steady_clock) {
         utils::error_injection<true> errinj;
 
         // Inject sleep, deadline short-circuit
-        auto f = make_ready_future<>();
         auto deadline = steady_clock::now() + sleep_msec;
         errinj.enable("future_deadline");
-        errinj.inject("future_deadline", deadline, f);
-        f.then([deadline] {
+        errinj.inject("future_deadline", deadline).then([deadline] {
             BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(steady_clock::now() - deadline).count(), 0);
             return make_ready_future<>();
         }).get();
@@ -107,11 +101,9 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_system_clock) {
         utils::error_injection<true> errinj;
 
         // Inject sleep, deadline short-circuit
-        auto f = make_ready_future<>();
         auto deadline = std::chrono::system_clock::now() + sleep_msec;
         errinj.enable("future_deadline");
-        errinj.inject("future_deadline", deadline, f);
-        f.then([deadline] {
+        errinj.inject("future_deadline", deadline).then([deadline] {
             BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - deadline).count(), 0);
             return make_ready_future<>();
         }).get();
@@ -123,11 +115,9 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_db_clock) {
         utils::error_injection<true> errinj;
 
         // Inject sleep, deadline short-circuit
-        auto f = make_ready_future<>();
         auto deadline = db::timeout_clock::now() + sleep_msec;
         errinj.enable("future_deadline");
-        errinj.inject("future_deadline", deadline, f);
-        f.then([deadline] {
+        errinj.inject("future_deadline", deadline).then([deadline] {
             BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(db::timeout_clock::now() - deadline).count(), 0);
             return make_ready_future<>();
         }).get();
@@ -137,10 +127,8 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_db_clock) {
 SEASTAR_TEST_CASE(test_inject_future_disabled) {
     utils::error_injection<true> errinj;
 
-    auto f = make_ready_future<>();
     auto start_time = steady_clock::now();
-    errinj.inject("futid", sleep_msec, f);
-    return f.then([start_time] {
+    return errinj.inject("futid", sleep_msec).then([start_time] {
         auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
         BOOST_REQUIRE_LT(wait_time.count(), sleep_msec.count());
         return make_ready_future<>();
@@ -150,10 +138,10 @@ SEASTAR_TEST_CASE(test_inject_future_disabled) {
 SEASTAR_TEST_CASE(test_inject_exception) {
     utils::error_injection<true> errinj;
 
-    auto f = make_ready_future<>();
     errinj.enable("exc");
-    errinj.inject("exc", f, [] () { return std::make_exception_ptr(std::runtime_error("test")); });
-    return f.then_wrapped([] (auto f) {
+    return errinj.inject("exc", [] () -> std::exception_ptr {
+        return std::make_exception_ptr(std::runtime_error("test"));
+    }).then_wrapped([] (auto f) {
         BOOST_REQUIRE_THROW(f.get(), std::runtime_error);
         return make_ready_future<>();
     });
