@@ -20,6 +20,7 @@
  */
 
 
+#include <list>
 #include <random>
 #include <experimental/source_location>
 
@@ -41,7 +42,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/make_random_string.hh"
-#include "test/lib/dummy_partitioner.hh"
+#include "test/lib/dummy_sharder.hh"
 #include "test/lib/reader_lifecycle_policy.hh"
 
 #include "dht/sharder.hh"
@@ -2203,8 +2204,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
             shard_pkeys[i++ % smp::count].push_back(pkey);
         }
 
-        auto partitioner = dummy_partitioner(s.schema()->get_partitioner(), std::move(pkeys_by_tokens));
-
         auto factory = [gs = global_simple_schema(s), &remote_controls, &shard_pkeys] (
                 schema_ptr,
                 const dht::partition_range& range,
@@ -2218,9 +2217,9 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         };
 
         {
-            auto schema = schema_builder(s.schema()).with_partitioner_for_tests_only(partitioner).build();
-            auto reader = make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
-                    schema, query::full_partition_range, schema->full_slice(), service::get_local_sstable_query_read_priority());
+            dummy_sharder sharder(s.schema()->get_sharder(), std::move(pkeys_by_tokens));
+            auto reader = make_multishard_combining_reader_for_tests(sharder, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
+                    s.schema(), query::full_partition_range, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
             reader.fill_buffer(db::no_timeout).get();
             BOOST_REQUIRE(reader.is_buffer_full());
         }
@@ -2409,7 +2408,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
                 mutation_reader::forwarding fwd_mr) {
             auto s = gs.get();
             auto pkey = s.make_pkey(pk);
-            if (s.schema()->get_partitioner().shard_of(pkey.token()) != this_shard_id()) {
+            if (s.schema()->get_sharder().shard_of(pkey.token()) != this_shard_id()) {
                 return make_empty_flat_reader(s.schema());
             }
             auto fragments = make_fragments_with_non_monotonic_positions(s, std::move(pkey), max_buffer_size, tombstone_deletion_time);
@@ -2464,10 +2463,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         auto token_range = dht::token_range::make_open_ended_both_sides();
         auto partition_range = dht::to_partition_range(token_range);
 
-        auto& local_partitioner = schema->get_partitioner();
-        auto remote_partitioner_ptr = create_object<dht::i_partitioner, const unsigned&, const unsigned&>(local_partitioner.name(),
-                local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
-        auto& remote_partitioner = *remote_partitioner_ptr;
+        auto& local_partitioner = schema->get_sharder();
+        auto remote_partitioner = dht::sharder(local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
 
         auto tested_reader = make_multishard_streaming_reader(env.db(), schema,
                 [sharder = dht::selective_token_range_sharder(remote_partitioner, token_range, 0)] () mutable -> std::optional<dht::partition_range> {

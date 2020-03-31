@@ -59,7 +59,7 @@ private:
     std::function<future<> (flat_mutation_reader)> _consumer;
 private:
     unsigned shard_for_mf(const mutation_fragment& mf) {
-        return _s->get_partitioner().shard_of(mf.as_partition_start().key().token());
+        return _s->get_sharder().shard_of(mf.as_partition_start().key().token());
     }
     future<> make_shard_writer(unsigned shard);
     future<stop_iteration> handle_mutation_fragment(mutation_fragment mf);
@@ -97,10 +97,10 @@ multishard_writer::multishard_writer(
     flat_mutation_reader producer,
     std::function<future<> (flat_mutation_reader)> consumer)
     : _s(std::move(s))
-    , _queue_reader_handles(_s->get_partitioner().shard_count())
+    , _queue_reader_handles(_s->get_sharder().shard_count())
     , _producer(std::move(producer))
     , _consumer(std::move(consumer)) {
-    _shard_writers.resize(_s->get_partitioner().shard_count());
+    _shard_writers.resize(_s->get_sharder().shard_count());
 }
 
 future<> multishard_writer::make_shard_writer(unsigned shard) {
@@ -137,7 +137,7 @@ future<stop_iteration> multishard_writer::handle_mutation_fragment(mutation_frag
 }
 
 future<stop_iteration> multishard_writer::handle_end_of_stream() {
-    return parallel_for_each(boost::irange(0u, _s->get_partitioner().shard_count()), [this] (unsigned shard) {
+    return parallel_for_each(boost::irange(0u, _s->get_sharder().shard_count()), [this] (unsigned shard) {
         if (_queue_reader_handles[shard]) {
             _queue_reader_handles[shard]->push_end_of_stream();
         }

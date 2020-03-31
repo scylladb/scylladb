@@ -101,12 +101,13 @@ token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
     std::vector<std::pair<sstring, dht::token>> key_and_token_pair;
 
     key_and_token_pair.reserve(tokens_to_generate);
-    dht::murmur3_partitioner partitioner(smp_count, ignore_msb);
+    dht::murmur3_partitioner partitioner;
+    dht::sharder sharder(smp_count, ignore_msb);
 
     while (tokens < tokens_to_generate) {
         sstring key = to_sstring(key_id++);
         dht::token token = create_token_from_key(partitioner, key);
-        if (shard != partitioner.shard_of(token)) {
+        if (shard != sharder.shard_of(token)) {
             continue;
         }
         tokens++;

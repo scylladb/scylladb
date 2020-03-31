@@ -104,7 +104,7 @@ struct send_info {
             return do_until(std::move(stop_cond), [this, &found_relevant_range, &ranges_it] {
                 dht::token_range range = *ranges_it++;
                 if (!found_relevant_range) {
-                    auto sharder = dht::selective_token_range_sharder(cf.schema()->get_partitioner(), std::move(range), this_shard_id());
+                    auto sharder = dht::selective_token_range_sharder(cf.schema()->get_sharder(), std::move(range), this_shard_id());
                     auto range_shard = sharder.next();
                     if (range_shard) {
                         found_relevant_range = true;

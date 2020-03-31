@@ -491,6 +491,16 @@ flat_mutation_reader make_multishard_combining_reader(
         tracing::trace_state_ptr trace_state = nullptr,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
+flat_mutation_reader make_multishard_combining_reader_for_tests(
+        const dht::sharder& sharder,
+        shared_ptr<reader_lifecycle_policy> lifecycle_policy,
+        schema_ptr schema,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state = nullptr,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+
 class queue_reader;
 
 /// Calls to different methods cannot overlap!

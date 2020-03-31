@@ -52,6 +52,7 @@
 #include <range.hh>
 #include <byteswap.h>
 #include "dht/token.hh"
+#include "dht/token-sharding.hh"
 
 namespace sstables {
 
@@ -148,12 +149,8 @@ public:
 using decorated_key_opt = std::optional<decorated_key>;
 
 class i_partitioner {
-protected:
-    unsigned _shard_count;
-    unsigned _sharding_ignore_msb_bits;
-    std::vector<uint64_t> _shard_start;
 public:
-    i_partitioner(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
+    i_partitioner() = default;
     virtual ~i_partitioner() {}
 
     /**
@@ -199,37 +196,8 @@ public:
      */
     virtual const sstring name() const = 0;
 
-    /**
-     * Calculates the shard that handles a particular token.
-     */
-    virtual unsigned shard_of(const token& t) const;
-
-    /**
-     * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
-     *
-     * If the `spans` parameter is greater than zero, the result is the same as if the function
-     * is called `spans` times, each time applied to its return value, but efficiently. This allows
-     * selecting ranges that include multiple round trips around the 0..smp::count-1 shard span:
-     *
-     *     token_for_next_shard(t, shard, spans) == token_for_next_shard(token_for_shard(t, shard, 1), spans - 1)
-     *
-     * On overflow, maximum_token() is returned.
-     */
-    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
-
-    /**
-     * @return number of shards configured for this partitioner
-     */
-    unsigned shard_count() const {
-        return _shard_count;
-    }
-
-    unsigned sharding_ignore_msb() const {
-        return _sharding_ignore_msb_bits;
-    }
     bool operator==(const i_partitioner& o) const {
-        return name() == o.name()
-                && sharding_ignore_msb() == o.sharding_ignore_msb();
+        return name() == o.name();
     }
     bool operator!=(const i_partitioner& o) const {
         return !(*this == o);
@@ -679,16 +647,10 @@ dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& r
 std::map<unsigned, dht::partition_range_vector>
 split_range_to_shards(dht::partition_range pr, const schema& s);
 
-// If input ranges are sorted and disjoint then the ranges for each shard
-// are also sorted and disjoint.
-std::map<unsigned, dht::partition_range_vector>
-split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s);
-
 // Intersect a partition_range with a shard and return the the resulting sub-ranges, in sorted order
 future<utils::chunked_vector<partition_range>> split_range_to_single_shard(const schema& s, const dht::partition_range& pr, shard_id shard);
-future<utils::chunked_vector<partition_range>> split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const dht::partition_range& pr, shard_id shard);
 
-std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name, unsigned shard_count, unsigned sharding_ignore_msb_bits);
+std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name);
 
 } // dht
 

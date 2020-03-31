@@ -409,7 +409,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     gossip_snitch_info().get();
 
     // gossip local partitioner information (shard count and ignore_msb_bits)
-    gossip_sharding_info().get();
+    gossip_sharder().get();
 
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
 
@@ -1667,7 +1667,7 @@ future<> storage_service::gossip_snitch_info() {
     });
 }
 
-future<> storage_service::gossip_sharding_info() {
+future<> storage_service::gossip_sharder() {
     return _gossiper.add_local_application_state({
         { gms::application_state::SHARD_COUNT, value_factory.shard_count(smp::count) },
         { gms::application_state::IGNORE_MSB_BITS, value_factory.ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()) },

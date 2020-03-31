@@ -1741,8 +1741,9 @@ static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_p
 // returns true if token ranges overlap.
 static bool key_range_overlaps(column_family_for_tests& cf, sstring a, sstring b, sstring c, sstring d) {
     const dht::i_partitioner& p = cf->schema()->get_partitioner();
-    auto range1 = create_token_range_from_keys(p, a, b);
-    auto range2 = create_token_range_from_keys(p, c, d);
+    const dht::sharder& sharder = cf->schema()->get_sharder();
+    auto range1 = create_token_range_from_keys(sharder, p, a, b);
+    auto range2 = create_token_range_from_keys(sharder, p, c, d);
     return range1.overlaps(range2, dht::token_comparator());
 }
 
@@ -4159,13 +4160,13 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             auto muts = boost::copy_range<std::vector<mutation>>(shards
                 | boost::adaptors::transformed([&] (auto shard) { return mut(shard); }));
             auto sst_gen = [&env, s, &tmp, gen, ignore_msb] () mutable {
-                auto schema = schema_builder(s).with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner", 1, ignore_msb).build();
+                auto schema = schema_builder(s).with_sharder(1, ignore_msb).build();
                 auto sst = env.make_sstable(std::move(schema), tmp.path().string(), (*gen)++, la, big);
                 sst->set_unshared();
                 return sst;
             };
             auto sst = make_sstable_containing(sst_gen, std::move(muts));
-            auto schema = schema_builder(s).with_partitioner("org.apache.cassandra.dht.Murmur3Partitioner", smp_count, ignore_msb).build();
+            auto schema = schema_builder(s).with_sharder(smp_count, ignore_msb).build();
             sst = env.reusable_sst(std::move(schema), tmp.path().string(), sst->generation()).get0();
             return sst;
         };
