@@ -649,6 +649,10 @@ public:
         return legacy_tri_compare(s, o) == 0;
     }
 
+    void validate(const schema& s) const {
+        return s.partition_key_type()->validate(representation());
+    }
+
     // A trichotomic comparator which orders keys according to their ordering on the ring.
     int ring_order_tri_compare(const schema& s, partition_key_view o) const;
 
