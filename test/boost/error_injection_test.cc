@@ -22,6 +22,7 @@
 #include "test/lib/cql_test_env.hh"
 #include <seastar/testing/test_case.hh>
 #include "utils/error_injection.hh"
+#include "db/timeout_clock.hh"
 #include "log.hh"
 #include <chrono>
 
@@ -85,7 +86,7 @@ SEASTAR_TEST_CASE(test_inject_sleep_duration) {
     });
 }
 
-SEASTAR_TEST_CASE(test_inject_sleep_deadline) {
+SEASTAR_TEST_CASE(test_inject_sleep_deadline_steady_clock) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         utils::error_injection<true> errinj;
 
@@ -96,6 +97,38 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline) {
         errinj.inject("future_deadline", deadline, f);
         f.then([deadline] {
             BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(steady_clock::now() - deadline).count(), 0);
+            return make_ready_future<>();
+        }).get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_inject_sleep_deadline_system_clock) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        utils::error_injection<true> errinj;
+
+        // Inject sleep, deadline short-circuit
+        auto f = make_ready_future<>();
+        auto deadline = std::chrono::system_clock::now() + sleep_msec;
+        errinj.enable("future_deadline");
+        errinj.inject("future_deadline", deadline, f);
+        f.then([deadline] {
+            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - deadline).count(), 0);
+            return make_ready_future<>();
+        }).get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_inject_sleep_deadline_db_clock) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        utils::error_injection<true> errinj;
+
+        // Inject sleep, deadline short-circuit
+        auto f = make_ready_future<>();
+        auto deadline = db::timeout_clock::now() + sleep_msec;
+        errinj.enable("future_deadline");
+        errinj.inject("future_deadline", deadline, f);
+        f.then([deadline] {
+            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(db::timeout_clock::now() - deadline).count(), 0);
             return make_ready_future<>();
         }).get();
     });

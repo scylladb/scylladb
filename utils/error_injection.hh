@@ -104,7 +104,6 @@ extern logging::logger errinj_logger;
 template <bool injection_enabled>
 class error_injection {
     using handler_fun = std::function<void()>;
-    using time_point = std::chrono::time_point<std::chrono::steady_clock>;
 
     // String cross-type comparator
     class str_less
@@ -195,14 +194,10 @@ public:
         });
     }
 
-    //
-    // TODO: template different clocks
-    //
-
     // @brief Inject a sleep to deadline (timeout) in an existing future
-    template<typename... T>
+    template<class TimePoint, typename... T>
     [[gnu::always_inline]]
-    void inject(const std::string_view& name, time_point deadline,
+    void inject(const std::string_view& name, TimePoint deadline,
             future<T...>& intercepted_future) {
 
         static_assert(sizeof...(T) <= 1,
@@ -216,7 +211,7 @@ public:
         }
 
         // Time left until deadline
-        std::chrono::milliseconds duration = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        std::chrono::milliseconds duration = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - TimePoint::clock::now());
         errinj_logger.debug("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
         intercepted_future = seastar::sleep(duration)
                 .then([f = std::move(intercepted_future)] () mutable {
@@ -282,7 +277,6 @@ public:
 template <>
 class error_injection<false> {
     using handler_fun = std::function<void()>;
-    using time_point = std::chrono::time_point<std::chrono::steady_clock>;
 public:
     [[gnu::always_inline]]
     void enable(const std::string_view& injection_name, const bool one_shot = false) {}
@@ -311,9 +305,9 @@ public:
     }
 
     // Inject a sleep to deadline (timeout) in an existing future
-    template<typename... T>
+    template<class TimePoint, typename... T>
     [[gnu::always_inline]]
-    void inject(const std::string_view& name, time_point deadline,
+    void inject(const std::string_view& name, TimePoint deadline,
             future<T...>& intercepted_future) {
         static_assert(sizeof...(T) <= 1,
             "future<> with more than one template parameter are not supported. Consider replacing with future<std::tuple<...>>");
