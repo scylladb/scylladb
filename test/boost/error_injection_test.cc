@@ -71,29 +71,13 @@ SEASTAR_TEST_CASE(test_inject_lambda) {
     return make_ready_future<>();
 }
 
-SEASTAR_TEST_CASE(test_inject_lambda_timeout) {
-    utils::error_injection<true> errinj;
-
-    errinj.enable("lambda_timeout1");
-    auto past_time = steady_clock::now();
-    BOOST_REQUIRE_NO_THROW(errinj.inject("lambda_timeout1",
-            [] () { throw std::runtime_error("test"); }, std::make_optional(past_time)));
-
-    errinj.enable("lambda_timeout2");
-    auto future_time = steady_clock::now() + minutes(future_mins);
-    BOOST_REQUIRE_THROW(errinj.inject("lambda_timeout2",
-            [] () { throw std::runtime_error("test"); }, std::make_optional(future_time)),
-            std::runtime_error);
-    return make_ready_future<>();
-}
-
-SEASTAR_TEST_CASE(test_inject_future_sleep) {
+SEASTAR_TEST_CASE(test_inject_sleep_duration) {
     utils::error_injection<true> errinj;
 
     auto f = make_ready_future<>();
     auto start_time = steady_clock::now();
-    errinj.enable("futi");
-    errinj.inject("futi", sleep_msec, f);
+    errinj.enable("future_sleep");
+    errinj.inject("future_sleep", sleep_msec, f);
     return f.then([start_time] {
         auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
         BOOST_REQUIRE_GE(wait_time.count(), sleep_msec.count());
@@ -101,53 +85,19 @@ SEASTAR_TEST_CASE(test_inject_future_sleep) {
     });
 }
 
-SEASTAR_TEST_CASE(test_inject_future_sleep_timeout) {
+SEASTAR_TEST_CASE(test_inject_sleep_deadline) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         utils::error_injection<true> errinj;
 
         // Inject sleep, deadline short-circuit
-        auto f1 = make_ready_future<>();
-        auto start_time = steady_clock::now();
-        auto past_time = steady_clock::now();
-        errinj.enable("futi_timeout1");
-        errinj.inject("futi_timeout1", sleep_msec, f1, past_time);
-        auto wait1 = f1.then([start_time] {
-            auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
-            return make_ready_future<milliseconds>(wait_time);
-        }).get0();
-        BOOST_REQUIRE_LT(wait1.count(), sleep_msec.count());
-
-        // Inject sleep, before cutoff deadline
-        auto f2 = make_ready_future<>();
-        start_time = steady_clock::now();
-        auto future_time = steady_clock::now() + minutes(future_mins);
-        errinj.enable("futi_timeout2");
-        errinj.inject("futi_timeout2", sleep_msec, f2, future_time);
-        auto wait2 = f2.then([start_time] {
-            auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
-            return make_ready_future<milliseconds>(wait_time);
-        }).get0();
-        BOOST_REQUIRE_GE(wait2.count(), sleep_msec.count());
-    });
-}
-
-SEASTAR_TEST_CASE(test_inject_future_sleep_timeout_short) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        utils::error_injection<true> errinj;
-
-        // Inject sleep, deadline before sleep ms, should truncate sleep
         auto f = make_ready_future<>();
-        constexpr milliseconds sleep_msec_x(500); // Long sleep, truncate
-        auto start_time = steady_clock::now();
-        auto actual_sleep = sleep_msec;           // Deadline in 10ms
-        auto future_time = start_time + actual_sleep;
-        errinj.enable("futi_timeout_trunc");
-        errinj.inject("futi_timeout_trunc", sleep_msec_x, f, future_time);
-        auto wait = f.then([start_time] {
-            auto wait_time = std::chrono::duration_cast<milliseconds>(steady_clock::now() - start_time);
-            return make_ready_future<milliseconds>(wait_time);
-        }).get0();
-        BOOST_REQUIRE_LE(wait.count(), sleep_msec_x.count());
+        auto deadline = steady_clock::now() + sleep_msec;
+        errinj.enable("future_deadline");
+        errinj.inject("future_deadline", deadline, f);
+        f.then([deadline] {
+            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(steady_clock::now() - deadline).count(), 0);
+            return make_ready_future<>();
+        }).get();
     });
 }
 
@@ -173,34 +123,6 @@ SEASTAR_TEST_CASE(test_inject_exception) {
     return f.then_wrapped([] (auto f) {
         BOOST_REQUIRE_THROW(f.get(), std::runtime_error);
         return make_ready_future<>();
-    });
-}
-
-SEASTAR_TEST_CASE(test_inject_exception_timeout) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        utils::error_injection<true> errinj;
-
-        // Inject exception, should not throw, deadline short-circuit
-        auto f1 = make_ready_future<>();
-        auto past_time = steady_clock::now();
-        errinj.enable("exc");
-        errinj.inject("exc", [] () { return std::make_exception_ptr(std::runtime_error("test")); },
-                f1, past_time);
-        f1.then_wrapped([] (auto f1) {
-            BOOST_REQUIRE_NO_THROW(f1.get());
-            return make_ready_future<>();
-        }).get();
-
-        // Inject exception, should throw before cutoff deadline
-        auto f2 = make_ready_future<>();
-        auto future_time = steady_clock::now() + minutes(future_mins);
-        errinj.enable("exc");
-        errinj.inject("exc", [] () { return std::make_exception_ptr(std::runtime_error("test")); },
-                f2, future_time);
-        f2.then_wrapped([] (auto f2) {
-            BOOST_REQUIRE_THROW(f2.get(), std::runtime_error);
-            return make_ready_future<>();
-        }).get();
     });
 }
 
