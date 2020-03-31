@@ -95,6 +95,7 @@ public:
     std::map<sstring, sstring> get_compaction_options() const;
     std::optional<std::map<sstring, sstring>> get_compression_options() const;
     const cdc::options* get_cdc_options(const schema::extensions_map&) const;
+    std::optional<caching_options> get_caching_options() const;
 #if 0
     public CachingOptions getCachingOptions() throws SyntaxException, ConfigurationException
     {
