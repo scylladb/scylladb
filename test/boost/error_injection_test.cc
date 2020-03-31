@@ -119,7 +119,7 @@ SEASTAR_TEST_CASE(test_inject_exception) {
 
     auto f = make_ready_future<>();
     errinj.enable("exc");
-    errinj.inject("exc", [] () { return std::make_exception_ptr(std::runtime_error("test")); }, f);
+    errinj.inject("exc", f, [] () { return std::make_exception_ptr(std::runtime_error("test")); });
     return f.then_wrapped([] (auto f) {
         BOOST_REQUIRE_THROW(f.get(), std::runtime_error);
         return make_ready_future<>();

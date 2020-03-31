@@ -90,7 +90,7 @@ extern logging::logger errinj_logger;
  *    Expected use case: slowing down the process so it hits external timeouts.
  *    e.g. making view update generation process extremely slow.
  *
- * 3. inject(name, exception_factory_lambda, future)
+ * 3. inject(name, future, exception_factory_lambda)
  *    Inserts code to raise a given exception type (if enabled).
  *    Requires future<> reference passed and an exception factory returning an
  *    exception pointer, for example:
@@ -229,8 +229,8 @@ public:
     template<typename... T>
     [[gnu::always_inline]]
     void inject(const std::string_view& name,
-            std::function<std::exception_ptr()> exception_factory,
-            future<T...>& intercepted_future) {
+            future<T...>& intercepted_future,
+            std::function<std::exception_ptr()> exception_factory) {
         static_assert(sizeof...(T) <= 1,
             "future<> with more than one template parameter are not supported. Consider replacing with future<std::tuple<...>>");
 
@@ -323,8 +323,8 @@ public:
     template<typename... T>
     [[gnu::always_inline]]
     void inject(const std::string_view& name,
-            std::function<std::exception_ptr()> exception_factory,
-            future<T...>& intercepted_future) {
+            future<T...>& intercepted_future,
+            std::function<std::exception_ptr()> exception_factory) {
         static_assert(sizeof...(T) <= 1,
             "future<> with more than one template parameter are not supported. Consider replacing with future<std::tuple<...>>");
     }
