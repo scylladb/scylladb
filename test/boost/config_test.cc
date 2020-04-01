@@ -930,17 +930,17 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_cdc) {
     cfg.read_from_yaml("experimental_features:\n    - cdc\n", throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::CDC});
     BOOST_CHECK(cfg.check_experimental(ef::CDC));
-    BOOST_CHECK(!cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     return make_ready_future();
 }
 
-SEASTAR_TEST_CASE(test_parse_experimental_features_lwt) {
+SEASTAR_TEST_CASE(test_parse_experimental_features_unused) {
     config cfg;
     cfg.read_from_yaml("experimental_features:\n    - lwt\n", throw_on_error);
-    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::LWT});
+    BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UNUSED});
     BOOST_CHECK(!cfg.check_experimental(ef::CDC));
-    BOOST_CHECK(cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     return make_ready_future();
 }
@@ -950,7 +950,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_udf) {
     cfg.read_from_yaml("experimental_features:\n    - udf\n", throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UDF});
     BOOST_CHECK(!cfg.check_experimental(ef::CDC));
-    BOOST_CHECK(!cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(cfg.check_experimental(ef::UDF));
     return make_ready_future();
 }
@@ -958,9 +958,9 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_udf) {
 SEASTAR_TEST_CASE(test_parse_experimental_features_multiple) {
     config cfg;
     cfg.read_from_yaml("experimental_features:\n    - cdc\n    - lwt\n    - cdc\n", throw_on_error);
-    BOOST_CHECK_EQUAL(cfg.experimental_features(), (features{ef::CDC, ef::LWT, ef::CDC}));
+    BOOST_CHECK_EQUAL(cfg.experimental_features(), (features{ef::CDC, ef::UNUSED, ef::CDC}));
     BOOST_CHECK(cfg.check_experimental(ef::CDC));
-    BOOST_CHECK(cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     return make_ready_future();
 }
@@ -973,7 +973,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
                            BOOST_REQUIRE_EQUAL(opt, "experimental_features");
                            BOOST_REQUIRE_NE(msg.find("line 2, column 7"), msg.npos);
                            BOOST_CHECK(!cfg.check_experimental(ef::CDC));
-                           BOOST_CHECK(!cfg.check_experimental(ef::LWT));
+                           BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
                            BOOST_CHECK(!cfg.check_experimental(ef::UDF));
                        });
     return make_ready_future();
@@ -983,7 +983,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_true) {
     config cfg;
     cfg.read_from_yaml("experimental: true", throw_on_error);
     BOOST_CHECK(cfg.check_experimental(ef::CDC));
-    BOOST_CHECK(cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(cfg.check_experimental(ef::UDF));
     return make_ready_future();
 }
@@ -992,7 +992,7 @@ SEASTAR_TEST_CASE(test_parse_experimental_false) {
     config cfg;
     cfg.read_from_yaml("experimental: false", throw_on_error);
     BOOST_CHECK(!cfg.check_experimental(ef::CDC));
-    BOOST_CHECK(!cfg.check_experimental(ef::LWT));
+    BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
     BOOST_CHECK(!cfg.check_experimental(ef::UDF));
     return make_ready_future();
 }

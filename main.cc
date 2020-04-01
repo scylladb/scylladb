@@ -1071,9 +1071,6 @@ int main(int ac, char** av) {
                 static sharded<alternator::executor> alternator_executor;
                 static sharded<alternator::server> alternator_server;
 
-                if (!cfg->check_experimental(db::experimental_features_t::LWT)) {
-                    throw std::runtime_error("Alternator enabled, but needs experimental LWT feature which wasn't enabled");
-                }
                 net::inet_address addr;
                 try {
                     addr = net::dns::get_host_by_name(cfg->alternator_address(), family).get0().addr_list.front();

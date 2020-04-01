@@ -110,10 +110,6 @@ feature_config feature_config_from_db_config(db::config& cfg) {
         fcfg.enable_cdc = true;
     }
 
-    if (cfg.check_experimental(db::experimental_features_t::LWT)) {
-        fcfg.enable_lwt = true;
-    }
-
     return fcfg;
 }
 
@@ -178,9 +174,7 @@ std::set<std::string_view> feature_service::known_feature_set() {
     if (_config.enable_cdc) {
         features.insert(gms::features::CDC);
     }
-    if (_config.enable_lwt) {
-        features.insert(gms::features::LWT);
-    }
+    features.insert(gms::features::LWT);
 
     for (const sstring& s : _config.disabled_features) {
         features.erase(s);
