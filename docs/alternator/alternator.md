@@ -23,7 +23,7 @@ Alternator on port 8000 - the traditional port used by DynamoDB.
 
 Alternator uses Scylla's LWT feature, which is currently considered
 experimental and needs to be seperately enabled as well, e.g. with the
-"`--experimental=on`" option.
+"`--experimental=1`" option.
 
 By default, Scylla listens on this port on all network interfaces.
 To listen only on a specific interface, pass also an "`alternator-address`"
