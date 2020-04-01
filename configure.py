@@ -388,6 +388,7 @@ scylla_tests = set([
     'test/boost/view_schema_ckey_test',
     'test/boost/vint_serialization_test',
     'test/boost/virtual_reader_test',
+    'test/boost/bptree_test',
     'test/manual/ec2_snitch_test',
     'test/manual/gce_snitch_test',
     'test/manual/gossip',
@@ -404,6 +405,7 @@ scylla_tests = set([
     'test/perf/perf_fast_forward',
     'test/perf/perf_hash',
     'test/perf/perf_mutation',
+    'test/perf/perf_bptree',
     'test/perf/perf_row_cache_update',
     'test/perf/perf_simple_query',
     'test/perf/perf_sstable',
@@ -411,6 +413,8 @@ scylla_tests = set([
     'test/unit/lsa_sync_eviction_test',
     'test/unit/row_cache_alloc_stress_test',
     'test/unit/row_cache_stress_test',
+    'test/unit/bptree_stress_test',
+    'test/unit/bptree_compaction_test',
 ])
 
 perf_tests = set([
@@ -958,6 +962,7 @@ pure_boost_tests = set([
     'test/boost/small_vector_test',
     'test/boost/top_k_test',
     'test/boost/vint_serialization_test',
+    'test/boost/bptree_test',
     'test/manual/streaming_histogram_test',
 ])
 
@@ -971,10 +976,13 @@ tests_not_using_seastar_test_framework = set([
     'test/perf/perf_cql_parser',
     'test/perf/perf_hash',
     'test/perf/perf_mutation',
+    'test/perf/perf_bptree',
     'test/perf/perf_row_cache_update',
     'test/unit/lsa_async_eviction_test',
     'test/unit/lsa_sync_eviction_test',
     'test/unit/row_cache_alloc_stress_test',
+    'test/unit/bptree_stress_test',
+    'test/unit/bptree_compaction_test',
     'test/manual/sstable_scan_footprint_test',
 ]) | pure_boost_tests
 
