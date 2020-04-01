@@ -1262,7 +1262,7 @@ void paxos_response_handler::prune(utils::UUID ballot) {
             }
         });
     }).finally([h = shared_from_this()] {
-        h->_proxy->get_stats().cas_now_pruning++;
+        h->_proxy->get_stats().cas_now_pruning--;
     });
 }
 
