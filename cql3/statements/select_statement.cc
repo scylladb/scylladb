@@ -439,9 +439,25 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const std::option
 
     for (const column_definition& base_col : base_columns) {
         const column_definition* view_col = view_schema.view_info()->view_column(base_col);
+        if (!view_col) {
+            throw std::runtime_error(format("Base key column not found in the view: {}", base_col.name_as_text()));
+        }
+        if (base_col.type != view_col->type) {
+            throw std::runtime_error(format("Mismatched types for base and view columns {}: {} and {}",
+                    base_col.name_as_text(), base_col.type->cql3_type_name(), view_col->type->cql3_type_name()));
+        }
         if (view_col->is_partition_key()) {
             exploded_base_key.push_back(index_pk.get_component(view_schema, view_col->id));
-        } else if (index_ck) {
+        } else {
+            if (!view_col->is_clustering_key()) {
+                throw std::runtime_error(
+                        format("Base primary key column {} is not a primary key column in the index (kind: {})",
+                                view_col->name_as_text(), to_sstring(view_col->kind)));
+            }
+            if (!index_ck) {
+                throw std::runtime_error(format("Column {} was expected to be provided "
+                        "in the index clustering key, but the whole index clustering key is missing", view_col->name_as_text()));
+            }
             exploded_base_key.push_back(index_ck->get_component(view_schema, view_col->id));
         }
     }
