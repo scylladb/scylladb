@@ -31,6 +31,7 @@
 
 #include <seastar/util/gcc6-concepts.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/file.hh>
 #include "db/timeout_clock.hh"
 
 #include <deque>

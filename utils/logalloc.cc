@@ -381,7 +381,7 @@ public:
     void register_region(region::impl*);
     void unregister_region(region::impl*) noexcept;
     size_t reclaim(size_t bytes);
-    reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor check_for_work);
+    idle_cpu_handler_result compact_on_idle(work_waiting_on_reactor check_for_work);
     // Releases whole segments back to the segment pool.
     // After the call, if there is enough evictable memory, the amount of free segments in the pool
     // will be at least reserve_segments + div_ceil(bytes, segment::size).
@@ -418,7 +418,7 @@ size_t tracker::reclaim(size_t bytes) {
     return _impl->reclaim(bytes);
 }
 
-reactor::idle_cpu_handler_result tracker::compact_on_idle(reactor::work_waiting_on_reactor check_for_work) {
+idle_cpu_handler_result tracker::compact_on_idle(work_waiting_on_reactor check_for_work) {
     return _impl->compact_on_idle(check_for_work);
 }
 
@@ -1875,13 +1875,13 @@ struct reclaim_timer {
     }
 };
 
-reactor::idle_cpu_handler_result tracker::impl::compact_on_idle(reactor::work_waiting_on_reactor check_for_work) {
+idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor check_for_work) {
     if (!_reclaiming_enabled) {
-        return reactor::idle_cpu_handler_result::no_more_work;
+        return idle_cpu_handler_result::no_more_work;
     }
     reclaiming_lock rl(*this);
     if (_regions.empty()) {
-        return reactor::idle_cpu_handler_result::no_more_work;
+        return idle_cpu_handler_result::no_more_work;
     }
     segment_pool::reservation_goal open_emergency_pool(shard_segment_pool, 0);
 
@@ -1899,14 +1899,14 @@ reactor::idle_cpu_handler_result tracker::impl::compact_on_idle(reactor::work_wa
         region::impl* r = _regions.back();
 
         if (!r->is_idle_compactible()) {
-            return reactor::idle_cpu_handler_result::no_more_work;
+            return idle_cpu_handler_result::no_more_work;
         }
 
         r->compact();
 
         boost::range::push_heap(_regions, cmp);
     }
-    return reactor::idle_cpu_handler_result::interrupted_by_higher_priority_task;
+    return idle_cpu_handler_result::interrupted_by_higher_priority_task;
 }
 
 size_t tracker::impl::reclaim(size_t memory_to_release) {

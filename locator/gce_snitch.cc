@@ -39,6 +39,7 @@
  */
 
 #include <seastar/net/dns.hh>
+#include <seastar/core/seastar.hh>
 #include "locator/gce_snitch.hh"
 
 namespace locator {

@@ -27,6 +27,7 @@
 #include "utils/disk-error-handler.hh"
 #include "seastarx.hh"
 #include <seastar/core/sleep.hh>
+#include <seastar/core/reactor.hh>
 
 namespace db {
 namespace hints {

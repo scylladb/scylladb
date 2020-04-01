@@ -1,4 +1,5 @@
 #include "locator/ec2_snitch.hh"
+#include <seastar/core/reactor.hh>
 
 namespace locator {
 
