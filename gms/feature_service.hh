@@ -41,7 +41,6 @@ struct feature_config {
     bool enable_sstables_mc_format = false;
     bool enable_user_defined_functions = false;
     bool enable_cdc = false;
-    bool enable_lwt = false;
     std::set<sstring> disabled_features;
     feature_config();
 };

@@ -860,7 +860,7 @@ db::fs::path db::config::get_conf_sub(db::fs::path sub) {
 }
 
 bool db::config::check_experimental(experimental_features_t::feature f) const {
-    if (experimental()) {
+    if (experimental() && f != experimental_features_t::UNUSED) {
         return true;
     }
     const auto& optval = experimental_features();
@@ -912,11 +912,13 @@ const db::extensions& db::config::extensions() const {
 std::unordered_map<sstring, db::experimental_features_t::feature> db::experimental_features_t::map() {
     // We decided against using the construct-on-first-use idiom here:
     // https://github.com/scylladb/scylla/pull/5369#discussion_r353614807
-    return {{"lwt", LWT}, {"udf", UDF}, {"cdc", CDC}};
+    // Lightweight transactions are no longer experimental. Map them
+    // to UNUSED switch for a while, then remove altogether.
+    return {{"lwt", UNUSED}, {"udf", UDF}, {"cdc", CDC}};
 }
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {
-    return {LWT, UDF, CDC};
+    return {UDF, CDC};
 }
 
 template struct utils::config_file::named_value<seastar::log_level>;
