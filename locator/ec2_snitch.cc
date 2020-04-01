@@ -1,5 +1,5 @@
 #include "locator/ec2_snitch.hh"
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 
 namespace locator {
 
@@ -64,7 +64,7 @@ future<> ec2_snitch::start() {
 }
 
 future<sstring> ec2_snitch::aws_api_call(sstring addr, uint16_t port, sstring cmd) {
-    return engine().net().connect(socket_address(inet_address{addr}, port))
+    return connect(socket_address(inet_address{addr}, port))
     .then([this, addr, cmd] (connected_socket fd) {
         _sd = std::move(fd);
         _in = std::move(_sd.input());

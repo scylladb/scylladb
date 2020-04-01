@@ -33,7 +33,7 @@
 #include "cdc/generation.hh"
 #include "cql3/query_processor.hh"
 
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>
 
 #include <boost/range/adaptor/transformed.hpp>

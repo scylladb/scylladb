@@ -25,7 +25,7 @@
 #include "db/config.hh"
 #include "db/write_type.hh"
 #include <seastar/core/future-util.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/execution_stage.hh>
 #include "service/query_state.hh"
@@ -80,7 +80,7 @@ future<> redis_server::listen(socket_address addr, std::shared_ptr<seastar::tls:
     try {
         ss = creds
           ? seastar::tls::listen(creds->build_server_credentials(), addr, lo)
-          : engine().listen(addr, lo);
+          : seastar::listen(addr, lo);
     } catch (...) {
         throw std::runtime_error(sprint("Redis server error while listening on %s -> %s", addr, std::current_exception()));
     }

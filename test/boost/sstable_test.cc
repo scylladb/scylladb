@@ -22,6 +22,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
+#include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/sleep.hh>
 #include "sstables/sstables.hh"

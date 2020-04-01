@@ -23,7 +23,7 @@
 
 #include <seastar/core/timer.hh>
 #include <seastar/core/semaphore.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include "seastarx.hh"
 
 namespace utils {

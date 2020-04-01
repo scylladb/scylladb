@@ -30,7 +30,7 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include "service/storage_service.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>

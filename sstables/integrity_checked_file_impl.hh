@@ -23,7 +23,7 @@
 
 #include <algorithm>
 #include <seastar/core/file.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include "bytes.hh"
 #include "log.hh"
 

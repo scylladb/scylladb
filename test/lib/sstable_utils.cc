@@ -28,6 +28,7 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "test/lib/flat_mutation_reader_assertions.hh"
+#include <seastar/core/reactor.hh>
 
 using namespace sstables;
 using namespace std::chrono_literals;

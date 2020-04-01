@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/sstring.hh>
 #include <utility>
 #include <optional>

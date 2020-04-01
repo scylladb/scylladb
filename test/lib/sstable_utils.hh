@@ -270,12 +270,12 @@ public:
     }
 protected:
     future<> _create_directory(sstring name) {
-        return engine().make_directory(name);
+        return make_directory(name);
     }
 
     future<> _remove(directory_entry de) {
         sstring t = _path + "/" + de.name;
-        return engine().file_type(t).then([t] (std::optional<directory_entry_type> det) {
+        return file_type(t).then([t] (std::optional<directory_entry_type> det) {
             auto f = make_ready_future<>();
 
             if (!det) {
@@ -284,21 +284,21 @@ protected:
                 f = empty_test_dir(t);
             }
             return f.then([t] {
-                return engine().remove_file(t);
+                return remove_file(t);
             });
         });
     }
     future<> done() { return std::move(_listing_done); }
 
     static future<> empty_test_dir(sstring p = path()) {
-        return engine().open_directory(p).then([p] (file f) {
+        return open_directory(p).then([p] (file f) {
             auto l = make_lw_shared<test_setup>(std::move(f), p);
             return l->done().then([l] { });
         });
     }
 public:
     static future<> create_empty_test_dir(sstring p = path()) {
-        return engine().make_directory(p).then_wrapped([p] (future<> f) {
+        return make_directory(p).then_wrapped([p] (future<> f) {
             try {
                 f.get();
             // it's fine if the directory exists, just shut down the exceptional future message

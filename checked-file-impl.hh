@@ -22,7 +22,7 @@
 #pragma once
 
 #include "seastar/core/file.hh"
-#include "seastar/core/reactor.hh"
+#include "seastar/core/seastar.hh"
 #include "utils/disk-error-handler.hh"
 
 #include "seastarx.hh"
@@ -147,7 +147,7 @@ inline open_checked_directory(const io_error_handler& error_handler,
                               sstring name)
 {
     return do_io_check(error_handler, [&] {
-        return engine().open_directory(name).then([&] (file f) {
+        return open_directory(name).then([&] (file f) {
             return make_ready_future<file>(make_checked_file(error_handler, f));
         });
     });

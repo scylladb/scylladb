@@ -155,7 +155,7 @@ private:
      * to ensure that its "type" field is engaged.
      *
      * If it is engaged - returns the input value as is.
-     * If "type"  isn't engaged - calls the engine().file_type() for file represented by @param de and sets
+     * If "type"  isn't engaged - calls the file_type() for file represented by @param de and sets
      * "type" field of @param de to the returned value and then returns @param de.
      *
      * @param de entry to check and return

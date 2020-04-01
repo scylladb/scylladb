@@ -38,7 +38,7 @@
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
 #include <seastar/core/future-util.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include "utils/UUID.hh"
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/metrics.hh>
@@ -216,7 +216,7 @@ cql_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credential
     try {
         ss = creds
           ? seastar::tls::listen(creds->build_server_credentials(), addr, lo)
-          : engine().listen(addr, lo);
+          : seastar::listen(addr, lo);
     } catch (...) {
         throw std::runtime_error(format("CQLServer error while listening on {} -> {}", addr, std::current_exception()));
     }

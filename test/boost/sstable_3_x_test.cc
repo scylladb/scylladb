@@ -26,6 +26,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <seastar/core/thread.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 

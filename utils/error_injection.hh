@@ -23,7 +23,8 @@
 
 #include "seastar/core/future.hh"
 #include "seastar/core/sleep.hh"
-#include "seastar/core/reactor.hh"
+#include "seastar/core/seastar.hh"
+#include <seastar/core/smp.hh>
 #include "seastarx.hh"
 
 #include "log.hh"

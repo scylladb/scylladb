@@ -33,7 +33,7 @@
 #include <seastar/net/tls.hh>
 #include <seastar/core/semaphore.hh>
 #include "seastar/core/distributed.hh"
-#include "seastar/core/reactor.hh"
+#include "seastar/core/seastar.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/estimated_histogram.hh"
 #include "redis/protocol_parser.hh"

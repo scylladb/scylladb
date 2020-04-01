@@ -22,6 +22,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/reactor.hh>
 #include <random>
 
 // hack: perf_sstable falsely depends on Boost.Test, but we can't include it with

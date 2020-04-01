@@ -219,7 +219,7 @@ future<>
 thrift_server::listen(socket_address addr, bool keepalive) {
     listen_options lo;
     lo.reuse_address = true;
-    _listeners.push_back(engine().listen(addr, lo));
+    _listeners.push_back(seastar::listen(addr, lo));
     do_accepts(_listeners.size() - 1, keepalive);
     return make_ready_future<>();
 }

@@ -33,6 +33,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/functions/functions.hh"
 #include <seastar/core/seastar.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics.hh>

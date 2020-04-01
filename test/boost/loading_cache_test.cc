@@ -26,7 +26,7 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/sstring.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
 
