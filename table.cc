@@ -1327,30 +1327,6 @@ table::compact_sstables(sstables::compaction_descriptor descriptor) {
     });
 }
 
-future<> table::rewrite_sstables(sstables::compaction_descriptor descriptor) {
-    return do_with(std::move(descriptor.sstables), std::move(descriptor.release_exhausted),
-            [this, options = descriptor.options] (auto& sstables, auto& release_fn) {
-        return do_for_each(sstables, [this, &release_fn, options] (auto& sst) {
-            // this semaphore ensures that only one rewrite will run per shard.
-            // That's to prevent node from running out of space when almost all sstables
-            // need rewrite, so if sstables are rewritten in parallel, we may need almost
-            // twice the disk space used by those sstables.
-            static thread_local named_semaphore sem(1, named_semaphore_exception_factory{"rewrite sstables"});
-
-            return with_semaphore(sem, 1, [this, &sst, &release_fn, options] {
-                // release reference to sstables cleaned up, otherwise space usage from their data and index
-                // components cannot be reclaimed until all of them are cleaned.
-                auto sstable_level = sst->get_sstable_level();
-                auto run_identifier = sst->run_identifier();
-                auto descriptor = sstables::compaction_descriptor({ std::move(sst) }, sstable_level,
-                    sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, options);
-                descriptor.release_exhausted = release_fn;
-                return this->compact_sstables(std::move(descriptor));
-            });
-        });
-    });
-}
-
 // Note: We assume that the column_family does not get destroyed during compaction.
 future<>
 table::compact_all_sstables() {

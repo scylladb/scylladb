@@ -839,11 +839,6 @@ public:
     future<> compact_all_sstables();
     // Compact all sstables provided in the vector.
     future<> compact_sstables(sstables::compaction_descriptor descriptor);
-    // Compact all sstables provided in the descriptor one-by-one.
-    //
-    // Will call `compact_sstables()` for each sstable. Use by compaction
-    // types such as cleanup or upgrade.
-    future<> rewrite_sstables(sstables::compaction_descriptor descriptor);
 
     future<bool> snapshot_exists(sstring name);
 

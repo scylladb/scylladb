@@ -596,17 +596,28 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
     task->compacting_cf = cf;
     task->type = options.type();
     _tasks.push_back(task);
-    _stats.pending_tasks++;
 
-    task->compaction_done = repeat([this, task, options, get_func = std::move(get_func)] () mutable {
+    auto sstables = std::make_unique<std::vector<sstables::shared_sstable>>(get_func(*cf));
+    auto sstables_ptr = sstables.get();
+    _stats.pending_tasks += sstables->size();
+
+    task->compaction_done = do_until([sstables_ptr] { return sstables_ptr->empty(); }, [this, task, options, sstables_ptr] () mutable {
+
         // FIXME: lock cf here
         if (!can_proceed(task)) {
-            _stats.pending_tasks--;
-            return make_ready_future<stop_iteration>(stop_iteration::yes);
+            return make_ready_future<>();
         }
+
+        auto sst = sstables_ptr->back();
+        sstables_ptr->pop_back();
+
+        return repeat([this, task, options, sst = std::move(sst)] () mutable {
         column_family& cf = *task->compacting_cf;
-        sstables::compaction_descriptor descriptor = sstables::compaction_descriptor(get_func(cf));
-        descriptor.options = options;
+        auto sstable_level = sst->get_sstable_level();
+        auto run_identifier = sst->run_identifier();
+        auto descriptor = sstables::compaction_descriptor({ sst }, sstable_level,
+                    sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, options);
+
         auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
         // Releases reference to cleaned sstable such that respective used disk space can be freed.
         descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
@@ -619,7 +630,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
         compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
         return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
             return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
-                return cf.rewrite_sstables(std::move(descriptor));
+                return cf.run_compaction(std::move(descriptor));
             });
         }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
             task->compaction_running = false;
@@ -639,7 +650,9 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
             reevaluate_postponed_compactions();
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         });
-    }).finally([this, task] {
+        });
+    }).finally([this, task, sstables = std::move(sstables)] {
+        _stats.pending_tasks -= sstables->size();
         _tasks.remove(task);
     });
 
