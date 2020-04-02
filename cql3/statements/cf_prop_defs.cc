@@ -255,7 +255,9 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
         }
     }
 
-    builder.set_default_time_to_live(gc_clock::duration(get_int(KW_DEFAULT_TIME_TO_LIVE, DEFAULT_DEFAULT_TIME_TO_LIVE)));
+    if (has_property(KW_DEFAULT_TIME_TO_LIVE)) {
+        builder.set_default_time_to_live(gc_clock::duration(get_int(KW_DEFAULT_TIME_TO_LIVE, DEFAULT_DEFAULT_TIME_TO_LIVE)));
+    }
 
     if (has_property(KW_SPECULATIVE_RETRY)) {
         builder.set_speculative_retry(get_string(KW_SPECULATIVE_RETRY, builder.get_speculative_retry().to_sstring()));
