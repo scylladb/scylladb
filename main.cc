@@ -662,9 +662,17 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting tokens manager");
             token_metadata.start().get();
-            auto stop_token_metadata = defer_verbose_shutdown("token metadata", [ &token_metadata ] {
-                token_metadata.stop().get();
-            });
+            // storage_proxy holds a reference on it and is not yet stopped.
+            // what's worse is that the calltrace
+            //   storage_proxy::do_query 
+            //                ::query_partition_key_range
+            //                ::query_partition_key_range_concurrent
+            // leaves unwaited futures on the reactor and once it gets there
+            // the token_metadata instance is accessed and ...
+            //
+            //auto stop_token_metadata = defer_verbose_shutdown("token metadata", [ &token_metadata ] {
+            //    token_metadata.stop().get();
+            //});
 
             supervisor::notify("starting migration manager notifier");
             mm_notifier.start().get();
