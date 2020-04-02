@@ -3254,7 +3254,9 @@ protected:
     uint32_t original_partition_limit() const {
         return _cmd->partition_limit;
     }
+    virtual void adjust_targets_for_reconciliation() {}
     void reconcile(db::consistency_level cl, storage_proxy::clock_type::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
+        adjust_targets_for_reconciliation();
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
@@ -3480,6 +3482,9 @@ public:
     }
     virtual void got_cl() override {
         _speculate_timer.cancel();
+    }
+    virtual void adjust_targets_for_reconciliation() override {
+        _targets = used_targets();
     }
 };
 
