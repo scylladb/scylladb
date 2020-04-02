@@ -1415,8 +1415,7 @@ future<> view_builder::calculate_shard_build_step(
             if (built_views.find(view->id()) != built_views.end()) {
                 if (this_shard_id() == 0) {
                     auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([view = std::move(view)] {
-                        //FIXME: discarded future.
-                        (void)system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
+                        return system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
                     });
                     bookkeeping_ops->push_back(std::move(f));
                 }
