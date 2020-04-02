@@ -349,7 +349,8 @@ class RunTest(Test):
     def __init__(self, test_no, shortname, suite, mode, options):
         super().__init__(test_no, shortname, suite, mode, options)
         self.path = os.path.join(suite.path, shortname)
-        self.args = ""
+        self.xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.args = ["--junit-xml={}".format(self.xmlout)]
 
     def print_summary(self):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
