@@ -2241,7 +2241,7 @@ future<> save_paxos_promise(const schema& s, const partition_key& key, const uti
 
 future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout) {
     static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = ?, proposal = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
-    partition_key_view key = proposal.update.key(s);
+    partition_key_view key = proposal.update.key();
     return execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(proposal.ballot),
@@ -2262,7 +2262,7 @@ future<> save_paxos_decision(const schema& s, const service::paxos::proposal& de
     // recent commit.
     static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null,"
             " most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
-    partition_key_view key = decision.update.key(s);
+    partition_key_view key = decision.update.key();
     return execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(decision.ballot),

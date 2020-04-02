@@ -675,7 +675,7 @@ void manager::end_point_hints_manager::sender::start() {
 future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
     keyspace& ks = _db.find_keyspace(m.s->ks_name());
     auto& rs = ks.get_replication_strategy();
-    auto token = dht::get_token(*m.s, m.fm.key(*m.s));
+    auto token = dht::get_token(*m.s, m.fm.key());
     std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(std::move(token));
 
     return do_send_one_mutation(std::move(m), natural_endpoints);

@@ -62,7 +62,7 @@ PERF_TEST_F(frozen_mutation, unfreeze_one_small_row)
 
 PERF_TEST_F(frozen_mutation, apply_one_small_row)
 {
-    auto m = mutation(schema(), frozen_one_small_row().key(*schema()));
+    auto m = mutation(schema(), frozen_one_small_row().key());
     mutation_application_stats app_stats;
     m.partition().apply(*schema(), frozen_one_small_row().partition(), *schema(), app_stats);
     perf_tests::do_not_optimize(m);

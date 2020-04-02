@@ -63,13 +63,13 @@ frozen_mutation::schema_version() const {
 }
 
 partition_key_view
-frozen_mutation::key(const schema& s) const {
+frozen_mutation::key() const {
     return _pk;
 }
 
 dht::decorated_key
 frozen_mutation::decorated_key(const schema& s) const {
-    return dht::decorate_key(s, key(s));
+    return dht::decorate_key(s, key());
 }
 
 partition_key frozen_mutation::deserialize_key() const {
@@ -108,7 +108,7 @@ frozen_mutation::frozen_mutation(const mutation& m)
 mutation
 frozen_mutation::unfreeze(schema_ptr schema) const {
     check_schema_version(schema_version(), *schema);
-    mutation m(schema, key(*schema));
+    mutation m(schema, key());
     partition_builder b(*schema, m.partition());
     partition().accept(*schema, b);
     return m;

@@ -724,7 +724,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_han
     with_allocator(allocator(), [this, &m, &m_schema] {
         _allocating_section(*this, [&, this] {
           with_linearized_managed_bytes([&] {
-            auto& p = find_or_create_partition_slow(m.key(*_schema));
+            auto& p = find_or_create_partition_slow(m.key());
             mutation_partition mp(m_schema);
             partition_builder pb(*m_schema, mp);
             m.partition().accept(*m_schema, pb);

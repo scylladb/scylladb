@@ -3156,8 +3156,8 @@ public:
             } else if (rh.result->partitions().size() == 0) {
                 return true;
             } else {
-                auto lhk = lh.result->partitions().back().mut().key(s);
-                auto rhk = rh.result->partitions().back().mut().key(s);
+                auto lhk = lh.result->partitions().back().mut().key();
+                auto rhk = rh.result->partitions().back().mut().key();
                 return lhk.ring_order_tri_compare(s, rhk) > 0;
             }
         };
@@ -3182,13 +3182,13 @@ public:
             if (_data_results.front().result->partitions().empty()) {
                 break; // if top of the heap is empty all others are empty too
             }
-            const auto& max_key = _data_results.front().result->partitions().back().mut().key(s);
+            const auto& max_key = _data_results.front().result->partitions().back().mut().key();
             versions.emplace_back();
             std::vector<version>& v = versions.back();
             v.reserve(_targets_count);
             for (reply& r : _data_results) {
                 auto pit = r.result->partitions().rbegin();
-                if (pit != r.result->partitions().rend() && pit->mut().key(s).legacy_equal(s, max_key)) {
+                if (pit != r.result->partitions().rend() && pit->mut().key().legacy_equal(s, max_key)) {
                     bool reached_partition_end = pit->row_count() < cmd.slice.partition_row_limit();
                     v.emplace_back(r.from, std::move(*pit), r.reached_end, reached_partition_end);
                     r.result->partitions().pop_back();
@@ -3212,7 +3212,7 @@ public:
             auto it = boost::range::find_if(v, [] (auto&& ver) {
                     return bool(ver.par);
             });
-            auto m = boost::accumulate(v, mutation(schema, it->par->mut().key(*schema)), [this, schema] (mutation& m, const version& ver) {
+            auto m = boost::accumulate(v, mutation(schema, it->par->mut().key()), [this, schema] (mutation& m, const version& ver) {
                 if (ver.par) {
                     mutation_application_stats app_stats;
                     m.partition().apply(*schema, ver.par->mut().partition(), *schema, app_stats);

@@ -1079,7 +1079,7 @@ future<> mutate_MV(
     auto fs = std::make_unique<std::vector<future<>>>();
     fs->reserve(view_updates.size());
     for (frozen_mutation_and_schema& mut : view_updates) {
-        auto view_token = dht::get_token(*mut.s, mut.fm.key(*mut.s));
+        auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto& keyspace_name = mut.s->ks_name();
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);

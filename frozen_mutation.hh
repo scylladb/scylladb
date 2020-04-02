@@ -62,7 +62,7 @@ public:
     const bytes_ostream& representation() const { return _bytes; }
     utils::UUID column_family_id() const;
     utils::UUID schema_version() const; // FIXME: Should replace column_family_id()
-    partition_key_view key(const schema& s) const;
+    partition_key_view key() const;
     dht::decorated_key decorated_key(const schema& s) const;
     mutation_partition_view partition() const;
     // The supplied schema must be of the same version as the schema of
