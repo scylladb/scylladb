@@ -4414,3 +4414,14 @@ SEASTAR_TEST_CASE(test_range_deletions_for_specific_column) {
                 exceptions::invalid_request_exception);
     });
 }
+
+SEASTAR_TEST_CASE(test_alter_table_default_ttl_reset) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&e] {
+            e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH default_time_to_live=10").get();
+            BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
+            e.execute_cql("ALTER TABLE tbl WITH gc_grace_seconds=0").get();
+            BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
+        });
+    });
+}
