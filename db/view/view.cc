@@ -1208,6 +1208,10 @@ view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_di
 
 future<> view_builder::start(service::migration_manager& mm) {
     _started = seastar::async([this, &mm] {
+        // Guard the whole startup routine with a semaphore,
+        // so that it's not intercepted by `on_drop_view`, `on_create_view`
+        // or `on_update_view` events.
+        auto units = get_units(_sem, 1).get0();
         // Wait for schema agreement even if we're a seed node.
         while (!mm.have_schema_agreement()) {
             if (_as.abort_requested()) {
