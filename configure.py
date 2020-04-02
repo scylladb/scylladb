@@ -1441,7 +1441,7 @@ with open(buildfile_tmp, 'w') as f:
                         build/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             rule checkhh.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -x c++ --include=$in -c -o $out /dev/null
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags --include $in -c -o $out build/{mode}/gen/empty.cc
               description = CHECKHH $in
               depfile = $out.d
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, **modeval))
@@ -1587,8 +1587,9 @@ with open(buildfile_tmp, 'w') as f:
                     if has_sanitize_address_use_after_scope:
                         flags += ' -fno-sanitize-address-use-after-scope'
                     f.write('  obj_cxxflags = %s\n' % flags)
+        f.write(f'build build/{mode}/gen/empty.cc: gen\n')
         for hh in headers:
-            f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} || {gen_headers_dep}\n'.format(
+            f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | build/{mode}/gen/empty.cc || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep))
 
         f.write('build build/{mode}/seastar/libseastar.a: ninja | always\n'
