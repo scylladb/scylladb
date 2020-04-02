@@ -1368,7 +1368,7 @@ future<> view_builder::calculate_shard_build_step(
     // Shard 0 makes cleanup changes to the system tables, but none that could conflict
     // with the other shards; everyone is thus able to proceed independently.
     auto bookkeeping_ops = std::make_unique<std::vector<future<>>>();
-    auto base_table_exists = [&, this] (const view_ptr& view) {
+    auto base_table_exists = [this] (const view_ptr& view) {
         // This is a safety check in case this node missed a create MV statement
         // but got a drop table for the base, and another node didn't get the
         // drop notification and sent us the view schema.
