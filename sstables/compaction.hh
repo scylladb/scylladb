@@ -48,9 +48,11 @@ namespace sstables {
         struct scrub {
             bool skip_corrupted;
         };
+        struct reshard {
+        };
 
     private:
-        using options_variant = std::variant<regular, cleanup, upgrade, scrub>;
+        using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard>;
 
     private:
         options_variant _options;
@@ -60,6 +62,10 @@ namespace sstables {
         }
 
     public:
+        static compaction_options make_reshard() {
+            return compaction_options(reshard{});
+        }
+
         static compaction_options make_regular() {
             return compaction_options(regular{});
         }
@@ -84,6 +90,18 @@ namespace sstables {
         compaction_type type() const;
     };
 
+    struct compaction_completion_desc {
+        std::vector<shared_sstable> input_sstables;
+        std::vector<shared_sstable> output_sstables;
+        // Set of compacted partition ranges that should be invalidated in the cache.
+        dht::partition_range_vector ranges_for_cache_invalidation;
+    };
+
+    // creates a new SSTable for a given shard
+    using creator_fn = std::function<shared_sstable(shard_id shard)>;
+    // Replaces old sstable(s) by new one(s) which contain all non-expired data.
+    using replacer_fn = std::function<void(compaction_completion_desc)>;
+
     struct compaction_descriptor {
         // List of sstables to be compacted.
         std::vector<sstables::shared_sstable> sstables;
@@ -100,6 +118,9 @@ namespace sstables {
         // The options passed down to the compaction code.
         // This also selects the kind of compaction to do.
         compaction_options options = compaction_options::make_regular();
+
+        creator_fn creator;
+        replacer_fn replacer;
 
         compaction_descriptor() = default;
 
@@ -190,16 +211,6 @@ namespace sstables {
         }
     };
 
-    struct compaction_completion_desc {
-        std::vector<shared_sstable> input_sstables;
-        std::vector<shared_sstable> output_sstables;
-        // Set of compacted partition ranges that should be invalidated in the cache.
-        dht::partition_range_vector ranges_for_cache_invalidation;
-    };
-
-    // Replaces old sstable(s) by new one(s) which contain all non-expired data.
-    using replacer_fn = std::function<void(compaction_completion_desc)>;
-
     // Compact a list of N sstables into M sstables.
     // Returns info about the finished compaction, which includes vector to new sstables.
     //
@@ -212,14 +223,7 @@ namespace sstables {
     // If descriptor.cleanup is true, mutation that doesn't belong to current node will be
     // cleaned up, log messages will inform the user that compact_sstables runs for
     // cleaning operation, and compaction history will not be updated.
-    future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf,
-        std::function<shared_sstable()> creator, replacer_fn replacer);
-
-    // Compacts a set of N shared sstables into M sstables. For every shard involved,
-    // i.e. which owns any of the sstables, a new unshared sstable is created.
-    future<std::vector<shared_sstable>> reshard_sstables(std::vector<shared_sstable> sstables,
-            column_family& cf, std::function<shared_sstable(shard_id)> creator,
-        uint64_t max_sstable_size, uint32_t sstable_level);
+    future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf);
 
     // Return list of expired sstables for column family cf.
     // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its

@@ -396,7 +396,9 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                 dblog.debug("{} resharding jobs for {}.{}", jobs.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
 
                 return invoke_all_resharding_jobs(cf, directory, std::move(jobs), [directory, &cf] (auto sstables, auto level, auto max_sstable_bytes) {
-                    auto creator = [&cf, directory] (shard_id shard) mutable {
+                    sstables::compaction_descriptor descriptor(sstables, level, max_sstable_bytes);
+                    descriptor.options = sstables::compaction_options::make_reshard();
+                    descriptor.creator = [&cf, directory] (shard_id shard) mutable {
                         // we need generation calculated by instance of cf at requested shard,
                         // or resource usage wouldn't be fairly distributed among shards.
                         auto gen = smp::submit_to(shard, [&cf] () {
@@ -407,9 +409,10 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                             cf->get_sstables_manager().get_highest_supported_format(),
                             sstables::sstable::format_types::big);
                     };
-                    auto f = sstables::reshard_sstables(sstables, *cf, creator, max_sstable_bytes, level);
+                    auto f = sstables::compact_sstables(std::move(descriptor), *cf);
 
-                    return f.then([&cf, sstables = std::move(sstables), directory] (std::vector<sstables::shared_sstable> new_sstables) mutable {
+                    return f.then([&cf, sstables = std::move(sstables), directory] (sstables::compaction_info info) mutable {
+                        auto new_sstables = std::move(info.new_sstables);
                         // an input sstable may belong to shard 1 and 2 and only have data which
                         // token belongs to shard 1. That means resharding will only create a
                         // sstable for shard 1, but both shards opened the sstable. So our code
