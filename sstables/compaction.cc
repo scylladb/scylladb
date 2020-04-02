@@ -756,12 +756,12 @@ public:
     }
 
     virtual shared_sstable create_new_sstable() const override {
-        return _sstable_creator(0);
+        return _sstable_creator(this_shard_id());
     }
 
     virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
         if (!_writer) {
-            _sst = _sstable_creator(0);
+            _sst = _sstable_creator(this_shard_id());
             setup_new_sstable(_sst);
 
             _active_write_monitors.emplace_back(_sst, _cf, maximum_timestamp(), _sstable_level);
