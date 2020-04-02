@@ -1810,7 +1810,7 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
             },
             true,
             [] (bool result, bool shard_complete) {
-                return result & shard_complete;
+                return result && shard_complete;
             }).then([this, view, next_token = std::move(next_token)] (bool built) {
         if (built) {
             return container().invoke_on_all([view_id = view->id()] (view_builder& builder) {
