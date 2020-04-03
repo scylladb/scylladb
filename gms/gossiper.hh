@@ -308,12 +308,12 @@ private:
     void quarantine_endpoint(inet_address endpoint);
 
     /**
-     * Quarantines the endpoint until quarantine_expiration + QUARANTINE_DELAY
+     * Quarantines the endpoint until quarantine_start + QUARANTINE_DELAY
      *
      * @param endpoint
-     * @param quarantine_expiration
+     * @param quarantine_start
      */
-    void quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_expiration);
+    void quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_start);
 
 public:
     /**

@@ -991,8 +991,8 @@ void gossiper::quarantine_endpoint(inet_address endpoint) {
     quarantine_endpoint(endpoint, now());
 }
 
-void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_expiration) {
-    _just_removed_endpoints[endpoint] = quarantine_expiration;
+void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_start) {
+    _just_removed_endpoints[endpoint] = quarantine_start;
 }
 
 void gossiper::replacement_quarantine(inet_address endpoint) {
