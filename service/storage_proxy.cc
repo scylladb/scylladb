@@ -5025,7 +5025,7 @@ void storage_proxy::init_messaging_service() {
                          timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
             unsigned shard = dht::shard_of(*schema, token);
-            bool local = shard == engine().cpu_id();
+            bool local = shard == this_shard_id();
             get_stats().replica_cross_shard_ops += !local;
             return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
                                      local,  key = std::move(key), ballot, timeout, src_ip, d = defer([] { pruning--; })] () {
