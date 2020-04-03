@@ -30,6 +30,8 @@
 
 #include "service/storage_service.hh"
 
+#include <utils/error_injection.hh>
+
 namespace service::paxos {
 
 logging::logger paxos_state::logger("paxos");
@@ -60,8 +62,10 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
         // amount of re-submit will fix this (because the node on which the commit has expired will have a
         // tombstone that hides any re-submit). See CASSANDRA-12043 for details.
         auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
-        auto f = db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
-        return f.then([&cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
+
+        return utils::get_local_injector().inject("paxos_state_prepare_timeout", timeout).then([&key, schema, now_in_sec, timeout] {
+            return db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
+        }).then([&cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
             // If received ballot is newer that the one we already accepted it has to be accepted as well,
             // but we will return the previously accepted proposal so that the new coordinator will use it instead of
             // its own.
@@ -120,24 +124,28 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
         clock_type::time_point timeout) {
     utils::latency_counter lc;
     lc.start();
+
     return with_locked_key(token, timeout, [proposal = std::move(proposal), schema, tr_state, timeout] () mutable {
         auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
         auto f = db::system_keyspace::load_paxos_state(proposal.update.decorated_key(*schema).key(), schema,
                 gc_clock::time_point(now_in_sec), timeout);
         return f.then([proposal = std::move(proposal), tr_state, schema, timeout] (paxos_state state) {
-            // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
-            // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
-            if (proposal.ballot == state._promised_ballot || proposal.ballot.timestamp() > state._promised_ballot.timestamp()) {
-                logger.debug("Accepting proposal {}", proposal);
-                tracing::trace(tr_state, "Accepting proposal {}", proposal);
-                return db::system_keyspace::save_paxos_proposal(*schema, proposal, timeout).then([] {
-                        return true;
-                });
-            } else {
-                logger.debug("Rejecting proposal for {} because in_progress is now {}", proposal, state._promised_ballot);
-                tracing::trace(tr_state, "Rejecting proposal for {} because in_progress is now {}", proposal, state._promised_ballot);
-                return make_ready_future<bool>(false);
-            }
+            return utils::get_local_injector().inject("paxos_state_accept_timeout", timeout).then(
+                    [proposal = std::move(proposal), state = std::move(state), tr_state, schema, timeout] {
+                // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
+                // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
+                if (proposal.ballot == state._promised_ballot || proposal.ballot.timestamp() > state._promised_ballot.timestamp()) {
+                    logger.debug("Accepting proposal {}", proposal);
+                    tracing::trace(tr_state, "Accepting proposal {}", proposal);
+                    return db::system_keyspace::save_paxos_proposal(*schema, proposal, timeout).then([] {
+                            return true;
+                    });
+                } else {
+                    logger.debug("Rejecting proposal for {} because in_progress is now {}", proposal, state._promised_ballot);
+                    tracing::trace(tr_state, "Rejecting proposal for {} because in_progress is now {}", proposal, state._promised_ballot);
+                    return make_ready_future<bool>(false);
+                }
+            });
         });
     }).finally([schema, lc] () mutable {
         auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
@@ -154,7 +162,8 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
     lc.start();
 
     return do_with(std::move(decision), [tr_state = std::move(tr_state), schema, timeout] (proposal& decision) {
-        auto f = make_ready_future();
+        auto f = utils::get_local_injector().inject("paxos_state_learn_timeout", timeout);
+
         table& cf = get_local_storage_proxy().get_db().local().find_column_family(schema);
         db_clock::time_point t = cf.get_truncation_record();
         auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
@@ -169,9 +178,11 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
         // The table may have been truncated since the proposal was initiated. In that case, we
         // don't want to perform the mutation and potentially resurrect truncated data.
         if (utils::UUID_gen::unix_timestamp(decision.ballot) >= truncated_at) {
-            logger.debug("Committing decision {}", decision);
-            tracing::trace(tr_state, "Committing decision {}", decision);
-            f = get_local_storage_proxy().mutate_locally(schema, decision.update, db::commitlog::force_sync::yes, timeout);
+            f = f.then([schema, &decision, timeout, tr_state] {
+                logger.debug("Committing decision {}", decision);
+                tracing::trace(tr_state, "Committing decision {}", decision);
+                return get_local_storage_proxy().mutate_locally(schema, decision.update, db::commitlog::force_sync::yes, timeout);
+            });
         } else {
             logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
             tracing::trace(tr_state, "Not committing decision {} as ballot timestamp predates last truncation time", decision);
