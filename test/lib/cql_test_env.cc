@@ -434,12 +434,7 @@ public:
             auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
-            gms::feature_config fcfg;
-            fcfg.enable_cdc = true;
-            fcfg.enable_sstables_mc_format = true;
-            if (cfg->enable_user_defined_functions()) {
-                fcfg.enable_user_defined_functions = true;
-            }
+            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
             fcfg.disabled_features = cfg_in.disabled_features;
             sharded<gms::feature_service> feature_service;
             feature_service.start(fcfg).get();
