@@ -468,8 +468,6 @@ arg_parser.add_argument('--tests-debuginfo', action='store', dest='tests_debugin
                         help='Enable(1)/disable(0)compiler debug information generation for tests')
 arg_parser.add_argument('--python', action='store', dest='python', default='python3',
                         help='Python3 path')
-add_tristate(arg_parser, name='hwloc', dest='hwloc', help='hwloc support')
-add_tristate(arg_parser, name='xen', dest='xen', help='Xen support')
 arg_parser.add_argument('--split-dwarf', dest='split_dwarf', action='store_true', default=False,
                         help='use of split dwarf (https://gcc.gnu.org/wiki/DebugFission) to speed up linking')
 arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='store_true', default=False,
