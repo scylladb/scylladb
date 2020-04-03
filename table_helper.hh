@@ -90,7 +90,7 @@ public:
      * @param opt_maker_args opt_maker arguments
      */
     template <typename OptMaker, typename... Args>
-    GCC6_CONCEPT( requires seastar::CanApply<OptMaker, Args...> )
+    GCC6_CONCEPT( requires seastar::CanInvoke<OptMaker, Args...> )
     future<> insert(service::query_state& qs, OptMaker opt_maker, Args... opt_maker_args) {
         return insert(qs, noncopyable_function<cql3::query_options ()>([opt_maker = std::move(opt_maker), args = std::make_tuple(std::move(opt_maker_args)...)] () mutable {
             return apply(opt_maker, std::move(args));
