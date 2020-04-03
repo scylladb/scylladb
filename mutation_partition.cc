@@ -2650,3 +2650,5 @@ future<> mutation_cleaner_impl::drain() {
         });
     });
 }
+
+can_gc_fn always_gc = [] (tombstone) { return true; };
