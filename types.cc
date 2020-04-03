@@ -2041,7 +2041,11 @@ struct compare_visitor {
 }
 
 int32_t abstract_type::compare(bytes_view v1, bytes_view v2) const {
-    return visit(*this, compare_visitor{v1, v2});
+    try {
+        return visit(*this, compare_visitor{v1, v2});
+    } catch (const marshal_exception& e) {
+        on_types_internal_error(e.what());
+    }
 }
 
 bool abstract_type::equal(bytes_view v1, bytes_view v2) const {

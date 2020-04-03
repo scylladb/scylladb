@@ -704,11 +704,7 @@ bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
 
 static inline
 int tri_compare(data_type t, bytes_view e1, bytes_view e2) {
-    try {
-        return t->compare(e1, e2);
-    } catch (const marshal_exception& e) {
-        on_types_internal_error(e.what());
-    }
+    return t->compare(e1, e2);
 }
 
 inline
