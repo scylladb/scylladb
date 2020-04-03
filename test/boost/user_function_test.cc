@@ -54,10 +54,9 @@ SEASTAR_TEST_CASE(test_user_function_disabled) {
         auto db_cfg_ptr = make_shared<db::config>();
         auto& db_cfg = *db_cfg_ptr;
         db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
-        return do_with_cql_env_thread([] (cql_test_env& e) {
-            auto fut = e.execute_cql(cql_using_udf);
-            BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_contains("User defined functions are disabled"));
-        });
+        return do_with_cql_env_thread([] (cql_test_env& e) {}, db_cfg_ptr);
+    }).then_wrapped([](future<> fut) {
+        BOOST_REQUIRE_EXCEPTION(fut.get(), std::runtime_error, message_contains("You must use both enable_user_defined_functions and experimental_features:udf to enable user-defined functions"));
     });
 }
 
