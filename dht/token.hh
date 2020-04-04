@@ -58,19 +58,27 @@ public:
         , _data(normalize(d)) { }
 
     token(kind k, const bytes& b) : _kind(std::move(k)) {
-        if (b.size() != sizeof(_data)) {
-            throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
+        if (_kind != kind::key) {
+            _data = 0;
+        } else {
+            if (b.size() != sizeof(_data)) {
+                throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
+            }
+            std::copy_n(b.begin(), sizeof(_data), reinterpret_cast<int8_t *>(&_data));
+            _data = net::ntoh(_data);
         }
-        std::copy_n(b.begin(), sizeof(_data), reinterpret_cast<int8_t *>(&_data));
-        _data = net::ntoh(_data);
     }
 
     token(kind k, bytes_view b) : _kind(std::move(k)) {
-        if (b.size() != sizeof(_data)) {
-            throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
+        if (_kind != kind::key) {
+            _data = 0;
+        } else {
+            if (b.size() != sizeof(_data)) {
+                throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
+            }
+            std::copy_n(b.begin(), sizeof(_data), reinterpret_cast<int8_t *>(&_data));
+            _data = net::ntoh(_data);
         }
-        std::copy_n(b.begin(), sizeof(_data), reinterpret_cast<int8_t *>(&_data));
-        _data = net::ntoh(_data);
     }
 
     bool is_minimum() const {
