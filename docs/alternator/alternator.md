@@ -165,6 +165,21 @@ implemented, with the following limitations:
 * Several metrics are available through the Grafana/Promethues stack: https://docs.scylladb.com/operating-scylla/monitoring/   It is different than the expectations of the current DynamoDB implementation. However, our
   monitoring is rather advanced and provide more insights to the internals.
 
+## Alternator-specific API
+
+### Accessing system tables from Scylla
+ * Scylla exposes lots of useful information via its internal system tables,
+   which can be found in system keyspaces: 'system', 'system\_auth', etc.
+   In order to access to these tables via alternator interface,
+   Scan and Query requests can use a special table name:
+   .scylla.alternator.KEYSPACE\_NAME.TABLE\_NAME
+   which will return results fetched from corresponding Scylla table.
+   This interface can be used only to fetch data from system tables.
+   Attempts to read regular tables via the virtual interface will result
+   in an error.
+   Example: in order to query the contents of Scylla's system.large_rows,
+   pass TableName='.scylla.alternator.system.large_rows' to a Query/Scan request.
+
 ## Alternator design and implementation
 
 This section provides only a very brief introduction to Alternator's
