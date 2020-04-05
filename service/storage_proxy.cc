@@ -334,6 +334,7 @@ public:
         if (_handler) {
             _handler->prune(_proposal->ballot);
         }
+        _proposal.release();
     }
 };
 
@@ -5021,14 +5022,15 @@ void storage_proxy::init_messaging_service() {
         }
 
         pruning++;
+        auto d = defer([] { pruning--; });
         return get_schema_for_read(schema_id, src_addr).then([this, key = std::move(key), ballot,
-                         timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
+                         timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
             unsigned shard = dht::shard_of(*schema, token);
             bool local = shard == this_shard_id();
             get_stats().replica_cross_shard_ops += !local;
             return smp::submit_to(shard, _write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local,  key = std::move(key), ballot, timeout, src_ip, d = defer([] { pruning--; })] () {
+                                     local,  key = std::move(key), ballot, timeout, src_ip, d = std::move(d)] () {
                 tracing::trace_state_ptr tr_state = gt;
                 return paxos::paxos_state::prune(gs, key, ballot,  *timeout, tr_state).then([src_ip, tr_state] () {
                     tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_ip);
