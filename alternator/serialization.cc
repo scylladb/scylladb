@@ -121,7 +121,7 @@ struct to_json_visitor {
     }
     // default
     void operator()(const abstract_type& t) const {
-        rjson::set_with_string_name(deserialized, type_ident, rjson::parse(t.to_string(bytes(bv))));
+        rjson::set_with_string_name(deserialized, type_ident, rjson::parse(to_json_string(t, bytes(bv))));
     }
 };
 
