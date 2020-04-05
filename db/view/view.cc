@@ -1208,6 +1208,10 @@ view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_di
 
 future<> view_builder::start(service::migration_manager& mm) {
     _started = seastar::async([this, &mm] {
+        // Guard the whole startup routine with a semaphore,
+        // so that it's not intercepted by `on_drop_view`, `on_create_view`
+        // or `on_update_view` events.
+        auto units = get_units(_sem, 1).get0();
         // Wait for schema agreement even if we're a seed node.
         while (!mm.have_schema_agreement()) {
             if (_as.abort_requested()) {
@@ -1368,7 +1372,7 @@ future<> view_builder::calculate_shard_build_step(
     // Shard 0 makes cleanup changes to the system tables, but none that could conflict
     // with the other shards; everyone is thus able to proceed independently.
     auto bookkeeping_ops = std::make_unique<std::vector<future<>>>();
-    auto base_table_exists = [&, this] (const view_ptr& view) {
+    auto base_table_exists = [this] (const view_ptr& view) {
         // This is a safety check in case this node missed a create MV statement
         // but got a drop table for the base, and another node didn't get the
         // drop notification and sent us the view schema.
@@ -1415,8 +1419,7 @@ future<> view_builder::calculate_shard_build_step(
             if (built_views.find(view->id()) != built_views.end()) {
                 if (this_shard_id() == 0) {
                     auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([view = std::move(view)] {
-                        //FIXME: discarded future.
-                        (void)system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
+                        return system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
                     });
                     bookkeeping_ops->push_back(std::move(f));
                 }
@@ -1811,7 +1814,7 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
             },
             true,
             [] (bool result, bool shard_complete) {
-                return result & shard_complete;
+                return result && shard_complete;
             }).then([this, view, next_token = std::move(next_token)] (bool built) {
         if (built) {
             return container().invoke_on_all([view_id = view->id()] (view_builder& builder) {
