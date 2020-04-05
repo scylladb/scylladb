@@ -54,7 +54,7 @@ If you add dependencies (to `install-dependencies.sh` or
 
 Run the command
 
-    docker build --no-cache -f tools/toolchain/Dockerfile .
+    docker build --no-cache --pull -f tools/toolchain/Dockerfile .
 
 and use the resulting image.
 
