@@ -153,7 +153,9 @@ std::string type_to_string(data_type type) {
     };
     auto it = types.find(type);
     if (it == types.end()) {
-        throw std::runtime_error(format("Unknown type {}", type->name()));
+        // fall back to string, in order to be able to present
+        // internal Scylla types in a human-readable way
+        return "S";
     }
     return it->second;
 }
@@ -205,8 +207,11 @@ rjson::value json_key_column_value(bytes_view cell, const column_definition& col
         auto s = to_json_string(*decimal_type, bytes(cell));
         return rjson::from_string(s);
     } else {
-        // We shouldn't get here, we shouldn't see such key columns.
-        throw std::runtime_error(format("Unexpected key type: {}", column.type->name()));
+        // Support for arbitrary key types is useful for parsing values of virtual tables,
+        // which can involve any type supported by Scylla.
+        // In order to guarantee that the returned type is parsable by alternator clients,
+        // they are represented simply as strings.
+        return rjson::from_string(column.type->to_string(bytes(cell)));
     }
 }
 
