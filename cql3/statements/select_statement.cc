@@ -434,6 +434,12 @@ GCC6_CONCEPT(
 static KeyType
 generate_base_key_from_index_pk(const partition_key& index_pk, const std::optional<clustering_key>& index_ck, const schema& base_schema, const schema& view_schema) {
     const auto& base_columns = std::is_same_v<KeyType, partition_key> ? base_schema.partition_key_columns() : base_schema.clustering_key_columns();
+
+    // An empty key in the index paging state translates to an empty base key
+    if (index_pk.is_empty() && !index_ck) {
+        return KeyType::make_empty();
+    }
+
     std::vector<bytes_view> exploded_base_key;
     exploded_base_key.reserve(base_columns.size());
 
@@ -523,8 +529,7 @@ indexed_table_select_statement::do_execute_base_query(
             if (old_paging_state && concurrency == 1) {
                 auto base_pk = generate_base_key_from_index_pk<partition_key>(old_paging_state->get_partition_key(),
                         old_paging_state->get_clustering_key(), *_schema, *_view_schema);
-                if (_schema->clustering_key_size() > 0) {
-                    assert(old_paging_state->get_clustering_key().has_value());
+                if (old_paging_state->get_clustering_key() && _schema->clustering_key_size() > 0) {
                     auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
                             old_paging_state->get_clustering_key(), *_schema, *_view_schema);
                     command->slice.set_range(*_schema, base_pk,
