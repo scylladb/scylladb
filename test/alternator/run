@@ -74,7 +74,7 @@ done
         --alternator-address $SCYLLA_IP \
         $alternator_port_option \
         --alternator-enforce-authorization=1 \
-        --experimental=on --developer-mode=1 \
+        --developer-mode=1 \
         --ring-delay-ms 0 --collectd 0 \
         --cpuset "$CPUSET" -m 1G \
         --api-address $SCYLLA_IP \
