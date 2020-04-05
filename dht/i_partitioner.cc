@@ -21,7 +21,7 @@
 
 #include "i_partitioner.hh"
 #include "sharder.hh"
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include "dht/token-sharding.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"

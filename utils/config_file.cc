@@ -30,7 +30,8 @@
 #include <boost/range/adaptor/filtered.hpp>
 
 #include <seastar/core/file.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/do_with.hh>

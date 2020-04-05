@@ -50,7 +50,7 @@
 #include <exception>
 
 #include <seastar/core/align.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/file.hh>
@@ -1101,7 +1101,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
         future<> process(directory_entry de) {
             auto entry_type = [this](const directory_entry & de) {
                 if (!de.type && !de.name.empty()) {
-                    return engine().file_type(_dirname + "/" + de.name);
+                    return file_type(_dirname + "/" + de.name);
                 }
                 return make_ready_future<std::optional<directory_entry_type>>(de.type);
             };

@@ -51,7 +51,7 @@
 #include <iterator>
 
 #include <seastar/core/file.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/fstream.hh>
 

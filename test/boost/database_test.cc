@@ -20,7 +20,7 @@
  */
 
 
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>

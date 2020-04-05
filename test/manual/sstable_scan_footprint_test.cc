@@ -31,7 +31,7 @@
 
 #include <boost/range/irange.hpp>
 #include <seastar/core/app-template.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/units.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/timer.hh>

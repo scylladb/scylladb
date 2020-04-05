@@ -40,6 +40,7 @@
 #include "db/query_context.hh"
 #include "query-result-writer.hh"
 #include "db/view/view.hh"
+#include <seastar/core/seastar.hh>
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
@@ -1804,7 +1805,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
         std::unordered_map<sstring, snapshot_details> all_snapshots;
         for (auto& datadir : _config.all_datadirs) {
             fs::path snapshots_dir = fs::path(datadir) / "snapshots";
-            auto file_exists = io_check([&snapshots_dir] { return engine().file_exists(snapshots_dir.native()); }).get0();
+            auto file_exists = io_check([&snapshots_dir] { return seastar::file_exists(snapshots_dir.native()); }).get0();
             if (!file_exists) {
                 continue;
             }

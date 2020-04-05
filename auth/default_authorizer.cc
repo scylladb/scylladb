@@ -51,7 +51,7 @@ extern "C" {
 
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range.hpp>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 
 #include "auth/authenticated_user.hh"
 #include "auth/common.hh"

@@ -49,30 +49,7 @@ inline future<> write_memtable_to_sstable_for_test(memtable& mt, sstables::share
 //
 // Make set of keys sorted by token for current or remote shard.
 //
-static std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1, local_shard_only lso = local_shard_only::yes) {
-    std::vector<std::pair<sstring, dht::decorated_key>> p;
-    p.reserve(n);
-
-    auto key_id = 0U;
-    auto generated = 0U;
-    while (generated < n) {
-        auto raw_key = sstring(std::max(min_key_size, sizeof(key_id)), int8_t(0));
-        std::copy_n(reinterpret_cast<int8_t*>(&key_id), sizeof(key_id), raw_key.begin());
-        auto dk = dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes(raw_key)));
-        key_id++;
-        if (lso) {
-            if (engine_is_ready() && this_shard_id() != shard_of(*s, dk.token())) {
-                continue;
-            }
-        }
-        generated++;
-        p.emplace_back(std::move(raw_key), std::move(dk));
-    }
-    boost::sort(p, [&] (auto& p1, auto& p2) {
-        return p1.second.less_compare(*s, p2.second);
-    });
-    return boost::copy_range<std::vector<sstring>>(p | boost::adaptors::map_keys);
-}
+std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1, local_shard_only lso = local_shard_only::yes);
 
 inline std::vector<sstring> make_local_keys(unsigned n, const schema_ptr& s, size_t min_key_size = 1) {
     return do_make_keys(n, s, min_key_size, local_shard_only::yes);
@@ -293,12 +270,12 @@ public:
     }
 protected:
     future<> _create_directory(sstring name) {
-        return engine().make_directory(name);
+        return make_directory(name);
     }
 
     future<> _remove(directory_entry de) {
         sstring t = _path + "/" + de.name;
-        return engine().file_type(t).then([t] (std::optional<directory_entry_type> det) {
+        return file_type(t).then([t] (std::optional<directory_entry_type> det) {
             auto f = make_ready_future<>();
 
             if (!det) {
@@ -307,21 +284,21 @@ protected:
                 f = empty_test_dir(t);
             }
             return f.then([t] {
-                return engine().remove_file(t);
+                return remove_file(t);
             });
         });
     }
     future<> done() { return std::move(_listing_done); }
 
     static future<> empty_test_dir(sstring p = path()) {
-        return engine().open_directory(p).then([p] (file f) {
+        return open_directory(p).then([p] (file f) {
             auto l = make_lw_shared<test_setup>(std::move(f), p);
             return l->done().then([l] { });
         });
     }
 public:
     static future<> create_empty_test_dir(sstring p = path()) {
-        return engine().make_directory(p).then_wrapped([p] (future<> f) {
+        return make_directory(p).then_wrapped([p] (future<> f) {
             try {
                 f.get();
             // it's fine if the directory exists, just shut down the exceptional future message

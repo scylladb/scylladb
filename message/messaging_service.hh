@@ -23,7 +23,7 @@
 
 #include "messaging_service_fwd.hh"
 #include "msg_addr.hh"
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"

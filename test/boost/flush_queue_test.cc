@@ -25,7 +25,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/range/irange.hpp>
 #include <seastar/core/semaphore.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/thread.hh>
 
 #include "seastarx.hh"

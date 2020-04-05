@@ -23,7 +23,9 @@
 
 #include <memory>
 #include <seastar/core/memory.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/idle_cpu_handler.hh>
+#include <seastar/core/condition-variable.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/gate.hh>
@@ -464,7 +466,7 @@ public:
 
     // Compacts one segment at a time from sparsest segment to least sparse until work_waiting_on_reactor returns true
     // or there are no more segments to compact.
-    reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor);
+    idle_cpu_handler_result compact_on_idle(work_waiting_on_reactor);
 
     // Compacts as much as possible. Very expensive, mainly for testing.
     // Guarantees that every live object from reclaimable regions will be moved.

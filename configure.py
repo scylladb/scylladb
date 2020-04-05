@@ -895,6 +895,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
     'test/lib/cql_assertions.cc',
     'test/lib/result_set_assertions.cc',
     'test/lib/mutation_source_test.cc',
+    'test/lib/sstable_utils.cc',
     'test/lib/data_model.cc',
     'test/lib/exception_utils.cc',
     'test/lib/random_schema.cc',
@@ -950,11 +951,9 @@ tests_not_using_seastar_test_framework = set([
     'test/perf/perf_hash',
     'test/perf/perf_mutation',
     'test/perf/perf_row_cache_update',
-    'test/perf/perf_sstable',
     'test/unit/lsa_async_eviction_test',
     'test/unit/lsa_sync_eviction_test',
     'test/unit/row_cache_alloc_stress_test',
-    'test/unit/row_cache_stress_test',
     'test/manual/sstable_scan_footprint_test',
 ]) | pure_boost_tests
 
@@ -976,13 +975,10 @@ perf_tests_seastar_deps = [
 for t in perf_tests:
     deps[t] = [t + '.cc'] + scylla_tests_dependencies + perf_tests_seastar_deps
 
-deps['test/boost/sstable_test'] += ['test/lib/sstable_utils.cc', 'test/lib/normalizing_reader.cc']
-deps['test/boost/sstable_datafile_test'] += ['test/lib/sstable_utils.cc', 'test/lib/normalizing_reader.cc']
-deps['test/boost/sstable_resharding_test'] += ['test/lib/sstable_utils.cc' ]
-deps['test/boost/mutation_reader_test'] += ['test/lib/sstable_utils.cc', 'test/lib/dummy_sharder.cc' ]
-deps['test/boost/multishard_combining_reader_as_mutation_source_test'] += ['test/lib/sstable_utils.cc', 'test/lib/dummy_sharder.cc' ]
-deps['test/boost/sstable_mutation_test'] += ['test/lib/sstable_utils.cc']
-deps['test/boost/sstable_conforms_to_mutation_source_test'] += ['test/lib/sstable_utils.cc']
+deps['test/boost/sstable_test'] += ['test/lib/normalizing_reader.cc']
+deps['test/boost/sstable_datafile_test'] += ['test/lib/normalizing_reader.cc']
+deps['test/boost/mutation_reader_test'] += ['test/lib/dummy_sharder.cc' ]
+deps['test/boost/multishard_combining_reader_as_mutation_source_test'] += ['test/lib/dummy_sharder.cc' ]
 
 deps['test/boost/bytes_ostream_test'] = [
     "test/boost/bytes_ostream_test.cc",

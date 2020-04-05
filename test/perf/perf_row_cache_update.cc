@@ -25,6 +25,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/weak_ptr.hh>
+#include <seastar/core/reactor.hh>
 
 #include "utils/managed_bytes.hh"
 #include "utils/extremum_tracking.hh"

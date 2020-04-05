@@ -48,7 +48,7 @@
 #include <optional>
 
 #include <boost/algorithm/cxx11/all_of.hpp>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 
 #include "auth/authenticated_user.hh"
 #include "auth/common.hh"

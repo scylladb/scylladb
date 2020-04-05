@@ -27,6 +27,7 @@
 #include "utils/disk-error-handler.hh"
 #include "seastarx.hh"
 #include <seastar/core/sleep.hh>
+#include <seastar/core/seastar.hh>
 
 namespace db {
 namespace hints {
@@ -94,7 +95,7 @@ future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, 
     return do_with(std::move(path), [this, ep_key, &shard_manager] (fs::path& path) {
         // It may happen that we get here and the directory has already been deleted in the context of manager::drain_for().
         // In this case simply bail out.
-        return engine().file_exists(path.native()).then([this, ep_key, &shard_manager, &path] (bool exists) {
+        return file_exists(path.native()).then([this, ep_key, &shard_manager, &path] (bool exists) {
             if (!exists) {
                 return make_ready_future<>();
             } else {

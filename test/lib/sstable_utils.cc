@@ -28,9 +28,35 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "test/lib/flat_mutation_reader_assertions.hh"
+#include <seastar/core/reactor.hh>
 
 using namespace sstables;
 using namespace std::chrono_literals;
+
+std::vector<sstring> do_make_keys(unsigned n, const schema_ptr& s, size_t min_key_size, local_shard_only lso) {
+    std::vector<std::pair<sstring, dht::decorated_key>> p;
+    p.reserve(n);
+
+    auto key_id = 0U;
+    auto generated = 0U;
+    while (generated < n) {
+        auto raw_key = sstring(std::max(min_key_size, sizeof(key_id)), int8_t(0));
+        std::copy_n(reinterpret_cast<int8_t*>(&key_id), sizeof(key_id), raw_key.begin());
+        auto dk = dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes(raw_key)));
+        key_id++;
+        if (lso) {
+            if (engine_is_ready() && this_shard_id() != shard_of(*s, dk.token())) {
+                continue;
+            }
+        }
+        generated++;
+        p.emplace_back(std::move(raw_key), std::move(dk));
+    }
+    boost::sort(p, [&] (auto& p1, auto& p2) {
+        return p1.second.less_compare(*s, p2.second);
+    });
+    return boost::copy_range<std::vector<sstring>>(p | boost::adaptors::map_keys);
+}
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
     auto sst = sst_factory();

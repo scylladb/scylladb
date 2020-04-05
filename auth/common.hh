@@ -27,9 +27,10 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/util/noncopyable_function.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/resource.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/smp.hh>
 
 #include "log.hh"
 #include "seastarx.hh"

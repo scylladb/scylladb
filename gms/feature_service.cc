@@ -19,7 +19,8 @@
 
 #include <any>
 #include <seastar/core/sstring.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/core/smp.hh>
 #include "log.hh"
 #include "db/config.hh"
 #include "gms/feature.hh"

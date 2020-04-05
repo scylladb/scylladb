@@ -27,7 +27,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/app-template.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include "transport/messages/result_message.hh"
 #include "types/user.hh"
 #include "types/map.hh"

@@ -20,7 +20,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/app-template.hh>
 #include "db/system_distributed_keyspace.hh"
 #include "message/messaging_service.hh"
