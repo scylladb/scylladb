@@ -1252,14 +1252,14 @@ void paxos_response_handler::prune(utils::UUID ballot) {
     // it is waited by holding shared pointer to storage_proxy which guaranties
     // that storage_proxy::stop() will wait for this to complete
     (void)parallel_for_each(_live_endpoints, [this, ballot] (gms::inet_address peer) mutable {
-            if (fbu::is_me(peer)) {
-                tracing::trace(tr_state, "prune: prune {} locally", ballot);
-                return paxos::paxos_state::prune(_schema, _key.key(), ballot, _timeout, tr_state);
-            } else {
-                tracing::trace(tr_state, "prune: send prune of {} to {}", ballot, peer);
-                netw::messaging_service& ms = netw::get_local_messaging_service();
-                return ms.send_paxos_prune(peer, _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
-            }
+        if (fbu::is_me(peer)) {
+            tracing::trace(tr_state, "prune: prune {} locally", ballot);
+            return paxos::paxos_state::prune(_schema, _key.key(), ballot, _timeout, tr_state);
+        } else {
+            tracing::trace(tr_state, "prune: send prune of {} to {}", ballot, peer);
+            netw::messaging_service& ms = netw::get_local_messaging_service();
+            return ms.send_paxos_prune(peer, _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
+        }
     }).finally([h = shared_from_this()] {
         h->_proxy->get_stats().cas_now_pruning--;
     });
