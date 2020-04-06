@@ -58,6 +58,12 @@ Run the command
 
 and use the resulting image.
 
+Note: if using `podman build` instead of `docker build`, add
+`--format docker` so that old docker clients can understand the
+image manifest:
+
+    podman build --format docker --no-cache --pull -f tools/toolchain/Dockerfile .
+
 ## Publishing an image
 
 If you're a maintainer, you can tag the image and push it
