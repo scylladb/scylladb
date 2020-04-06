@@ -531,6 +531,43 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
                 {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
         });
+
+        {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE c = 2", std::move(qo)).get0();
+            auto paging_state = extract_paging_state(res);
+
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+            }});
+
+            // Override the actual paging state with one with empty keys,
+            // which is a valid paging state as well, and should return
+            // no rows.
+            paging_state = make_lw_shared<service::pager::paging_state>(partition_key::make_empty(),
+                    std::nullopt, paging_state->get_remaining(), paging_state->get_query_uuid(),
+                    paging_state->get_last_replicas(), paging_state->get_query_read_repair_decision(),
+                    paging_state->get_rows_fetched_for_last_partition());
+
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+            res = e.execute_cql("SELECT * FROM tab WHERE c = 2", std::move(qo)).get0();
+
+            assert_that(res).is_rows().with_size(0);
+        }
+
+        {
+            // An artificial paging state with an empty key pair is also valid and is expected
+            // not to return rows (since no row matches an empty partition key)
+            auto paging_state = make_lw_shared<service::pager::paging_state>(partition_key::make_empty(), std::nullopt,
+                    1, utils::make_random_uuid(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 1);
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
+
+            assert_that(res).is_rows().with_size(0);
+        }
     });
 }
 
