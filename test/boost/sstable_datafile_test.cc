@@ -5627,3 +5627,78 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         BOOST_REQUIRE(is_partition_dead(alpha));
     });
 }
+
+SEASTAR_TEST_CASE(twcs_major_compaction_test) {
+    // Tests that two mutations that were written a month apart are compacted
+    // to two different SSTables, whereas two mutations that were written 1ms apart
+    // are compacted to the same SSTable.
+    return test_env::do_with_async([] (test_env& env) {
+        storage_service_for_tests ssft;
+        cell_locker_stats cl_stats;
+
+        // In a column family with gc_grace_seconds set to 0, check that a tombstone
+        // is purged after compaction.
+        auto builder = schema_builder("tests", "twcs_major")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, la, big);
+        };
+
+        auto next_timestamp = [] (auto step) {
+            using namespace std::chrono;
+            return (api::timestamp_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
+        };
+
+        auto make_insert = [&] (api::timestamp_clock::duration step) {
+            static thread_local int32_t value = 1;
+
+            auto key_and_token_pair = token_generation_for_current_shard(1);
+            auto key_str = key_and_token_pair[0].first;
+            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+
+            mutation m(s, key);
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_timestamp(step));
+            return m;
+        };
+
+
+        // Two mutations, one of them 30 days ago. Should be split when
+        // compacting
+        auto mut1 = make_insert(0ms);
+        auto mut2 = make_insert(720h);
+
+        // Two mutations, close together. Should end up in the same SSTable
+        auto mut3 = make_insert(0ms);
+        auto mut4 = make_insert(1ms);
+
+        auto cm = make_lw_shared<compaction_manager>();
+        column_family::config cfg = column_family_test_config();
+        cfg.datadir = tmp.path().string();
+        cfg.enable_disk_writes = true;
+        cfg.enable_commitlog = false;
+        cfg.enable_cache = false;
+        cfg.enable_incremental_backups = false;
+            reader_concurrency_semaphore sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{});
+            cfg.read_concurrency_semaphore = &sem;
+        auto tracker = make_lw_shared<cache_tracker>();
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        cf->mark_ready_for_writes();
+        cf->start();
+        cf->set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+
+        auto original_together = make_sstable_containing(sst_gen, {mut3, mut4});
+
+        auto ret = compact_sstables(sstables::compaction_descriptor({original_together}), *cf, sst_gen, replacer_fn_no_op()).get0();
+        BOOST_REQUIRE(ret.new_sstables.size() == 1);
+
+        auto original_apart = make_sstable_containing(sst_gen, {mut1, mut2});
+        ret = compact_sstables(sstables::compaction_descriptor({original_apart}), *cf, sst_gen, replacer_fn_no_op()).get0();
+        BOOST_REQUIRE(ret.new_sstables.size() == 2);
+    });
+}

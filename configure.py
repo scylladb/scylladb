@@ -784,6 +784,7 @@ scylla_core = (['database.cc',
                 'utils/like_matcher.cc',
                 'utils/error_injection.cc',
                 'mutation_writer/timestamp_based_splitting_writer.cc',
+                'mutation_writer/shard_based_splitting_writer.cc',
                 'lua.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                )

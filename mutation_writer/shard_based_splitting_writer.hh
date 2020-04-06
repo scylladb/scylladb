@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 ScyllaDB
+ * Copyright (C) 2020 ScyllaDB
  */
 
 /*
@@ -27,7 +27,10 @@
 
 namespace mutation_writer {
 
-using classify_by_timestamp = noncopyable_function<int64_t(api::timestamp_type)>;
-future<> segregate_by_timestamp(flat_mutation_reader producer, classify_by_timestamp classifier, reader_consumer consumer);
+// Given a producer that may contain data for all shards, consume it in a per-shard
+// manner. This is useful, for instance, in the resharding process where a user changes
+// the amount of CPU assigned to Scylla and we have to rewrite the SSTables to their new
+// owners.
+future<> segregate_by_shard(flat_mutation_reader producer, reader_consumer consumer);
 
 } // namespace mutation_writer

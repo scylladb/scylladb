@@ -68,6 +68,8 @@
 #include "leveled_manifest.hh"
 #include "utils/observable.hh"
 #include "dht/token.hh"
+#include "mutation_writer/shard_based_splitting_writer.hh"
+#include "mutation_source_metadata.hh"
 
 namespace sstables {
 
@@ -124,18 +126,22 @@ static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, 
 
 class compaction;
 
+struct compaction_writer {
+    sstable_writer writer;
+    shared_sstable sst;
+};
+
 class compacting_sstable_writer {
     compaction& _c;
-    sstable_writer* _writer = nullptr;
+    std::optional<compaction_writer> _writer = {};
 public:
-    explicit compacting_sstable_writer(compaction& c) : _c(c) {}
-
+    explicit compacting_sstable_writer(compaction& c) : _c(c) { }
     void consume_new_partition(const dht::decorated_key& dk);
 
-    void consume(tombstone t) { _writer->consume(t); }
-    stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer->consume(std::move(sr)); }
-    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _writer->consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone&& rt) { return _writer->consume(std::move(rt)); }
+    void consume(tombstone t) { _writer->writer.consume(t); }
+    stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer->writer.consume(std::move(sr)); }
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _writer->writer.consume(std::move(cr)); }
+    stop_iteration consume(range_tombstone&& rt) { return _writer->writer.consume(std::move(rt)); }
 
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
@@ -396,6 +402,7 @@ protected:
     encoding_stats_collector _stats_collector;
     utils::observable<> _on_new_sstable_sealed;
     bool _contains_multi_fragment_runs = false;
+    mutation_source_metadata _ms_metadata = {};
 protected:
     compaction(column_family& cf, creator_fn creator, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level)
         : _cf(cf)
@@ -418,7 +425,8 @@ protected:
 
     uint64_t partitions_per_sstable() const {
         uint64_t estimated_sstables = std::max(1UL, uint64_t(ceil(double(_info->start_size) / _max_sstable_size)));
-        return ceil(double(_estimated_partitions) / estimated_sstables);
+        return std::min(uint64_t(ceil(double(_estimated_partitions) / estimated_sstables)),
+                        _cf.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimated_partitions));
     }
 
     void setup_new_sstable(shared_sstable& sst) {
@@ -431,11 +439,10 @@ protected:
         }
     }
 
-    void finish_new_sstable(std::optional<sstable_writer>& writer, shared_sstable& sst) {
-        writer->consume_end_of_stream();
-        writer = std::nullopt;
-        sst->open_data().get0();
-        _info->end_size += sst->bytes_on_disk();
+    void finish_new_sstable(compaction_writer* writer) {
+        writer->writer.consume_end_of_stream();
+        writer->sst->open_data().get0();
+        _info->end_size += writer->sst->bytes_on_disk();
         // Notify GC'ed-data sstable writer's handler that an output sstable has just been sealed.
         // The handler is responsible for making sure that deleting an input sstable will not
         // result in resurrection on failure.
@@ -474,7 +481,11 @@ private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
     virtual flat_mutation_reader make_sstable_reader() const = 0;
 
-    flat_mutation_reader setup() {
+    template <typename GCConsumer>
+    GCC6_CONCEPT(
+        requires CompactedFragmentsConsumer<GCConsumer>
+    )
+    future<> setup(GCConsumer gc_consumer) {
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_schema));
         sstring formatted_msg = "[";
         auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - _schema->gc_grace_seconds());
@@ -514,8 +525,24 @@ private:
         report_start(formatted_msg);
 
         _compacting = std::move(ssts);
-        return make_sstable_reader();
+
+        auto now = gc_clock::now();
+        auto consumer = make_interposer_consumer([this, gc_consumer = std::move(gc_consumer), now] (flat_mutation_reader reader) mutable
+        {
+            using compact_mutations = compact_for_compaction<compacting_sstable_writer, GCConsumer>;
+            auto cfc = make_stable_flattened_mutations_consumer<compact_mutations>(*schema(), now,
+                                         max_purgeable_func(),
+                                         get_compacting_sstable_writer(),
+                                         std::move(gc_consumer));
+
+            return seastar::async([cfc = std::move(cfc), reader = std::move(reader), this] () mutable {
+                reader.consume_in_thread(std::move(cfc), make_partition_filter(), db::no_timeout);
+            });
+        });
+        return consumer(make_sstable_reader());
     }
+
+    virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) = 0;
 
     compaction_info finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
         _info->ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(ended_at.time_since_epoch()).count();
@@ -524,6 +551,8 @@ private:
         // Don't report NaN or negative number.
         auto throughput = duration.count() > 0 ? (double(_info->end_size) / (1024*1024)) / duration.count() : double{};
         sstring new_sstables_msg;
+
+        on_end_of_compaction();
 
         for (auto& newtab : _info->new_sstables) {
             new_sstables_msg += format("{}:level={:d}, ", newtab->get_filename(), newtab->get_sstable_level());
@@ -564,14 +593,16 @@ private:
         };
     }
 
+    virtual void on_new_partition() = 0;
+
+    virtual void on_end_of_compaction() = 0;
+
     virtual shared_sstable create_new_sstable() const = 0;
 
-    // select a sstable writer based on decorated key.
-    virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) = 0;
+    // create a writer based on decorated key.
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) = 0;
     // stop current writer
-    virtual void stop_sstable_writer() = 0;
-    // finish all writers.
-    virtual void finish_sstable_writer() = 0;
+    virtual void stop_sstable_writer(compaction_writer* writer) = 0;
 
     compacting_sstable_writer get_compacting_sstable_writer() {
         return compacting_sstable_writer(*this);
@@ -625,23 +656,30 @@ void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& 
         // Compaction manager will catch this exception and re-schedule the compaction.
         throw compaction_stop_exception(_c._info->ks_name, _c._info->cf_name, _c._info->stop_requested);
     }
-    _writer = _c.select_sstable_writer(dk);
-    _writer->consume_new_partition(dk);
+    if (!_writer) {
+        _writer = _c.create_compaction_writer(dk);
+    }
+
+    _c.on_new_partition();
+    _writer->writer.consume_new_partition(dk);
     _c._info->total_keys_written++;
 }
 
 stop_iteration compacting_sstable_writer::consume_end_of_partition() {
-    auto ret = _writer->consume_end_of_partition();
+    auto ret = _writer->writer.consume_end_of_partition();
     if (ret == stop_iteration::yes) {
         // stop sstable writer being currently used.
-        _c.stop_sstable_writer();
+        _c.stop_sstable_writer(&*_writer);
+        _writer = std::nullopt;
     }
     return ret;
 }
 
 void compacting_sstable_writer::consume_end_of_stream() {
-    // this will stop any writer opened by compaction.
-    _c.finish_sstable_writer();
+    if (_writer) {
+        _c.stop_sstable_writer(&*_writer);
+        _writer = std::nullopt;
+    }
 }
 
 void garbage_collected_sstable_writer::setup_on_new_sstable_sealed_handler() {
@@ -695,8 +733,6 @@ class regular_compaction : public compaction {
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
     std::optional<sstable_set::incremental_selector> _selector;
     // sstable being currently written.
-    shared_sstable _sst;
-    std::optional<sstable_writer> _writer;
     std::optional<compaction_weight_registration> _weight_registration;
     mutable compaction_read_monitor_generator _monitor_generator;
     std::deque<compaction_write_monitor> _active_write_monitors = {};
@@ -726,6 +762,10 @@ public:
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
                 _monitor_generator);
+    }
+
+    reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
+        return _cf.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
     }
 
     void report_start(const sstring& formatted_msg) const override {
@@ -759,42 +799,37 @@ public:
         return _sstable_creator(this_shard_id());
     }
 
-    virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
-        if (!_writer) {
-            _sst = _sstable_creator(this_shard_id());
-            setup_new_sstable(_sst);
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+        auto sst = _sstable_creator(this_shard_id());
+        setup_new_sstable(sst);
 
-            _active_write_monitors.emplace_back(_sst, _cf, maximum_timestamp(), _sstable_level);
-            auto&& priority = service::get_local_compaction_priority();
-            sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
-            cfg.max_sstable_size = _max_sstable_size;
-            cfg.monitor = &_active_write_monitors.back();
-            cfg.run_identifier = _run_identifier;
-            _writer.emplace(_sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), priority));
+        _active_write_monitors.emplace_back(sst, _cf, maximum_timestamp(), _sstable_level);
+        auto&& priority = service::get_local_compaction_priority();
+        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
+        cfg.max_sstable_size = _max_sstable_size;
+        cfg.monitor = &_active_write_monitors.back();
+        cfg.run_identifier = _run_identifier;
+        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), priority), sst};
+    }
+
+    virtual void stop_sstable_writer(compaction_writer* writer) override {
+        if (writer) {
+            finish_new_sstable(writer);
+            maybe_replace_exhausted_sstables_by_sst(writer->sst);
         }
-        do_pending_replacements();
-        return &*_writer;
     }
 
-    virtual void stop_sstable_writer() override {
-        finish_new_sstable(_writer, _sst);
-        maybe_replace_exhausted_sstables();
+    void on_new_partition() override {
+        update_pending_ranges();
     }
 
-    virtual void finish_sstable_writer() override {
-        on_end_of_stream();
-        if (_writer) {
-            stop_sstable_writer();
+    virtual void on_end_of_compaction() override {
+        if (_weight_registration) {
+            _cf.get_compaction_manager().on_compaction_complete(*_weight_registration);
         }
         replace_remaining_exhausted_sstables();
     }
 private:
-    void on_end_of_stream() {
-        if (_weight_registration) {
-            _cf.get_compaction_manager().on_compaction_complete(*_weight_registration);
-        }
-    }
-
     void backlog_tracker_incrementally_adjust_charges(std::vector<shared_sstable> exhausted_sstables) {
         //
         // Notify backlog tracker of an early sstable replacement triggered by incremental compaction approach.
@@ -814,14 +849,14 @@ private:
         _active_write_monitors.clear();
     }
 
-    void maybe_replace_exhausted_sstables() {
+    void maybe_replace_exhausted_sstables_by_sst(shared_sstable sst) {
         // Skip earlier replacement of exhausted sstables if compaction works with only single-fragment runs,
         // meaning incremental compaction is disabled for this compaction.
         if (!_contains_multi_fragment_runs) {
             return;
         }
         // Replace exhausted sstable(s), if any, by new one(s) in the column family.
-        auto not_exhausted = [s = _schema, &dk = _sst->get_last_decorated_key()] (shared_sstable& sst) {
+        auto not_exhausted = [s = _schema, &dk = sst->get_last_decorated_key()] (shared_sstable& sst) {
             return sst->get_last_decorated_key().tri_compare(*s, dk) > 0;
         };
         auto exhausted = std::partition(_sstables.begin(), _sstables.end(), not_exhausted);
@@ -849,7 +884,7 @@ private:
         }
     }
 
-    void do_pending_replacements() {
+    void update_pending_ranges() {
         if (_set.all()->empty() || _info->pending_replacements.empty()) { // set can be empty for testing scenario.
             return;
         }
@@ -1163,7 +1198,11 @@ private:
     // return estimated partitions per sstable for a given shard
     uint64_t partitions_per_sstable(shard_id s) const {
         uint64_t estimated_sstables = std::max(uint64_t(1), uint64_t(ceil(double(_estimation_per_shard[s].estimated_size) / _max_sstable_size)));
-        return ceil(double(_estimation_per_shard[s].estimated_partitions) / estimated_sstables);
+        // As we adjust this estimate downwards from the compaction strategy, it can get to 0 so
+        // make sure we're returning at least 1.
+        return std::max(uint64_t(1),
+                std::min(uint64_t(ceil(double(_estimation_per_shard[s].estimated_partitions) / estimated_sstables)),
+                _cf.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions)));
     }
 public:
     resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor)
@@ -1208,6 +1247,13 @@ public:
                 nullptr,
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no);
+
+    }
+
+    reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
+        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader reader) mutable -> future<> {
+            return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
+        };
     }
 
     void report_start(const sstring& formatted_msg) const override {
@@ -1221,40 +1267,31 @@ public:
     void backlog_tracker_adjust_charges() override { }
 
     shared_sstable create_new_sstable() const override {
-        return _sstable_creator(_shard);
+        // create_new_sstables is used only from the garbage_collected writer.
+        // It it not supposed to work with resharding compactions
+        abort();
     }
 
-    sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
-        _shard = dht::shard_of(*_schema, dk.token());
-        auto& sst = _output_sstables[_shard].first;
-        auto& writer = _output_sstables[_shard].second;
+    compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+        auto shard = dht::shard_of(*_schema, dk.token());
+        auto sst = _sstable_creator(shard);
+        setup_new_sstable(sst);
 
-        if (!writer) {
-            sst = _sstable_creator(_shard);
-            setup_new_sstable(sst);
-
-            sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
-            cfg.max_sstable_size = _max_sstable_size;
-            // sstables generated for a given shard will share the same run identifier.
-            cfg.run_identifier = _run_identifiers.at(_shard);
-            auto&& priority = service::get_local_compaction_priority();
-            writer.emplace(sst->get_writer(*_schema, partitions_per_sstable(_shard), cfg, get_encoding_stats(), priority, _shard));
-        }
-        return &*writer;
+        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
+        cfg.max_sstable_size = _max_sstable_size;
+        // sstables generated for a given shard will share the same run identifier.
+        cfg.run_identifier = _run_identifiers.at(shard);
+        auto&& priority = service::get_local_compaction_priority();
+        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), priority, shard), sst};
     }
 
-    void stop_sstable_writer() override {
-        auto& sst = _output_sstables[_shard].first;
-        auto& writer = _output_sstables[_shard].second;
+    void on_new_partition() override {}
 
-        finish_new_sstable(writer, sst);
-    }
+    virtual void on_end_of_compaction() override {}
 
-    void finish_sstable_writer() override {
-        for (auto& p : _output_sstables) {
-            if (p.second) {
-                finish_new_sstable(p.second, p.first);
-            }
+    void stop_sstable_writer(compaction_writer* writer) override {
+        if (writer) {
+            finish_new_sstable(writer);
         }
     }
 };
@@ -1265,22 +1302,13 @@ GCC6_CONCEPT(
 )
 future<compaction_info> compaction::run(std::unique_ptr<compaction> c, GCConsumer gc_consumer) {
     return seastar::async([c = std::move(c), gc_consumer = std::move(gc_consumer)] () mutable {
-        auto reader = c->setup();
-
-        auto cr = c->get_compacting_sstable_writer();
-        auto cfc = make_stable_flattened_mutations_consumer<compact_for_compaction<compacting_sstable_writer, GCConsumer>>(
-                    *c->schema(), gc_clock::now(), c->max_purgeable_func(), std::move(cr), std::move(gc_consumer));
-
+        auto consumer = c->setup(std::move(gc_consumer));
         auto start_time = db_clock::now();
         try {
-            // make sure the readers are all gone before the compaction object is gone. We will
-            // leave this block either successfully or exceptionally with the reader object
-            // destroyed.
-            auto r = std::move(reader);
-            r.consume_in_thread(std::move(cfc), c->make_partition_filter(), db::no_timeout);
+           consumer.get();
         } catch (...) {
             c->delete_sstables_for_interrupted_compaction();
-            c = nullptr; // make sure writers are stopped while running in thread context
+            c = nullptr; // make sure writers are stopped while running in thread context. This is because of calls to file.close().get();
             throw;
         }
 
