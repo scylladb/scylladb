@@ -1268,9 +1268,9 @@ def query_seastar_flags(pc_file, link_static_cxx=False):
     return cflags, libs
 
 for mode in build_modes:
-    seastar_cflags, seastar_libs = query_seastar_flags(pc[mode], link_static_cxx=args.staticcxx)
-    modes[mode]['seastar_cflags'] = seastar_cflags
-    modes[mode]['seastar_libs'] = seastar_libs
+    seastar_pc_cflags, seastar_pc_libs = query_seastar_flags(pc[mode], link_static_cxx=args.staticcxx)
+    modes[mode]['seastar_cflags'] = seastar_pc_cflags
+    modes[mode]['seastar_libs'] = seastar_pc_libs
 
 args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
 args.user_cflags += ' -march=' + args.target
