@@ -1439,6 +1439,9 @@ with open(buildfile_tmp, 'w') as f:
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags --include $in -c -o $out build/{mode}/gen/empty.cc
               description = CHECKHH $in
               depfile = $out.d
+            rule test.{mode}
+              command = ./test.py --mode={mode}
+              description = TEST {mode}
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, **modeval))
         f.write(
             'build {mode}: phony {artifacts}\n'.format(
@@ -1538,6 +1541,17 @@ with open(buildfile_tmp, 'w') as f:
             )
         )
 
+        f.write(
+            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/test/tools/cql_repl\n'.format(
+                mode=mode,
+                test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in tests]),
+            )
+        )
+        f.write(
+            'build {mode}-check: phony {mode}-headers {mode}-test\n'.format(
+                mode=mode,
+            )
+        )
 
         gen_headers = []
         for th in thrifts:
@@ -1619,6 +1633,13 @@ with open(buildfile_tmp, 'w') as f:
 
     mode = 'dev' if 'dev' in modes else modes[0]
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(mode, hh) for hh in headers])))
+
+    f.write(
+            'build test: phony {}\n'.format(' '.join(['{mode}-test'.format(mode=mode) for mode in modes]))
+    )
+    f.write(
+            'build check: phony {}\n'.format(' '.join(['{mode}-check'.format(mode=mode) for mode in modes]))
+    )
 
     f.write(textwrap.dedent('''\
         rule configure
