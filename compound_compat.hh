@@ -27,6 +27,9 @@
 #include "schema.hh"
 #include "sstables/version.hh"
 
+//FIXME: de-inline methods and define this as static in a .cc file.
+extern logging::logger compound_logger;
+
 //
 // This header provides adaptors between the representation used by our compound_type<>
 // and representation used by Origin.
@@ -337,8 +340,9 @@ public:
     class iterator : public std::iterator<std::input_iterator_tag, const component_view> {
         bytes_view _v;
         component_view _current;
+        bool _strict_mode = true;
     private:
-        void read_current() {
+        void do_read_current() {
             size_type len;
             {
                 if (_v.empty()) {
@@ -354,11 +358,24 @@ public:
             _v.remove_prefix(len);
             _current = component_view(std::move(value), to_eoc(read_simple<eoc_type>(_v)));
         }
-    public:
+        void read_current() {
+            try {
+                do_read_current();
+            } catch (marshal_exception& e) {
+                if (_strict_mode) {
+                    //FIXME: `on_internal_error()` variant that takes `std::exception_ptr`.
+                    on_internal_error(compound_logger, e.what());
+                } else {
+                    throw;
+                }
+            }
+        }
+
         struct end_iterator_tag {};
 
-        iterator(const bytes_view& v, bool is_compound, bool is_static)
-                : _v(v) {
+        // In strict-mode de-serialization errors will invoke `on_internal_error()`.
+        iterator(const bytes_view& v, bool is_compound, bool is_static, bool strict_mode = true)
+                : _v(v), _strict_mode(strict_mode) {
             if (is_static) {
                 _v.remove_prefix(2);
             }
@@ -372,6 +389,7 @@ public:
 
         iterator(end_iterator_tag) : _v(nullptr, 0) {}
 
+    public:
         iterator& operator++() {
             read_current();
             return *this;
@@ -387,6 +405,9 @@ public:
         const value_type* operator->() const { return &_current; }
         bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
         bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
+
+        friend class composite;
+        friend class composite_view;
     };
 
     iterator begin() const {
@@ -557,11 +578,14 @@ public:
 
     bool is_valid() const {
         try {
+            auto it = composite::iterator(_bytes, _is_compound, is_static(), false);
+            const auto end = composite::iterator(composite::iterator::end_iterator_tag());
             size_t s = 0;
-            for (auto& c : components()) {
+            for (; it != end; ++it) {
+                auto& c = *it;
                 s += c.first.size() + sizeof(composite::size_type) + sizeof(composite::eoc_type);
             }
-            return s == b.size();
+            return s == _bytes.size();
         } catch (marshal_exception&) {
             return false;
         }
