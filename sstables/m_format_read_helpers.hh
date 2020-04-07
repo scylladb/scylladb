@@ -126,7 +126,7 @@ inline std::ostream& operator<<(std::ostream& out, sstables::bound_kind_m kind) 
         out << "excl_start";
         break;
     default:
-        out << static_cast<std::underlying_type_t<sstables::bound_kind_m>>(kind);
+        out << static_cast<unsigned>(kind);
     }
     return out;
 }
