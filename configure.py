@@ -32,6 +32,8 @@ import tempfile
 import textwrap
 from distutils.spawn import find_executable
 
+curdir = os.getcwd()
+
 tempfile.tempdir = "./build/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
@@ -1204,6 +1206,8 @@ forced_ldflags += f'--dynamic-linker={dynamic_linker}'
 args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
 args.user_cflags += ' -Wno-error=stack-usage='
+
+args.user_cflags += f"-ffile-prefix-map={curdir}=."
 
 seastar_cflags = args.user_cflags
 if args.target != '':
