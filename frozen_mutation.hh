@@ -52,7 +52,7 @@ private:
     partition_key deserialize_key() const;
     ser::mutation_view mutation_view() const;
 public:
-    frozen_mutation(const mutation& m);
+    explicit frozen_mutation(const mutation& m);
     explicit frozen_mutation(bytes_ostream&& b);
     frozen_mutation(bytes_ostream&& b, partition_key key);
     frozen_mutation(frozen_mutation&& m) = default;

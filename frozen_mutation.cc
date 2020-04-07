@@ -115,7 +115,7 @@ frozen_mutation::unfreeze(schema_ptr schema) const {
 }
 
 frozen_mutation freeze(const mutation& m) {
-    return { m };
+    return frozen_mutation{ m };
 }
 
 mutation_partition_view frozen_mutation::partition() const {
