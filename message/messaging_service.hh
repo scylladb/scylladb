@@ -237,6 +237,7 @@ private:
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server;
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
+    std::unique_ptr<seastar::tls::credentials_builder> _credentials_builder;
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
     std::array<clients_map, 4> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
@@ -248,13 +249,13 @@ public:
     using clock_type = lowres_clock;
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
-            uint16_t port = 7000, bool listen_now = true);
+            uint16_t port = 7000);
     messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what, tcp_nodelay_what,
             uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
-            memory_config mcfg, scheduling_config scfg, bool sltba = false, bool listen_now = true);
+            memory_config mcfg, scheduling_config scfg, bool sltba = false);
     ~messaging_service();
 public:
-    void start_listen();
+    future<> start_listen();
     uint16_t port();
     gms::inet_address listen_address();
     future<> stop_tls_server();
@@ -511,6 +512,7 @@ public:
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
     bool remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only);
+    void do_start_listen();
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);
