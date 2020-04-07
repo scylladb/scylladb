@@ -555,6 +555,18 @@ public:
         return composite::is_static(_bytes, _is_compound);
     }
 
+    bool is_valid() const {
+        try {
+            size_t s = 0;
+            for (auto& c : components()) {
+                s += c.first.size() + sizeof(composite::size_type) + sizeof(composite::eoc_type);
+            }
+            return s == b.size();
+        } catch (marshal_exception&) {
+            return false;
+        }
+    }
+
     explicit operator bytes_view() const {
         return _bytes;
     }

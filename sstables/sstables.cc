@@ -1158,18 +1158,6 @@ void sstable::validate_min_max_metadata() {
     }
 
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
-    auto is_composite_valid = [] (const bytes& b) {
-        auto v = composite_view(b);
-        try {
-            size_t s = 0;
-            for (auto& c : v.components()) {
-                s += c.first.size() + sizeof(composite::size_type) + sizeof(composite::eoc_type);
-            }
-            return s == b.size();
-        } catch (marshal_exception&) {
-            return false;
-        }
-    };
     auto clear_incorrect_min_max_column_names = [&s] {
         s.min_column_names.elements.clear();
         s.max_column_names.elements.clear();
@@ -1199,7 +1187,7 @@ void sstable::validate_min_max_metadata() {
         }
 
         if (_schema->is_compound() && _schema->clustering_key_size() > 1 && _schema->is_dense() &&
-                (is_composite_valid(min_column_names[i].value) || is_composite_valid(max_column_names[i].value))) {
+                (composite_view(min_column_names[i].value).is_valid() || composite_view(max_column_names[i].value).is_valid())) {
             clear_incorrect_min_max_column_names();
             break;
         }
