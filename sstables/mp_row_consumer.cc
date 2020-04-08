@@ -38,6 +38,7 @@
  */
 
 #include "mp_row_consumer.hh"
+#include "column_translation.hh"
 
 namespace sstables {
 
@@ -77,6 +78,51 @@ atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value) {
     }
     ccb.sort_and_remove_duplicates();
     return ccb.build(timestamp);
+}
+
+std::vector<column_translation::column_info> column_translation::state::build(
+        const schema& s,
+        const utils::chunked_vector<serialization_header::column_desc>& src,
+        bool is_static) {
+    std::vector<column_info> cols;
+    if (s.is_dense()) {
+        const column_definition& col = is_static ? *s.static_begin() : *s.regular_begin();
+        cols.push_back(column_info{
+            &col.name(),
+            col.type,
+            col.id,
+            col.type->value_length_if_fixed(),
+            col.is_multi_cell(),
+            col.is_counter(),
+            false
+        });
+    } else {
+        cols.reserve(src.size());
+        for (auto&& desc : src) {
+            const bytes& type_name = desc.type_name.value;
+            data_type type = db::marshal::type_parser::parse(to_sstring_view(type_name));
+            const column_definition* def = s.get_column_definition(desc.name.value);
+            std::optional<column_id> id;
+            bool schema_mismatch = false;
+            if (def) {
+                id = def->id;
+                schema_mismatch = def->is_multi_cell() != type->is_multi_cell() ||
+                                  def->is_counter() != type->is_counter() ||
+                                  !def->type->is_value_compatible_with(*type);
+            }
+            cols.push_back(column_info{
+                &desc.name.value,
+                type,
+                id,
+                type->value_length_if_fixed(),
+                type->is_multi_cell(),
+                type->is_counter(),
+                schema_mismatch
+            });
+        }
+        boost::range::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
+    }
+    return cols;
 }
 
 }
