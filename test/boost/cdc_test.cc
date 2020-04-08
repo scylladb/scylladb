@@ -515,7 +515,8 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
 SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
         auto test = [&e] (bool pre_enabled, bool post_enabled, bool with_ttl) {
-            cquery_nofail(e, format("CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, val2 int, PRIMARY KEY((pk, pk2), ck, ck2)) "
+            // note: 'val3' column is not used, but since not set in initial update, would provoke #6143 unless fixed.
+            cquery_nofail(e, format("CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, val2 int, val3 int, PRIMARY KEY((pk, pk2), ck, ck2)) "
                 "WITH cdc = {{'enabled':'true', 'preimage':'{}', 'postimage':'{}'}}", pre_enabled, post_enabled));
             cquery_nofail(e, "UPDATE ks.tbl"s + (with_ttl ? " USING TTL 654" : "") + " SET val = 11111, val2 = 22222 WHERE pk=1 AND pk2=11 AND ck=111 AND ck2=1111");
 
@@ -1162,6 +1163,10 @@ SEASTAR_THREAD_TEST_CASE(test_list_logging) {
         }, [&](data_value v) {
             auto map = value_cast<map_type_impl::native_type>(std::move(v));
             auto cpy = boost::copy_range<std::vector<data_value>>(map | boost::adaptors::map_values);
+            // verify key is timeuuid
+            for (auto& key : map | boost::adaptors::map_keys) {
+                value_cast<utils::UUID>(key);
+            }
             return ::make_list_value(list_type, std::move(cpy));
         });
     }, mk_cdc_test_config()).get();

@@ -1042,10 +1042,10 @@ public:
                 });
 
                 // fill in all columns not already processed. Note that column nulls are also marked.
-                if (poikey) {
+                if (poikey && pirow) {
                     for (auto& cdef : _schema->columns(ckind)) {
                         if (!columns_assigned.count(cdef.id)) {
-                            auto v = pirow->get_view_opt(cdef.name_as_text());
+                            auto v = get_preimage_col_value(cdef, pirow);
                             if (v) {
                                 auto dst = _log_schema->get_column_definition(log_data_column_name_bytes(cdef.name()));
                                 res.set_cell(*poikey, *dst, atomic_cell::make_live(*dst->type, ts, *v, _cdc_ttl_opt));
