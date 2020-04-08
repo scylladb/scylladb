@@ -1019,13 +1019,22 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
 
 mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) {
     mutation m(schema, _pk);
-    auto& row = m.partition().clustered_row(*schema, _ck);
+    // If there's no clustering key, a tombstone should be created directly
+    // on a partition, not on a clustering row - otherwise it will look like
+    // an open-ended range tombstone, which will crash on KA/LA sstable format.
+    // Ref: #6035
+    const bool use_partition_tombstone = schema->clustering_key_size() == 0;
     if (!_cells) {
-        // a DeleteItem operation:
-        row.apply(tombstone(ts, gc_clock::now()));
+        if (use_partition_tombstone) {
+            m.partition().apply(tombstone(ts, gc_clock::now()));
+        } else {
+            // a DeleteItem operation:
+            m.partition().clustered_row(*schema, _ck).apply(tombstone(ts, gc_clock::now()));
+        }
         return m;
     }
     // else, a PutItem operation:
+    auto& row = m.partition().clustered_row(*schema, _ck);
     attribute_collector attrs_collector;
     for (auto& c : *_cells) {
         const column_definition* cdef = schema->get_column_definition(c.column_name);
@@ -1048,7 +1057,11 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) {
     // Scylla proper, to implement the operation to replace an entire
     // collection ("UPDATE .. SET x = ..") - see
     // cql3::update_parameters::make_tombstone_just_before().
-    row.apply(tombstone(ts-1, gc_clock::now()));
+    if (use_partition_tombstone) {
+        m.partition().apply(tombstone(ts-1, gc_clock::now()));
+    } else {
+        row.apply(tombstone(ts-1, gc_clock::now()));
+    }
     return m;
 }
 
