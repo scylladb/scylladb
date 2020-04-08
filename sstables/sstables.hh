@@ -780,8 +780,9 @@ public:
     const serialization_header& get_serialization_header() const {
         return get_mutable_serialization_header(*_components);
     }
-    column_translation get_column_translation(const schema& s, const serialization_header& h) {
-        return _column_translation.get_for_schema(s, h);
+    column_translation get_column_translation(
+            const schema& s, const serialization_header& h, const sstable_enabled_features& f) {
+        return _column_translation.get_for_schema(s, h, f);
     }
     const std::vector<unsigned>& get_shards_for_this_sstable() const {
         return _shards;
