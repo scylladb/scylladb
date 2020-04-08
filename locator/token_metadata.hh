@@ -227,6 +227,16 @@ public:
 
     bool is_leaving(inet_address endpoint);
 
+    // Is this node being replaced by another node
+    bool is_being_replaced(inet_address endpoint);
+
+    // Is any node being replaced by another node
+    bool is_any_node_being_replaced();
+
+    void add_replacing_endpoint(inet_address existing_node, inet_address replacing_node);
+
+    void del_replacing_endpoint(inet_address existing_node);
+
     /**
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
      * bootstrap tokens and leaving endpoints are not included in the copy.
@@ -288,6 +298,9 @@ public:
         abstract_replication_strategy& strategy,
         lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
         lw_shared_ptr<token_metadata> all_left_metadata);
+    future<> calculate_pending_ranges_for_replacing(
+            abstract_replication_strategy& strategy,
+            lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges);
 
     token get_predecessor(token t);
 
