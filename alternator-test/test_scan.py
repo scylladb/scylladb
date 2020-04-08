@@ -42,6 +42,11 @@ def test_scan_basic(filled_test_table):
         assert len(items) == len(got_items)
         assert multiset(items) == multiset(got_items)
 
+def test_scan_nonexistent_table(dynamodb):
+    client = dynamodb.meta.client
+    with pytest.raises(ClientError, match="ResourceNotFoundException"):
+        client.scan(TableName="i_do_not_exist")
+
 def test_scan_with_paginator(dynamodb, filled_test_table):
     test_table, items = filled_test_table
     paginator = dynamodb.meta.client.get_paginator('scan')
