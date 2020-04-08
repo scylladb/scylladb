@@ -80,7 +80,7 @@ bool stream_id::operator<(const stream_id& o) const {
     return _value < o._value;
 }
 
-static int64_t bytes_to_int64(const bytes& b, size_t offset) {
+static int64_t bytes_to_int64(bytes_view b, size_t offset) {
     assert(b.size() >= offset + sizeof(int64_t));
     int64_t res;
     std::copy_n(b.begin() + offset, sizeof(int64_t), reinterpret_cast<int8_t *>(&res));
@@ -88,11 +88,15 @@ static int64_t bytes_to_int64(const bytes& b, size_t offset) {
 }
 
 int64_t stream_id::first() const {
-    return bytes_to_int64(_value, 0);
+    return token_from_bytes(_value);
 }
 
 int64_t stream_id::second() const {
     return bytes_to_int64(_value, sizeof(int64_t));
+}
+
+int64_t stream_id::token_from_bytes(bytes_view b) {
+    return bytes_to_int64(b, 0);
 }
 
 const bytes& stream_id::to_bytes() const {

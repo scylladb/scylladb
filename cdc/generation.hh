@@ -77,6 +77,7 @@ public:
     const bytes& to_bytes() const;
 
     partition_key to_partition_key(const schema& log_schema) const;
+    static int64_t token_from_bytes(bytes_view);
 };
 
 /* Describes a mapping of tokens to CDC streams in a token range.
