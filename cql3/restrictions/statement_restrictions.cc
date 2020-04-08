@@ -645,7 +645,10 @@ bool single_column_restriction::EQ::is_satisfied_by(bytes_view data, const query
         fail(unimplemented::cause::COUNTERS);
     }
     auto operand = value(options);
-    return operand && _column_def.type->compare(*operand, data) == 0;
+    if (!operand) {
+        throw exceptions::invalid_request_exception(format("Invalid null value for {}", _column_def.name_as_text()));
+    }
+    return _column_def.type->compare(*operand, data) == 0;
 }
 
 bool single_column_restriction::IN::is_satisfied_by(const schema& schema,
@@ -881,7 +884,9 @@ bool single_column_restriction::contains::is_satisfied_by(bytes_view collection_
             auto map_key = _entry_keys[i]->bind_and_get(options);
             auto map_value = _entry_values[i]->bind_and_get(options);
             if (!map_key || !map_value) {
-                continue;
+                throw exceptions::invalid_request_exception(
+                        format("Unsupported null map {} for column {}",
+                               map_key ? "key" : "value", _column_def.name_as_text()));
             }
             auto found = with_linearized(*map_key, [&] (bytes_view map_key_bv) {
               return std::find_if(data_map.begin(), data_map.end(), [&] (auto&& element) {

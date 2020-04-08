@@ -4425,3 +4425,22 @@ SEASTAR_TEST_CASE(test_alter_table_default_ttl_reset) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(equals_null_is_forbidden) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&e] {
+            cquery_nofail(
+                    e, "create table t (pk int, ck1 int, ck2 int, r int, m map<int, int>, primary key(pk, ck1, ck2))");
+            cquery_nofail(e, "insert into t(pk,ck1,ck2,r,m) values(1,11,21,101,{1:1})");
+            using ire = exceptions::invalid_request_exception;
+            const auto nullerr = exception_predicate::message_contains("null");
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where pk=null").get(), ire, nullerr);
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where token(pk)=null").get(), ire, nullerr);
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where ck1=null allow filtering").get(), ire, nullerr);
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where (ck1,ck2)=(null,1) allow filtering").get(),
+                                    ire, nullerr);
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where r=null allow filtering").get(), ire, nullerr);
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where m[1]=null allow filtering").get(), ire, nullerr);
+        });
+    });
+}
