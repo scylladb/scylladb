@@ -5256,3 +5256,131 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
     test_sstable_log_too_many_rows_f(random, (random + 1), false);
     test_sstable_log_too_many_rows_f((random + 1), random, true);
 }
+
+// The following test runs on test/resource/sstables/3.x/uncompressed/legacy_udt_in_collection
+// It was created using Scylla 3.0.x using the following CQL statements:
+//
+// CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+// CREATE TYPE ks.ut (a int, b int);
+// CREATE TABLE ks.t ( pk int PRIMARY KEY,
+//                     m map<int, frozen<ut>>,
+//                     fm frozen<map<int, frozen<ut>>>,
+//                     mm map<int, frozen<map<int, frozen<ut>>>>,
+//                     fmm frozen<map<int, frozen<map<int, frozen<ut>>>>>,
+//                     s set<frozen<ut>>,
+//                     fs frozen<set<frozen<ut>>>,
+//                     l list<frozen<ut>>,
+//                     fl frozen<list<frozen<ut>>>
+//                   ) WITH compression = {};
+// UPDATE ks.t USING TIMESTAMP 1525385507816568 SET
+//         m[0] = {a: 0, b: 0},
+//         fm = {0: {a: 0, b: 0}},
+//         mm[0] = {0: {a: 0, b: 0}},
+//         fmm = {0: {0: {a: 0, b: 0}}},
+//         s = s + {{a: 0, b: 0}},
+//         fs = {{a: 0, b: 0}},
+//         l[scylla_timeuuid_list_index(7fb27e80-7b12-11ea-9fad-f4d108a9e4a3)] = {a: 0, b: 0},
+//         fl = [{a: 0, b: 0}]
+//     WHERE pk = 0;
+//
+// It checks whether a SSTable containing UDTs nested in collections, which contains incorrect serialization headers
+// (doesn't wrap nested UDTs in the FrozenType<...> tag) can be loaded by new versions of Scylla.
+
+static const sstring LEGACY_UDT_IN_COLLECTION_PATH =
+    "test/resource/sstables/3.x/uncompressed/legacy_udt_in_collection";
+
+SEASTAR_THREAD_TEST_CASE(test_legacy_udt_in_collection_table) {
+    auto abj = defer([] { await_background_jobs().get(); });
+
+    auto ut = user_type_impl::get_instance("ks", to_bytes("ut"),
+            {to_bytes("a"), to_bytes("b")},
+            {int32_type, int32_type}, false);
+    auto m_type = map_type_impl::get_instance(int32_type, ut, true);
+    auto fm_type = map_type_impl::get_instance(int32_type, ut, false);
+    auto mm_type = map_type_impl::get_instance(int32_type, fm_type, true);
+    auto fmm_type = map_type_impl::get_instance(int32_type, fm_type, false);
+    auto s_type = set_type_impl::get_instance(ut, true);
+    auto fs_type = set_type_impl::get_instance(ut, false);
+    auto l_type = list_type_impl::get_instance(ut, true);
+    auto fl_type = list_type_impl::get_instance(ut, false);
+
+    auto s = schema_builder("ks", "t")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("m", m_type)
+        .with_column("fm", fm_type)
+        .with_column("mm", mm_type)
+        .with_column("fmm", fmm_type)
+        .with_column("s", s_type)
+        .with_column("fs", fs_type)
+        .with_column("l", l_type)
+        .with_column("fl", fl_type)
+        .set_compressor_params(compression_parameters::no_compression())
+        .build();
+
+    auto m_cdef = s->get_column_definition(to_bytes("m"));
+    auto fm_cdef = s->get_column_definition(to_bytes("fm"));
+    auto mm_cdef = s->get_column_definition(to_bytes("mm"));
+    auto fmm_cdef = s->get_column_definition(to_bytes("fmm"));
+    auto s_cdef = s->get_column_definition(to_bytes("s"));
+    auto fs_cdef = s->get_column_definition(to_bytes("fs"));
+    auto l_cdef = s->get_column_definition(to_bytes("l"));
+    auto fl_cdef = s->get_column_definition(to_bytes("fl"));
+    BOOST_REQUIRE(m_cdef && fm_cdef && mm_cdef && fmm_cdef && s_cdef && fs_cdef && l_cdef && fl_cdef);
+
+    auto ut_val = make_user_value(ut, {int32_t(0), int32_t(0)});
+    auto fm_val = make_map_value(fm_type, {{int32_t(0), ut_val}});
+    auto fmm_val = make_map_value(fmm_type, {{int32_t(0), fm_val}});
+    auto fs_val = make_set_value(fs_type, {ut_val});
+    auto fl_val = make_list_value(fl_type, {ut_val});
+
+    mutation mut{s, partition_key::from_deeply_exploded(*s, {0})};
+    auto ckey = clustering_key::make_empty();
+
+    // m[0] = {a: 0, b: 0}
+    {
+        collection_mutation_description desc;
+        desc.cells.emplace_back(int32_type->decompose(0),
+            atomic_cell::make_live(*ut, write_timestamp, ut->decompose(ut_val), atomic_cell::collection_member::yes));
+        mut.set_clustered_cell(ckey, *m_cdef, desc.serialize(*m_type));
+    }
+
+    // fm = {0: {a: 0, b: 0}}
+    mut.set_clustered_cell(ckey, *fm_cdef, atomic_cell::make_live(*fm_type, write_timestamp, fm_type->decompose(fm_val)));
+
+    // mm[0] = {0: {a: 0, b: 0}},
+    {
+        collection_mutation_description desc;
+        desc.cells.emplace_back(int32_type->decompose(0),
+            atomic_cell::make_live(*fm_type, write_timestamp, fm_type->decompose(fm_val), atomic_cell::collection_member::yes));
+        mut.set_clustered_cell(ckey, *mm_cdef, desc.serialize(*mm_type));
+    }
+
+    // fmm = {0: {0: {a: 0, b: 0}}},
+    mut.set_clustered_cell(ckey, *fmm_cdef, atomic_cell::make_live(*fmm_type, write_timestamp, fmm_type->decompose(fmm_val)));
+
+    // s = s + {{a: 0, b: 0}},
+    {
+        collection_mutation_description desc;
+        desc.cells.emplace_back(ut->decompose(ut_val),
+            atomic_cell::make_live(*bytes_type, write_timestamp, bytes{}, atomic_cell::collection_member::yes));
+        mut.set_clustered_cell(ckey, *s_cdef, desc.serialize(*s_type));
+    }
+
+    // fs = {{a: 0, b: 0}},
+    mut.set_clustered_cell(ckey, *fs_cdef, atomic_cell::make_live(*fs_type, write_timestamp, fs_type->decompose(fs_val)));
+
+    // l[scylla_timeuuid_list_index(7fb27e80-7b12-11ea-9fad-f4d108a9e4a3)] = {a: 0, b: 0},
+    {
+        collection_mutation_description desc;
+        desc.cells.emplace_back(timeuuid_type->decompose(utils::UUID("7fb27e80-7b12-11ea-9fad-f4d108a9e4a3")),
+            atomic_cell::make_live(*ut, write_timestamp, ut->decompose(ut_val), atomic_cell::collection_member::yes));
+        mut.set_clustered_cell(ckey, *l_cdef, desc.serialize(*l_type));
+    }
+
+    // fl = [{a: 0, b: 0}]
+    mut.set_clustered_cell(ckey, *fl_cdef, atomic_cell::make_live(*fl_type, write_timestamp, fl_type->decompose(fl_val)));
+
+    sstable_assertions sst(s, LEGACY_UDT_IN_COLLECTION_PATH);
+    sst.load();
+    assert_that(sst.read_rows_flat()).produces(mut).produces_end_of_stream();
+}
