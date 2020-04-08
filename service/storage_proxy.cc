@@ -1844,7 +1844,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     auto keyspace_name = s->ks_name();
     keyspace& ks = _db.local().find_keyspace(keyspace_name);
     auto& rs = ks.get_replication_strategy();
-    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(token);
+    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints_without_node_being_replaced(token);
     std::vector<gms::inet_address> pending_endpoints = _token_metadata.pending_endpoints_for(token, keyspace_name);
 
     slogger.trace("creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints, pending_endpoints);
@@ -2156,8 +2156,8 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 storage_proxy::paxos_participants
 storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &token, db::consistency_level cl_for_paxos) {
     keyspace& ks = _db.local().find_keyspace(ks_name);
-    locator::abstract_replication_strategy& rs = ks.get_replication_strategy();
-    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(token);
+    auto& rs = ks.get_replication_strategy();
+    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints_without_node_being_replaced(token);
     std::vector<gms::inet_address> pending_endpoints = _token_metadata.pending_endpoints_for(token, ks_name);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
@@ -4500,7 +4500,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
 std::vector<gms::inet_address> storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) const {
     auto& rs = ks.get_replication_strategy();
-    std::vector<gms::inet_address> eps = rs.get_natural_endpoints(token);
+    std::vector<gms::inet_address> eps = rs.get_natural_endpoints_without_node_being_replaced(token);
     auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::gossiper::is_alive), &gms::get_local_gossiper())));
     eps.erase(itend, eps.end());
     return eps;

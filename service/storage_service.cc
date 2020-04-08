@@ -288,11 +288,6 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         }
 
         std::tie(_bootstrap_tokens, _cdc_streams_ts) = prepare_replacement_info(loaded_peer_features).get0();
-        // kbraun: I think we don't have to gossip tokens nor streams timestmap when HIBERNATEd
-        // (any state for this node will be ignored by other nodes anyway), but since TOKENS was already there, I added CDC_STREAMS_TIMESTAMP too.
-        app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens));
-        app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts));
-        app_states.emplace(gms::application_state::STATUS, versioned_value::hibernate(true));
         auto replace_address = db().local().get_replace_address();
         replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
@@ -392,7 +387,12 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         ss._local_host_id = local_host_id;
     }).get();
     auto features = get_config_supported_features();
-    _token_metadata.update_host_id(local_host_id, get_broadcast_address());
+    if (!replacing_a_node_with_diff_ip) {
+        // Replacing node with a different ip should own the host_id only after
+        // the replacing node becomes NORMAL status. It is updated in
+        // handle_state_normal().
+        _token_metadata.update_host_id(local_host_id, get_broadcast_address());
+    }
 
     // Replicate the tokens early because once gossip runs other nodes
     // might send reads/writes to this node. Replicate it early to make
@@ -937,9 +937,17 @@ void storage_service::bootstrap() {
         set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
         _gossiper.wait_for_range_setup().get();
     } else {
-        // Dont set any state for the node which is bootstrapping the existing token...
-        _token_metadata.update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
-        replicate_to_all_cores().get();
+        // Wait until we know tokens of existing node before announcing replacing status.
+        set_mode(mode::JOINING, sprint("Wait until local node knows tokens of peer nodes"), true);
+        _gossiper.wait_for_range_setup().get();
+        set_mode(mode::JOINING, sprint("Announce tokens and status of the replacing node"), true);
+        _gossiper.add_local_application_state({
+            { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
+            { gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts) },
+            { gms::application_state::STATUS, versioned_value::hibernate(true) },
+        }).get();
+        set_mode(mode::JOINING, format("Wait until peer nodes know the bootstrap tokens of local node"), true);
+        _gossiper.wait_for_range_setup().get();
         auto replace_addr = db().local().get_replace_address();
         if (replace_addr) {
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
@@ -1041,6 +1049,27 @@ storage_service::get_range_to_address_map(const sstring& keyspace,
     return construct_range_to_endpoint_map(ks, get_all_ranges(sorted_tokens));
 }
 
+void storage_service::handle_state_replacing(inet_address replacing_node) {
+    slogger.debug("endpoint={} handle_state_replacing", replacing_node);
+    auto host_id = _gossiper.get_host_id(replacing_node);
+    auto existing_node_opt = _token_metadata.get_endpoint_for_host_id(host_id);
+    auto replace_addr = db().local().get_replace_address();
+    if (replacing_node == get_broadcast_address() && replace_addr && *replace_addr == get_broadcast_address()) {
+        existing_node_opt = replacing_node;
+    }
+    if (!existing_node_opt) {
+        slogger.warn("Can not find the existing node for the replacing node {}", replacing_node);
+        return;
+    }
+    auto existing_node = *existing_node_opt;
+    auto existing_tokens = get_tokens_for(existing_node);
+    auto replacing_tokens = get_tokens_for(replacing_node);
+    slogger.info("Node {} is replacing existing node {} with host_id={}, existing_tokens={}, replacing_tokens={}",
+            replacing_node, existing_node, host_id, existing_tokens, replacing_tokens);
+    _token_metadata.add_replacing_endpoint(existing_node, replacing_node);
+    update_pending_ranges().get();
+}
+
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
     slogger.debug("endpoint={} handle_state_bootstrap", endpoint);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
@@ -1104,12 +1133,19 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             } else if (_gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
                 slogger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
                 do_remove_node(*existing);
+                slogger.info("Set host_id={} to be owned by node={}, existing={}", host_id, endpoint, *existing);
                 _token_metadata.update_host_id(host_id, endpoint);
+                slogger.info("Remove node {} from pending replacing endpoint", endpoint);
+                _token_metadata.del_replacing_endpoint(endpoint);
             } else {
                 slogger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
                 do_remove_node(endpoint);
             }
+        } else if (existing && *existing == endpoint) {
+            slogger.info("Remove node {} from pending replacing endpoint", endpoint);
+            _token_metadata.del_replacing_endpoint(endpoint);
         } else {
+            slogger.info("Set host_id={} to be owned by node={}", host_id, endpoint);
             _token_metadata.update_host_id(host_id, endpoint);
         }
     }
@@ -1368,6 +1404,8 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             handle_state_left(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
             handle_state_moving(endpoint, pieces);
+        } else if (move_name == sstring(versioned_value::HIBERNATE)) {
+            handle_state_replacing(endpoint);
         } else {
             return; // did nothing.
         }
