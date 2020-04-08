@@ -144,10 +144,15 @@ insert_token_range_to_sorted_container_while_unwrapping(
 
 dht::token_range_vector
 abstract_replication_strategy::get_ranges(inet_address ep) const {
+    return get_ranges(ep, _token_metadata);
+}
+
+dht::token_range_vector
+abstract_replication_strategy::get_ranges(inet_address ep, token_metadata& tm) const {
     dht::token_range_vector ret;
-    auto prev_tok = _token_metadata.sorted_tokens().back();
-    for (auto tok : _token_metadata.sorted_tokens()) {
-        for (inet_address a : calculate_natural_endpoints(tok, _token_metadata)) {
+    auto prev_tok = tm.sorted_tokens().back();
+    for (auto tok : tm.sorted_tokens()) {
+        for (inet_address a : calculate_natural_endpoints(tok, tm)) {
             if (a == ep) {
                 insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
                 break;
