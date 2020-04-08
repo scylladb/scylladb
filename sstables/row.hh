@@ -1348,7 +1348,7 @@ public:
         , _consumer(consumer)
         , _sst(sst)
         , _header(sst->get_serialization_header())
-        , _column_translation(sst->get_column_translation(s, _header))
+        , _column_translation(sst->get_column_translation(s, _header, sst->features()))
         , _has_shadowable_tombstones(sst->has_shadowable_tombstones())
     {
         setup_columns(_regular_row, _column_translation.regular_columns());
