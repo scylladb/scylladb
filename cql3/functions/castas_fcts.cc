@@ -73,6 +73,10 @@ shared_ptr<function> make_castas_function(data_type to_type, data_type from_type
  */
 namespace {
 
+data_value identity_castas_fctn(data_value val) {
+    return val;
+}
+
 using bytes_opt = std::optional<bytes>;
 
 template<typename ToType, typename FromType>
@@ -224,7 +228,6 @@ using castas_fctns_map = std::unordered_map<castas_fctn_key, castas_fctn, castas
 
 // List of supported castas functions...
 thread_local castas_fctns_map castas_fctns {
-    { {byte_type, byte_type}, make_castas_fctn_simple<int8_t, int8_t>() },
     { {byte_type, short_type}, make_castas_fctn_simple<int8_t, int16_t>() },
     { {byte_type, int32_type}, make_castas_fctn_simple<int8_t, int32_t>() },
     { {byte_type, long_type}, make_castas_fctn_simple<int8_t, int64_t>() },
@@ -234,7 +237,6 @@ thread_local castas_fctns_map castas_fctns {
     { {byte_type, decimal_type}, make_castas_fctn_from_decimal_to_integer<int8_t>() },
 
     { {short_type, byte_type}, make_castas_fctn_simple<int16_t, int8_t>() },
-    { {short_type, short_type}, make_castas_fctn_simple<int16_t, int16_t>() },
     { {short_type, int32_type}, make_castas_fctn_simple<int16_t, int32_t>() },
     { {short_type, long_type}, make_castas_fctn_simple<int16_t, int64_t>() },
     { {short_type, float_type}, make_castas_fctn_simple<int16_t, float>() },
@@ -244,7 +246,6 @@ thread_local castas_fctns_map castas_fctns {
 
     { {int32_type, byte_type}, make_castas_fctn_simple<int32_t, int8_t>() },
     { {int32_type, short_type}, make_castas_fctn_simple<int32_t, int16_t>() },
-    { {int32_type, int32_type}, make_castas_fctn_simple<int32_t, int32_t>() },
     { {int32_type, long_type}, make_castas_fctn_simple<int32_t, int64_t>() },
     { {int32_type, float_type}, make_castas_fctn_simple<int32_t, float>() },
     { {int32_type, double_type}, make_castas_fctn_simple<int32_t, double>() },
@@ -254,7 +255,6 @@ thread_local castas_fctns_map castas_fctns {
     { {long_type, byte_type}, make_castas_fctn_simple<int64_t, int8_t>() },
     { {long_type, short_type}, make_castas_fctn_simple<int64_t, int16_t>() },
     { {long_type, int32_type}, make_castas_fctn_simple<int64_t, int32_t>() },
-    { {long_type, long_type}, make_castas_fctn_simple<int64_t, int64_t>() },
     { {long_type, float_type}, make_castas_fctn_simple<int64_t, float>() },
     { {long_type, double_type}, make_castas_fctn_simple<int64_t, double>() },
     { {long_type, varint_type}, make_castas_fctn_from_varint_to_integer<int64_t>() },
@@ -264,7 +264,6 @@ thread_local castas_fctns_map castas_fctns {
     { {float_type, short_type}, make_castas_fctn_simple<float, int16_t>() },
     { {float_type, int32_type}, make_castas_fctn_simple<float, int32_t>() },
     { {float_type, long_type}, make_castas_fctn_simple<float, int64_t>() },
-    { {float_type, float_type}, make_castas_fctn_simple<float, float>() },
     { {float_type, double_type}, make_castas_fctn_simple<float, double>() },
     { {float_type, varint_type}, make_castas_fctn_simple<float, utils::multiprecision_int>() },
     { {float_type, decimal_type}, make_castas_fctn_from_decimal_to_float<float>() },
@@ -274,7 +273,6 @@ thread_local castas_fctns_map castas_fctns {
     { {double_type, int32_type}, make_castas_fctn_simple<double, int32_t>() },
     { {double_type, long_type}, make_castas_fctn_simple<double, int64_t>() },
     { {double_type, float_type}, make_castas_fctn_simple<double, float>() },
-    { {double_type, double_type}, make_castas_fctn_simple<double, double>() },
     { {double_type, varint_type}, make_castas_fctn_simple<double, utils::multiprecision_int>() },
     { {double_type, decimal_type}, make_castas_fctn_from_decimal_to_float<double>() },
 
@@ -294,7 +292,6 @@ thread_local castas_fctns_map castas_fctns {
     { {decimal_type, float_type}, make_castas_fctn_from_float_to_decimal<float>() },
     { {decimal_type, double_type}, make_castas_fctn_from_float_to_decimal<double>() },
     { {decimal_type, varint_type}, make_castas_fctn_from_integer_to_decimal<utils::multiprecision_int>() },
-    { {decimal_type, decimal_type}, make_castas_fctn_simple<big_decimal, big_decimal>() },
 
     { {ascii_type, byte_type}, make_castas_fctn_to_string<int8_t>() },
     { {ascii_type, short_type}, make_castas_fctn_to_string<int16_t>() },
@@ -327,7 +324,6 @@ thread_local castas_fctns_map castas_fctns {
     { {ascii_type, uuid_type}, make_castas_fctn_from_dv_to_string() },
     { {ascii_type, boolean_type}, make_castas_fctn_from_dv_to_string() },
     { {ascii_type, inet_addr_type}, make_castas_fctn_from_dv_to_string() },
-    { {ascii_type, ascii_type}, make_castas_fctn_simple<sstring, sstring>() },
 
     { {utf8_type, timestamp_type}, make_castas_fctn_from_dv_to_string() },
     { {utf8_type, simple_date_type}, make_castas_fctn_from_dv_to_string() },
@@ -337,12 +333,17 @@ thread_local castas_fctns_map castas_fctns {
     { {utf8_type, boolean_type}, make_castas_fctn_from_dv_to_string() },
     { {utf8_type, inet_addr_type}, make_castas_fctn_from_dv_to_string() },
     { {utf8_type, ascii_type}, make_castas_fctn_simple<sstring, sstring>() },
-    { {utf8_type, utf8_type}, make_castas_fctn_simple<sstring, sstring>() },
 };
 
 } /* Anonymous Namespace */
 
 castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
+    if (from_type == to_type) {
+        // Casting any type to itself doesn't make sense, but it is
+        // harmless so allow it instead of reporting a confusing error
+        // message about TypeX not being castable to TypeX.
+        return identity_castas_fctn;
+    }
     auto it_candidate = castas_fctns.find(castas_fctn_key{to_type, from_type});
     if (it_candidate == castas_fctns.end()) {
         throw exceptions::invalid_request_exception(format("{} cannot be cast to {}", from_type->name(), to_type->name()));
