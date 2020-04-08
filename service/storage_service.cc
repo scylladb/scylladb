@@ -958,7 +958,7 @@ void storage_service::bootstrap() {
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     if (is_repair_based_node_ops_enabled()) {
         if (db().local().is_replacing()) {
-            replace_with_repair(_db, _token_metadata).get();
+            replace_with_repair(_db, _token_metadata, _bootstrap_tokens).get();
         } else {
             bootstrap_with_repair(_db, _token_metadata, _bootstrap_tokens).get();
         }
