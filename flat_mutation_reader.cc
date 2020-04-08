@@ -173,11 +173,11 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, size_
         }
 
         virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
-            throw std::bad_function_call();
+            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
         }
 
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
-            throw std::bad_function_call();
+            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
         }
         virtual size_t buffer_size() const override {
             return flat_mutation_reader::impl::buffer_size() + _source->buffer_size();
@@ -335,7 +335,7 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_par
             });
         }
         virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-            throw std::bad_function_call();
+            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
         }
         virtual void next_partition() override {
             clear_buffer_to_next_partition();
@@ -643,7 +643,7 @@ public:
         return _reader->fast_forward_to(pr, timeout);
     }
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual void next_partition() override {
         if (!_reader) {
@@ -714,7 +714,7 @@ public:
     }
 
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
 
     virtual void next_partition() override {
@@ -922,13 +922,13 @@ public:
         });
     }
     virtual void next_partition() override {
-        throw std::bad_function_call();
+        throw_with_backtrace<std::bad_function_call>();
     }
     virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
 };
 

@@ -950,7 +950,7 @@ public:
     }
 
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
 
     std::size_t call_count() const {
@@ -1069,7 +1069,7 @@ class dummy_file_impl : public file_impl {
     }
 
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override {
-        throw std::bad_function_call();
+        throw_with_backtrace<std::bad_function_call>();
     }
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
@@ -2076,8 +2076,12 @@ public:
         abort();
     }
     virtual void next_partition() override { }
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
-    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
+    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
 };
 
 // Test a background pending read-ahead outliving the reader.

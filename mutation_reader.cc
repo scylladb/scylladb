@@ -1453,7 +1453,7 @@ future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeo
 }
 
 future<> shard_reader::fast_forward_to(position_range, db::timeout_clock::time_point timeout) {
-    return make_exception_future<>(std::bad_function_call());
+    return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
 }
 
 void shard_reader::read_ahead(db::timeout_clock::time_point timeout) {
@@ -1648,7 +1648,7 @@ future<> multishard_combining_reader::fast_forward_to(const dht::partition_range
 }
 
 future<> multishard_combining_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
-    return make_exception_future<>(std::bad_function_call());
+    return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
 }
 
 namespace {
@@ -1762,13 +1762,13 @@ public:
         return _full->get_future();
     }
     virtual void next_partition() override {
-        throw std::bad_function_call();
+        throw_with_backtrace<std::bad_function_call>();
     }
     virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     future<> push(mutation_fragment&& mf) {
         if (!is_buffer_full()) {
@@ -1997,7 +1997,7 @@ public:
         return _reader.fast_forward_to(pr, timeout);
     }
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual size_t buffer_size() const override {
         return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();

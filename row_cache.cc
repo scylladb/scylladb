@@ -441,7 +441,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual size_t buffer_size() const override {
         if (_reader) {
@@ -717,7 +717,7 @@ public:
         return make_ready_future<>();
     }
     virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
-        throw std::bad_function_call();
+        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     virtual size_t buffer_size() const override {
         if (_reader) {
