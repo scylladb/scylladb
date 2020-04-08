@@ -39,6 +39,7 @@
 
 #include "mp_row_consumer.hh"
 #include "column_translation.hh"
+#include "concrete_types.hh"
 
 namespace sstables {
 
@@ -80,9 +81,42 @@ atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value) {
     return ccb.build(timestamp);
 }
 
+// See #6130.
+static data_type freeze_types_in_collections(data_type t) {
+    return ::visit(*t, make_visitor(
+    [] (const map_type_impl& typ) -> data_type {
+        return map_type_impl::get_instance(
+                freeze_types_in_collections(typ.get_keys_type()->freeze()),
+                freeze_types_in_collections(typ.get_values_type()->freeze()),
+                typ.is_multi_cell());
+    },
+    [] (const set_type_impl& typ) -> data_type {
+        return set_type_impl::get_instance(
+                freeze_types_in_collections(typ.get_elements_type()->freeze()),
+                typ.is_multi_cell());
+    },
+    [] (const list_type_impl& typ) -> data_type {
+        return list_type_impl::get_instance(
+                freeze_types_in_collections(typ.get_elements_type()->freeze()),
+                typ.is_multi_cell());
+    },
+    [&] (const abstract_type& typ) -> data_type {
+        return std::move(t);
+    }
+    ));
+}
+
+/* If this function returns false, the caller cannot assume that the SSTable comes from Scylla.
+ * It might, if for some reason a table was created using Scylla that didn't contain any feature bit,
+ * but that should never happen. */
+static bool is_certainly_scylla_sstable(const sstable_enabled_features& features) {
+    return features.enabled_features;
+}
+
 std::vector<column_translation::column_info> column_translation::state::build(
         const schema& s,
         const utils::chunked_vector<serialization_header::column_desc>& src,
+        const sstable_enabled_features& features,
         bool is_static) {
     std::vector<column_info> cols;
     if (s.is_dense()) {
@@ -101,6 +135,10 @@ std::vector<column_translation::column_info> column_translation::state::build(
         for (auto&& desc : src) {
             const bytes& type_name = desc.type_name.value;
             data_type type = db::marshal::type_parser::parse(to_sstring_view(type_name));
+            if (!features.is_enabled(CorrectUDTsInCollections) && is_certainly_scylla_sstable(features)) {
+                // See #6130.
+                type = freeze_types_in_collections(std::move(type));
+            }
             const column_definition* def = s.get_column_definition(desc.name.value);
             std::optional<column_id> id;
             bool schema_mismatch = false;

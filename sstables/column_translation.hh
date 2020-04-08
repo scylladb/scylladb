@@ -72,6 +72,7 @@ private:
         static std::vector<column_info> build(
                 const schema& s,
                 const utils::chunked_vector<serialization_header::column_desc>& src,
+                const sstable_enabled_features& features,
                 bool is_static);
 
         utils::UUID schema_uuid;
@@ -85,10 +86,10 @@ private:
         state(state&&) = default;
         state& operator=(state&&) = default;
 
-        state(const schema& s, const serialization_header& header)
+        state(const schema& s, const serialization_header& header, const sstable_enabled_features& features)
             : schema_uuid(s.version())
-            , regular_schema_columns_from_sstable(build(s, header.regular_columns.elements, false))
-            , static_schema_columns_from_sstable(build(s, header.static_columns.elements, true))
+            , regular_schema_columns_from_sstable(build(s, header.regular_columns.elements, features, false))
+            , static_schema_columns_from_sstable(build(s, header.static_columns.elements, features, true))
             , clustering_column_value_fix_lengths (get_clustering_values_fixed_lengths(header))
         {}
     };
@@ -96,9 +97,10 @@ private:
     lw_shared_ptr<const state> _state = make_lw_shared<const state>();
 
 public:
-    column_translation get_for_schema(const schema& s, const serialization_header& header) {
+    column_translation get_for_schema(
+            const schema& s, const serialization_header& header, const sstable_enabled_features& features) {
         if (s.version() != _state->schema_uuid) {
-            _state = make_lw_shared(state(s, header));
+            _state = make_lw_shared(state(s, header, features));
         }
         return *this;
     }
