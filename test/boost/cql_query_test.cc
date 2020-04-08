@@ -4444,3 +4444,16 @@ SEASTAR_TEST_CASE(equals_null_is_forbidden) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(ck_slice_with_null_is_forbidden) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&e] {
+            cquery_nofail(e, "create table t (p int primary key, r int)");
+            cquery_nofail(e, "insert into t(p,r) values (1,11)");
+            using ire = exceptions::invalid_request_exception;
+            const auto nullerr = exception_predicate::message_contains("null");
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where r<null allow filtering").get(), ire, nullerr);
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where r>null allow filtering").get(), ire, nullerr);
+        });
+    });
+}

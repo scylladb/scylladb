@@ -682,7 +682,7 @@ bool single_column_restriction::IN::is_satisfied_by(bytes_view data, const query
     });
 }
 
-static query::range<bytes_view> to_range(const term_slice& slice, const query_options& options) {
+static query::range<bytes_view> to_range(const term_slice& slice, const query_options& options, const sstring& name) {
     using range_type = query::range<bytes_view>;
     auto extract_bound = [&] (statements::bound bound) -> std::optional<range_type::bound> {
         if (!slice.has_bound(bound)) {
@@ -690,7 +690,7 @@ static query::range<bytes_view> to_range(const term_slice& slice, const query_op
         }
         auto value = slice.bound(bound)->bind_and_get(options);
         if (!value) {
-            return { };
+            throw exceptions::invalid_request_exception(format("Invalid null bound for {}", name));
         }
         auto value_view = options.linearize(*value);
         return { range_type::bound(value_view, slice.is_inclusive(bound)) };
@@ -714,7 +714,8 @@ bool single_column_restriction::slice::is_satisfied_by(const schema& schema,
         return false;
     }
     return cell_value->with_linearized([&] (bytes_view cell_value_bv) {
-        return to_range(_slice, options).contains(cell_value_bv, _column_def.type->as_tri_comparator());
+        return to_range(_slice, options, _column_def.name_as_text()).contains(
+                cell_value_bv, _column_def.type->as_tri_comparator());
     });
 }
 
@@ -722,7 +723,8 @@ bool single_column_restriction::slice::is_satisfied_by(bytes_view data, const qu
     if (_column_def.type->is_counter()) {
         fail(unimplemented::cause::COUNTERS);
     }
-    return to_range(_slice, options).contains(data, _column_def.type->underlying_type()->as_tri_comparator());
+    return to_range(_slice, options, _column_def.name_as_text()).contains(
+            data, _column_def.type->underlying_type()->as_tri_comparator());
 }
 
 bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
@@ -934,7 +936,7 @@ bool token_restriction::slice::is_satisfied_by(const schema& schema,
         const query_options& options,
         gc_clock::time_point now) const {
     bool satisfied = false;
-    auto range = to_range(_slice, options);
+    auto range = to_range(_slice, options, "token");
     for (auto* cdef : _column_definitions) {
         auto cell_value = do_get_value(schema, *cdef, key, ckey, cells, now);
         if (!cell_value) {
