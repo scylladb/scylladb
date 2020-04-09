@@ -853,7 +853,8 @@ void throw_on_error(const sstring& opt, const sstring& msg, std::optional<utils:
 } // anonymous namespace
 
 SEASTAR_TEST_CASE(test_parse_yaml) {
-    config cfg;
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
 
     cfg.read_from_yaml(cassandra_conf, throw_on_error);
 
@@ -891,7 +892,8 @@ SEASTAR_TEST_CASE(test_parse_yaml) {
 }
 
 SEASTAR_TEST_CASE(test_parse_broken) {
-    config cfg;
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
 
     bool ok = false;
 
@@ -926,7 +928,8 @@ using ef = experimental_features_t;
 using features = std::vector<enum_option<ef>>;
 
 SEASTAR_TEST_CASE(test_parse_experimental_features_cdc) {
-    config cfg;
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
     cfg.read_from_yaml("experimental_features:\n    - cdc\n", throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::CDC});
     BOOST_CHECK(cfg.check_experimental(ef::CDC));
@@ -936,7 +939,8 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_cdc) {
 }
 
 SEASTAR_TEST_CASE(test_parse_experimental_features_unused) {
-    config cfg;
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
     cfg.read_from_yaml("experimental_features:\n    - lwt\n", throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UNUSED});
     BOOST_CHECK(!cfg.check_experimental(ef::CDC));
@@ -946,7 +950,8 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_unused) {
 }
 
 SEASTAR_TEST_CASE(test_parse_experimental_features_udf) {
-    config cfg;
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
     cfg.read_from_yaml("experimental_features:\n    - udf\n", throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), features{ef::UDF});
     BOOST_CHECK(!cfg.check_experimental(ef::CDC));
@@ -956,7 +961,8 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_udf) {
 }
 
 SEASTAR_TEST_CASE(test_parse_experimental_features_multiple) {
-    config cfg;
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
     cfg.read_from_yaml("experimental_features:\n    - cdc\n    - lwt\n    - cdc\n", throw_on_error);
     BOOST_CHECK_EQUAL(cfg.experimental_features(), (features{ef::CDC, ef::UNUSED, ef::CDC}));
     BOOST_CHECK(cfg.check_experimental(ef::CDC));
@@ -966,7 +972,8 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_multiple) {
 }
 
 SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
-    config cfg;
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
     using value_status = utils::config_file::value_status;
     cfg.read_from_yaml("experimental_features:\n    - invalidoptiontvaluedonotuse\n",
                        [&cfg] (const sstring& opt, const sstring& msg, std::optional<value_status> status) {
@@ -980,7 +987,8 @@ SEASTAR_TEST_CASE(test_parse_experimental_features_invalid) {
 }
 
 SEASTAR_TEST_CASE(test_parse_experimental_true) {
-    config cfg;
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
     cfg.read_from_yaml("experimental: true", throw_on_error);
     BOOST_CHECK(cfg.check_experimental(ef::CDC));
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
@@ -989,7 +997,8 @@ SEASTAR_TEST_CASE(test_parse_experimental_true) {
 }
 
 SEASTAR_TEST_CASE(test_parse_experimental_false) {
-    config cfg;
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
     cfg.read_from_yaml("experimental: false", throw_on_error);
     BOOST_CHECK(!cfg.check_experimental(ef::CDC));
     BOOST_CHECK(!cfg.check_experimental(ef::UNUSED));
