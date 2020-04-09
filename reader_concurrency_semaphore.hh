@@ -23,18 +23,15 @@
 
 #include <map>
 #include <seastar/core/future.hh>
-#include "db/timeout_clock.hh"
 #include "reader_permit.hh"
 
 using namespace seastar;
 
 /// Specific semaphore for controlling reader concurrency
 ///
-/// Before creating a reader one should obtain a permit by calling
-/// `wait_admission()`. This permit can then be used for tracking the
-/// reader's memory consumption.
-/// The permit should be held onto for the lifetime of the reader
-/// and/or any buffer its tracking.
+/// Use `make_permit()` to create a permit to track the resource consumption
+/// of a specific read. The permit should be created before the read is even
+/// started so it is available to track resource consumption from the start.
 /// Reader concurrency is dual limited by count and memory.
 /// The semaphore can be configured with the desired limits on
 /// construction. New readers will only be admitted when there is both
@@ -92,9 +89,9 @@ public:
 
 private:
     struct entry {
-        promise<reader_permit> pr;
+        promise<reader_permit::resource_units> pr;
         resources res;
-        entry(promise<reader_permit>&& pr, resources r) : pr(std::move(pr)), res(r) {}
+        entry(promise<reader_permit::resource_units>&& pr, resources r) : pr(std::move(pr)), res(r) {}
     };
 
     class expiry_handler {
@@ -128,6 +125,8 @@ private:
         return has_available_units(r) && _wait_list.empty();
     }
 
+    future<reader_permit::resource_units> do_wait_admission(size_t memory, db::timeout_clock::time_point timeout);
+
 public:
     struct no_limits { };
 
@@ -150,6 +149,8 @@ public:
                 std::numeric_limits<int>::max(),
                 std::numeric_limits<ssize_t>::max(),
                 "unlimited reader_concurrency_semaphore") {}
+
+    ~reader_concurrency_semaphore();
 
     reader_concurrency_semaphore(const reader_concurrency_semaphore&) = delete;
     reader_concurrency_semaphore& operator=(const reader_concurrency_semaphore&) = delete;
@@ -195,6 +196,8 @@ public:
     /// Consume the specific amount of resources without waiting.
     reader_permit consume_resources(resources r);
 
+    reader_permit make_permit();
+
     const resources available_resources() const {
         return _resources;
     }
@@ -208,4 +211,6 @@ public:
     size_t waiters() const {
         return _wait_list.size();
     }
+
+    void broken(std::exception_ptr ex);
 };

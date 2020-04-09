@@ -25,6 +25,8 @@
 #include <seastar/core/file.hh>
 #include "seastarx.hh"
 
+#include "db/timeout_clock.hh"
+
 struct reader_resources {
     int count = 0;
     ssize_t memory = 0;
@@ -59,6 +61,14 @@ struct reader_resources {
 
 class reader_concurrency_semaphore;
 
+/// A permit for a specific read.
+///
+/// Used to track the read's resource consumption and wait for admission to read
+/// from the disk.
+/// Use `consume_memory()` to register memory usage. Use `wait_admission()` to
+/// wait for admission, before reading from the disk. Both methods return a
+/// `resource_units` RAII object that should be held onto while the respective
+/// resources are in use.
 class reader_permit {
     struct impl {
         reader_concurrency_semaphore& semaphore;
@@ -69,6 +79,7 @@ class reader_permit {
     };
 
     friend reader_permit no_reader_permit();
+    friend class reader_concurrency_semaphore;
 
 public:
     class resource_units {
@@ -76,6 +87,7 @@ public:
         reader_resources _resources;
 
         friend class reader_permit;
+        friend class reader_concurrency_semaphore;
     private:
         resource_units() = default;
         resource_units(reader_concurrency_semaphore& semaphore, reader_resources res) noexcept;
@@ -94,9 +106,9 @@ private:
 private:
     reader_permit() = default;
 
-public:
     reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost);
 
+public:
     bool operator==(const reader_permit& o) const {
         return _impl == o._impl;
     }
@@ -104,7 +116,14 @@ public:
         return bool(_impl);
     }
 
+    reader_concurrency_semaphore* semaphore();
+
+    future<resource_units> wait_admission(size_t memory, db::timeout_clock::time_point timeout);
+
     resource_units consume_memory(size_t memory = 0);
+
+    resource_units consume_resources(reader_resources res);
+
     void release();
 };
 

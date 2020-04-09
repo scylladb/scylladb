@@ -68,11 +68,30 @@ reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, reader_res
     : _impl(make_lw_shared<reader_permit::impl>(semaphore, base_cost)) {
 }
 
+reader_concurrency_semaphore* reader_permit::semaphore() {
+    return _impl ? &_impl->semaphore : nullptr;
+}
+
+future<reader_permit::resource_units> reader_permit::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
+    if (!_impl) {
+        return make_ready_future<resource_units>(resource_units());
+    }
+    return _impl->semaphore.do_wait_admission(memory, timeout);
+}
+
 reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
     if (!_impl) {
         return resource_units();
     }
     const auto res = reader_resources{0, ssize_t(memory)};
+    _impl->semaphore.consume(res);
+    return resource_units(_impl->semaphore, res);
+}
+
+reader_permit::resource_units reader_permit::consume_resources(reader_resources res) {
+    if (!_impl) {
+        return resource_units();
+    }
     _impl->semaphore.consume(res);
     return resource_units(_impl->semaphore, res);
 }
@@ -92,12 +111,16 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
         auto& x = _wait_list.front();
         _resources -= x.res;
         try {
-            x.pr.set_value(reader_permit(*this, x.res));
+            x.pr.set_value(reader_permit::resource_units(*this, x.res));
         } catch (...) {
             x.pr.set_exception(std::current_exception());
         }
         _wait_list.pop_front();
     }
+}
+
+reader_concurrency_semaphore::~reader_concurrency_semaphore() {
+    broken(std::make_exception_ptr(broken_semaphore{}));
 }
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(std::unique_ptr<inactive_read> ir) {
@@ -141,13 +164,12 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
     return true;
 }
 
-future<reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory,
-        db::timeout_clock::time_point timeout) {
+future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
         if (_prethrow_action) {
             _prethrow_action();
         }
-        return make_exception_future<reader_permit>(
+        return make_exception_future<reader_permit::resource_units>(
                 std::make_exception_ptr(std::runtime_error(
                         format("{}: restricted mutation reader queue overload", _name))));
     }
@@ -163,17 +185,35 @@ future<reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory
     }
     if (may_proceed(r)) {
         _resources -= r;
-        return make_ready_future<reader_permit>(reader_permit(*this, r));
+        return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(*this, r));
     }
-    promise<reader_permit> pr;
+    promise<reader_permit::resource_units> pr;
     auto fut = pr.get_future();
     _wait_list.push_back(entry(std::move(pr), r), timeout);
     return fut;
 }
 
+future<reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
+    return do_wait_admission(memory, timeout).then([this] (reader_permit::resource_units res) {
+        auto underlying_res = std::exchange(res._resources, {});
+        return reader_permit(*this, underlying_res);
+    });
+}
+
 reader_permit reader_concurrency_semaphore::consume_resources(resources r) {
     _resources -= r;
     return reader_permit(*this, r);
+}
+
+reader_permit reader_concurrency_semaphore::make_permit() {
+    return reader_permit(*this, {});
+}
+
+void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
+    while (!_wait_list.empty()) {
+        _wait_list.front().pr.set_exception(std::make_exception_ptr(broken_semaphore{}));
+        _wait_list.pop_front();
+    }
 }
 
 // A file that tracks the memory usage of buffers resulting from read
