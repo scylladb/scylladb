@@ -335,10 +335,6 @@ table::make_sstable_reader(schema_ptr s,
                                    tracing::trace_state_ptr trace_state,
                                    streamed_mutation::forwarding fwd,
                                    mutation_reader::forwarding fwd_mr) const {
-    auto* semaphore = service::get_local_streaming_read_priority().id() == pc.id()
-        ? _config.streaming_read_concurrency_semaphore
-        : _config.read_concurrency_semaphore;
-
     // CAVEAT: if make_sstable_reader() is called on a single partition
     // we want to optimize and read exactly this partition. As a
     // consequence, fast_forward_to() will *NOT* work on the result,
@@ -360,7 +356,7 @@ table::make_sstable_reader(schema_ptr s,
                 });
             }
 
-            return mutation_source([semaphore, this, sstables=std::move(sstables)] (
+            return mutation_source([this, sstables=std::move(sstables)] (
                     schema_ptr s,
                     reader_permit permit,
                     const dht::partition_range& pr,
@@ -373,7 +369,7 @@ table::make_sstable_reader(schema_ptr s,
                         _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
             });
         } else {
-            return mutation_source([semaphore, sstables=std::move(sstables)] (
+            return mutation_source([sstables=std::move(sstables)] (
                     schema_ptr s,
                     reader_permit permit,
                     const dht::partition_range& pr,
@@ -388,10 +384,10 @@ table::make_sstable_reader(schema_ptr s,
         }
     }();
 
-    if (semaphore) {
-        return make_restricted_flat_reader(*semaphore, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    if (permit) {
+        return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
     } else {
-        return ms.make_reader(std::move(s), no_reader_permit(), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        return ms.make_reader(std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
     }
 }
 

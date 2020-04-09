@@ -989,7 +989,7 @@ public:
             return flat_mutation_reader(std::move(tracker_ptr));
         });
 
-        _reader = make_restricted_flat_reader(semaphore, std::move(ms), schema);
+        _reader = make_restricted_flat_reader(std::move(ms), schema, semaphore.make_permit());
     }
 
     reader_wrapper(
@@ -1328,16 +1328,14 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
 
 SEASTAR_TEST_CASE(test_restricted_reader_as_mutation_source) {
     return seastar::async([test_name = get_name()] {
-        reader_concurrency_semaphore semaphore(100, 10 * new_reader_base_cost, test_name);
-
-        auto make_restricted_populator = [&semaphore](schema_ptr s, const std::vector<mutation> &muts) {
+        auto make_restricted_populator = [] (schema_ptr s, const std::vector<mutation> &muts) {
             auto mt = make_lw_shared<memtable>(s);
             for (auto &&mut : muts) {
                 mt->apply(mut);
             }
 
             auto ms = mt->as_data_source();
-            return mutation_source([&semaphore, ms = std::move(ms)](schema_ptr schema,
+            return mutation_source([ms = std::move(ms)](schema_ptr schema,
                     reader_permit permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
@@ -1345,7 +1343,7 @@ SEASTAR_TEST_CASE(test_restricted_reader_as_mutation_source) {
                     tracing::trace_state_ptr tr,
                     streamed_mutation::forwarding fwd,
                     mutation_reader::forwarding fwd_mr) {
-                return make_restricted_flat_reader(semaphore, std::move(ms), std::move(schema), range, slice, pc, tr,
+                return make_restricted_flat_reader(std::move(ms), std::move(schema), std::move(permit), range, slice, pc, tr,
                         fwd, fwd_mr);
             });
         };
