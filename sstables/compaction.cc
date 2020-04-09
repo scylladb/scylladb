@@ -486,8 +486,13 @@ private:
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_schema));
         sstring formatted_msg = "[";
         auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - _schema->gc_grace_seconds());
+        min_max_tracker<api::timestamp_type> timestamp_tracker;
 
         for (auto& sst : _sstables) {
+            auto& sst_stats = sst->get_stats_metadata();
+            timestamp_tracker.update(sst_stats.min_timestamp);
+            timestamp_tracker.update(sst_stats.max_timestamp);
+
             // Compacted sstable keeps track of its ancestors.
             _ancestors.push_back(sst->generation());
             _info->start_size += sst->bytes_on_disk();
@@ -513,7 +518,7 @@ private:
             // is that we might miss a high water mark for the commit log replayer,
             // this is kind of ok, esp. since we will hopefully not be trying to recover based on
             // compacted sstables anyway (CL should be clean by then).
-            _rp = std::max(_rp, sst->get_stats_metadata().position);
+            _rp = std::max(_rp, sst_stats.position);
         }
         formatted_msg += "]";
         _info->sstables = _sstables.size();
@@ -523,6 +528,8 @@ private:
 
         _compacting = std::move(ssts);
 
+        _ms_metadata.min_timestamp = timestamp_tracker.min();
+        _ms_metadata.max_timestamp = timestamp_tracker.max();
         auto now = gc_clock::now();
         auto consumer = make_interposer_consumer([this, gc_consumer = std::move(gc_consumer), now] (flat_mutation_reader reader) mutable
         {
