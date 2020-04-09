@@ -305,6 +305,11 @@ public:
     get_window_for(const time_window_compaction_strategy_options& options, api::timestamp_type ts) {
         return get_window_lower_bound(options.sstable_window_size, to_timestamp_type(options.timestamp_resolution, ts));
     }
+
+    static api::timestamp_type
+    get_window_size(const time_window_compaction_strategy_options& options) {
+        return timestamp_type(std::chrono::duration_cast<std::chrono::microseconds>(options.get_sstable_window_size()).count());
+    }
 private:
     void update_estimated_compaction_by_tasks(std::map<timestamp_type, std::vector<shared_sstable>>& tasks, int min_threshold) {
         int64_t n = 0;

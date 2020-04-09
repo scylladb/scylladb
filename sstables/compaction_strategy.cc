@@ -792,7 +792,11 @@ uint64_t time_window_compaction_strategy::adjust_partition_estimate(const mutati
     }
     const auto min_window = get_window_for(_options, *ms_meta.min_timestamp);
     const auto max_window = get_window_for(_options, *ms_meta.max_timestamp);
-    return partition_estimate / (max_window - min_window + 1);
+    const auto window_size = get_window_size(_options);
+
+    auto estimated_window_count = (max_window + (window_size - 1) - min_window) / window_size;
+
+    return partition_estimate / std::max(1UL, uint64_t(estimated_window_count));
 }
 
 namespace {
