@@ -5702,3 +5702,78 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
         BOOST_REQUIRE(ret.new_sstables.size() == 2);
     });
 }
+
+SEASTAR_TEST_CASE(autocompaction_control_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        storage_service_for_tests ssft;
+        cell_locker_stats cl_stats;
+        cache_tracker tracker;
+
+        compaction_manager cm; cm.start();
+
+        auto s = schema_builder(some_keyspace, some_column_family)
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type)
+                .build();
+
+        auto tmp = tmpdir();
+        column_family::config cfg = column_family_test_config();
+        cfg.datadir = tmp.path().string();
+        cfg.enable_commitlog = false;
+        cfg.enable_disk_writes = true;
+
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats, tracker);
+        cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+        cf->mark_ready_for_writes();
+
+        // no compactions done yet
+        auto& ss = cm.get_stats();
+        BOOST_REQUIRE(ss.pending_tasks == 0 && ss.active_tasks == 0 && ss.completed_tasks == 0);
+        // auto compaction is enabled by default
+        BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
+        // disable auto compaction by user
+        cf->disable_auto_compaction();
+        // check it is disabled
+        BOOST_REQUIRE(cf->is_auto_compaction_disabled_by_user());
+
+        // generate a few sstables
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, la, big);
+        };
+        auto make_insert = [&] (partition_key key) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1 /* ts */);
+            return m;
+        };
+        auto min_threshold = cf->schema()->min_compaction_threshold();
+        auto tokens = token_generation_for_current_shard(1);
+        for (auto i = 0; i < 2 * min_threshold; ++i) {
+            auto key = partition_key::from_exploded(*s, {to_bytes(tokens[0].first)});
+            auto mut = make_insert(key);
+            auto sst = make_sstable_containing(sst_gen, {mut});
+            cf->add_sstable_and_update_cache(sst).wait();
+        }
+
+        // check compaction manager does not receive background compaction submissions
+        cf->start();
+        cf->trigger_compaction();
+        cf->get_compaction_manager().submit(cf.get());
+        BOOST_REQUIRE(ss.pending_tasks == 0 && ss.active_tasks == 0 && ss.completed_tasks == 0);
+        // enable auto compaction
+        cf->enable_auto_compaction();
+        // check enabled
+        BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
+        // trigger background compaction
+        cf->trigger_compaction();
+        // wait until compaction finished
+        do_until([&ss] { return ss.pending_tasks == 0 && ss.active_tasks == 0; }, [] {
+            return sleep(std::chrono::milliseconds(100));
+        }).wait();
+        // test compaction successfully finished
+        BOOST_REQUIRE(ss.errors == 0);
+        BOOST_REQUIRE(ss.completed_tasks == 1);
+
+        cf->stop().wait();
+        cm.stop().wait();
+    });
+}

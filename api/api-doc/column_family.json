@@ -380,16 +380,54 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"check if the auto compaction disabled",
+               "summary":"check if the auto_compaction property is enabled for a given table",
                "type":"boolean",
-               "nickname":"is_auto_compaction_disabled",
+               "nickname":"get_auto_compaction",
                "produces":[
                   "application/json"
                ],
                "parameters":[
                   {
                      "name":"name",
-                     "description":"The column family name in keyspace:name format",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Enable table auto compaction",
+               "type":"void",
+               "nickname":"enable_auto_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Disable table auto compaction",
+               "type":"void",
+               "nickname":"disable_auto_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
