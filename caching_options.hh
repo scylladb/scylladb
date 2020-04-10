@@ -79,6 +79,10 @@ public:
         return json::to_json(to_map());
     }
 
+    static caching_options get_disabled_caching_options() {
+        return caching_options("NONE", "NONE", false);
+    }
+
     template<typename Map>
     static caching_options from_map(const Map & map) {
         sstring k = default_key;
