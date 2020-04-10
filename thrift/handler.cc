@@ -1697,13 +1697,8 @@ private:
                      ? dht::ring_position::ending_at(dht::maximum_token())
                      : partitioner.decorate_key(s, key_from_thrift(s, to_bytes(range.end_key)));
             if (end.less_compare(s, start)) {
-                if (partitioner.preserves_order()) {
-                    throw make_exception<InvalidRequestException>(
-                            "Start key must sort before (or equal to) finish key in the partitioner");
-                } else {
-                    throw make_exception<InvalidRequestException>(
-                            "Start key's token sorts after end key's token. This is not allowed; you probably should not specify end key at all except with an ordered partitioner");
-                }
+                throw make_exception<InvalidRequestException>(
+                        "Start key's token sorts after end key's token. This is not allowed; you probably should not specify end key at all except with an ordered partitioner");
             }
             return {{dht::partition_range::bound(std::move(start), true),
                      dht::partition_range::bound(std::move(end), true)}};
