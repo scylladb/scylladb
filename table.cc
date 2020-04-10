@@ -2412,6 +2412,44 @@ table::run_with_compaction_disabled(std::function<future<> ()> func) {
     });
 }
 
+void
+table::enable_auto_compaction() {
+    // XXX: unmute backlog. turn table backlog back on.
+    //      see table::disable_auto_compaction() notes.
+    _compaction_disabled_by_user = false;
+}
+
+void
+table::disable_auto_compaction() {
+    // XXX: mute backlog. When we disable background compactions
+    // for the table, we must also disable current backlog of the
+    // table compaction strategy that contributes to the scheduling
+    // group resources prioritization.
+    //
+    // There are 2 possibilities possible:
+    // - there are no ongoing background compaction, and we can freely
+    //   mute table backlog.
+    // - there are compactions happening. than we must decide either
+    //   we want to allow them to finish not allowing submitting new
+    //   compactions tasks, or we may "suspend" them until the bg
+    //   compactions will be enabled back. This is not a worst option
+    //   because it will allow bg compactions to finish if there are
+    //   unused resourced, it will not lose any writers/readers stats.
+    //
+    // Besides that:
+    // - there are major compactions that additionally uses constant
+    //   size backlog of shares,
+    // - sstables rewrites tasks that do the same.
+    // 
+    // Setting NullCompactionStrategy is not an option due to the
+    // following reasons:
+    // - it will 0 backlog if suspending current compactions is not an
+    //   option
+    // - it will break computation of major compaction descriptor
+    //   for new submissions
+    _compaction_disabled_by_user = true;
+}
+
 flat_mutation_reader
 table::make_reader_excluding_sstables(schema_ptr s,
         std::vector<sstables::shared_sstable>& excluded,
