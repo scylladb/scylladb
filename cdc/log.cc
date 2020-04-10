@@ -399,9 +399,9 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
         for (const auto& column : columns) {
             auto type = column.type;
-            if (is_data_col) {
+            if (is_data_col && type->is_multi_cell()) {
                 type = visit(*type, make_visitor(
-                    // lists are represented as map<timeuuid, value_type>. Otherwise we cannot express delta
+                    // non-frozen lists are represented as map<timeuuid, value_type>. Otherwise we cannot express delta
                     [] (const list_type_impl& type) -> data_type {
                         return map_type_impl::get_instance(type.name_comparator(), type.value_comparator(), false);
                     },
@@ -410,7 +410,6 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
                         return type.freeze();
                     }
                 ));
-                type = type->freeze();
             }
             b.with_column(log_data_column_name_bytes(column.name()), type);
             if (is_data_col) {

@@ -1269,6 +1269,57 @@ SEASTAR_THREAD_TEST_CASE(test_udt_logging) {
     }, mk_cdc_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_frozen_logging) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto keyspace_name = "ks";
+        const auto base_tbl_name = "tbl";
+        const auto log_tbl_name = cdc::log_name(base_tbl_name);
+        const auto column_name = "val";
+
+        auto test_frozen = [&] (sstring type_string, sstring value_string) {
+            BOOST_TEST_MESSAGE(format("Testing type {}", type_string));
+            cquery_nofail(e, format("CREATE TABLE {}.{} (pk int, ck int, {} {}, PRIMARY KEY (pk, ck)) WITH cdc = {{'enabled': 'true'}}",
+                    keyspace_name, base_tbl_name, column_name, type_string)).get();
+
+            // Corresponding column in CDC log should have the same type
+            const auto base_schema = e.local_db().find_schema(keyspace_name, base_tbl_name);
+            const auto base_column = base_schema->get_column_definition(column_name);
+            BOOST_TEST_MESSAGE(format("Column type in base table: {}", base_column->type->name()));
+
+            const auto log_schema = e.local_db().find_schema(keyspace_name, log_tbl_name);
+            const auto log_column = log_schema->get_column_definition(column_name);
+            BOOST_TEST_MESSAGE(format("Column type in log table: {}", log_column->type->name()));
+
+            BOOST_REQUIRE(base_column->type == log_column->type);
+
+            cquery_nofail(e, format("INSERT INTO {}.{} (pk, ck, {}) VALUES (0, 0, {})",
+                    keyspace_name, base_tbl_name, column_name, value_string)).get();
+
+            // Expect only one row, with the same value as inserted
+            const auto base_msg = e.execute_cql(format("SELECT {} FROM {}.{}", column_name, keyspace_name, base_tbl_name)).get0();
+            const auto base_rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(base_msg);
+            BOOST_REQUIRE(base_rows);
+            const auto base_bytes = to_bytes(*base_rows);
+            BOOST_REQUIRE_EQUAL(base_bytes.size(), 1);
+
+            const auto log_msg = e.execute_cql(format("SELECT {} FROM {}.{}", column_name, keyspace_name, log_tbl_name)).get0();
+            const auto log_rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(log_msg);
+            BOOST_REQUIRE(log_rows);
+            const auto log_bytes = to_bytes(*log_rows);
+            BOOST_REQUIRE_EQUAL(log_bytes, base_bytes);
+
+            cquery_nofail(e, format("DROP TABLE {}.{}", keyspace_name, base_tbl_name)).get();
+        };
+
+        cquery_nofail(e, format("CREATE TYPE {}.udt (a text, ccc text)", keyspace_name));
+
+        test_frozen("frozen<list<text>>", "['a', 'bb', 'ccc']");
+        test_frozen("frozen<set<text>>", "{'a', 'bb', 'ccc'}");
+        test_frozen("frozen<map<text, text>>", "{'a': 'bb', 'ccc': 'dddd'}");
+        test_frozen("frozen<udt>", "{a: 'bb', ccc: 'dddd'}");
+    }, mk_cdc_test_config()).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_update_insert_delete_distinction) {
     do_with_cql_env_thread([](cql_test_env& e) {
         const auto base_tbl_name = "tbl_rowdel";
