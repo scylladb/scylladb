@@ -839,26 +839,11 @@ void set_column_family(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(res);
     });
 
-    cf::get_auto_compaction.set(r, [&ctx] (const_req req) {
-        const utils::UUID& uuid = get_uuid(req.param["name"], ctx.db.local());
-        column_family& cf = ctx.db.local().find_column_family(uuid);
-        return !cf.is_auto_compaction_disabled_by_user();
-    });
-
-    cf::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
-        return foreach_column_family(ctx, req->param["name"], [](column_family &cf) {
-            cf.enable_auto_compaction();
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    cf::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
-        return foreach_column_family(ctx, req->param["name"], [](column_family &cf) {
-            cf.disable_auto_compaction();
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+    cf::is_auto_compaction_disabled.set(r, [] (const_req req) {
+        // FIXME
+        // currently auto compaction is disable
+        // it should be changed when it would have an API
+        return true;
     });
 
     cf::get_built_indexes.set(r, [&ctx](std::unique_ptr<request> req) {

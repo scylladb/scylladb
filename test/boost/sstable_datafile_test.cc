@@ -1036,51 +1036,6 @@ static flat_mutation_reader make_normalizing_sstable_reader(shared_sstable sst, 
     return make_normalizing_sstable_reader(sst, s, query::full_partition_range);
 }
 
-SEASTAR_TEST_CASE(autocompaction_control_test) {
-    return test_env::do_with_async([] (test_env& env) {
-        storage_service_for_tests ssft;
-        BOOST_REQUIRE(smp::count == 1);
-        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family, {{"p1", utf8_type}}, {{"c1", utf8_type}}, {}, {}, utf8_type));
-
-        auto cm = make_lw_shared<compaction_manager>();
-        cm->start();
-
-        auto tmp = tmpdir();
-        column_family::config cfg = column_family_test_config();
-        cfg.datadir = tmp.path().string();
-        cfg.enable_commitlog = false;
-        cfg.enable_incremental_backups = false;
-        auto cl_stats = make_lw_shared<cell_locker_stats>();
-        auto tracker = make_lw_shared<cache_tracker>();
-        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
-        cf->start();
-        cf->set_compaction_strategy(sstables::compaction_strategy_type::null);
-
-        // auto compaction is enabled by default
-        BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
-        // disable auto compaction by user
-        cf->disable_auto_compaction();
-        // check it is disabled
-        BOOST_REQUIRE(cf->is_auto_compaction_disabled_by_user());
-        // check CompactionManager does not receive background compaction submissions
-        cf->trigger_compaction();
-        BOOST_REQUIRE(cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0);
-        cf->get_compaction_manager().submit(cf.get());
-        BOOST_REQUIRE(cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0);
-        // enable auto compaction
-        cf->enable_auto_compaction();
-        // check enabled
-        BOOST_REQUIRE(!cf->is_auto_compaction_disabled_by_user());
-        // trigger background compaction
-        cf->trigger_compaction();
-        BOOST_REQUIRE(cm->get_stats().pending_tasks == 1 || cm->get_stats().active_tasks == 1);
-
-        // XXX: test backlog state
-
-        cm->stop().wait();
-    });
-}
-
 SEASTAR_TEST_CASE(compaction_manager_test) {
   return test_env::do_with_async([] (test_env& env) {
     storage_service_for_tests ssft;
