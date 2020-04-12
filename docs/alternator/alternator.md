@@ -55,9 +55,8 @@ Alternator's compatibility with DynamoDB, and will be updated as the work
 progresses and compatibility continues to improve.
 
 ### API Server
-* Transport: HTTP mostly supported, but small features like CRC header and
-  compression are still missing. HTTPS supported on top of HTTP, so small
-  features may still be missing.
+* Transport: HTTP and HTTPS are mostly supported, but small features like CRC
+  header and compression are still missing.
 * Authorization (verifying the originator of the request): implemented
   on top of system\_auth.roles table. The secret key used for authorization
   is the salted\_hash column from the roles table, selected with:
@@ -65,20 +64,19 @@ progresses and compatibility continues to improve.
   By default, authorization is not enforced at all. It can be turned on
   by providing an entry in Scylla configuration:
     alternator\_enforce\_authorization: true
-* DNS server for load balancing: Not yet supported. Client needs to pick
-  one of the live Scylla nodes and send a request to it.
+* Load balancing: Not a part of Alternator. One should use an external load
+  balancer or DNS server to balance the requests between the live Scylla
+  nodes. We plan to publish a reference example soon.
 ### Table Operations
-* CreateTable: Supported. Note our implementation is synchronous.
-* UpdateTable: Not supported.
+* CreateTable and DeleteTable: Supported. Note our implementation is synchronous.
 * DescribeTable: Partial implementation. Missing creation date and size esitmate.
-* DeleteTable: Supported. Note our implementation is synchronous.
+* UpdateTable: Not supported.
 * ListTables: Supported.
 ### Item Operations
 * GetItem: Support almost complete except that projection expressions can
   only ask for top-level attributes.
 * PutItem: Support almost complete except that condition expressions can
   only refer to to-level attributes.
-  pre-put content) not yet supported.
 * UpdateItem: Nested documents are supported but updates to nested attributes
   are not (e.g., `SET a.b[3].c=val`), and neither are nested attributes in
   condition expressions.
@@ -90,15 +88,14 @@ progresses and compatibility continues to improve.
 * BatchWriteItem: Supported. Doesn't limit the number of items (DynamoDB
   limits to 25) or size of items (400 KB) or total request size (16 MB).
 ### Scans
-* Scan: As usual, projection expressions only support top-level attributes.
-  Filter expressions (to filter some of the items) partially supported:
-  The ScanFilter syntax is supported but FilterExpression is not yet, and
-  only equality operator is supported so far.
-  The "Select" options which allows to count items instead of returning them
-  is not yet supported. Parallel scan is not yet supported.
-* Query: Same issues as Scan above. Additionally, missing support for
-  KeyConditionExpression (an alternative syntax replacing the older
-  KeyConditions parameter which we do support).
+Scan and Query are mostly supported, with the following limitations:
+* As above, projection expressions only support top-level attributes.
+* Filter expressions (to filter some of the items) are only partially
+  supported: The ScanFilter syntax is currently only supports the equality
+  operator, and the FilterExpression syntax is not yet supported at all.
+* The "Select" options which allows to count items instead of returning them
+  is not yet supported.
+* Parallel scan is not yet supported.
 ### Secondary Indexes
 Global Secondary Indexes (GSI) and Local Secondary Indexes (LSI) are
 implemented, with the following limitations:
@@ -116,24 +113,28 @@ implemented, with the following limitations:
   Writes are done in LOCAL_QURUM and reads in LOCAL_ONE (eventual consistency)
   or LOCAL_QUORUM (strong consistency).
 ### Global Tables
-* Not yet supported: CreateGlobalTable, UpdateGlobalTable,
-  DescribeGlobalTable, ListGlobalTables, UpdateGlobalTableSettings,
-  DescribeGlobalTableSettings. Implementation will use Scylla's multi-DC
-  features.
+* Currently, *all* Alternator tables are created as "Global Tables", i.e., can
+  be accessed from all of Scylla's DCs.
+* We do not yet support the DynamoDB API calls to make some of the tables
+  global and others local to a particular DC: CreateGlobalTable,
+  UpdateGlobalTable, DescribeGlobalTable, ListGlobalTables,
+  UpdateGlobalTableSettings, DescribeGlobalTableSettings, and UpdateTable.
 ### Backup and Restore
-* On-demand backup: Not yet supported: CreateBackup, DescribeBackup,
-  DeleteBackup, ListBackups, RestoreTableFromBackup. Implementation will
-  use Scylla's snapshots
+* On-demand backup: the DynamoDB APIs are not yet supported: CreateBackup,
+  DescribeBackup, DeleteBackup, ListBackups, RestoreTableFromBackup.
+  Users can use Scylla's [snapshots](https://docs.scylladb.com/operating-scylla/procedures/backup-restore/)
+  or [Scylla Manager](https://docs.scylladb.com/operating-scylla/manager/2.0/backup/).
 * Continuous backup: Not yet supported: UpdateContinuousBackups,
   DescribeContinuousBackups, RestoreTableToPoinInTime.
 ### Transations
 * Not yet supported: TransactWriteItems, TransactGetItems.
   Note that this is a new DynamoDB feature - these are more powerful than
   the old conditional updates which were "lightweight transactions".
-### Streams (CDC)
-* Not yet supported
+### Streams
+* Scylla has experimental support for [CDC](https://docs.scylladb.com/using-scylla/cdc/)
+  (change data capture), but the "DynamoDB Streams" API is not yet supported.
 ### Encryption at rest
-* Supported natively by Scylla, but needs to be enabled by default.
+* Supported by Scylla Enterprise (not in open-source). Needs to be enabled.
 ### ARNs and tags
 * ARN is generated for every alternator table
 * Tagging can be used with the help of the following requests:
@@ -166,7 +167,9 @@ implemented, with the following limitations:
 * Not required. Scylla cache is rather advanced and there is no need to place
   a cache in front of the database: https://www.scylladb.com/2017/07/31/database-caches-not-good/
 ### Metrics
-* Several metrics are available through the Grafana/Promethues stack: https://docs.scylladb.com/operating-scylla/monitoring/   It is different than the expectations of the current DynamoDB implementation. However, our
+* Several metrics are available through the Grafana/Prometheus stack:
+  https://docs.scylladb.com/operating-scylla/monitoring/
+  Those are different from the current DynamoDB metrics, but Scylla's
   monitoring is rather advanced and provide more insights to the internals.
 
 ## Alternator design and implementation
@@ -229,8 +232,3 @@ one DynamoDB feature which we cannot support safely: we cannot modify
 a non-top-level attribute (e.g., a.b[3].c) directly without RMW. We plan
 to fix this in a future version by rethinking the data model we use for
 attributes, or rethinking our implementation of RMW (as explained above).
-
-For reasons explained above, the data model used by Alternator to store
-data on disk is still in a state of flux, and may change in future versions.
-Therefore, in this early stage it is not recommended to store important
-production data using Alternator.
