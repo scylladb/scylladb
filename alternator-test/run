@@ -8,7 +8,6 @@ script_path=$(dirname $(readlink -e $0))
 # By default, we take the latest build/*/scylla as the executable:
 SCYLLA=${SCYLLA-$(ls -t "$script_path/../build/"*"/scylla" | head -1)}
 SCYLLA=$(readlink -f "$SCYLLA")
-SCYLLA_IP=${IP-127.0.0.1}
 CPUSET=${CPUSET-0}
 
 # Below, we need to use python3 and the Cassandra drive to set up the
@@ -20,6 +19,14 @@ then
     echo "Error: python3 and python3-cassandra-driver must be installed to configure Alternator authentication." >&2
     exit 1
 fi
+
+# Pick a loopback IP address for Scylla to run, in an attempt not to collide
+# other concurrent runs of Scylla. CCM uses 127.0.0.<nodenum>, so if we use
+# 127.1.*.* which cannot collide with it. Moreover, we'll take the last two
+# bytes of the address from the current process - so as to allow multiple
+# concurrent runs of this code to use a different address.
+SCYLLA_IP=127.1.$(($$ >> 8 & 255)).$(($$ & 255))
+echo "Running Scylla on $SCYLLA_IP"
 
 tmp_dir=/tmp/alternator-test-$$
 mkdir $tmp_dir
@@ -51,6 +58,7 @@ trap 'cleanup' EXIT
 # to work. We only need to do this if the "--https" option was explicitly
 # passed - otherwise the test would not use HTTPS anyway.
 alternator_port_option="--alternator-port=8000"
+alternator_url="http://$SCYLLA_IP:8000"
 for i
 do
     if [ "$i" = --https ]
@@ -58,17 +66,20 @@ do
         openssl genrsa 2048 > "$tmp_dir/scylla.key"
         openssl req -new -x509 -nodes -sha256 -days 365 -subj "/C=IL/ST=None/L=None/O=None/OU=None/CN=example.com" -key "$tmp_dir/scylla.key" -out "$tmp_dir/scylla.crt"
         alternator_port_option="--alternator-https-port=8043"
+        alternator_url="https://$SCYLLA_IP:8043"
     fi
 done
-"$SCYLLA" --options-file "$script_path/../conf/scylla.yaml" \
-         --alternator-address $SCYLLA_IP \
+"$SCYLLA" --options-file "$source_path/conf/scylla.yaml" \
+        --alternator-address $SCYLLA_IP \
         $alternator_port_option \
         --alternator-enforce-authorization=1 \
         --developer-mode=1 \
         --ring-delay-ms 0 --collectd 0 \
         --cpuset "$CPUSET" -m 1G \
-        --api-address $SCYLLA_IP --rpc-address $SCYLLA_IP \
+        --api-address $SCYLLA_IP \
+        --rpc-address $SCYLLA_IP \
         --listen-address $SCYLLA_IP \
+        --prometheus-address $SCYLLA_IP \
         --seed-provider-parameters seeds=$SCYLLA_IP \
         --workdir "$tmp_dir" \
         --server-encryption-options keyfile="$tmp_dir/scylla.key" \
@@ -81,7 +92,7 @@ SCYLLA_PROCESS=$!
 # test. This requires connecting to Scylla with CQL - we'll wait up for
 # one minute for this to work:
 setup_authentication() {
-    python3 -c 'from cassandra.cluster import Cluster; Cluster().connect().execute("INSERT INTO system_auth.roles (role, salted_hash) VALUES ('\''alternator'\'', '\''secret_pass'\'')")'
+    python3 -c 'from cassandra.cluster import Cluster; Cluster(["'$SCYLLA_IP'"]).connect().execute("INSERT INTO system_auth.roles (role, salted_hash) VALUES ('\''alternator'\'', '\''secret_pass'\'')")'
 }
 echo "Scylla is: $SCYLLA."
 echo -n "Booting Scylla..."
@@ -127,7 +138,8 @@ else
 fi
 
 cd "$script_path"
-pytest "$@"
+set +e
+pytest --url $alternator_url "$@"
 code=$?
 case $code in
 0) summary="Alternator tests pass";;
