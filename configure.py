@@ -253,11 +253,11 @@ modes = {
     },
     'release': {
         'cxxflags': '',
-        'cxx_ld_flags': '-O3 -Wstack-usage=%s' % (1024*29),
+        'cxx_ld_flags': '-O3 -Wstack-usage=%s' % (1024*13),
     },
     'dev': {
         'cxxflags': '-DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '-O1 -Wstack-usage=%s' % (1024*29),
+        'cxx_ld_flags': '-O1 -Wstack-usage=%s' % (1024*21),
     },
     'sanitize': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
