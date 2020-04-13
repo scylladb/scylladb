@@ -21,6 +21,7 @@
 import pytest
 import redis
 import logging
+import re
 from util import random_string, connect
 
 logger = logging.getLogger('redis-test')
@@ -141,3 +142,41 @@ def test_exists_multiple_existent_key():
     assert r.get(key3) == val3
     assert r.get(key4) == None
     assert r.exists(key1, key2, key3, key4) == 3
+
+def test_lolwut():
+    pattern1 = r'''
+^⠀⡤⠤⠤⠤⠤⠤⠤⠤⡄
+⠀⡇⠀⠀⠀⠀⠀⠀⠀⡇
+⠀⡇⠀⠀⠀⠀⠀⠀⠀⡇
+⠀⡇⠀⠀⠀⠀⠀⠀⠀⡇
+⠀⡧⠤⠤⠤⠤⠤⠤⠤⡇
+⠀⡇⠀⠀⠀⠀⠀⠀⠀⡇
+⠀⡇⠀⠀⠀⠀⠀⠀⠀⡇
+⠀⡇⠀⠀⠀⠀⠀⠀⠀⡇
+⠀⠧⠤⠤⠤⠤⠤⠤⠤⠇
+
+Georg Nees - schotter, plotter on paper, 1968\. Redis ver\. [0-9]+\.[0-9]+\.[0-9]+
+'''[1:-1]
+    pattern2 = r'''
+^⠀⡤⠤⠤⠤⡤⠤⠤⠤⡄
+⠀⡇⠀⠀⠀⡇⠀⠀⠀⡇
+⠀⡧⠤⠤⠤⡧⠤⠤⠤⡇
+⠀⡇⠀⠀⠀⡇⠀⠀⠀⡇
+⠀⠧⠤⠤⠤⠧⠤⠤⠤⠇
+
+Georg Nees - schotter, plotter on paper, 1968\. Redis ver\. [0-9]+\.[0-9]+\.[0-9]+
+'''[1:-1]
+    pattern3 = r'''
+^⠀⡤⠤⡤⠤⡤⠤⡤⠤⡄
+⠀⡧⠤⡧⠤⡧⠤⡧⠤⡇
+⠀⠧⠤⠧⠤⠧⠤⠧⠤⠇
+
+Georg Nees - schotter, plotter on paper, 1968\. Redis ver\. [0-9]+\.[0-9]+\.[0-9]+
+'''[1:-1]
+    r = connect()
+    res = r.execute_command('LOLWUT', 10, 1, 2)
+    assert re.match(pattern1, res)
+    res = r.execute_command('LOLWUT', 10, 2, 2)
+    assert re.match(pattern2, res)
+    res = r.execute_command('LOLWUT', 10, 4, 2)
+    assert re.match(pattern3, res)
