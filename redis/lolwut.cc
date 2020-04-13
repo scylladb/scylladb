@@ -104,8 +104,8 @@ public:
     static canvas draw_schotter(const int cols, const int squares_per_row, const int squares_per_col) {
         const int width = cols * 2;
         const int padding = width > 4 ? 2 : 0;
-        const float side = static_cast<float>((width - padding * 1) / squares_per_row);
-        const int height = side * squares_per_col + padding * 0;
+        const float side = static_cast<float>((width - padding * 2) / squares_per_row);
+        const int height = side * squares_per_col + padding * 2;
         canvas c {width, height};
         std::random_device seed_gen;
         std::default_random_engine engine(seed_gen());
