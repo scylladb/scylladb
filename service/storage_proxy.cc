@@ -4356,14 +4356,14 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
  */
 future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges, storage_proxy::coordinator_query_options query_options,
-        db::consistency_level cl_for_paxos, db::consistency_level cl_for_commit,
+        db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
         clock_type::time_point write_timeout, clock_type::time_point cas_timeout) {
 
     assert(partition_ranges.size() == 1);
     assert(query::is_single_partition(partition_ranges[0]));
 
     db::validate_for_cas(cl_for_paxos);
-    db::validate_for_cas_commit(cl_for_commit, schema->ks_name());
+    db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
 
     if (cas_shard(*schema, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
         throw std::logic_error("storage_proxy::cas called on a wrong shard");
@@ -4374,7 +4374,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
         handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
                 query_options.trace_state, query_options.permit,
                 partition_ranges[0].start()->value().as_decorated_key(),
-                schema, cmd, cl_for_paxos, cl_for_commit, write_timeout, cas_timeout);
+                schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
     } catch (exceptions::unavailable_exception& ex) {
         get_stats().cas_write_unavailables.mark();
         throw;

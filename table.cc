@@ -1137,8 +1137,8 @@ void table::set_metrics() {
                     ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
                     ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
                     ms::make_histogram("cas_prepare_latency", ms::description("CAS prepare round latency histogram"), [this] {return _stats.estimated_cas_prepare.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                    ms::make_histogram("cas_propose_latency", ms::description("CAS propose round latency histogram"), [this] {return _stats.estimated_cas_propose.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                    ms::make_histogram("cas_commit_latency", ms::description("CAS commit round latency histogram"), [this] {return _stats.estimated_cas_commit.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
+                    ms::make_histogram("cas_propose_latency", ms::description("CAS accept round latency histogram"), [this] {return _stats.estimated_cas_accept.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
+                    ms::make_histogram("cas_commit_latency", ms::description("CAS learn round latency histogram"), [this] {return _stats.estimated_cas_learn.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
                     ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
             });
         }

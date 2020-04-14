@@ -340,7 +340,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         const query_options& options,
         service::query_state& qs) const {
 
-    auto cl_for_commit = options.get_consistency();
+    auto cl_for_learn = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
     seastar::shared_ptr<cas_request> request;
     schema_ptr schema;
@@ -386,7 +386,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 
     return proxy.cas(schema, request, request->read_command(), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            cl_for_paxos, cl_for_commit, batch_timeout, cas_timeout).then([this, request] (bool is_applied) {
+            cl_for_paxos, cl_for_learn, batch_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return modification_statement::build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied, request->rows());
     });
 }

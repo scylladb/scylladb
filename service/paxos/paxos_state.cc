@@ -149,9 +149,9 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
         });
     }).finally([schema, lc] () mutable {
         auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
-        stats.cas_propose.mark(lc.stop().latency());
+        stats.cas_accept.mark(lc.stop().latency());
         if (lc.is_start()) {
-            stats.estimated_cas_propose.add(lc.latency(), stats.cas_propose.hist.count);
+            stats.estimated_cas_accept.add(lc.latency(), stats.cas_accept.hist.count);
         }
     });
 }
@@ -194,9 +194,9 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
         });
     }).finally([schema, lc] () mutable {
         auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
-        stats.cas_commit.mark(lc.stop().latency());
+        stats.cas_learn.mark(lc.stop().latency());
         if (lc.is_start()) {
-            stats.estimated_cas_commit.add(lc.latency(), stats.cas_commit.hist.count);
+            stats.estimated_cas_learn.add(lc.latency(), stats.cas_learn.hist.count);
         }
     });
 }

@@ -804,14 +804,14 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_cas_propose.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
-            return cf.get_stats().estimated_cas_propose;
+            return cf.get_stats().estimated_cas_accept;
         },
         utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_cas_commit.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
-            return cf.get_stats().estimated_cas_commit;
+            return cf.get_stats().estimated_cas_learn;
         },
         utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });

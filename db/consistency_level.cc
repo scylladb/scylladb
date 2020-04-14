@@ -318,7 +318,7 @@ void validate_for_write(consistency_level cl) {
 }
 
 // This is the same than validateForWrite really, but we include a slightly different error message for SERIAL/LOCAL_SERIAL
-void validate_for_cas_commit(consistency_level cl, const sstring& keyspace) {
+void validate_for_cas_learn(consistency_level cl, const sstring& keyspace) {
     switch (cl) {
     case consistency_level::SERIAL:
     case consistency_level::LOCAL_SERIAL:

@@ -348,13 +348,13 @@ struct table_stats {
     utils::timed_rate_moving_average_and_histogram reads{256};
     utils::timed_rate_moving_average_and_histogram writes{256};
     utils::timed_rate_moving_average_and_histogram cas_prepare{256};
-    utils::timed_rate_moving_average_and_histogram cas_propose{256};
-    utils::timed_rate_moving_average_and_histogram cas_commit{256};
+    utils::timed_rate_moving_average_and_histogram cas_accept{256};
+    utils::timed_rate_moving_average_and_histogram cas_learn{256};
     utils::estimated_histogram estimated_read;
     utils::estimated_histogram estimated_write;
     utils::estimated_histogram estimated_cas_prepare;
-    utils::estimated_histogram estimated_cas_propose;
-    utils::estimated_histogram estimated_cas_commit;
+    utils::estimated_histogram estimated_cas_accept;
+    utils::estimated_histogram estimated_cas_learn;
     utils::estimated_histogram estimated_sstable_per_read{35};
     utils::timed_rate_moving_average_and_histogram tombstone_scanned;
     utils::timed_rate_moving_average_and_histogram live_scanned;

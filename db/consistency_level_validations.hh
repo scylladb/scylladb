@@ -58,7 +58,7 @@ bool is_serial_consistency(consistency_level cl);
 
 void validate_for_cas(consistency_level cl);
 
-void validate_for_cas_commit(consistency_level cl, const sstring& keyspace);
+void validate_for_cas_learn(consistency_level cl, const sstring& keyspace);
 
 void validate_counter_for_write(const schema& s, consistency_level cl);
 

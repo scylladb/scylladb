@@ -322,7 +322,7 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
 
-    auto cl_for_commit = options.get_consistency();
+    auto cl_for_learn = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
     db::timeout_clock::time_point now = db::timeout_clock::now();
     const timeout_config& cfg = options.get_timeout_config();
@@ -354,7 +354,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
 
     return proxy.cas(s, request, request->read_command(), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            cl_for_paxos, cl_for_commit, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
+            cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied, request->rows());
     });
 }
