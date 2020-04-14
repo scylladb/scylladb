@@ -740,7 +740,11 @@ void repair_info::check_failed_ranges() {
         rlogger.info("repair id {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
         throw std::runtime_error(format("repair {:d} on shard {:d} failed to do checksum for {:d} sub ranges", id, shard, nr_failed_ranges));
     } else {
-        rlogger.info("repair id {} on shard {} completed successfully", id, shard);
+        if (dropped_tables.size()) {
+            rlogger.warn("repair id {} on shard {} completed successfully, keyspace={}, ignoring dropped tables={}", id, shard, keyspace, dropped_tables);
+        } else {
+            rlogger.info("repair id {} on shard {} completed successfully, keyspace={}", id, shard, keyspace);
+        }
     }
 }
 
@@ -1027,7 +1031,16 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
         return do_for_each(ri.cfs.begin(), ri.cfs.end(), [&ri, &neighbors, range] (auto&& cf) {
             ri._sub_ranges_nr++;
             if (ri.row_level_repair()) {
-                return repair_cf_range_row_level(ri, cf, range, neighbors);
+                if (ri.dropped_tables.count(cf)) {
+                    return make_ready_future<>();
+                }
+                return repair_cf_range_row_level(ri, cf, range, neighbors).handle_exception_type([&ri, cf] (no_such_column_family&) mutable {
+                    ri.dropped_tables.insert(cf);
+                    return make_ready_future<>();
+                }).handle_exception([&ri] (std::exception_ptr ep) mutable {
+                    ri.nr_failed_ranges++;
+                    return make_exception_future<>(std::move(ep));
+                });
             } else {
                 return repair_cf_range(ri, cf, range, neighbors);
             }

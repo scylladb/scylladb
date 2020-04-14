@@ -205,6 +205,7 @@ public:
     repair_stats _stats;
     bool _row_level_repair;
     uint64_t _sub_ranges_nr = 0;
+    std::unordered_set<sstring> dropped_tables;
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
@@ -332,6 +333,15 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const repair_hash& x) {
         return os << x.hash;
     }
+};
+
+enum class repair_row_level_start_status: uint8_t {
+    ok,
+    no_such_column_family,
+};
+
+struct repair_row_level_start_response {
+    repair_row_level_start_status status;
 };
 
 // Return value of the REPAIR_GET_SYNC_BOUNDARY RPC verb
