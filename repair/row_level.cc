@@ -1455,23 +1455,33 @@ public:
         // the time this change is introduced.
         sstring remote_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
         return netw::get_local_messaging_service().send_repair_row_level_start(msg_addr(remote_node),
-                _repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range), _algo, _max_row_buf_size, _seed,
+                _repair_meta_id, ks_name, cf_name, std::move(range), _algo, _max_row_buf_size, _seed,
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb,
-                remote_partitioner_name, std::move(schema_version), reason);
+                remote_partitioner_name, std::move(schema_version), reason).then([ks_name, cf_name] (rpc::optional<repair_row_level_start_response> resp) {
+            if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
+                return make_exception_future<>(no_such_column_family(ks_name, cf_name));
+            } else {
+                return make_ready_future<>();
+            }
+        });
     }
 
     // RPC handler
-    static future<>
+    static future<repair_row_level_start_response>
     repair_row_level_start_handler(gms::inet_address from, uint32_t src_cpu_id, uint32_t repair_meta_id, sstring ks_name, sstring cf_name,
             dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size,
             uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason) {
         if (!_sys_dist_ks->local_is_initialized() || !_view_update_generator->local_is_initialized()) {
-            return make_exception_future<>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
+            return make_exception_future<repair_row_level_start_response>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
                     utils::fb_utilities::get_broadcast_address())));
         }
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
             utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
-        return insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason);
+        return insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason).then([] {
+            return repair_row_level_start_response{repair_row_level_start_status::ok};
+        }).handle_exception_type([] (no_such_column_family&) {
+            return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
+        });
     }
 
     // RPC API
@@ -2455,6 +2465,7 @@ public:
             };
             auto s = _cf.schema();
             auto schema_version = s->version();
+            bool table_dropped = false;
 
             repair_meta master(_ri.db,
                     _cf,
@@ -2507,11 +2518,16 @@ public:
                     }
                     send_missing_rows_to_follower_nodes(master);
                 }
+            } catch (no_such_column_family& e) {
+                table_dropped = true;
+                rlogger.warn("repair id {} on shard {}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
+                        _ri.id, this_shard_id(), _ri.keyspace, _cf_name, _range, e);
+                _failed = true;
             } catch (std::exception& e) {
-                rlogger.info("Got error in row level repair: {}", e);
+                rlogger.warn("repair id {} on shard {}, keyspace={}, cf={}, range={}, got error in row level repair: {}",
+                        _ri.id, this_shard_id(), _ri.keyspace, _cf_name, _range, e);
                 // In case the repair process fail, we need to call repair_row_level_stop to clean up repair followers
                 _failed = true;
-                _ri.nr_failed_ranges++;
             }
 
             parallel_for_each(nodes_to_stop, [&] (const gms::inet_address& node) {
@@ -2520,7 +2536,11 @@ public:
 
             _ri.update_statistics(master.stats());
             if (_failed) {
-                throw std::runtime_error(format("Failed to repair for keyspace={}, cf={}, range={}", _ri.keyspace, _cf_name, _range));
+                if (table_dropped) {
+                    throw no_such_column_family(_ri.keyspace,  _cf_name);
+                } else {
+                    throw std::runtime_error(format("Failed to repair for keyspace={}, cf={}, range={}", _ri.keyspace, _cf_name, _range));
+                }
             }
             rlogger.debug("<<< Finished Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}, tx_hashes_nr={}, rx_hashes_nr={}, tx_row_nr={}, rx_row_nr={}, row_from_disk_bytes={}, row_from_disk_nr={}",
                     master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _ri.keyspace, _cf_name, _range, master.stats().tx_hashes_nr, master.stats().rx_hashes_nr, master.stats().tx_row_nr, master.stats().rx_row_nr, master.stats().row_from_disk_bytes, master.stats().row_from_disk_nr);
@@ -2531,8 +2551,11 @@ public:
 future<> repair_cf_range_row_level(repair_info& ri,
         sstring cf_name, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes) {
-    return do_with(row_level_repair(ri, std::move(cf_name), std::move(range), all_peer_nodes), [] (row_level_repair& repair) {
-        return repair.run();
+    return seastar::futurize_invoke([&ri, cf_name = std::move(cf_name), range = std::move(range), &all_peer_nodes] () mutable {
+        auto repair = row_level_repair(ri, std::move(cf_name), std::move(range), all_peer_nodes);
+        return do_with(std::move(repair), [] (row_level_repair& repair) {
+            return repair.run();
+        });
     });
 }
 

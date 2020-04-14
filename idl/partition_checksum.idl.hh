@@ -94,3 +94,12 @@ struct repair_row_on_wire_with_cmd {
     repair_stream_cmd cmd;
     partition_key_and_mutation_fragments row;
 };
+
+enum class repair_row_level_start_status: uint8_t {
+    ok,
+    no_such_column_family,
+};
+
+struct repair_row_level_start_response {
+    repair_row_level_start_status status;
+};
