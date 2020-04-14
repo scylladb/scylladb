@@ -238,6 +238,7 @@ class shard_mutation_querier {
     std::unique_ptr<const dht::partition_range> _reader_range;
     std::unique_ptr<const query::partition_slice> _reader_slice;
     flat_mutation_reader _reader;
+    reader_permit _permit;
     dht::decorated_key _nominal_pkey;
     std::optional<clustering_key_prefix> _nominal_ckey;
 
@@ -247,12 +248,14 @@ public:
             std::unique_ptr<const dht::partition_range> reader_range,
             std::unique_ptr<const query::partition_slice> reader_slice,
             flat_mutation_reader reader,
+            reader_permit permit,
             dht::decorated_key nominal_pkey,
             std::optional<clustering_key_prefix> nominal_ckey)
         : _query_ranges(std::move(query_ranges))
         , _reader_range(std::move(reader_range))
         , _reader_slice(std::move(reader_slice))
         , _reader(std::move(reader))
+        , _permit(std::move(permit))
         , _nominal_pkey(std::move(nominal_pkey))
         , _nominal_ckey(std::move(nominal_ckey)) {
     }
@@ -267,6 +270,10 @@ public:
 
     schema_ptr schema() const {
         return _reader.schema();
+    }
+
+    reader_permit& permit() {
+        return _permit;
     }
 
     position_view current_position() const {

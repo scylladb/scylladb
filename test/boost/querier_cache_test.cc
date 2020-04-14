@@ -111,14 +111,6 @@ private:
 
     template <typename Querier>
     Querier make_querier(const dht::partition_range& range) {
-        if constexpr (std::is_same_v<Querier, query::shard_mutation_querier>) {
-            return Querier(_mutation_source,
-                _s.schema(),
-                range,
-                _s.schema()->full_slice(),
-                service::get_local_sstable_query_read_priority(),
-                nullptr);
-        }
         return Querier(_mutation_source,
             _s.schema(),
             _sem.make_permit(),

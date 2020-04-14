@@ -98,17 +98,21 @@ class read_context : public reader_lifecycle_policy {
 
     struct reader_meta {
         struct remote_parts {
-            reader_concurrency_semaphore& semaphore;
+            reader_permit permit;
             std::unique_ptr<const dht::partition_range> range;
             std::unique_ptr<const query::partition_slice> slice;
             utils::phased_barrier::operation read_operation;
 
+            explicit remote_parts(reader_concurrency_semaphore& semaphore)
+                : permit(semaphore.make_permit()) {
+            }
+
             remote_parts(
-                    reader_concurrency_semaphore& semaphore,
+                    reader_permit permit,
                     std::unique_ptr<const dht::partition_range> range = nullptr,
                     std::unique_ptr<const query::partition_slice> slice = nullptr,
                     utils::phased_barrier::operation read_operation = {})
-                : semaphore(semaphore)
+                : permit(std::move(permit))
                 , range(std::move(range))
                 , slice(std::move(slice))
                 , read_operation(std::move(read_operation)) {
@@ -236,7 +240,7 @@ public:
     virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
-        return _readers[this_shard_id()].rparts->semaphore;
+        return *_readers[this_shard_id()].rparts->permit.semaphore();
     }
 
     future<> lookup_readers();
@@ -300,7 +304,7 @@ flat_mutation_reader read_context::create_reader(
     rm.rparts->read_operation = table.read_in_progress();
     rm.state = reader_state::used;
 
-    return table.as_mutation_source().make_reader(std::move(schema), no_reader_permit(), *rm.rparts->range, *rm.rparts->slice, pc,
+    return table.as_mutation_source().make_reader(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice, pc,
             std::move(trace_state));
 }
 
@@ -445,7 +449,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
     return _db.invoke_on(shard, [this, shard, query_uuid = _cmd.query_uuid, query_ranges = _ranges, rm = std::exchange(_readers[shard], {}),
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
         try {
-            flat_mutation_reader_opt reader = try_resume(rm.rparts->semaphore, std::move(*rm.handle));
+            flat_mutation_reader_opt reader = try_resume(*rm.rparts->permit.semaphore(), std::move(*rm.handle));
 
             if (!reader) {
                 return;
@@ -474,6 +478,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
                     std::move(rm.rparts->range),
                     std::move(rm.rparts->slice),
                     std::move(*reader),
+                    std::move(rm.rparts->permit),
                     last_pkey,
                     last_ckey);
 
@@ -518,7 +523,7 @@ future<> read_context::lookup_readers() {
             auto handle = pause(semaphore, std::move(q).reader());
             return reader_meta(
                     reader_state::successful_lookup,
-                    reader_meta::remote_parts(semaphore, std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress()),
+                    reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress()),
                     std::move(handle));
         }).then([this, shard] (reader_meta rm) {
             _readers[shard] = std::move(rm);
