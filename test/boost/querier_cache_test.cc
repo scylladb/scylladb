@@ -161,7 +161,7 @@ public:
 
     test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h, size_t cache_size = 100000)
         : _sem(reader_concurrency_semaphore::no_limits{})
-        , _cache(_sem, cache_size, entry_ttl)
+        , _cache(cache_size, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr, reader_permit, const dht::partition_range& range) {
             auto rd = flat_mutation_reader_from_mutations(_mutations, range);

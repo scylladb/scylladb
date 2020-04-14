@@ -390,6 +390,12 @@ public:
             }, _value);
         }
 
+        reader_permit& permit() {
+            return std::visit([] (auto& q) -> reader_permit& {
+                return q.permit();
+            }, _value);
+        }
+
         dht::partition_ranges_view ranges() const {
             return std::visit([] (auto& q) {
                 return q.ranges();
@@ -427,7 +433,6 @@ public:
           boost::intrusive::constant_time_size<false>>;
 
 private:
-    reader_concurrency_semaphore& _sem;
     entries _entries;
     index _data_querier_index;
     index _mutation_querier_index;
@@ -440,7 +445,7 @@ private:
     void scan_cache_entries();
 
 public:
-    explicit querier_cache(reader_concurrency_semaphore& sem, size_t max_cache_size = 1'000'000, std::chrono::seconds entry_ttl = default_entry_ttl);
+    explicit querier_cache(size_t max_cache_size = 1'000'000, std::chrono::seconds entry_ttl = default_entry_ttl);
 
     querier_cache(const querier_cache&) = delete;
     querier_cache& operator=(const querier_cache&) = delete;
