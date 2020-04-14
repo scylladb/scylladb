@@ -42,6 +42,7 @@
 #include "query-result-reader.hh"
 #include "partition_slice_builder.hh"
 #include "test/lib/tmpdir.hh"
+#include "test/lib/reader_permit.hh"
 #include "sstables/compaction_manager.hh"
 
 #include <seastar/testing/test_case.hh>
@@ -516,7 +517,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
             auto verify_row = [&] (int32_t c1, int32_t r1) {
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
                 auto p_key = dht::decorate_key(*s, key);
-                auto r = cf.find_row(cf.schema(), p_key, c_key).get0();
+                auto r = cf.find_row(cf.schema(), tests::make_permit(), p_key, c_key).get0();
                 {
                     BOOST_REQUIRE(r);
                     auto i = r->find_cell(r1_col.id);
@@ -575,13 +576,13 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             std::sort(mutations.begin(), mutations.end(), mutation_decorated_key_less_comparator());
 
             // Flush will happen in the middle of reading for this scanner
-            auto assert_that_scanner1 = assert_that(cf.make_reader(s, query::full_partition_range));
+            auto assert_that_scanner1 = assert_that(cf.make_reader(s, tests::make_permit(), query::full_partition_range));
 
             // Flush will happen before it is invoked
-            auto assert_that_scanner2 = assert_that(cf.make_reader(s, query::full_partition_range));
+            auto assert_that_scanner2 = assert_that(cf.make_reader(s, tests::make_permit(), query::full_partition_range));
 
             // Flush will happen after all data was read, but before EOS was consumed
-            auto assert_that_scanner3 = assert_that(cf.make_reader(s, query::full_partition_range));
+            auto assert_that_scanner3 = assert_that(cf.make_reader(s, tests::make_permit(), query::full_partition_range));
 
             assert_that_scanner1.produces(mutations[0]);
             assert_that_scanner1.produces(mutations[1]);
@@ -655,7 +656,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
         }
 
         return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {
-            return cf.for_all_partitions_slow(s, [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
+            return cf.for_all_partitions_slow(s, tests::make_permit(), [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
                 auto p1 = value_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
                 for (const rows_entry& re : mp.range(*s, nonwrapping_range<clustering_key_prefix>())) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));

@@ -27,6 +27,7 @@
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/result_set_assertions.hh"
+#include "test/lib/reader_permit.hh"
 
 #include "database.hh"
 #include "partition_slice_builder.hh"
@@ -150,7 +151,7 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd,
                     mutation_reader::forwarding fwd_mr) {
-                return cf.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                return cf.make_reader(s, tests::make_permit(), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
             });
         });
         return make_ready_future<>();

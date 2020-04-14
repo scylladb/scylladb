@@ -70,7 +70,7 @@
 #include <boost/icl/interval_map.hpp>
 #include "test/lib/test_services.hh"
 #include "test/lib/cql_test_env.hh"
-
+#include "test/lib/reader_permit.hh"
 #include "test/lib/sstable_utils.hh"
 
 namespace fs = std::filesystem;
@@ -5577,7 +5577,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         cf->set_compaction_strategy(sstables::compaction_strategy_type::null);
 
         auto is_partition_dead = [&s, &cf] (partition_key& pkey) {
-            column_family::const_mutation_partition_ptr mp = cf->find_partition_slow(s, pkey).get0();
+            column_family::const_mutation_partition_ptr mp = cf->find_partition_slow(s, tests::make_permit(), pkey).get0();
             return mp && bool(mp->partition_tombstone());
         };
 

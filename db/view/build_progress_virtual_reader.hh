@@ -64,6 +64,7 @@ class build_progress_virtual_reader {
 
         build_progress_reader(
                 schema_ptr legacy_schema,
+                reader_permit permit,
                 column_family& scylla_views_build_progress,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
@@ -80,6 +81,7 @@ class build_progress_virtual_reader {
                 , _slice(adjust_partition_slice())
                 , _underlying(scylla_views_build_progress.make_reader(
                         scylla_views_build_progress.schema(),
+                        std::move(permit),
                         range,
                         slice,
                         pc,
@@ -188,7 +190,7 @@ public:
 
     flat_mutation_reader operator()(
             schema_ptr s,
-            reader_permit,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
@@ -197,6 +199,7 @@ public:
             mutation_reader::forwarding fwd_mr) {
         return flat_mutation_reader(std::make_unique<build_progress_reader>(
                 std::move(s),
+                std::move(permit),
                 _db.find_column_family(s->ks_name(), system_keyspace::v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
                 range,
                 slice,
