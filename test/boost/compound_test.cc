@@ -355,14 +355,7 @@ BOOST_AUTO_TEST_CASE(test_composite_view_explode) {
 
 BOOST_AUTO_TEST_CASE(test_composite_validity) {
     auto is_valid = [] (bytes b) {
-        auto v = composite_view(b);
-        try {
-            size_t s = 0;
-            for (auto& c : v.components()) { s += c.first.size() + sizeof(composite::size_type) + sizeof(composite::eoc_type);  }
-            return s == b.size();
-        } catch (marshal_exception&) {
-            return false;
-        }
+        return composite_view(b).is_valid();
     };
 
     BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x01', 'a', '\x00'}), true);
