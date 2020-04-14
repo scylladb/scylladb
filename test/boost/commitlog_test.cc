@@ -47,6 +47,11 @@
 using namespace db;
 
 static future<> cl_test(commitlog::config cfg, noncopyable_function<future<> (commitlog&)> f) {
+    // enable as needed.
+    // moved from static init because static init fiasco.
+#if 0
+    logging::logger_registry().set_logger_level("commitlog", logging::log_level::trace);
+#endif
     tmpdir tmp;
     cfg.commit_log_location = tmp.path().string();
     return commitlog::create_commitlog(cfg).then([f = std::move(f)](commitlog log) mutable {
@@ -66,13 +71,6 @@ static future<> cl_test(noncopyable_function<future<> (commitlog&)> f) {
     cfg.metrics_category_name = "commitlog";
     return cl_test(cfg, std::move(f));
 }
-
-#if 0
-static int loggo = [] {
-        logging::logger_registry().set_logger_level("commitlog", logging::log_level::trace);
-        return 0;
-}();
-#endif
 
 // just write in-memory...
 SEASTAR_TEST_CASE(test_create_commitlog){
@@ -307,13 +305,20 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
 
             // add a flush handler that simply says we're done with the range.
             auto r = log.add_flush_handler([&log, sem, segments](cf_id_type id, replay_position pos) {
-                *segments = log.get_active_segment_names();
-                // Verify #5899 - file size should not exceed the config max. 
-                return parallel_for_each(*segments, [](sstring filename) {
-                    return file_size(filename).then([](uint64_t size) {
-                        BOOST_REQUIRE_LE(size, max_size_mb * 1024 * 1024);
+                auto f = make_ready_future<>();
+                // #6195 only get segment list at first callback. We can (not often)
+                // be called again, but reading segment list at that point might (will)
+                // render same list as in the diff check below. 
+                if (segments->empty()) {
+                    *segments = log.get_active_segment_names();
+                    // Verify #5899 - file size should not exceed the config max. 
+                    f = parallel_for_each(*segments, [](sstring filename) {
+                        return file_size(filename).then([](uint64_t size) {
+                            BOOST_REQUIRE_LE(size, max_size_mb * 1024 * 1024);
+                        });
                     });
-                }).then([&log, sem, id] {
+                }
+                return f.then([&log, sem, id] {
                     log.discard_completed_segments(id);
                     sem->signal();
                 });
