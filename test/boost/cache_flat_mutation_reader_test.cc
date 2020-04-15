@@ -36,6 +36,7 @@
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/reader_permit.hh"
 
 #include <variant>
 
@@ -230,7 +231,7 @@ void test_slice_single_version(mutation& underlying,
 
     try {
         auto range = dht::partition_range::make_singular(DK);
-        auto reader = cache.make_reader(SCHEMA, range, slice);
+        auto reader = cache.make_reader(SCHEMA, tests::make_permit(), range, slice);
 
         check_produces_only(DK, std::move(reader), expected_sm_fragments, slice.row_ranges(*SCHEMA, DK.key()));
 

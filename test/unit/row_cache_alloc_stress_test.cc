@@ -30,6 +30,7 @@
 #include "log.hh"
 #include "schema_builder.hh"
 #include "memtable.hh"
+#include "test/lib/reader_permit.hh"
 
 static
 partition_key new_key(schema_ptr s) {
@@ -186,7 +187,7 @@ int main(int argc, char** argv) {
             // Verify that all mutations from memtable went through
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
-                auto reader = cache.make_reader(s, range);
+                auto reader = cache.make_reader(s, tests::make_permit(), range);
                 auto mo = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
                 assert(mo);
                 assert(mo->partition().live_row_count(*s) ==
@@ -203,7 +204,7 @@ int main(int argc, char** argv) {
 
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
-                auto reader = cache.make_reader(s, range);
+                auto reader = cache.make_reader(s, tests::make_permit(), range);
                 auto mfopt = reader(db::no_timeout).get0();
                 assert(mfopt);
                 assert(mfopt->is_partition_start());
@@ -241,7 +242,7 @@ int main(int argc, char** argv) {
                 }
 
                 try {
-                    auto reader = cache.make_reader(s, range);
+                    auto reader = cache.make_reader(s, tests::make_permit(), range);
                     assert(!reader(db::no_timeout).get0());
                     auto evicted_from_cache = logalloc::segment_size + large_cell_size;
                     // GCC's -fallocation-dce can remove dead calls to new and malloc, so
