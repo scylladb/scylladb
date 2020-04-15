@@ -1,0 +1,146 @@
+create table ks.t (pk int, ck int, cs counter static, c counter, primary key (pk, ck)) with cdc = {'enabled': true, 'preimage': true, 'postimage': true};
+{
+	"status" : "ok"
+}
+
+-- generates 2 rows: delta(static) + postimage(static)
+update ks.t set cs = cs + 1 where pk = 0;
+{
+	"status" : "ok"
+}
+-- generates 3 rows: preimage(static), delta(static) + postimage(static)
+update ks.t set cs = cs + 10 where pk = 0;
+{
+	"status" : "ok"
+}
+select c, "cdc$batch_seq_no", "cdc$operation", ck, cs from ks.t_scylla_cdc_log where pk = 0 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "1",
+			"cs" : "1",
+			"pk" : "0"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "9",
+			"cs" : "1",
+			"pk" : "0"
+		},
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"cs" : "1",
+			"pk" : "0"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "1",
+			"cs" : "10",
+			"pk" : "0"
+		},
+		{
+			"cdc$batch_seq_no" : "2",
+			"cdc$operation" : "9",
+			"cs" : "11",
+			"pk" : "0"
+		}
+	]
+}
+
+-- generates 5 rows: preimage(static), delta(static+clustered), postimage(static+clustered), but we only select ck==0
+update ks.t set cs = cs + 2, c = c + 20 where pk = 0 and ck = 0;
+{
+	"status" : "ok"
+}
+select c, "cdc$batch_seq_no", "cdc$operation", ck, cs from ks.t_scylla_cdc_log where pk = 0 and ck = 0 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"c" : "20",
+			"cdc$batch_seq_no" : "3",
+			"cdc$operation" : "1",
+			"ck" : "0",
+			"pk" : "0"
+		},
+		{
+			"c" : "20",
+			"cdc$batch_seq_no" : "4",
+			"cdc$operation" : "9",
+			"ck" : "0",
+			"pk" : "0"
+		}
+	]
+}
+
+-- update one counter at a new PK: delta(clustered) + postimage(clustered)
+update ks.t set c = c + 20 where pk = 1 and ck = 0;
+{
+	"status" : "ok"
+}
+-- delete clustered column: preimage(clustered) and delta(clustered) with "cdc$deleted_c"
+delete c from ks.t where pk = 1 and ck = 0;
+{
+	"status" : "ok"
+}
+-- update dead clustered counter: nothing should happen in CDC
+update ks.t set c = c + 20 where pk = 1 and ck = 0;
+{
+	"status" : "ok"
+}
+select c, "cdc$batch_seq_no", "cdc$deleted_c", "cdc$operation" from ks.t_scylla_cdc_log where pk = 1 and ck = 0 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"c" : "20",
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "1",
+			"ck" : "0",
+			"pk" : "1"
+		},
+		{
+			"c" : "20",
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "9",
+			"ck" : "0",
+			"pk" : "1"
+		},
+		{
+			"c" : "20",
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"ck" : "0",
+			"pk" : "1"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$deleted_c" : "true",
+			"cdc$operation" : "1",
+			"ck" : "0",
+			"pk" : "1"
+		},
+		{
+			"cdc$batch_seq_no" : "2",
+			"cdc$operation" : "9",
+			"ck" : "0",
+			"pk" : "1"
+		},
+		{
+			"c" : "20",
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "1",
+			"ck" : "0",
+			"pk" : "1"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "9",
+			"ck" : "0",
+			"pk" : "1"
+		}
+	]
+}
