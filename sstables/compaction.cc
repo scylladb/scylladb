@@ -393,6 +393,7 @@ protected:
     column_family& _cf;
     creator_fn _sstable_creator;
     schema_ptr _schema;
+    reader_permit _permit;
     std::vector<shared_sstable> _sstables;
     // Unused sstables are tracked because if compaction is interrupted we can only delete them.
     // Deleting used sstables could potentially result in data loss.
@@ -417,6 +418,7 @@ protected:
         : _cf(cf)
         , _sstable_creator(std::move(descriptor.creator))
         , _schema(cf.schema())
+        , _permit(_cf.compaction_concurrency_semaphore().make_permit())
         , _sstables(std::move(descriptor.sstables))
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)
@@ -730,7 +732,7 @@ public:
 
     flat_mutation_reader make_sstable_reader() const override {
         return ::make_local_shard_sstable_reader(_schema,
-                no_reader_permit(),
+                _permit,
                 _compacting,
                 query::full_partition_range,
                 _schema->full_slice(),
@@ -1225,7 +1227,7 @@ public:
     // Use reader that makes sure no non-local mutation will not be filtered out.
     flat_mutation_reader make_sstable_reader() const override {
         return ::make_range_sstable_reader(_schema,
-                no_reader_permit(),
+                _permit,
                 _compacting,
                 query::full_partition_range,
                 _schema->full_slice(),
