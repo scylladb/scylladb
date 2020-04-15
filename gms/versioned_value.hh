@@ -127,30 +127,20 @@ public:
         return ::join(sstring(versioned_value::DELIMITER_STR), args);
     }
 
+    static sstring make_full_token_string(const std::unordered_set<dht::token>& tokens);
+    static sstring make_token_string(const std::unordered_set<dht::token>& tokens);
+    static sstring make_cdc_streams_timestamp_string(std::optional<db_clock::time_point> t);
+
+    // Reverse of `make_full_token_string`.
+    static std::unordered_set<dht::token> tokens_from_string(const sstring&);
+
+    // Reverse of `make_cdc_streams_timestamp_string`.
+    static std::optional<db_clock::time_point> cdc_streams_timestamp_from_string(const sstring&);
+
 public:
     class factory {
         using token = dht::token;
     public:
-        sstring make_full_token_string(const std::unordered_set<token>& tokens) {
-            return ::join(";", tokens | boost::adaptors::transformed([] (const token& t) {
-                return t.to_sstring(); })
-            );
-        }
-        sstring make_token_string(const std::unordered_set<token>& tokens) {
-            if (tokens.empty()) {
-                return "";
-            }
-            return tokens.begin()->to_sstring();
-        }
-
-        sstring make_cdc_streams_timestamp_string(std::optional<db_clock::time_point> t) {
-            // We assume that the db_clock epoch is the same on all receiving nodes.
-            if (!t) {
-                return "";
-            }
-            return std::to_string(t->time_since_epoch().count());
-        }
-
         versioned_value clone_with_higher_version(const versioned_value& value) {
             return versioned_value(value.value);
         }

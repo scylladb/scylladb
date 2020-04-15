@@ -335,12 +335,7 @@ db_clock::time_point make_new_cdc_generation(
 std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper& g) {
     auto streams_ts_string = g.get_application_state_value(endpoint, gms::application_state::CDC_STREAMS_TIMESTAMP);
     cdc_log.trace("endpoint={}, streams_ts_string={}", endpoint, streams_ts_string);
-
-    if (streams_ts_string.empty()) {
-        return {};
-    }
-
-    return db_clock::time_point(db_clock::duration(std::stoll(streams_ts_string)));
+    return gms::versioned_value::cdc_streams_timestamp_from_string(streams_ts_string);
 }
 
 // Run inside seastar::async context.
