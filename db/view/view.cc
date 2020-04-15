@@ -1072,6 +1072,7 @@ future<> mutate_MV(
         std::vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,
         cf_stats& cf_stats,
+        tracing::trace_state_ptr tr_state,
         db::timeout_semaphore_units pending_view_updates,
         service::allow_hints allow_hints,
         wait_for_all_updates wait_for_all)
@@ -1125,7 +1126,7 @@ future<> mutate_MV(
                 // writes but mutate_locally() doesn't, so we need to do that here.
                 ++stats.writes;
                 auto mut_ptr = std::make_unique<frozen_mutation>(std::move(mut.fm));
-                future<> local_view_update = service::get_local_storage_proxy().mutate_locally(mut.s, *mut_ptr, db::commitlog::force_sync::no).then_wrapped(
+                future<> local_view_update = service::get_local_storage_proxy().mutate_locally(mut.s, *mut_ptr, std::move(tr_state), db::commitlog::force_sync::no).then_wrapped(
                         [&stats,
                          maybe_account_failure = std::move(maybe_account_failure),
                          mut_ptr = std::move(mut_ptr)] (future<>&& f) {
@@ -1147,6 +1148,7 @@ future<> mutate_MV(
                         *paired_endpoint,
                         std::move(pending_endpoints),
                         db::write_type::VIEW,
+                        std::move(tr_state),
                         stats,
                         allow_hints).then_wrapped(
                                 [paired_endpoint,
@@ -1183,6 +1185,7 @@ future<> mutate_MV(
                     target,
                     std::move(pending_endpoints),
                     db::write_type::VIEW,
+                    std::move(tr_state),
                     allow_hints).then_wrapped(
                             [target,
                              updates_pushed_remote,

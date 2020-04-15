@@ -2069,15 +2069,16 @@ static size_t memory_usage_of(const std::vector<frozen_mutation_and_schema>& ms)
 future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         std::vector<view_ptr>&& views,
         mutation&& m,
-        flat_mutation_reader_opt existings) const {
+        flat_mutation_reader_opt existings,
+        tracing::trace_state_ptr tr_state) const {
     auto base_token = m.token();
     return db::view::generate_view_updates(
             base,
             std::move(views),
             flat_mutation_reader_from_mutations({std::move(m)}),
-            std::move(existings)).then([this, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+            std::move(existings)).then([this, base_token = std::move(base_token), tr_state = std::move(tr_state)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
-        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats,
+        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats, std::move(tr_state),
                 std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no).handle_exception([] (auto ignored) { });
     });
 }
@@ -2192,8 +2193,8 @@ future<> table::populate_views(
                  units_to_consume = update_size - units_to_wait_for,
                  this] (db::timeout_semaphore_units&& units) mutable {
             units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, units_to_consume));
-            return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats,
-                    *_config.cf_stats, std::move(units), service::allow_hints::no, db::view::wait_for_all_updates::yes);
+            return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats,
+                    tracing::trace_state_ptr(), std::move(units), service::allow_hints::no, db::view::wait_for_all_updates::yes);
         });
     });
 }
@@ -2518,14 +2519,14 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
  * Given an update for the base table, calculates the set of potentially affected views,
  * generates the relevant updates, and sends them to the paired view replicas.
  */
-future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout) const {
+future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr tr_state) const {
     //FIXME: Avoid unfreezing here.
     auto m = fm.unfreeze(s);
-    return push_view_replica_updates(s, std::move(m), timeout);
+    return push_view_replica_updates(s, std::move(m), timeout, std::move(tr_state));
 }
 
 future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source,
-        const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const {
+        tracing::trace_state_ptr tr_state, const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const {
     if (!_config.view_update_concurrency_semaphore->current()) {
         // We don't have resources to generate view updates for this write. If we reached this point, we failed to
         // throttle the client. The memory queue is already full, waiting on the semaphore would cause this node to
@@ -2543,7 +2544,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     }
     auto cr_ranges = db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
     if (cr_ranges.empty()) {
-        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }).then([] {
+        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }, std::move(tr_state)).then([] {
                 // In this case we are not doing a read-before-write, just a
                 // write, so no lock is needed.
                 return make_ready_future<row_locker::lock_holder>();
@@ -2566,14 +2567,14 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.
     future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
-    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout, source = std::move(source), &io_priority] (row_locker::lock_holder lock) {
+    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout, source = std::move(source), tr_state = std::move(tr_state), &io_priority] (row_locker::lock_holder lock) mutable {
       return do_with(
         dht::partition_range::make_singular(m.decorated_key()),
         std::move(slice),
         std::move(m),
-        [base, views = std::move(views), lock = std::move(lock), this, timeout, source = std::move(source), &io_priority] (auto& pk, auto& slice, auto& m) mutable {
+        [base, views = std::move(views), lock = std::move(lock), this, timeout, source = std::move(source), &io_priority, tr_state = std::move(tr_state)] (auto& pk, auto& slice, auto& m) mutable {
             auto reader = source.make_reader(base, no_reader_permit(), pk, slice, io_priority, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader)).then([lock = std::move(lock)] () mutable {
+            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader), std::move(tr_state)).then([lock = std::move(lock)] () mutable {
                 // return the local partition/row lock we have taken so it
                 // remains locked until the caller is done modifying this
                 // partition/row and destroys the lock object.
@@ -2583,16 +2584,16 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     });
 }
 
-future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout) const {
+future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr tr_state) const {
     return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source(),
-            service::get_local_sstable_query_read_priority(), {});
+            std::move(tr_state), service::get_local_sstable_query_read_priority(), {});
 }
 
 future<row_locker::lock_holder>
 table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout,
         std::vector<sstables::shared_sstable>& excluded_sstables) const {
     return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source_excluding(excluded_sstables),
-            service::get_local_streaming_read_priority(), query::partition_slice::option_set::of<query::partition_slice::option::bypass_cache>());
+            tracing::trace_state_ptr(), service::get_local_streaming_read_priority(), query::partition_slice::option_set::of<query::partition_slice::option::bypass_cache>());
 }
 
 mutation_source

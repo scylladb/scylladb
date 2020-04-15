@@ -386,7 +386,7 @@ private:
     future<std::vector<unique_response_handler>> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler handler);
     template<typename Range>
     future<std::vector<unique_response_handler>> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
-    future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl, std::optional<clock_type::time_point> timeout_opt = { });
+    future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl, tracing::trace_state_ptr trace_state, std::optional<clock_type::time_point> timeout_opt = { });
     future<> mutate_end(future<> mutate_result, utils::latency_counter, write_stats& stats, tracing::trace_state_ptr trace_state);
     future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state, service_permit permit);
     bool need_throttle_writes() const;
@@ -412,6 +412,7 @@ private:
             gms::inet_address target,
             std::vector<gms::inet_address> pending_endpoints,
             db::write_type type,
+            tracing::trace_state_ptr tr_state,
             write_stats& stats,
             allow_hints allow_hints = allow_hints::yes);
 
@@ -456,15 +457,15 @@ public:
 
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(const mutation& m, clock_type::time_point timeout = clock_type::time_point::max());
+    future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout = clock_type::time_point::max());
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max());
+    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max());
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(std::vector<mutation> mutation, clock_type::time_point timeout = clock_type::time_point::max());
+    future<> mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout = clock_type::time_point::max());
 
-    future<> mutate_hint(const schema_ptr&, const frozen_mutation& m, clock_type::time_point timeout = clock_type::time_point::max());
+    future<> mutate_hint(const schema_ptr&, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout = clock_type::time_point::max());
     future<> mutate_streaming_mutation(const schema_ptr&, utils::UUID plan_id, const frozen_mutation& m, bool fragmented);
 
     /**
@@ -506,8 +507,10 @@ public:
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, write_stats& stats, allow_hints allow_hints = allow_hints::yes);
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, allow_hints allow_hints = allow_hints::yes);
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type,
+            tracing::trace_state_ptr tr_state, write_stats& stats, allow_hints allow_hints = allow_hints::yes);
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type,
+            tracing::trace_state_ptr tr_state, allow_hints allow_hints = allow_hints::yes);
 
     // Send a mutation to a specific remote target as a hint.
     // Unlike regular mutations during write operations, hints are sent on the streaming connection

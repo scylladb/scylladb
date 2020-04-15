@@ -996,8 +996,8 @@ public:
     void remove_view(view_ptr v);
     void clear_views();
     const std::vector<view_ptr>& views() const;
-    future<row_locker::lock_holder> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout) const;
-    future<row_locker::lock_holder> push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout) const;
+    future<row_locker::lock_holder> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr tr_state) const;
+    future<row_locker::lock_holder> push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr tr_state) const;
     future<row_locker::lock_holder>
     stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout,
             std::vector<sstables::shared_sstable>& excluded_sstables) const;
@@ -1029,12 +1029,13 @@ public:
 
 private:
     future<row_locker::lock_holder> do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source,
-            const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const;
+            tracing::trace_state_ptr tr_state, const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const;
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
             std::vector<view_ptr>&& views,
             mutation&& m,
-            flat_mutation_reader_opt existings) const;
+            flat_mutation_reader_opt existings,
+            tracing::trace_state_ptr tr_state) const;
 
     mutable row_locker _row_locker;
     future<row_locker::lock_holder> local_base_lock(
@@ -1364,6 +1365,7 @@ private:
             database*,
             schema_ptr,
             const frozen_mutation&,
+            tracing::trace_state_ptr,
             db::timeout_clock::time_point,
             db::commitlog::force_sync> _apply_stage;
 
@@ -1412,7 +1414,7 @@ private:
     void setup_metrics();
 
     friend class db_apply_executor;
-    future<> do_apply(schema_ptr, const frozen_mutation&, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync);
+    future<> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync);
     future<> apply_with_commitlog(schema_ptr, column_family&, utils::UUID, const frozen_mutation&, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
@@ -1514,8 +1516,8 @@ public:
                                                 db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
-    future<> apply(schema_ptr, const frozen_mutation&, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout);
-    future<> apply_hint(schema_ptr, const frozen_mutation&, db::timeout_clock::time_point timeout);
+    future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout);
+    future<> apply_hint(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout);
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
     future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);

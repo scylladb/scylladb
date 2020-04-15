@@ -290,7 +290,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             mutation m(schema, key);
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
             m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
-            return _qp.proxy().mutate_locally(m);
+            return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr());
         });
     };
 

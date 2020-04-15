@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
                     auto&& col = *s->get_column_definition(to_bytes("v"));
                     m.set_clustered_cell(ck, col, atomic_cell::make_live(*col.type, api::new_timestamp(), serialized(value)));
                     auto t0 = clock::now();
-                    db.apply(s, freeze(m), db::commitlog::force_sync::no, db::no_timeout).get();
+                    db.apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
                     writes_hist.add(std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0).count());
                     ++mutations;
                 }
