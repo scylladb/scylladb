@@ -147,7 +147,7 @@ public:
         return utils::fb_utilities::get_broadcast_address();
     }
     void set_cluster_name(sstring name);
-    std::set<inet_address> get_seeds();
+    const std::set<inet_address>& get_seeds() const;
     void set_seeds(std::set<inet_address> _seeds);
 public:
     static clk::time_point inline now() { return clk::now(); }

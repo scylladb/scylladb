@@ -91,7 +91,7 @@ sstring gossiper::get_partitioner_name() {
     return _cfg.partitioner();
 }
 
-std::set<inet_address> gossiper::get_seeds() {
+const std::set<inet_address>& gossiper::get_seeds() const {
     return _seeds_from_config;
 }
 
