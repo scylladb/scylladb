@@ -377,6 +377,7 @@ public:
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
+        reader_concurrency_semaphore* compaction_concurrency_semaphore;
         ::cf_stats* cf_stats = nullptr;
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
@@ -1028,6 +1029,10 @@ public:
         return *_config.streaming_read_concurrency_semaphore;
     }
 
+    reader_concurrency_semaphore& compaction_concurrency_semaphore() {
+        return *_config.compaction_concurrency_semaphore;
+    }
+
 private:
     future<row_locker::lock_holder> do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source,
             tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const;
@@ -1195,6 +1200,7 @@ public:
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
+        reader_concurrency_semaphore* compaction_concurrency_semaphore;
         ::cf_stats* cf_stats = nullptr;
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
@@ -1338,6 +1344,7 @@ private:
 
     reader_concurrency_semaphore _read_concurrency_sem;
     reader_concurrency_semaphore _streaming_concurrency_sem;
+    reader_concurrency_semaphore _compaction_concurrency_sem;
     reader_concurrency_semaphore _system_read_concurrency_sem;
 
     named_semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads(), named_semaphore_exception_factory{"sstable load concurrency"}};

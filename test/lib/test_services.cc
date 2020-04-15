@@ -20,6 +20,7 @@
  */
 
 #include "test/lib/test_services.hh"
+#include "test/lib/reader_permit.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -106,6 +107,7 @@ thread_local sstables::sstables_manager test_sstables_manager(nop_lp_handler, te
 column_family::config column_family_test_config() {
     column_family::config cfg;
     cfg.sstables_manager = &test_sstables_manager;
+    cfg.compaction_concurrency_semaphore = &tests::semaphore();
     return cfg;
 }
 

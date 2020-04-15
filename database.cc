@@ -190,6 +190,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             max_count_streaming_concurrent_reads,
             max_memory_streaming_concurrent_reads(),
             "_streaming_concurrency_sem")
+    // No limits, just for accounting.
+    , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{})
     , _system_read_concurrency_sem(
             // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
             max_count_concurrent_reads,
@@ -918,6 +920,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.dirty_memory_manager = _config.dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
     cfg.streaming_read_concurrency_semaphore = _config.streaming_read_concurrency_semaphore;
+    cfg.compaction_concurrency_semaphore = _config.compaction_concurrency_semaphore;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
     cfg.compaction_scheduling_group = _config.compaction_scheduling_group;
@@ -1644,6 +1647,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.streaming_read_concurrency_semaphore = &_streaming_concurrency_sem;
+    cfg.compaction_concurrency_semaphore = &_compaction_concurrency_sem;
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
 
