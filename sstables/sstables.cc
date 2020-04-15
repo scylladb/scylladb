@@ -2504,14 +2504,15 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 return do_with(summary_generator(_schema->get_partitioner(), _components->summary,
                                 _manager.config().sstable_summary_ratio()),
                         [this, &pc, options = std::move(options), index_file, index_size] (summary_generator& s) mutable {
+                    auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
-                            no_reader_permit(), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
+                            sem->make_permit(), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
                             (_version == sstable_version_types::mc
                                 ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
                                 : std::optional<column_values_fixed_lengths>{}));
                     return ctx->consume_input().finally([ctx] {
                         return ctx->close();
-                    }).then([this, ctx, &s] {
+                    }).then([this, ctx, &s, sem = std::move(sem)] {
                         seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());
                     });
                 });
@@ -2796,8 +2797,8 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
     return make_file_input_stream(f, pos, len, std::move(options));
 }
 
-future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc) {
-    return do_with(data_stream(pos, len, pc, no_reader_permit(), tracing::trace_state_ptr(), {}), [len] (auto& stream) {
+future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc, reader_permit permit) {
+    return do_with(data_stream(pos, len, pc, std::move(permit), tracing::trace_state_ptr(), {}), [len] (auto& stream) {
         return stream.read_exactly(len).finally([&stream] {
             return stream.close();
         });
@@ -3212,9 +3213,11 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
     if (!filter_has_key(hk)) {
         return make_ready_future<bool>(false);
     }
-    seastar::shared_ptr<sstables::index_reader> lh_index
-        = seastar::make_shared<sstables::index_reader>(s, no_reader_permit(), default_priority_class(), tracing::trace_state_ptr());
-    return lh_index->advance_lower_and_check_if_present(dk).then([lh_index, s, this] (bool present) {
+    auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
+    auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem->make_permit(), default_priority_class(), tracing::trace_state_ptr());
+    auto& lh_index = *lh_index_ptr;
+    return lh_index.advance_lower_and_check_if_present(dk).then([lh_index_ptr = std::move(lh_index_ptr), s, sem = std::move(sem)] (bool present) mutable {
+        lh_index_ptr.reset(); // destroy before the semaphore
         return make_ready_future<bool>(present);
     });
 }

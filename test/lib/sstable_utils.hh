@@ -32,6 +32,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
+#include "test/lib/reader_permit.hh"
 #include "gc_clock.hh"
 
 using namespace sstables;
@@ -97,7 +98,7 @@ public:
     }
 
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len) {
-        return _sst->data_read(pos, len, default_priority_class());
+        return _sst->data_read(pos, len, default_priority_class(), tests::make_permit());
     }
 
     future<index_list> read_indexes() {
