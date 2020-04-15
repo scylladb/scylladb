@@ -33,6 +33,7 @@
 #include "memtable.hh"
 
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/reader_permit.hh"
 
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
@@ -127,7 +128,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
             {
                 std::vector<flat_mutation_reader> readers;
                 for (int i = 0; i < n; ++i) {
-                    readers.push_back(memtables[i]->make_flat_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
+                    readers.push_back(memtables[i]->make_flat_reader(s, tests::make_permit(), range, slice, pc, trace_state, fwd, fwd_mr));
                 }
                 return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
             });

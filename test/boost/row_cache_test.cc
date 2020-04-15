@@ -39,6 +39,7 @@
 #include "partition_slice_builder.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/lib/log.hh"
+#include "test/lib/reader_permit.hh"
 
 using namespace std::chrono_literals;
 
@@ -399,7 +400,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
         auto make_cache = [&tracker, &mt](schema_ptr s, int& secondary_calls_count) -> lw_shared_ptr<row_cache> {
             auto secondary = mutation_source([&mt, &secondary_calls_count] (schema_ptr s, reader_permit, const dht::partition_range& range,
                     const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
-                return make_counting_reader(mt->make_flat_reader(s, range, slice, pc, std::move(trace), std::move(fwd)), secondary_calls_count);
+                return make_counting_reader(mt->make_flat_reader(s, tests::make_permit(), range, slice, pc, std::move(trace), std::move(fwd)), secondary_calls_count);
             });
 
             return make_lw_shared<row_cache>(s, snapshot_source_from_snapshot(secondary), tracker);
@@ -1375,7 +1376,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
 
         // This update should miss on all partitions
         auto mt2_copy = make_lw_shared<memtable>(s);
-        mt2_copy->apply(*mt2).get();
+        mt2_copy->apply(*mt2, tests::make_permit()).get();
         auto update_future = cache.update([&] { memtables.apply(mt2_copy); }, *mt2);
 
         auto rd3 = cache.make_reader(s);
@@ -1572,13 +1573,13 @@ SEASTAR_TEST_CASE(test_mvcc) {
 
             std::optional<flat_mutation_reader> mt1_reader_opt;
             if (with_active_memtable_reader) {
-                mt1_reader_opt = mt1->make_flat_reader(s);
+                mt1_reader_opt = mt1->make_flat_reader(s, tests::make_permit());
                 mt1_reader_opt->set_max_buffer_size(1);
                 mt1_reader_opt->fill_buffer(db::no_timeout).get();
             }
 
             auto mt1_copy = make_lw_shared<memtable>(s);
-            mt1_copy->apply(*mt1).get();
+            mt1_copy->apply(*mt1, tests::make_permit()).get();
             cache.update([&] { underlying.apply(mt1_copy); }, *mt1).get();
 
             auto rd3 = cache.make_reader(s);
@@ -1832,7 +1833,7 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
         mt->apply(m5);
 
         auto mt_copy = make_lw_shared<memtable>(s.schema());
-        mt_copy->apply(*mt).get();
+        mt_copy->apply(*mt, tests::make_permit()).get();
         cache.update_invalidating([&] { underlying.apply(mt_copy); }, *mt).get();
 
         assert_that(cache.make_reader(s.schema()))
@@ -2034,7 +2035,7 @@ static void apply(row_cache& cache, memtable_snapshot_source& underlying, const 
 
 static void apply(row_cache& cache, memtable_snapshot_source& underlying, memtable& m) {
     auto mt1 = make_lw_shared<memtable>(m.schema());
-    mt1->apply(m).get();
+    mt1->apply(m, tests::make_permit()).get();
     cache.update([&] { underlying.apply(std::move(mt1)); }, m).get();
 }
 
@@ -2313,7 +2314,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
 
                 // Make snapshot on pkeys[2]
                 auto pr = dht::partition_range::make_singular(pkeys[2]);
-                snap = mt->make_flat_reader(s.schema(), pr);
+                snap = mt->make_flat_reader(s.schema(), tests::make_permit(), pr);
                 snap->set_max_buffer_size(1);
                 snap->fill_buffer(db::no_timeout).get();
 
@@ -3271,7 +3272,7 @@ SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
             later().get();
         }
 
-        auto mt2_reader = mt2->make_flat_reader(s, pr, s->full_slice(), default_priority_class(),
+        auto mt2_reader = mt2->make_flat_reader(s, tests::make_permit(), pr, s->full_slice(), default_priority_class(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
         auto cache_reader = cache.make_reader(s, pr, s->full_slice(), default_priority_class(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
@@ -3307,12 +3308,12 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
 
         mt->apply(m1);
 
-        auto mt_rd1 = mt->make_flat_reader(s);
+        auto mt_rd1 = mt->make_flat_reader(s, tests::make_permit());
         mt_rd1.set_max_buffer_size(1);
         mt_rd1.fill_buffer(db::no_timeout).get();
         BOOST_REQUIRE(mt_rd1.is_buffer_full()); // If fails, increase n_rows
 
-        auto mt_rd2 = mt->make_flat_reader(s);
+        auto mt_rd2 = mt->make_flat_reader(s, tests::make_permit());
         mt_rd2.set_max_buffer_size(1);
         mt_rd2.fill_buffer(db::no_timeout).get();
 

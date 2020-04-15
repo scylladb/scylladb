@@ -35,6 +35,7 @@
 #include "schema_builder.hh"
 #include "memtable.hh"
 #include "test/perf/perf.hh"
+#include "test/lib/reader_permit.hh"
 
 static const int update_iterations = 16;
 static const int cell_size = 128;
@@ -152,7 +153,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         // Create a reader which tests the case of memtable snapshots
         // going away after memtable was merged to cache.
         auto rd = std::make_unique<flat_mutation_reader>(
-            make_combined_reader(s, cache.make_reader(s), mt->make_flat_reader(s)));
+            make_combined_reader(s, cache.make_reader(s), mt->make_flat_reader(s, tests::make_permit())));
         rd->set_max_buffer_size(1);
         rd->fill_buffer(db::no_timeout).get();
 

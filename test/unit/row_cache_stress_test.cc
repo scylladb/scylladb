@@ -100,7 +100,7 @@ struct table {
         testlog.trace("flushing");
         prev_mt = std::exchange(mt, make_lw_shared<memtable>(s.schema()));
         auto flushed = make_lw_shared<memtable>(s.schema());
-        flushed->apply(*prev_mt).get();
+        flushed->apply(*prev_mt, tests::make_permit()).get();
         prev_mt->mark_flushed(flushed->as_data_source());
         testlog.trace("updating cache");
         cache.update([&] {
@@ -148,10 +148,10 @@ struct table {
         auto r = std::make_unique<reader>(reader{std::move(pr), std::move(slice), make_empty_flat_reader(s.schema())});
         std::vector<flat_mutation_reader> rd;
         if (prev_mt) {
-            rd.push_back(prev_mt->make_flat_reader(s.schema(), r->pr, r->slice, default_priority_class(), nullptr,
+            rd.push_back(prev_mt->make_flat_reader(s.schema(), tests::make_permit(), r->pr, r->slice, default_priority_class(), nullptr,
                 streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         }
-        rd.push_back(mt->make_flat_reader(s.schema(), r->pr, r->slice, default_priority_class(), nullptr,
+        rd.push_back(mt->make_flat_reader(s.schema(), tests::make_permit(), r->pr, r->slice, default_priority_class(), nullptr,
             streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         rd.push_back(cache.make_reader(s.schema(), r->pr, r->slice, default_priority_class(), nullptr,
             streamed_mutation::forwarding::no, mutation_reader::forwarding::no));

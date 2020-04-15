@@ -468,7 +468,7 @@ table::make_reader(schema_ptr s,
     // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_flat_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
+        readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
     if (cache_enabled() && !slice.options.contains(query::partition_slice::option::bypass_cache)) {
@@ -507,7 +507,7 @@ table::make_streaming_reader(schema_ptr s,
         std::vector<flat_mutation_reader> readers;
         readers.reserve(_memtables->size() + 1);
         for (auto&& mt : *_memtables) {
-            readers.emplace_back(mt->make_flat_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
+            readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
         }
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
         return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
@@ -526,7 +526,7 @@ flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::
     std::vector<flat_mutation_reader> readers;
     readers.reserve(_memtables->size() + 1);
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_flat_reader(schema, range, slice, pc, trace_state, fwd, fwd_mr));
+        readers.emplace_back(mt->make_flat_reader(schema, permit, range, slice, pc, trace_state, fwd, fwd_mr));
     }
     readers.emplace_back(make_sstable_reader(schema, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     return make_combined_reader(std::move(schema), std::move(readers), fwd, fwd_mr);
@@ -2486,7 +2486,7 @@ table::make_reader_excluding_sstables(schema_ptr s,
     readers.reserve(_memtables->size() + 1);
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_flat_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
+        readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
     auto effective_sstables = ::make_lw_shared<sstables::sstable_set>(*_sstables);

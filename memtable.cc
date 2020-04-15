@@ -341,12 +341,13 @@ protected:
         return {};
     }
 
-    flat_mutation_reader delegate_reader(const dht::partition_range& delegate,
+    flat_mutation_reader delegate_reader(reader_permit permit,
+                                    const dht::partition_range& delegate,
                                     const query::partition_slice& slice,
                                     const io_priority_class& pc,
                                     streamed_mutation::forwarding fwd,
                                     mutation_reader::forwarding fwd_mr) {
-        auto ret = _memtable->_underlying->make_reader(_schema, no_reader_permit(), delegate, slice, pc, nullptr, fwd, fwd_mr);
+        auto ret = _memtable->_underlying->make_reader(_schema, std::move(permit), delegate, slice, pc, nullptr, fwd, fwd_mr);
         _memtable = {};
         _last = {};
         return ret;
@@ -361,6 +362,7 @@ protected:
 class scanning_reader final : public flat_mutation_reader::impl, private iterator_reader {
     std::optional<dht::partition_range> _delegate_range;
     std::optional<flat_mutation_reader> _delegate;
+    std::optional<reader_permit> _permit;
     const io_priority_class& _pc;
     const query::partition_slice& _slice;
     mutation_reader::forwarding _fwd_mr;
@@ -389,12 +391,14 @@ class scanning_reader final : public flat_mutation_reader::impl, private iterato
 public:
      scanning_reader(schema_ptr s,
                      lw_shared_ptr<memtable> m,
+                     std::optional<reader_permit> permit, // not needed when used for flushing
                      const dht::partition_range& range,
                      const query::partition_slice& slice,
                      const io_priority_class& pc,
                      mutation_reader::forwarding fwd_mr)
          : impl(s)
          , iterator_reader(s, std::move(m), range)
+         , _permit(std::move(permit))
          , _pc(pc)
          , _slice(slice)
          , _fwd_mr(fwd_mr)
@@ -405,7 +409,8 @@ public:
             if (!_delegate) {
                 _delegate_range = get_delegate_range();
                 if (_delegate_range) {
-                    _delegate = delegate_reader(*_delegate_range, _slice, _pc, streamed_mutation::forwarding::no, _fwd_mr);
+                    assert(_permit);
+                    _delegate = delegate_reader(*_permit, *_delegate_range, _slice, _pc, streamed_mutation::forwarding::no, _fwd_mr);
                 } else {
                     auto key_and_snp = read_section()(region(), [&] {
                         return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
@@ -636,6 +641,7 @@ partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
 
 flat_mutation_reader
 memtable::make_flat_reader(schema_ptr s,
+                      reader_permit permit,
                       const dht::partition_range& range,
                       const query::partition_slice& slice,
                       const io_priority_class& pc,
@@ -666,7 +672,7 @@ memtable::make_flat_reader(schema_ptr s,
         rd.upgrade_schema(s);
         return rd;
     } else {
-        auto res = make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), range, slice, pc, fwd_mr);
+        auto res = make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit), range, slice, pc, fwd_mr);
         if (fwd == streamed_mutation::forwarding::yes) {
             return make_forwardable(std::move(res));
         } else {
@@ -681,7 +687,7 @@ memtable::make_flush_reader(schema_ptr s, const io_priority_class& pc) {
         return make_flat_mutation_reader<flush_reader>(s, shared_from_this());
     } else {
         auto& full_slice = s->full_slice();
-        return make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(),
+        return make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::nullopt,
             query::full_partition_range, full_slice, pc, mutation_reader::forwarding::no);
     }
 }
@@ -696,8 +702,8 @@ memtable::update(db::rp_handle&& h) {
 }
 
 future<>
-memtable::apply(memtable& mt) {
-    return do_with(mt.make_flat_reader(_schema), [this] (auto&& rd) mutable {
+memtable::apply(memtable& mt, reader_permit permit) {
+    return do_with(mt.make_flat_reader(_schema, std::move(permit)), [this] (auto&& rd) mutable {
         return consume_partitions(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
             self->apply(m);
             return stop_iteration::no;
@@ -749,7 +755,7 @@ mutation_source memtable::as_data_source() {
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
-        return mt->make_flat_reader(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        return mt->make_flat_reader(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
 }
 

@@ -92,7 +92,7 @@ static atomic_cell make_collection_member(data_type dt, T value) {
 static mutation_partition get_partition(memtable& mt, const partition_key& key) {
     auto dk = dht::decorate_key(*mt.schema(), key);
     auto range = dht::partition_range::make_singular(dk);
-    auto reader = mt.make_flat_reader(mt.schema(), range);
+    auto reader = mt.make_flat_reader(mt.schema(), tests::make_permit(), range);
     auto mo = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
     BOOST_REQUIRE(bool(mo));
     return std::move(mo->partition());
@@ -439,7 +439,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
         mt->apply(make_mutation_with_collection(pk, std::move(cmd1)));
         mt->apply(make_mutation_with_collection(pk, std::move(cmd2))); // this should trigger a merge of the two collections
 
-        auto rd = mt->make_flat_reader(schema);
+        auto rd = mt->make_flat_reader(schema, tests::make_permit());
         auto res_mut_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
         BOOST_REQUIRE(res_mut_opt);
 

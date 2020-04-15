@@ -24,6 +24,7 @@
 #include "mutation_reader.hh"
 #include "memtable.hh"
 #include "utils/phased_barrier.hh"
+#include "test/lib/reader_permit.hh"
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/condition-variable.hh>
@@ -66,6 +67,7 @@ private:
         std::vector<flat_mutation_reader> readers;
         for (auto&& mt : _memtables) {
             readers.push_back(mt->make_flat_reader(new_mt->schema(),
+                 tests::make_permit(),
                  query::full_partition_range,
                  new_mt->schema()->full_slice(),
                  default_priority_class(),
@@ -121,7 +123,7 @@ public:
     void apply(memtable& mt) {
         auto op = _apply.start();
         auto new_mt = new_memtable();
-        new_mt->apply(mt).get();
+        new_mt->apply(mt, tests::make_permit()).get();
         _memtables.push_back(new_mt);
     }
     // mt must not change from now on.

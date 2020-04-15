@@ -47,6 +47,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/reader_permit.hh"
 
 using namespace db;
 
@@ -639,7 +640,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         }
 
         {
-            auto rd = mt.make_flat_reader(s);
+            auto rd = mt.make_flat_reader(s, tests::make_permit());
             auto mopt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
             BOOST_REQUIRE(mopt);
 

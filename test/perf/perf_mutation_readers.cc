@@ -26,6 +26,7 @@
 #include "seastar/include/seastar/testing/perf_tests.hh"
 
 #include "test/lib/simple_schema.hh"
+#include "test/lib/reader_permit.hh"
 
 #include "mutation_reader.hh"
 #include "flat_mutation_reader.hh"
@@ -291,22 +292,22 @@ protected:
 
 PERF_TEST_F(memtable, one_partition_one_row)
 {
-    return consume_all(single_row_mt().make_flat_reader(schema(), single_partition_range()));
+    return consume_all(single_row_mt().make_flat_reader(schema(), tests::make_permit(), single_partition_range()));
 }
 
 PERF_TEST_F(memtable, one_partition_many_rows)
 {
-    return consume_all(multi_row_mt().make_flat_reader(schema(), single_partition_range()));
+    return consume_all(multi_row_mt().make_flat_reader(schema(), tests::make_permit(), single_partition_range()));
 }
 
 PERF_TEST_F(memtable, many_partitions_one_row)
 {
-    return consume_all(single_row_mt().make_flat_reader(schema(), multi_partition_range(25)));
+    return consume_all(single_row_mt().make_flat_reader(schema(), tests::make_permit(), multi_partition_range(25)));
 }
 
 PERF_TEST_F(memtable, many_partitions_many_rows)
 {
-    return consume_all(multi_row_mt().make_flat_reader(schema(), multi_partition_range(25)));
+    return consume_all(multi_row_mt().make_flat_reader(schema(), tests::make_permit(), multi_partition_range(25)));
 }
 
 }
