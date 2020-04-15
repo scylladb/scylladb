@@ -2435,8 +2435,8 @@ table::run_with_compaction_disabled(std::function<future<> ()> func) {
 }
 
 flat_mutation_reader
-table::make_reader_excluding_sstable(schema_ptr s,
-        sstables::shared_sstable sst,
+table::make_reader_excluding_sstables(schema_ptr s,
+        std::vector<sstables::shared_sstable>& excluded,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         const io_priority_class& pc,
@@ -2451,7 +2451,9 @@ table::make_reader_excluding_sstable(schema_ptr s,
     }
 
     auto effective_sstables = ::make_lw_shared<sstables::sstable_set>(*_sstables);
-    effective_sstables->erase(sst);
+    for (auto& sst : excluded) {
+        effective_sstables->erase(sst);
+    }
 
     readers.emplace_back(make_sstable_reader(s, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
@@ -2553,13 +2555,15 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
     return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source(), service::get_local_sstable_query_read_priority());
 }
 
-future<row_locker::lock_holder> table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, sstables::shared_sstable excluded_sstable) const {
-    return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source_excluding(std::move(excluded_sstable)), service::get_local_streaming_write_priority());
+future<row_locker::lock_holder>
+table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout,
+        std::vector<sstables::shared_sstable>& excluded_sstables) const {
+    return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source_excluding(excluded_sstables), service::get_local_streaming_write_priority());
 }
 
 mutation_source
-table::as_mutation_source_excluding(sstables::shared_sstable sst) const {
-    return mutation_source([this, sst = std::move(sst)] (schema_ptr s,
+table::as_mutation_source_excluding(std::vector<sstables::shared_sstable>& ssts) const {
+    return mutation_source([this, &ssts] (schema_ptr s,
                                    reader_permit,
                                    const dht::partition_range& range,
                                    const query::partition_slice& slice,
@@ -2567,7 +2571,7 @@ table::as_mutation_source_excluding(sstables::shared_sstable sst) const {
                                    tracing::trace_state_ptr trace_state,
                                    streamed_mutation::forwarding fwd,
                                    mutation_reader::forwarding fwd_mr) {
-        return this->make_reader_excluding_sstable(std::move(s), std::move(sst), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        return this->make_reader_excluding_sstables(std::move(s), ssts, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
 }
 
@@ -2576,7 +2580,7 @@ stop_iteration db::view::view_updating_consumer::consume_end_of_partition() {
         return stop_iteration::yes;
     }
     try {
-        auto lock_holder = _table->stream_view_replica_updates(_schema, std::move(*_m), db::no_timeout, _excluded_sstable).get();
+        auto lock_holder = _table->stream_view_replica_updates(_schema, std::move(*_m), db::no_timeout, _excluded_sstables).get();
     } catch (...) {
         tlogger.warn("Failed to push replica updates for table {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
     }

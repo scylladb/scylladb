@@ -19,7 +19,9 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/range/adaptor/map.hpp>
 #include "view_update_generator.hh"
+#include "service/priority_manager.hh"
 
 static logging::logger vug_logger("view_update_generator");
 
@@ -33,28 +35,53 @@ future<> view_update_generator::start() {
             if (_sstables_with_tables.empty()) {
                 _pending_sstables.wait().get();
             }
-            while (!_sstables_with_tables.empty()) {
-                auto& [sst, t] = _sstables_with_tables.front();
+
+            // If we got here, we will process all tables we know about so far eventually so there
+            // is no starvation
+            for (auto& t : _sstables_with_tables | boost::adaptors::map_keys) {
+                schema_ptr s = t->schema();
+
+                // Copy what we have so far so we don't miss new updates
+                auto sstables = std::exchange(_sstables_with_tables[t], {});
+
                 try {
-                    schema_ptr s = t->schema();
-                    flat_mutation_reader staging_sstable_reader = sst->read_rows_flat(s, no_reader_permit());
-                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, _db, sst, _as), db::no_timeout);
+                    // temporary: need an sstable set for the flat mutation reader, but the
+                    // compaction_descriptor takes a vector. Soon this will become a compaction
+                    // so the transformation to the SSTable set will not be needed.
+                    auto ssts = make_lw_shared(t->get_compaction_strategy().make_sstable_set(s));
+                    for (auto& sst : sstables) {
+                        ssts->insert(sst);
+                    }
+
+                    flat_mutation_reader staging_sstable_reader = ::make_range_sstable_reader(s,
+                            no_reader_permit(),
+                            std::move(ssts),
+                            query::full_partition_range,
+                            s->full_slice(),
+                            service::get_local_streaming_read_priority(),
+                            nullptr,
+                            ::streamed_mutation::forwarding::no,
+                            ::mutation_reader::forwarding::no);
+
+                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, *t, sstables, _as), db::no_timeout);
                     if (result == stop_iteration::yes) {
                         break;
                     }
                 } catch (...) {
-                    vug_logger.warn("Processing {} failed: {}. Will retry...", sst->get_filename(), std::current_exception());
+                    vug_logger.warn("Processing {} failed for table {}:{}. Will retry...", s->ks_name(), s->cf_name(), std::current_exception());
+                    // Need to add sstables back to the set so we can retry later. By now it may
+                    // have had other updates.
+                    std::move(sstables.begin(), sstables.end(), std::back_inserter(_sstables_with_tables[t]));
                     break;
                 }
                 try {
                     // collect all staging sstables to move in a map, grouped by table.
-                    _sstables_to_move[t].push_back(sst);
+                    std::move(sstables.begin(), sstables.end(), std::back_inserter(_sstables_to_move[t]));
                 } catch (...) {
                     // Move from staging will be retried upon restart.
-                    vug_logger.warn("Moving {} from staging failed: {}. Ignoring...", sst->get_filename(), std::current_exception());
+                    vug_logger.warn("Moving {} from staging failed: {}:{}. Ignoring...", s->ks_name(), s->cf_name(), std::current_exception());
                 }
                 _registration_sem.signal();
-                _sstables_with_tables.pop_front();
             }
             // For each table, move the processed staging sstables into the table's base dir.
             for (auto it = _sstables_to_move.begin(); it != _sstables_to_move.end(); ) {
@@ -88,7 +115,8 @@ future<> view_update_generator::register_staging_sstable(sstables::shared_sstabl
     if (_as.abort_requested()) {
         return make_ready_future<>();
     }
-    _sstables_with_tables.emplace_back(std::move(sst), std::move(table));
+    _sstables_with_tables[table].push_back(std::move(sst));
+
     _pending_sstables.signal();
     if (should_throttle()) {
         return _registration_sem.wait(1);

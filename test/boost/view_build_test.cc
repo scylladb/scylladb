@@ -28,6 +28,7 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/sstable_utils.hh"
 #include "schema_builder.hh"
 #include "service/priority_manager.hh"
 #include "test/lib/test_services.hh"
@@ -405,16 +406,22 @@ SEASTAR_TEST_CASE(test_builder_with_concurrent_drop) {
 SEASTAR_TEST_CASE(test_view_update_generator) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table t (p text, c text, v text, primary key (p, c))").get();
+
+        auto msb = e.local_db().get_config().murmur3_partitioner_ignore_msb_bits();
+        auto key_token_pair = token_generation_for_shard(2, this_shard_id(), msb);
+        auto key1 = key_token_pair[0].first;
+        auto key2 = key_token_pair[1].first;
+
         for (auto i = 0; i < 1024; ++i) {
-            e.execute_cql(fmt::format("insert into t (p, c, v) values ('a', 'c{}', 'x')", i)).get();
+            e.execute_cql(fmt::format("insert into t (p, c, v) values ('{}', 'c{}', 'x')", key1, i)).get();
         }
         for (auto i = 0; i < 512; ++i) {
-            e.execute_cql(fmt::format("insert into t (p, c, v) values ('b', 'c{}', '{}')", i, i + 1)).get();
+            e.execute_cql(fmt::format("insert into t (p, c, v) values ('{}', 'c{}', '{}')", key2, i, i + 1)).get();
         }
         auto& view_update_generator = e.local_view_update_generator();
         auto s = test_table_schema();
 
-        auto key = partition_key::from_exploded(*s, {to_bytes("a")});
+        auto key = partition_key::from_exploded(*s, {to_bytes(key1)});
         mutation m(s, key);
         auto col = s->get_column_definition("v");
         for (int i = 1024; i < 1280; ++i) {
@@ -426,30 +433,31 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
         auto sst = t->make_streaming_staging_sstable();
         sstables::sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
         auto& pc = service::get_local_streaming_write_priority();
+
         sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
         sst->open_data().get();
         t->add_sstable_and_update_cache(sst).get();
         view_update_generator.register_staging_sstable(sst, t).get();
 
-        eventually([&] {
-            auto msg = e.execute_cql("SELECT * FROM t WHERE p = 'a'").get0();
+        eventually([&, key1, key2] {
+            auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}'", key1)).get0();
             assert_that(msg).is_rows().with_size(1280);
-            msg = e.execute_cql("SELECT * FROM t WHERE p = 'b'").get0();
+            msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}'", key2)).get0();
             assert_that(msg).is_rows().with_size(512);
 
             for (int i = 0; i < 1024; ++i) {
-                auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = 'a' and c = 'c{}'", i)).get0();
+                auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}' and c = 'c{}'", key1, i)).get0();
                 assert_that(msg).is_rows().with_size(1).with_row({
-                     {utf8_type->decompose(sstring("a"))},
+                     {utf8_type->decompose(key1)},
                      {utf8_type->decompose(sstring(fmt::format("c{}", i)))},
                      {utf8_type->decompose(sstring("x"))}
                  });
 
             }
             for (int i = 1024; i < 1280; ++i) {
-                auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = 'a' and c = 'c{}'", i)).get0();
+                auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}' and c = 'c{}'", key1, i)).get0();
                 assert_that(msg).is_rows().with_size(1).with_row({
-                     {utf8_type->decompose(sstring("a"))},
+                     {utf8_type->decompose(key1)},
                      {utf8_type->decompose(sstring(fmt::format("c{}", i)))},
                      {utf8_type->decompose(sstring(fmt::format("v{}", i)))}
                  });

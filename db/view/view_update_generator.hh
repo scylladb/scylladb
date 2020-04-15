@@ -43,7 +43,7 @@ class view_update_generator {
         lw_shared_ptr<table> t;
         sstable_with_table(sstables::shared_sstable sst, lw_shared_ptr<table> t) : sst(std::move(sst)), t(std::move(t)) { }
     };
-    std::deque<sstable_with_table> _sstables_with_tables;
+    std::unordered_map<lw_shared_ptr<table>, std::vector<sstables::shared_sstable>> _sstables_with_tables;
     std::unordered_map<lw_shared_ptr<table>, std::vector<sstables::shared_sstable>> _sstables_to_move;
 public:
     view_update_generator(database& db) : _db(db) { }

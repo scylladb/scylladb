@@ -36,14 +36,14 @@ namespace db::view {
 class view_updating_consumer {
     schema_ptr _schema;
     lw_shared_ptr<table> _table;
-    sstables::shared_sstable _excluded_sstable;
+    std::vector<sstables::shared_sstable> _excluded_sstables;
     const seastar::abort_source& _as;
     std::optional<mutation> _m;
 public:
-    view_updating_consumer(schema_ptr schema, database& db, sstables::shared_sstable excluded_sstable, const seastar::abort_source& as)
+    view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as)
             : _schema(std::move(schema))
-            , _table(db.find_column_family(_schema->id()).shared_from_this())
-            , _excluded_sstable(excluded_sstable)
+            , _table(table.shared_from_this())
+            , _excluded_sstables(std::move(excluded_sstables))
             , _as(as)
             , _m()
     { }
