@@ -70,6 +70,15 @@ public:
     static future<> init_system_keyspace(distributed<database>& db);
     static future<> ensure_system_table_directories(distributed<database>& db);
     static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy, distributed<service::migration_manager>& mm);
+    /**
+     * Marks a keyspace (by name) as "prioritized" on bootstrap.
+     * This will effectively let it bypass concurrency control.
+     * The only real use for this is to avoid certain chicken and
+     * egg issues.
+     *
+     * May only be called pre-bootstrap on main shard.
+     */
+    static void mark_keyspace_as_load_prio(const sstring&);
 private:
     static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
     static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);

@@ -47,6 +47,15 @@ static const std::unordered_set<sstring> system_keyspaces = {
                 db::system_keyspace::NAME, db::schema_tables::NAME
 };
 
+// Not super nice. Adding statefulness to the file. 
+static std::unordered_set<sstring> load_prio_keyspaces;
+static bool population_started = false;
+
+void distributed_loader::mark_keyspace_as_load_prio(const sstring& ks) {
+    assert(!population_started);
+    load_prio_keyspaces.insert(ks);
+}
+
 bool is_system_keyspace(const sstring& name) {
     return system_keyspaces.find(name) != system_keyspaces.end();
 }
@@ -309,13 +318,21 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
     // calculate_generation_for_new_table(). That ensures every sstable is
     // shard-local if reshard wasn't performed. This approach is also expected
     // to distribute evenly the resource usage among all shards.
+    static thread_local std::unordered_map<sstring, named_semaphore> named_semaphores;    
 
     return db.invoke_on(column_family::calculate_shard_from_sstable_generation(comps.generation),
             [&db, comps = std::move(comps), func = std::move(func), &pc] (database& local) {
 
-        return with_semaphore(local.sstable_load_concurrency_sem(), 1, [&db, &local, comps = std::move(comps), func = std::move(func), &pc] {
-            auto& cf = local.find_column_family(comps.ks, comps.cf);
+        // check if we should bypass concurrency throttle for this keyspace
+        // we still only allow a single sstable per shard extra to be loaded, 
+        // to avoid concurrency explosion
+        auto& sem = load_prio_keyspaces.count(comps.ks)
+            ? named_semaphores.try_emplace(comps.ks, 1, named_semaphore_exception_factory{comps.ks}).first->second
+            : local.sstable_load_concurrency_sem()
+            ;
 
+        return with_semaphore(sem, 1, [&db, &local, comps = std::move(comps), func = std::move(func), &pc] {
+            auto& cf = local.find_column_family(comps.ks, comps.cf);
             auto sst = cf.make_sstable(comps.sstdir, comps.generation, comps.version, comps.format);
             auto f = sst->load(pc).then([sst = std::move(sst)] {
                 return sst->load_shared_components();
@@ -799,6 +816,8 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
 }
 
 future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
+    population_started = true;
+
     return seastar::async([&db] {
         // We need to init commitlog on shard0 before it is inited on other shards
         // because it obtains the list of pre-existing segments for replay, which must
