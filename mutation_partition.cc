@@ -2501,7 +2501,7 @@ mutation_partition::fully_discontinuous(const schema& s, const position_range& r
     return check_continuity(s, r, is_continuous::no);
 }
 
-future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& source,
+future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& source, reader_permit permit,
                                          const dht::decorated_key& dk,
                                          const query::partition_slice& slice,
                                          tracing::trace_state_ptr trace_ptr)
@@ -2513,19 +2513,19 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
         range_and_reader(range_and_reader&&) = delete;
         range_and_reader(const range_and_reader&) = delete;
 
-        range_and_reader(schema_ptr s, const mutation_source& source,
+        range_and_reader(schema_ptr s, const mutation_source& source, reader_permit permit,
                          const dht::decorated_key& dk,
                          const query::partition_slice& slice,
                          tracing::trace_state_ptr trace_ptr)
             : range(dht::partition_range::make_singular(dk))
-            , reader(source.make_reader(s, no_reader_permit(), range, slice, service::get_local_sstable_query_read_priority(),
+            , reader(source.make_reader(s, std::move(permit), range, slice, service::get_local_sstable_query_read_priority(),
                                                       std::move(trace_ptr), streamed_mutation::forwarding::no,
                                                       mutation_reader::forwarding::no))
         { }
     };
 
     // do_with() doesn't support immovable objects
-    auto r_a_r = std::make_unique<range_and_reader>(s, source, dk, slice, std::move(trace_ptr));
+    auto r_a_r = std::make_unique<range_and_reader>(s, source, std::move(permit), dk, slice, std::move(trace_ptr));
     auto cwqrb = counter_write_query_result_builder(*s);
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, counter_write_query_result_builder>>(
             *s, gc_clock::now(), slice, query::max_rows, query::max_rows, std::move(cwqrb));

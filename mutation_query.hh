@@ -204,7 +204,7 @@ public:
 };
 
 // Performs a query for counter updates.
-future<mutation_opt> counter_write_query(schema_ptr, const mutation_source&,
+future<mutation_opt> counter_write_query(schema_ptr, const mutation_source&, reader_permit permit,
                                          const dht::decorated_key& dk,
                                          const query::partition_slice& slice,
                                          tracing::trace_state_ptr trace_ptr);
