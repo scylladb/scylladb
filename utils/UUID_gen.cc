@@ -57,14 +57,15 @@ static int64_t make_node()
 }
 
 
-static int64_t make_clock_seq_and_node()
+int64_t make_clock_seq_and_node()
 {
+    thread_local std::mt19937_64 engine(std::random_device().operator()());
+    thread_local std::uniform_int_distribution<int> dist;
     // The original Java code did this, shuffling the number of millis
     // since the epoch, and taking 14 bits of it. We don't do exactly
     // the same, but the idea is the same.
     //long clock = new Random(System.currentTimeMillis()).nextLong();
-    unsigned int seed = std::chrono::system_clock::now().time_since_epoch().count();
-    int clock = rand_r(&seed);
+    int clock = dist(engine);
 
     long lsb = 0;
     lsb |= 0x8000000000000000L;                 // variant (2 bits)
@@ -96,7 +97,6 @@ UUID UUID_gen::get_name_UUID(const unsigned char *s, size_t len) {
     return get_UUID(digest);
 }
 
-const thread_local int64_t UUID_gen::clock_seq_and_node = make_clock_seq_and_node();
 thread_local const std::unique_ptr<UUID_gen> UUID_gen::instance (new UUID_gen());
 
 

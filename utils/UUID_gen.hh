@@ -50,6 +50,8 @@
 
 namespace utils {
 
+int64_t make_clock_seq_and_node();
+
 /**
  * The goods are here: www.ietf.org/rfc/rfc4122.txt.
  */
@@ -58,7 +60,6 @@ class UUID_gen
 private:
     // A grand day! millis at 00:00:00.000 15 Oct 1582.
     static constexpr int64_t START_EPOCH = -12219292800000L;
-    static thread_local const int64_t clock_seq_and_node;
 
     /*
      * The min and max possible lsb for a UUID.
@@ -78,13 +79,6 @@ private:
     static thread_local const std::unique_ptr<UUID_gen> instance;
 
     uint64_t last_nanos = 0;
-
-    UUID_gen()
-    {
-        // make sure someone didn't whack the clockSeqAndNode by changing the order of instantiation.
-        assert(clock_seq_and_node != 0);
-    }
-
 public:
     /**
      * Creates a type 1 UUID (time-based UUID).
@@ -93,7 +87,7 @@ public:
      */
     static UUID get_time_UUID()
     {
-        auto uuid = UUID(instance->create_time_safe(), clock_seq_and_node);
+        auto uuid = UUID(instance->create_time_safe(), make_clock_seq_and_node());
         assert(uuid.is_timestamp());
         return uuid;
     }
@@ -105,7 +99,7 @@ public:
      */
     static UUID get_time_UUID(int64_t when)
     {
-        auto uuid = UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
+        auto uuid = UUID(create_time(from_unix_timestamp(when)), make_clock_seq_and_node());
         assert(uuid.is_timestamp());
         return uuid;
     }
@@ -121,7 +115,7 @@ public:
         // "nanos" needs to be in 100ns intervals since the adoption of the Gregorian calendar in the West.
         uint64_t nanos = duration_cast<nanoseconds>(tp.time_since_epoch()).count() / 100;
         nanos -= (10000ULL * START_EPOCH);
-        auto uuid = UUID(create_time(nanos), clock_seq_and_node);
+        auto uuid = UUID(create_time(nanos), make_clock_seq_and_node());
         assert(uuid.is_timestamp());
         return uuid;
     }
@@ -298,7 +292,7 @@ public:
 private:
     static std::array<int8_t, 16> create_time_UUID_bytes(uint64_t msb)
     {
-        uint64_t lsb = clock_seq_and_node;
+        uint64_t lsb = make_clock_seq_and_node();
         std::array<int8_t, 16> uuid_bytes;
 
         for (int i = 0; i < 8; i++)
