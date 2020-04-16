@@ -2077,6 +2077,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             std::move(views),
             flat_mutation_reader_from_mutations({std::move(m)}),
             std::move(existings)).then([this, base_token = std::move(base_token), tr_state = std::move(tr_state)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+            tracing::trace(tr_state, "Generated {} view update mutations", updates.size());
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
         return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats, std::move(tr_state),
                 std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no).handle_exception([] (auto ignored) { });
@@ -2544,6 +2545,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     }
     auto cr_ranges = db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
     if (cr_ranges.empty()) {
+        tracing::trace(tr_state, "View updates do not require read-before-write");
         return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }, std::move(tr_state)).then([] {
                 // In this case we are not doing a read-before-write, just a
                 // write, so no lock is needed.
@@ -2568,13 +2570,15 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     // writing the base-table update.
     future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
     return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout, source = std::move(source), tr_state = std::move(tr_state), &io_priority] (row_locker::lock_holder lock) mutable {
+      tracing::trace(tr_state, "View updates for {}.{} require read-before-write - base table reader is created", base->ks_name(), base->cf_name());
       return do_with(
         dht::partition_range::make_singular(m.decorated_key()),
         std::move(slice),
         std::move(m),
         [base, views = std::move(views), lock = std::move(lock), this, timeout, source = std::move(source), &io_priority, tr_state = std::move(tr_state)] (auto& pk, auto& slice, auto& m) mutable {
-            auto reader = source.make_reader(base, no_reader_permit(), pk, slice, io_priority, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader), std::move(tr_state)).then([lock = std::move(lock)] () mutable {
+            auto reader = source.make_reader(base, no_reader_permit(), pk, slice, io_priority, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader), tr_state).then([base, tr_state = std::move(tr_state), lock = std::move(lock)] () mutable {
+                tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
                 // return the local partition/row lock we have taken so it
                 // remains locked until the caller is done modifying this
                 // partition/row and destroys the lock object.

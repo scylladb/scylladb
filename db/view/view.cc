@@ -1084,7 +1084,7 @@ future<> mutate_MV(
         auto& keyspace_name = mut.s->ks_name();
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
-        auto maybe_account_failure = [&stats, &cf_stats, units = pending_view_updates.split(mut.fm.representation().size())] (
+        auto maybe_account_failure = [tr_state, &stats, &cf_stats, units = pending_view_updates.split(mut.fm.representation().size())] (
                 future<>&& f,
                 gms::inet_address target,
                 bool is_local,
@@ -1095,9 +1095,13 @@ future<> mutate_MV(
                 cf_stats.total_view_updates_failed_local += is_local;
                 cf_stats.total_view_updates_failed_remote += remotes;
                 auto ep = f.get_exception();
+                tracing::trace(tr_state, "Failed to apply {}view update for {} and {} remote endpoints",
+                        seastar::value_of([is_local]{return is_local ? "local " : "";}), target, remotes);
                 vlogger.error("Error applying view update to {}: {}", target, ep);
                 return make_exception_future<>(std::move(ep));
             } else {
+                tracing::trace(tr_state, "Successfully applied {}view update for {} and {} remote endpoints",
+                        seastar::value_of([is_local]{return is_local ? "local " : "";}), target, remotes);
                 return make_ready_future<>();
             }
         };
@@ -1126,6 +1130,8 @@ future<> mutate_MV(
                 // writes but mutate_locally() doesn't, so we need to do that here.
                 ++stats.writes;
                 auto mut_ptr = std::make_unique<frozen_mutation>(std::move(mut.fm));
+                tracing::trace(tr_state, "Locally applying view update for {}.{}; base token = {}; view token = {}",
+                        mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
                 future<> local_view_update = service::get_local_storage_proxy().mutate_locally(mut.s, *mut_ptr, std::move(tr_state), db::commitlog::force_sync::no).then_wrapped(
                         [&stats,
                          maybe_account_failure = std::move(maybe_account_failure),
@@ -1143,6 +1149,8 @@ future<> mutate_MV(
                 // to send the update there. Currently, we do this from *each* of
                 // the base replicas, but this is probably excessive - see
                 // See https://issues.apache.org/jira/browse/CASSANDRA-14262/
+                tracing::trace(tr_state, "Sending view update for {}.{} to {}, with pending endpoints = {}; base token = {}; view token = {}",
+                        mut.s->ks_name(), mut.s->cf_name(), *paired_endpoint, pending_endpoints, base_token, view_token);
                 future<> view_update = service::get_local_storage_proxy().send_to_endpoint(
                         std::move(mut),
                         *paired_endpoint,
@@ -1180,6 +1188,8 @@ future<> mutate_MV(
             cf_stats.total_view_updates_pushed_remote += updates_pushed_remote;
             auto target = pending_endpoints.back();
             pending_endpoints.pop_back();
+            tracing::trace(tr_state, "Sending view update for {}.{} to {}, with pending endpoints = {}; base token = {}; view token = {}",
+                    mut.s->ks_name(), mut.s->cf_name(), target, pending_endpoints, base_token, view_token);
             future<> view_update = service::get_local_storage_proxy().send_to_endpoint(
                     std::move(mut),
                     target,
