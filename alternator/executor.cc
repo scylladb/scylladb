@@ -731,7 +731,12 @@ static mutation make_item_mutation(const rjson::value& item, schema_ptr schema) 
     // Scylla proper, to implement the operation to replace an entire
     // collection ("UPDATE .. SET x = ..") - see
     // cql3::update_parameters::make_tombstone_just_before().
-    row.apply(tombstone(ts-1, gc_clock::now()));
+    const bool use_partition_tombstone = schema->clustering_key_size() == 0;
+    if (use_partition_tombstone) {
+        m.partition().apply(tombstone(ts-1, gc_clock::now()));
+    } else {
+        row.apply(tombstone(ts-1, gc_clock::now()));
+    }
     return m;
 }
 
@@ -802,8 +807,13 @@ static mutation make_delete_item_mutation(const rjson::value& key, schema_ptr sc
     clustering_key ck = ck_from_json(key, schema);
     check_key(key, schema);
     mutation m(schema, pk);
-    auto& row = m.partition().clustered_row(*schema, ck);
-    row.apply(tombstone(api::new_timestamp(), gc_clock::now()));
+    const bool use_partition_tombstone = schema->clustering_key_size() == 0;
+    if (use_partition_tombstone) {
+        m.partition().apply(tombstone(api::new_timestamp(), gc_clock::now()));
+    } else {
+        auto& row = m.partition().clustered_row(*schema, ck);
+        row.apply(tombstone(api::new_timestamp(), gc_clock::now()));
+    }
     return m;
 }
 
