@@ -239,7 +239,8 @@ public:
     future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>> augment_mutation_call(
         lowres_clock::time_point timeout,
         std::vector<mutation>&& mutations,
-        tracing::trace_state_ptr tr_state
+        tracing::trace_state_ptr tr_state,
+        db::consistency_level write_cl
     );
 
     template<typename Iter>
@@ -1208,7 +1209,7 @@ public:
 
     future<lw_shared_ptr<cql3::untyped_result_set>> pre_image_select(
             service::client_state& client_state,
-            db::consistency_level cl,
+            db::consistency_level write_cl,
             const mutation& m)
     {
         auto& p = m.partition();
@@ -1289,7 +1290,9 @@ public:
         auto partition_slice = query::partition_slice(std::move(bounds), std::move(static_columns), std::move(regular_columns), std::move(opts));
         auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), partition_slice, row_limit);
 
-        return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+        const auto select_cl = adjust_cl(write_cl);
+
+        return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
                 [s = _schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
                     cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
                     query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *s, *selection));
@@ -1299,6 +1302,18 @@ public:
                     }
                     return make_lw_shared<cql3::untyped_result_set>(*result_set);
         });
+    }
+
+    /** For preimage query use the same CL as for base write, except for CLs ANY and ALL. */
+    static db::consistency_level adjust_cl(db::consistency_level write_cl) {
+        if (write_cl == db::consistency_level::ANY) {
+            return db::consistency_level::ONE;
+        } else if (write_cl == db::consistency_level::ALL || write_cl == db::consistency_level::SERIAL) {
+	        return db::consistency_level::QUORUM;
+        } else if (write_cl == db::consistency_level::LOCAL_SERIAL) {
+	        return db::consistency_level::LOCAL_QUORUM;
+        }
+        return write_cl;
     }
 };
 
@@ -1314,7 +1329,7 @@ transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_siz
 } // namespace cdc
 
 future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
-cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
+cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
@@ -1329,8 +1344,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     mutations.reserve(2 * mutations.size());
 
     return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{},
-            [this, timeout, i, tr_state = std::move(tr_state)] (std::vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
-        return transform_mutations(mutations, 1, [this, &mutations, timeout, &qs, tr_state = tr_state, &details] (int idx) mutable {
+            [this, timeout, i, tr_state = std::move(tr_state), write_cl] (std::vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
+        return transform_mutations(mutations, 1, [this, &mutations, timeout, &qs, tr_state = tr_state, &details, write_cl] (int idx) mutable {
             auto& m = mutations[idx];
             auto s = m.schema();
 
@@ -1346,7 +1361,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
                 tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
-                f = trans.pre_image_select(qs.get_client_state(), db::consistency_level::LOCAL_QUORUM, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
+                f = trans.pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
                     auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
                     cdc_stats.counters_total.preimage_selects++;
                     if (f.failed()) {
@@ -1403,6 +1418,6 @@ bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutat
 }
 
 future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
-cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state) {
-    return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state));
+cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+    return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
 }
