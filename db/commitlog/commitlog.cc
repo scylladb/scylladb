@@ -48,6 +48,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <exception>
+#include <filesystem>
 
 #include <seastar/core/align.hh>
 #include <seastar/core/seastar.hh>
@@ -2104,6 +2105,11 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
             });
         }
     };
+
+    auto bare_filename = std::filesystem::path(filename).filename().string();
+    if (bare_filename.rfind(pfx, 0) != 0) {
+        return make_ready_future<>();
+    }
 
     auto fut = do_io_check(commit_error_handler, [&] {
         auto fut = open_file_dma(filename, open_flags::ro);
