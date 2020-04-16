@@ -28,6 +28,7 @@
 #include "db/timeout_clock.hh"
 #include "querier.hh"
 #include "utils/chunked_vector.hh"
+#include "query_class_config.hh"
 #include <seastar/core/execution_stage.hh>
 
 class reconcilable_result;
@@ -162,7 +163,7 @@ future<reconcilable_result> mutation_query(
     uint32_t partition_limit,
     gc_clock::time_point query_time,
     db::timeout_clock::time_point timeout,
-    uint64_t max_memory_reverse_query,
+    query_class_config class_config,
     query::result_memory_accounter&& accounter = { },
     tracing::trace_state_ptr trace_ptr = nullptr,
     query::querier_cache_context cache_ctx = { });
@@ -177,7 +178,7 @@ future<> data_query(
     gc_clock::time_point query_time,
     query::result::builder& builder,
     db::timeout_clock::time_point timeout,
-    uint64_t max_memory_reverse_query,
+    query_class_config class_config,
     tracing::trace_state_ptr trace_ptr = nullptr,
     query::querier_cache_context cache_ctx = { });
 
@@ -192,7 +193,7 @@ class mutation_query_stage {
         uint32_t,
         gc_clock::time_point,
         db::timeout_clock::time_point,
-        uint64_t,
+        query_class_config,
         query::result_memory_accounter&&,
         tracing::trace_state_ptr,
         query::querier_cache_context> _execution_stage;

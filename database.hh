@@ -93,6 +93,7 @@
 #include "utils/disk-error-handler.hh"
 #include "utils/updateable_value.hh"
 #include "user_types_metadata.hh"
+#include "query_class_config.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -798,6 +799,7 @@ public:
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
         const query::read_command& cmd,
+        query_class_config class_config,
         query::result_options opts,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
@@ -1350,6 +1352,7 @@ private:
         column_family*,
         schema_ptr,
         const query::read_command&,
+        query_class_config,
         query::result_options,
         const dht::partition_range_vector&,
         tracing::trace_state_ptr,
