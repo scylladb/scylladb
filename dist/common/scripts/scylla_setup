@@ -193,6 +193,8 @@ if __name__ == '__main__':
                         help='skip cpu scaling setup')
     parser.add_argument('--no-fstrim-setup', action='store_true', default=False,
                         help='skip fstrim setup')
+    parser.add_argument('--no-memory-setup', action='store_true', default=False,
+                        help='skip memory setup')
     if len(sys.argv) == 1:
         interactive = True
         group.required = False # interactive mode: no option is required.
@@ -231,6 +233,7 @@ if __name__ == '__main__':
     node_exporter = not args.no_node_exporter
     cpuscaling_setup = not args.no_cpuscaling_setup
     fstrim_setup = not args.no_fstrim_setup
+    memory_setup = not args.no_memory_setup
     selinux_reboot_required = False
     set_clocksource = False
 
@@ -424,6 +427,11 @@ if __name__ == '__main__':
         args.no_fstrim_setup = not fstrim_setup
         if fstrim_setup:
             run_setup_script('fstrim', 'scylla_fstrim_setup')
+
+        memory_setup = interactive_ask_service('Will Scylla be the only service on this host?', 'Answer yes to lock all memory to Scylla, to prevent swapout. Answer no to do nothing.', memory_setup)
+        args.no_memory_setup = not memory_setup
+        if memory_setup:
+            run_setup_script('memory', 'scylla_memory_setup --lock-memory')
 
         if not swap_exists():
             colorprint('{red}No swap is configured, it is highly recommended to setup swap on Scylla node.{nocolor}')
