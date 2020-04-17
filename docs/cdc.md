@@ -125,9 +125,9 @@ Future patches will make the solution safe by using a two-phase-commit approach.
 Next, the node starts gossiping the timestamp of the new generation together with its set of chosen tokens and status:
 ```
         _gossiper.add_local_application_state({
-            { gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens) },
-            { gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(_cdc_streams_ts) },
-            { gms::application_state::STATUS, value_factory.bootstrapping(_bootstrap_tokens) },
+            { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
+            { gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts) },
+            { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
         }).get();
 ```
 

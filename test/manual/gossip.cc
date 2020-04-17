@@ -71,7 +71,6 @@ int main(int ac, char ** av) {
             const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
             utils::fb_utilities::set_broadcast_address(listen);
             utils::fb_utilities::set_broadcast_rpc_address(listen);
-            gms::versioned_value::factory vv;
             auto cfg = std::make_unique<db::config>();
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             sharded<gms::feature_service> feature_service;
@@ -108,7 +107,7 @@ int main(int ac, char ** av) {
             gossiper.set_cluster_name("Test Cluster");
 
             std::map<gms::application_state, gms::versioned_value> app_states = {
-                { gms::application_state::LOAD, vv.load(0.5) },
+                { gms::application_state::LOAD, gms::versioned_value::load(0.5) },
             };
 
             using namespace std::chrono;
@@ -117,7 +116,7 @@ int main(int ac, char ** av) {
             gossiper.start_gossiping(generation_number, app_states).get();
             static double load = 0.5;
             for (;;) {
-                auto value = vv.load(load);
+                auto value = gms::versioned_value::load(load);
                 load += 0.0001;
                 gms::get_local_gossiper().add_local_application_state(gms::application_state::LOAD, value).get();
                 sleep(std::chrono::seconds(1)).get();

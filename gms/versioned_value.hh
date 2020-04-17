@@ -137,129 +137,124 @@ public:
     // Reverse of `make_cdc_streams_timestamp_string`.
     static std::optional<db_clock::time_point> cdc_streams_timestamp_from_string(const sstring&);
 
-public:
-    class factory {
-        using token = dht::token;
-    public:
-        versioned_value clone_with_higher_version(const versioned_value& value) {
-            return versioned_value(value.value);
-        }
+    static versioned_value clone_with_higher_version(const versioned_value& value) {
+        return versioned_value(value.value);
+    }
 
-        versioned_value bootstrapping(const std::unordered_set<token>& tokens) {
-            return versioned_value(version_string({sstring(versioned_value::STATUS_BOOTSTRAPPING),
-                                                   make_token_string(tokens)}));
-        }
+    static versioned_value bootstrapping(const std::unordered_set<dht::token>& tokens) {
+        return versioned_value(version_string({sstring(versioned_value::STATUS_BOOTSTRAPPING),
+                                               make_token_string(tokens)}));
+    }
 
-        versioned_value normal(const std::unordered_set<token>& tokens) {
-            return versioned_value(version_string({sstring(versioned_value::STATUS_NORMAL),
-                                                   make_token_string(tokens)}));
-        }
+    static versioned_value normal(const std::unordered_set<dht::token>& tokens) {
+        return versioned_value(version_string({sstring(versioned_value::STATUS_NORMAL),
+                                               make_token_string(tokens)}));
+    }
 
-        versioned_value load(double load) {
-            return versioned_value(to_sstring(load));
-        }
+    static versioned_value load(double load) {
+        return versioned_value(to_sstring(load));
+    }
 
-        versioned_value schema(const utils::UUID &new_version) {
-            return versioned_value(new_version.to_sstring());
-        }
+    static versioned_value schema(const utils::UUID &new_version) {
+        return versioned_value(new_version.to_sstring());
+    }
 
-        versioned_value leaving(const std::unordered_set<token>& tokens) {
-            return versioned_value(version_string({sstring(versioned_value::STATUS_LEAVING),
-                                                   make_token_string(tokens)}));
-        }
+    static versioned_value leaving(const std::unordered_set<dht::token>& tokens) {
+        return versioned_value(version_string({sstring(versioned_value::STATUS_LEAVING),
+                                               make_token_string(tokens)}));
+    }
 
-        versioned_value left(const std::unordered_set<token>& tokens, int64_t expire_time) {
-            return versioned_value(version_string({sstring(versioned_value::STATUS_LEFT),
-                                                   make_token_string(tokens),
-                                                   std::to_string(expire_time)}));
-        }
+    static versioned_value left(const std::unordered_set<dht::token>& tokens, int64_t expire_time) {
+        return versioned_value(version_string({sstring(versioned_value::STATUS_LEFT),
+                                               make_token_string(tokens),
+                                               std::to_string(expire_time)}));
+    }
 
-        versioned_value moving(token t) {
-            std::unordered_set<token> tokens = {t};
-            return versioned_value(version_string({sstring(versioned_value::STATUS_MOVING),
-                                                   make_token_string(tokens)}));
-        }
+    static versioned_value moving(dht::token t) {
+        std::unordered_set<dht::token> tokens = {t};
+        return versioned_value(version_string({sstring(versioned_value::STATUS_MOVING),
+                                               make_token_string(tokens)}));
+    }
 
-        versioned_value host_id(const utils::UUID& host_id) {
-            return versioned_value(host_id.to_sstring());
-        }
+    static versioned_value host_id(const utils::UUID& host_id) {
+        return versioned_value(host_id.to_sstring());
+    }
 
-        versioned_value tokens(const std::unordered_set<token>& tokens) {
-            return versioned_value(make_full_token_string(tokens));
-        }
+    static versioned_value tokens(const std::unordered_set<dht::token>& tokens) {
+        return versioned_value(make_full_token_string(tokens));
+    }
 
-        versioned_value cdc_streams_timestamp(std::optional<db_clock::time_point> t) {
-            return versioned_value(make_cdc_streams_timestamp_string(t));
-        }
+    static versioned_value cdc_streams_timestamp(std::optional<db_clock::time_point> t) {
+        return versioned_value(make_cdc_streams_timestamp_string(t));
+    }
 
-        versioned_value removing_nonlocal(const utils::UUID& host_id) {
-            return versioned_value(sstring(REMOVING_TOKEN) +
-                sstring(DELIMITER_STR) + host_id.to_sstring());
-        }
+    static versioned_value removing_nonlocal(const utils::UUID& host_id) {
+        return versioned_value(sstring(REMOVING_TOKEN) +
+            sstring(DELIMITER_STR) + host_id.to_sstring());
+    }
 
-        versioned_value removed_nonlocal(const utils::UUID& host_id, int64_t expire_time) {
-            return versioned_value(sstring(REMOVED_TOKEN) + sstring(DELIMITER_STR) +
-                host_id.to_sstring() + sstring(DELIMITER_STR) + to_sstring(expire_time));
-        }
+    static versioned_value removed_nonlocal(const utils::UUID& host_id, int64_t expire_time) {
+        return versioned_value(sstring(REMOVED_TOKEN) + sstring(DELIMITER_STR) +
+            host_id.to_sstring() + sstring(DELIMITER_STR) + to_sstring(expire_time));
+    }
 
-        versioned_value removal_coordinator(const utils::UUID& host_id) {
-            return versioned_value(sstring(REMOVAL_COORDINATOR) +
-                sstring(DELIMITER_STR) + host_id.to_sstring());
-        }
+    static versioned_value removal_coordinator(const utils::UUID& host_id) {
+        return versioned_value(sstring(REMOVAL_COORDINATOR) +
+            sstring(DELIMITER_STR) + host_id.to_sstring());
+    }
 
-        versioned_value hibernate(bool value) {
-            return versioned_value(sstring(HIBERNATE) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
-        }
+    static versioned_value hibernate(bool value) {
+        return versioned_value(sstring(HIBERNATE) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
+    }
 
-        versioned_value shutdown(bool value) {
-            return versioned_value(sstring(SHUTDOWN) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
-        }
+    static versioned_value shutdown(bool value) {
+        return versioned_value(sstring(SHUTDOWN) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
+    }
 
-        versioned_value datacenter(const sstring& dc_id) {
-            return versioned_value(dc_id);
-        }
+    static versioned_value datacenter(const sstring& dc_id) {
+        return versioned_value(dc_id);
+    }
 
-        versioned_value rack(const sstring& rack_id) {
-            return versioned_value(rack_id);
-        }
+    static versioned_value rack(const sstring& rack_id) {
+        return versioned_value(rack_id);
+    }
 
-        versioned_value shard_count(int shard_count) {
-            return versioned_value(format("{}", shard_count));
-        }
+    static versioned_value shard_count(int shard_count) {
+        return versioned_value(format("{}", shard_count));
+    }
 
-        versioned_value ignore_msb_bits(unsigned ignore_msb_bits) {
-            return versioned_value(format("{}", ignore_msb_bits));
-        }
+    static versioned_value ignore_msb_bits(unsigned ignore_msb_bits) {
+        return versioned_value(format("{}", ignore_msb_bits));
+    }
 
-        versioned_value rpcaddress(gms::inet_address endpoint) {
-            return versioned_value(format("{}", endpoint));
-        }
+    static versioned_value rpcaddress(gms::inet_address endpoint) {
+        return versioned_value(format("{}", endpoint));
+    }
 
-        versioned_value release_version() {
-            return versioned_value(version::release());
-        }
+    static versioned_value release_version() {
+        return versioned_value(version::release());
+    }
 
-        versioned_value network_version();
+    static versioned_value network_version();
 
-        versioned_value internal_ip(const sstring &private_ip) {
-            return versioned_value(private_ip);
-        }
+    static versioned_value internal_ip(const sstring &private_ip) {
+        return versioned_value(private_ip);
+    }
 
-        versioned_value severity(double value) {
-            return versioned_value(to_sstring(value));
-        }
+    static versioned_value severity(double value) {
+        return versioned_value(to_sstring(value));
+    }
 
-        versioned_value supported_features(const sstring& features) {
-            return versioned_value(features);
-        }
+    static versioned_value supported_features(const sstring& features) {
+        return versioned_value(features);
+    }
 
-        versioned_value cache_hitrates(const sstring& hitrates) {
-            return versioned_value(hitrates);
-        }
+    static versioned_value cache_hitrates(const sstring& hitrates) {
+        return versioned_value(hitrates);
+    }
 
-        versioned_value cql_ready(bool value) {
-            return versioned_value(to_sstring(int(value)));
-        }
+    static versioned_value cql_ready(bool value) {
+        return versioned_value(to_sstring(int(value)));
     };
 }; // class versioned_value
 

@@ -583,7 +583,6 @@ public:
     void maybe_enable_features();
 private:
     seastar::metrics::metric_groups _metrics;
-    gms::versioned_value::factory _value_factory;
 public:
     void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 public:

@@ -247,7 +247,6 @@ private:
     cdc::metadata _cdc_metadata;
 public:
     std::chrono::milliseconds get_ring_delay();
-    gms::versioned_value::factory value_factory;
     dht::token_range_vector get_local_ranges(const sstring& keyspace_name) const {
         return get_ranges_for_endpoint(keyspace_name, get_broadcast_address());
     }
