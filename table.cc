@@ -746,6 +746,7 @@ public:
     }
     virtual void on_write_completed() override { }
     virtual void on_flush_completed() override { }
+    virtual void write_failed() override { }
 };
 
 // Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc
@@ -777,7 +778,7 @@ public:
         _tracker = nullptr;
     }
 
-    void write_failed() {
+    virtual void write_failed() override {
         _compaction_strategy.get_backlog_tracker().revert_charges(_sst);
     }
 

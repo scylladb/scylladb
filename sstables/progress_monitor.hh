@@ -39,6 +39,7 @@ public:
     virtual void on_data_write_completed() = 0;
     virtual void on_write_completed() = 0;
     virtual void on_flush_completed() = 0;
+    virtual void write_failed() = 0;
 };
 
 struct noop_write_monitor final : public write_monitor {
@@ -46,6 +47,7 @@ struct noop_write_monitor final : public write_monitor {
     virtual void on_data_write_completed() override { }
     virtual void on_write_completed() override { }
     virtual void on_flush_completed() override { }
+    virtual void write_failed() override { }
 };
 
 write_monitor& default_write_monitor();
