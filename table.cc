@@ -848,8 +848,7 @@ table::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
                         return old->clear_gently();
                       }
                     });
-                }).handle_exception([old, permit = std::move(permit), &monitor, newtab] (auto ep) {
-                    monitor.write_failed();
+                }).handle_exception([old, permit = std::move(permit), newtab] (auto ep) {
                     newtab->mark_for_deletion();
                     tlogger.error("failed to write streamed sstable: {}", ep);
                     return make_exception_future<>(ep);
@@ -889,7 +888,6 @@ future<> table::seal_active_streaming_memtable_big(streaming_memtable_big& smb, 
                         smb.sstables.push_back(monitored_sstable{std::move(monitor), newtab});
                         return make_ready_future<>();
                     } else {
-                        monitor->write_failed();
                         newtab->mark_for_deletion();
                         auto ep = f.get_exception();
                         tlogger.error("failed to write streamed sstable: {}", ep);
@@ -985,8 +983,8 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
         // priority inversion.
-        return with_scheduling_group(default_scheduling_group(), [this, &monitor, old = std::move(old), newtab = std::move(newtab), f = std::move(f)] () mutable {
-            return f.then([this, newtab, old, &monitor] {
+        return with_scheduling_group(default_scheduling_group(), [this, old = std::move(old), newtab = std::move(newtab), f = std::move(f)] () mutable {
+            return f.then([this, newtab, old] {
                 return newtab->open_data().then([this, old, newtab] () {
                     tlogger.debug("Flushing to {} done", newtab->get_filename());
                     return with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, newtab] {
@@ -997,8 +995,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
                     tlogger.debug("Memtable for {} replaced", newtab->get_filename());
                     return stop_iteration::yes;
                 });
-            }).handle_exception([this, old, newtab, &monitor] (auto e) {
-                monitor.write_failed();
+            }).handle_exception([this, old, newtab] (auto e) {
                 newtab->mark_for_deletion();
                 _config.cf_stats->failed_memtables_flushes_count++;
                 tlogger.error("failed to write sstable {}: {}", newtab->get_filename(), e);
@@ -1889,7 +1886,6 @@ future<> table::fail_streaming_mutations(utils::UUID plan_id) {
     _streaming_memtables_big.erase(it);
     return entry->flush_in_progress.close().then([this, entry] {
         for (auto&& sst : entry->sstables) {
-            sst.monitor->write_failed();
             sst.sstable->mark_for_deletion();
         }
     });
