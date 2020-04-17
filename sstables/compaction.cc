@@ -258,6 +258,9 @@ public:
         }
     }
 
+    virtual void write_failed() override {
+    }
+
     virtual uint64_t written() const {
         if (_tracker) {
             return _tracker->offset;
