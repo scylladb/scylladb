@@ -319,10 +319,10 @@ schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info
                     + column_offset(column_kind::regular_column),
             _raw._columns.end(), column_definition::name_comparator(regular_column_name_type()));
 
-    std::sort(_raw._columns.begin(),
+    std::stable_sort(_raw._columns.begin(),
               _raw._columns.begin() + column_offset(column_kind::clustering_key),
               [] (auto x, auto y) { return x.id < y.id; });
-    std::sort(_raw._columns.begin() + column_offset(column_kind::clustering_key),
+    std::stable_sort(_raw._columns.begin() + column_offset(column_kind::clustering_key),
               _raw._columns.begin() + column_offset(column_kind::static_column),
               [] (auto x, auto y) { return x.id < y.id; });
 
