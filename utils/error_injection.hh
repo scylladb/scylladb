@@ -202,7 +202,7 @@ public:
         // Time left until deadline
         std::chrono::milliseconds duration = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
         errinj_logger.debug("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
-        return seastar::sleep(duration);
+        return seastar::sleep<Clock>(duration);
     }
 
     // \brief Inject exception

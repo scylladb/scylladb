@@ -20,6 +20,7 @@
  */
 
 #include "test/lib/cql_test_env.hh"
+#include <seastar/core/manual_clock.hh>
 #include <seastar/testing/test_case.hh>
 #include "utils/error_injection.hh"
 #include "db/timeout_clock.hh"
@@ -96,17 +97,19 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_steady_clock) {
     });
 }
 
-SEASTAR_TEST_CASE(test_inject_sleep_deadline_system_clock) {
+SEASTAR_TEST_CASE(test_inject_sleep_deadline_manual_clock) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         utils::error_injection<true> errinj;
 
         // Inject sleep, deadline short-circuit
-        auto deadline = std::chrono::system_clock::now() + sleep_msec;
+        auto deadline = seastar::manual_clock::now() + sleep_msec;
         errinj.enable("future_deadline");
-        errinj.inject("future_deadline", deadline).then([deadline] {
-            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - deadline).count(), 0);
+        auto f = errinj.inject("future_deadline", deadline).then([deadline] {
+            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(seastar::manual_clock::now() - deadline).count(), 0);
             return make_ready_future<>();
-        }).get();
+        });
+        manual_clock::advance(sleep_msec);
+        f.get();
     });
 }
 
