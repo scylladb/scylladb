@@ -18,6 +18,7 @@ class ScyllaSetup:
         self._alternatorPort = arguments.alternatorPort
         self._smp = arguments.smp
         self._memory = arguments.memory
+        self._reserveMemory = arguments.reserveMemory
         self._overprovisioned = arguments.overprovisioned
         self._housekeeping = not arguments.disable_housekeeping
         self._experimental = arguments.experimental
@@ -78,6 +79,9 @@ class ScyllaSetup:
         args = []
         if self._memory is not None:
             args += ["--memory %s" % self._memory]
+
+        if self._reserveMemory is not None:
+            args += ["--reserve-memory %s" % self._reserveMemory]
 
         if self._smp is not None:
             args += ["--smp %s" % self._smp]
