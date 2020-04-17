@@ -2339,13 +2339,9 @@ void sstable_writer_k_l::consume_end_of_stream()
     run_identifier identifier{_run_identifier};
     _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier));
 
-    _monitor->on_write_completed();
-
     if (!_leave_unsealed) {
         _sst.seal_sstable(_backup).get();
     }
-
-    _monitor->on_flush_completed();
 }
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,

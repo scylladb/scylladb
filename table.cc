@@ -745,8 +745,6 @@ public:
         // we ensure the permit doesn't outlive this continuation.
         _permit = sstable_write_permit::unconditional();
     }
-    virtual void on_write_completed() override { }
-    virtual void on_flush_completed() override { }
 };
 
 // Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc

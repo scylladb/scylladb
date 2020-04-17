@@ -277,9 +277,6 @@ public:
     unsigned level() const override {
         return _sstable_level;
     }
-
-    virtual void on_write_completed() override { }
-    virtual void on_flush_completed() override { }
 };
 
 // Writes a temporary sstable run containing only garbage collected data.

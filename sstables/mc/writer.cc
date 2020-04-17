@@ -1417,11 +1417,9 @@ void writer::consume_end_of_stream() {
     }
     run_identifier identifier{_run_identifier};
     _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier));
-    _cfg.monitor->on_write_completed();
     if (!_cfg.leave_unsealed) {
         _sst.seal_sstable(_cfg.backup).get();
     }
-    _cfg.monitor->on_flush_completed();
 }
 
 std::unique_ptr<sstable_writer::writer_impl> make_writer(sstable& sst,
