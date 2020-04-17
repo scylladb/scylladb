@@ -197,13 +197,24 @@ $ docker run --name some-scylla -d scylladb/scylla --smp 2
 
 ### `--memory AMOUNT`
 
-The `--memory` command line options restricts Scylla to use up to `AMOUNT` of memory.
+The `--memory` command line option restricts Scylla to use up to `AMOUNT` of memory.
 The `AMOUNT` value supports both `M` unit for megabytes and `G` unit for gigabytes.
 
 For example, to restrict Scylla to 4 GB of memory:
 
 ```console
 $ docker run --name some-scylla -d scylladb/scylla --memory 4G
+```
+
+### `--reserve-memory AMOUNT`
+
+The `--reserve-memory` command line option configures Scylla to reserve the `AMOUNT` of memory to the OS.
+The `AMOUNT` value supports both `M` unit for megabytes and `G` unit for gigabytes.
+
+For example, to reserve 4 GB of memory to the OS:
+
+```console
+$ docker run --name some-scylla -d scylladb/scylla --reserve-memory 4G
 ```
 
 ### `--overprovisioned ENABLE`

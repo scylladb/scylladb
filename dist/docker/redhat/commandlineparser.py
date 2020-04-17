@@ -9,6 +9,7 @@ def parse():
     parser.add_argument('--cpuset', default=None, help="e.g. --cpuset 0-3 for the first four CPUs")
     parser.add_argument('--smp', default=None, help="e.g --smp 2 to use two CPUs")
     parser.add_argument('--memory', default=None, help="e.g. --memory 1G to use 1 GB of RAM")
+    parser.add_argument('--reserve-memory', default=None, dest='reserveMemory', help="e.g. --reserve-memory 1G to reserve 1 GB of RAM")
     parser.add_argument('--overprovisioned', default=None, choices=['0', '1'],
                         help="run in overprovisioned environment. By default it will run in overprovisioned mode unless --cpuset is specified")
     parser.add_argument('--listen-address', default=None, dest='listenAddress')
