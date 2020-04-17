@@ -45,7 +45,7 @@ if [ $SYSTEMD_VER -ge 229 ] || [[ $SYSTEMD_VER -eq 219 && $SYSTEMD_REL -ge 33 ]]
         mkdir -p /etc/systemd/system/scylla-server.service.d/
         cat << EOS > /etc/systemd/system/scylla-server.service.d/capabilities.conf
 [Service]
-AmbientCapabilities=CAP_SYS_NICE
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
 EOS
     fi
 fi

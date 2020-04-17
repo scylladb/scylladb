@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2019 ScyllaDB
+#
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+import os
+import sys
+import argparse
+from scylla_util import *
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Configure memory for Scylla.')
+    parser.add_argument('--lock-memory',
+                        help='lock all memory', action='store_true')
+    parser.add_argument('--memory',
+                        help='memory to use, in bytes (ex: 4G, default=all)')
+    parser.add_argument('--reserve-memory',
+                        help='memory reserved to OS (if --memory not specified)')
+    args = parser.parse_args()
+    if not args.lock_memory and not args.memory and not args.reserve_memory:
+        parser.print_help()
+        sys.exit(1)
+
+    conf_args=[]
+    if args.lock_memory:
+        conf_args.append('--lock-memory=1')
+    if args.memory:
+        conf_args.append('--memory={}'.format(args.memory))
+    if args.reserve_memory:
+        conf_args.append('--reserve-memory={}'.format(args.reserve_memory))
+    conf = 'MEM_CONF="{}"\n'.format(' '.join(conf_args))
+
+    with open(str(etcdir_p() / 'scylla.d' / 'memory.conf'), 'w') as f:
+        f.write(conf)
+
