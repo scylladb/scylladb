@@ -2299,6 +2299,7 @@ void sstable_writer_k_l::finish_file_writer()
 
 sstable_writer_k_l::~sstable_writer_k_l() {
     if (_writer) {
+        _monitor->write_failed();
         try {
             _writer->close();
         } catch (...) {
