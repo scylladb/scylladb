@@ -118,7 +118,7 @@ token token::midpoint(const token& t1, const token& t2) {
 }
 
 token token::get_random_token() {
-    return {kind::key, dht::get_random_number<int64_t>()};
+    return token(kind::key, dht::get_random_number<uint64_t>());
 }
 
 token token::from_sstring(const sstring& t) {
