@@ -208,11 +208,11 @@ void v3_columns::apply_to(schema_builder& builder) const {
             } else if (c.kind == column_kind::static_column) {
                 auto new_def = c;
                 new_def.kind = column_kind::regular_column;
-                builder.with_column(new_def);
+                builder.with_column_ordered(new_def);
             } else if (c.kind == column_kind::clustering_key) {
                 builder.set_regular_column_name_type(c.type);
             } else {
-                builder.with_column(c);
+                builder.with_column_ordered(c);
             }
         }
     } else {
@@ -220,7 +220,7 @@ void v3_columns::apply_to(schema_builder& builder) const {
             if (is_compact() && c.kind == column_kind::regular_column) {
                 builder.set_default_validation_class(c.type);
             }
-            builder.with_column(c);
+            builder.with_column_ordered(c);
         }
     }
 }
@@ -929,7 +929,7 @@ column_definition& schema_builder::find_column(const cql3::column_identifier& c)
     throw std::invalid_argument(format("No such column {}", c.name()));
 }
 
-schema_builder& schema_builder::with_column(const column_definition& c) {
+schema_builder& schema_builder::with_column_ordered(const column_definition& c) {
     return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position(), c.view_virtual(), c.get_computation_ptr());
 }
 
@@ -988,7 +988,7 @@ schema_builder& schema_builder::rename_column(bytes from, bytes to)
     auto& def = *it;
     column_definition new_def(to, def.type, def.kind, def.component_index());
     _raw._columns.erase(it);
-    return with_column(new_def);
+    return with_column_ordered(new_def);
 }
 
 schema_builder& schema_builder::alter_column_type(bytes name, data_type new_type)

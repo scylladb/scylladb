@@ -379,7 +379,7 @@ public:
                         return to_bytes(name);
                     }
                 }();
-                builder.with_column(std::move(column_name), std::move(validator), kind, component_index);
+                builder.with_column_ordered(column_definition(std::move(column_name), std::move(validator), kind, component_index));
             }
 
             if (is_static_compact) {

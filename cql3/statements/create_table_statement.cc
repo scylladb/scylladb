@@ -135,7 +135,7 @@ schema_ptr create_table_statement::get_cf_meta_data(const database& db) const {
 void create_table_statement::apply_properties_to(schema_builder& builder, const database& db) const {
     auto&& columns = get_columns();
     for (auto&& column : columns) {
-        builder.with_column(column);
+        builder.with_column_ordered(column);
     }
 #if 0
     cfmd.defaultValidator(defaultValidator)
