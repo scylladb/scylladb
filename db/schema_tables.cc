@@ -2572,12 +2572,12 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     auto computed_columns = get_computed_columns(sm);
     auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns);
     for (auto&& cdef : column_defs) {
-        builder.with_column(cdef);
+        builder.with_column_ordered(cdef);
     }
     if (sm.view_virtual_columns_mutation()) {
         column_defs = create_columns_from_column_rows(query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns);
         for (auto&& cdef : column_defs) {
-            builder.with_column(cdef);
+            builder.with_column_ordered(cdef);
         }
     }
 
