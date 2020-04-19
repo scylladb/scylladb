@@ -65,7 +65,7 @@ progresses and compatibility continues to improve.
   nodes. We plan to publish a reference example soon.
 ### Table Operations
 * CreateTable and DeleteTable: Supported. Note our implementation is synchronous.
-* DescribeTable: Partial implementation. Missing creation date and size esitmate.
+* DescribeTable: Partial implementation. Missing creation date and size estimate.
 * UpdateTable: Not supported.
 * ListTables: Supported.
 ### Item Operations
@@ -122,7 +122,7 @@ implemented, with the following limitations:
   or [Scylla Manager](https://docs.scylladb.com/operating-scylla/manager/2.0/backup/).
 * Continuous backup: Not yet supported: UpdateContinuousBackups,
   DescribeContinuousBackups, RestoreTableToPoinInTime.
-### Transations
+### Transactions
 * Not yet supported: TransactWriteItems, TransactGetItems.
   Note that this is a new DynamoDB feature - these are more powerful than
   the old conditional updates which were "lightweight transactions".
