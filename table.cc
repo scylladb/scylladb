@@ -2526,6 +2526,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     opts.set(query::partition_slice::option::send_clustering_key);
     opts.set(query::partition_slice::option::send_timestamp);
     opts.set(query::partition_slice::option::send_ttl);
+    opts.set(query::partition_slice::option::bypass_cache);
     auto slice = query::partition_slice(
             std::move(cr_ranges), { }, std::move(columns), std::move(opts), { }, cql_serialization_format::internal(), query::max_rows);
     // Take the shard-local lock on the base-table row or partition as needed.
