@@ -81,13 +81,6 @@ using token_range = nonwrapping_range<token>;
 using partition_range_vector = std::vector<partition_range>;
 using token_range_vector = std::vector<token_range>;
 
-template <typename T>
-inline auto get_random_number() {
-    static thread_local std::default_random_engine re{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<T> dist{};
-    return dist(re);
-}
-
 // Wraps partition_key with its corresponding token.
 //
 // Total ordering defined by comparators is compatible with Origin's ordering.

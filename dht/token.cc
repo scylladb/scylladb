@@ -118,7 +118,12 @@ token token::midpoint(const token& t1, const token& t2) {
 }
 
 token token::get_random_token() {
-    return token(kind::key, dht::get_random_number<uint64_t>());
+    static thread_local std::default_random_engine re{std::random_device{}()};
+    // std::numeric_limits<int64_t>::min() value is reserved and shouldn't
+    // be used for regular tokens.
+    static thread_local std::uniform_int_distribution<int64_t> dist(
+            std::numeric_limits<int64_t>::min() + 1);
+    return token(kind::key, dist(re));
 }
 
 token token::from_sstring(const sstring& t) {
