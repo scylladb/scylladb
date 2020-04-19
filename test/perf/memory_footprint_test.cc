@@ -36,6 +36,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
+#include "test/lib/cql_test_env.hh"
 
 class size_calculator {
     class nest {
@@ -129,12 +130,13 @@ struct mutation_settings {
     size_t column_count;
     size_t column_name_size;
     size_t row_count;
+    size_t partition_count;
     size_t partition_key_size;
     size_t clustering_key_size;
     size_t data_size;
 };
 
-static mutation make_mutation(mutation_settings settings) {
+static schema_ptr make_schema(const mutation_settings& settings) {
     auto builder = schema_builder("ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("ck", bytes_type, column_kind::clustering_key);
@@ -143,8 +145,10 @@ static mutation make_mutation(mutation_settings settings) {
         builder.with_column(to_bytes(random_string(settings.column_name_size)), bytes_type);
     }
 
-    auto s = builder.build();
+    return builder.build();
+}
 
+static mutation make_mutation(schema_ptr s, mutation_settings settings) {
     mutation m(s, partition_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.partition_key_size)))));
 
     for (size_t i = 0; i < settings.row_count; ++i) {
@@ -161,26 +165,30 @@ static mutation make_mutation(mutation_settings settings) {
 struct sizes {
     size_t memtable;
     size_t cache;
-    size_t sstable;
+    std::map<sstables::sstable::version_types, size_t> sstable;
     size_t frozen;
     size_t canonical;
     size_t query_result;
 };
 
-static sizes calculate_sizes(const mutation& m) {
+static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& settings) {
     sizes result;
-    auto s = m.schema();
+    auto s = make_schema(settings);
     auto mt = make_lw_shared<memtable>(s);
-    cache_tracker tracker;
     row_cache cache(s, make_empty_snapshot_source(), tracker);
 
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
 
     assert(mt->occupancy().used_space() == 0);
 
-    mt->apply(m);
-    cache.populate(m);
+    std::vector<mutation> muts;
+    for (size_t i = 0; i < settings.partition_count; ++i) {
+        muts.emplace_back(make_mutation(s, settings));
+        mt->apply(muts.back());
+        cache.populate(muts.back());
+    }
 
+    mutation& m = muts[0];
     result.memtable = mt->occupancy().used_space();
     result.cache = tracker.region().occupancy().used_space() - cache_initial_occupancy;
     result.frozen = freeze(m).representation().size();
@@ -189,14 +197,18 @@ static sizes calculate_sizes(const mutation& m) {
 
     tmpdir sstable_dir;
     sstables::test_env env;
-    auto sst = env.make_sstable(s,
-        sstable_dir.path().string(),
-        1 /* generation */,
-        sstables::sstable::version_types::la,
-        sstables::sstable::format_types::big);
-    write_memtable_to_sstable_for_test(*mt, sst).get();
-    sst->load().get();
-    result.sstable = sst->data_size();
+    for (auto v  : sstables::all_sstable_versions) {
+        auto sst = env.make_sstable(s,
+            sstable_dir.path().string(),
+            1 /* generation */,
+            v,
+            sstables::sstable::format_types::big);
+        auto mt2 = make_lw_shared<memtable>(s);
+        mt2->apply(*mt).get();
+        write_memtable_to_sstable_for_test(*mt2, sst).get();
+        sst->load().get();
+        result.sstable[v] = sst->data_size();
+    }
 
     return result;
 }
@@ -205,9 +217,11 @@ int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
+        ("verbose", "Enable info-level logging")
         ("column-count", bpo::value<size_t>()->default_value(5), "column count")
         ("column-name-size", bpo::value<size_t>()->default_value(2), "column name size")
         ("row-count", bpo::value<size_t>()->default_value(1), "row count")
+        ("partition-count", bpo::value<size_t>()->default_value(1), "partition count")
         ("partition-key-size", bpo::value<size_t>()->default_value(10), "partition key size")
         ("clustering-key-size", bpo::value<size_t>()->default_value(10), "clustering key size")
         ("data-size", bpo::value<size_t>()->default_value(32), "cell data size");
@@ -216,24 +230,31 @@ int main(int argc, char** argv) {
         if (smp::count != 1) {
             throw std::runtime_error("This test has to be run with -c1");
         }
-        return seastar::async([&] {
-            storage_service_for_tests ssft;
 
+        if (!app.configuration().count("verbose")) {
+            logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
+        }
+
+        return do_with_cql_env_thread([&](cql_test_env& env) {
             mutation_settings settings;
             settings.column_count = app.configuration()["column-count"].as<size_t>();
             settings.column_name_size = app.configuration()["column-name-size"].as<size_t>();
             settings.row_count = app.configuration()["row-count"].as<size_t>();
+            settings.partition_count = app.configuration()["partition-count"].as<size_t>();
             settings.partition_key_size = app.configuration()["partition-key-size"].as<size_t>();
             settings.clustering_key_size = app.configuration()["clustering-key-size"].as<size_t>();
             settings.data_size = app.configuration()["data-size"].as<size_t>();
 
-            auto m = make_mutation(settings);
-            auto sizes = calculate_sizes(m);
+            auto& tracker = env.local_db().find_column_family("system", "local").get_row_cache().get_cache_tracker();
+            auto sizes = calculate_sizes(tracker, settings);
 
             std::cout << "mutation footprint:" << "\n";
             std::cout << " - in cache:     " << sizes.cache << "\n";
             std::cout << " - in memtable:  " << sizes.memtable << "\n";
-            std::cout << " - in sstable:   " << sizes.sstable << "\n";
+            std::cout << " - in sstable:\n";
+            for (auto v : sizes.sstable) {
+                std::cout << "   " << sstables::to_string(v.first) << ":   " << v.second << "\n";
+            }
             std::cout << " - frozen:       " << sizes.frozen << "\n";
             std::cout << " - canonical:    " << sizes.canonical << "\n";
             std::cout << " - query result: " << sizes.query_result << "\n";
