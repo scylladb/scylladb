@@ -125,13 +125,13 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
     utils::latency_counter lc;
     lc.start();
 
-    return with_locked_key(token, timeout, [proposal = std::move(proposal), schema, tr_state, timeout] () mutable {
+    return with_locked_key(token, timeout, [&proposal, schema, tr_state, timeout] () mutable {
         auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
         auto f = db::system_keyspace::load_paxos_state(proposal.update.decorated_key(*schema).key(), schema,
                 gc_clock::time_point(now_in_sec), timeout);
-        return f.then([proposal = std::move(proposal), tr_state, schema, timeout] (paxos_state state) {
+        return f.then([&proposal, tr_state, schema, timeout] (paxos_state state) {
             return utils::get_local_injector().inject("paxos_state_accept_timeout", timeout).then(
-                    [proposal = std::move(proposal), state = std::move(state), tr_state, schema, timeout] {
+                    [&proposal, state = std::move(state), tr_state, schema, timeout] {
                 // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
                 // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
                 if (proposal.ballot == state._promised_ballot || proposal.ballot.timestamp() > state._promised_ballot.timestamp()) {
