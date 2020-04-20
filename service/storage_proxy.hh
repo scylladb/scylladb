@@ -318,9 +318,9 @@ private:
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
-    response_id_type create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>& proposal,
+    response_id_type create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>& proposal,
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
-    response_id_type create_write_response_handler(const std::tuple<paxos::proposal, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>& meta,
+    response_id_type create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, std::unordered_set<gms::inet_address>>& meta,
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     void register_cdc_operation_result_tracker(const std::vector<storage_proxy::unique_response_handler>& ids, lw_shared_ptr<cdc::operation_result_tracker> tracker);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
@@ -699,8 +699,8 @@ public:
     // Steps of the Paxos protocol
     future<ballot_and_data> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write);
     future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
-    future<bool> accept_proposal(const paxos::proposal& proposal, bool timeout_if_partially_accepted = true);
-    future<> learn_decision(paxos::proposal decision, bool allow_hints = false);
+    future<bool> accept_proposal(lw_shared_ptr<paxos::proposal> proposal, bool timeout_if_partially_accepted = true);
+    future<> learn_decision(lw_shared_ptr<paxos::proposal> proposal, bool allow_hints = false);
     void prune(utils::UUID ballot);
     uint64_t id() const {
         return _id;
