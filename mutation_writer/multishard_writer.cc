@@ -173,6 +173,13 @@ future<> multishard_writer::distribute_mutation_fragments() {
                 return handle_end_of_stream();
             }
         });
+    }).handle_exception([this] (std::exception_ptr ep) {
+        for (auto& q : _queue_reader_handles) {
+            if (q) {
+                q->abort(ep);
+            }
+        }
+        return make_exception_future<>(std::move(ep));
     });
 }
 
