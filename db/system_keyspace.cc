@@ -2196,7 +2196,7 @@ future<service::paxos::paxos_state> load_paxos_state(const partition_key& key, s
     // FIXME: we need execute_cql_with_now()
     (void)now;
     auto f = execute_cql_with_timeout(cql, timeout, to_legacy(*key.get_compound_type(*s), key.representation()), s->id());
-    return f.then([s] (shared_ptr<cql3::untyped_result_set> results) mutable {
+    return f.then([s, key] (shared_ptr<cql3::untyped_result_set> results) mutable {
         if (results->empty()) {
             return service::paxos::paxos_state();
         }
@@ -2211,9 +2211,14 @@ future<service::paxos::paxos_state> load_paxos_state(const partition_key& key, s
         }
 
         std::optional<service::paxos::proposal> most_recent;
-        if (row.has("most_recent_commit")) {
+        if (row.has("most_recent_commit_at")) {
+            // the value can be missing if it was pruned, suply empty one since
+            // it will not going to be used anyway
+            auto fm = row.has("most_recent_commit") ?
+                     ser::deserialize_from_buffer<>(row.get_blob("most_recent_commit"), boost::type<frozen_mutation>(), 0) :
+                     freeze(mutation(s, key));
             most_recent = service::paxos::proposal(row.get_as<utils::UUID>("most_recent_commit_at"),
-                    ser::deserialize_from_buffer<>(row.get_blob("most_recent_commit"), boost::type<frozen_mutation>(), 0));
+                    std::move(fm));
         }
 
         return service::paxos::paxos_state(promised, std::move(accepted), std::move(most_recent));
@@ -2240,12 +2245,13 @@ future<> save_paxos_promise(const schema& s, const partition_key& key, const uti
 }
 
 future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout) {
-    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = ?, proposal = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
+    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET promise = ?, proposal_ballot = ?, proposal = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
     partition_key_view key = proposal.update.key();
     return execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(proposal.ballot),
             paxos_ttl_sec(s),
+            proposal.ballot,
             proposal.ballot,
             ser::serialize_to_buffer<bytes>(proposal.update),
             to_legacy(*key.get_compound_type(s), key.representation()),
@@ -2276,9 +2282,9 @@ future<> save_paxos_decision(const schema& s, const service::paxos::proposal& de
 
 future<> delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
     // This should be called only if a learn stage succeeded on all replicas.
-    // In this case we can remove the paxos row using ballot's timestamp which
+    // In this case we can remove learned paxos value using ballot's timestamp which
     // guarantees that if there is more recent round it will not be affected.
-    static auto cql = format("DELETE FROM system.{} USING TIMESTAMP ?  WHERE row_key = ? AND cf_id = ?", PAXOS);
+    static auto cql = format("DELETE most_recent_commit FROM system.{} USING TIMESTAMP ?  WHERE row_key = ? AND cf_id = ?", PAXOS);
 
     return execute_cql_with_timeout(cql,
             timeout,
