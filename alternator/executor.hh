@@ -50,6 +50,7 @@ public:
     stats _stats;
     static constexpr auto ATTRS_COLUMN_NAME = ":attrs";
     static constexpr auto KEYSPACE_NAME_PREFIX = "alternator_";
+    static constexpr std::string_view INTERNAL_TABLE_PREFIX = ".scylla.alternator.";
 
     executor(service::storage_proxy& proxy, service::migration_manager& mm, smp_service_group ssg)
         : _proxy(proxy), _mm(mm), _ssg(ssg) {}

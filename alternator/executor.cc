@@ -187,6 +187,25 @@ static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& r
     }
 }
 
+static std::tuple<bool, std::string_view, std::string_view> try_get_internal_table(std::string_view table_name) {
+    size_t it = table_name.find(executor::INTERNAL_TABLE_PREFIX);
+    if (it != 0) {
+        return {false, "", ""};
+    }
+    table_name.remove_prefix(executor::INTERNAL_TABLE_PREFIX.size());
+    size_t delim = table_name.find_first_of('.');
+    if (delim == std::string_view::npos) {
+        return {false, "", ""};
+    }
+    std::string_view ks_name = table_name.substr(0, delim);
+    table_name.remove_prefix(ks_name.size() + 1);
+    // Only internal keyspaces can be accessed to avoid leakage
+    if (!is_internal_keyspace(sstring(ks_name))) {
+        return {false, "", ""};
+    }
+    return {true, ks_name, table_name};
+}
+
 // get_table_or_view() is similar to to get_table(), except it returns either
 // a table or a materialized view from which to read, based on the TableName
 // and optional IndexName in the request. Only requests like Query and Scan
@@ -196,6 +215,17 @@ static std::pair<schema_ptr, table_or_view_type>
 get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     table_or_view_type type = table_or_view_type::base;
     std::string table_name = get_table_name(request);
+
+    auto [is_internal_table, internal_ks_name, internal_table_name] = try_get_internal_table(table_name);
+    if (is_internal_table) {
+        try {
+            return { proxy.get_db().local().find_schema(sstring(internal_ks_name), sstring(internal_table_name)), type };
+        } catch (no_such_column_family&) {
+            throw api_error("ResourceNotFoundException",
+                format("Requested resource not found: Internal table: {}.{} not found", internal_ks_name, internal_table_name));
+        }
+    }
+
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     const rjson::value* index_name = rjson::find(request, "IndexName");
     std::string orig_table_name;
@@ -684,6 +714,10 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
     std::string table_name = get_table_name(request);
+    if (table_name.find(INTERNAL_TABLE_PREFIX) == 0) {
+        return make_ready_future<request_return_type>(api_error("ValidationException",
+                format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
+    }
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     const rjson::value& attribute_definitions = request["AttributeDefinitions"];
 
@@ -2920,8 +2954,10 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
 
     auto regular_columns = boost::copy_range<query::column_id_vector>(
             schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
+    auto static_columns = boost::copy_range<query::column_id_vector>(
+            schema->static_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto selection = cql3::selection::selection::wildcard(schema);
-    auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), selection->get_query_options());
+    auto partition_slice = query::partition_slice(std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
 
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
