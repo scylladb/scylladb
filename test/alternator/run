@@ -9,7 +9,6 @@ source_path=$script_path/../..
 # By default, we take the latest build/*/scylla as the executable:
 SCYLLA=${SCYLLA-$(ls -t "$source_path/build/"*"/scylla" | head -1)}
 SCYLLA=$(readlink -f "$SCYLLA")
-CPUSET=${CPUSET-0}
 
 # Below, we need to use python3 and the Cassandra drive to set up the
 # authentication credentials expected by some of the tests that check
@@ -76,7 +75,8 @@ done
         --alternator-enforce-authorization=1 \
         --developer-mode=1 \
         --ring-delay-ms 0 --collectd 0 \
-        --cpuset "$CPUSET" -m 1G \
+        --smp 2 -m 1G \
+        --overprovisioned --unsafe-bypass-fsync 1 \
         --api-address $SCYLLA_IP \
         --rpc-address $SCYLLA_IP \
         --listen-address $SCYLLA_IP \
