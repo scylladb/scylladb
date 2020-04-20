@@ -1092,7 +1092,7 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
                 auto& s = *dt.schema.get();
                 return db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
             }).get();
-            
+
             // In order to avoid possible races we first create the tables and only then the views.
             // That way if a view seeks information about its base table it's guarantied to find it.
             parallel_for_each(tables_diff.created, [&] (global_schema_ptr& gs) {
