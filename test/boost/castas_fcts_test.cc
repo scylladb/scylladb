@@ -580,4 +580,37 @@ SEASTAR_TEST_CASE(test_casts_with_revrsed_order_in_selection_clause) {
     });
 }
 
+SEASTAR_TEST_CASE(test_identity_casts) {
+    return do_with_cql_env_thread([&] (auto& e) {
+        const std::pair<data_type, const char*> type_value_pairs[] = {
+                {ascii_type, "'val'"},
+                {long_type, "0"},
+                {bytes_type, "0x0000000000000003"},
+                {boolean_type, "true"},
+                {double_type, "0.0"},
+                {float_type, "0.0"},
+                {int32_type, "0"},
+                {short_type, "0"},
+                {utf8_type, "'val'"},
+                {timestamp_type, "'2011-02-03 04:05+0000'"},
+                {byte_type, "0"},
+                {uuid_type, "123e4567-e89b-12d3-a456-426655440000"},
+                {timeuuid_type, "123e4567-e89b-12d3-a456-426655440000"},
+                {simple_date_type, "'2011-02-03'"},
+                {time_type, "'08:12:54.123456789'"},
+                {inet_addr_type, "'192.168.1.1'"},
+                {varint_type, "0"},
+                {decimal_type, "0.0"},
+                {duration_type, "5h23m10s"},
+        };
+
+        for (const auto [type, value] : type_value_pairs) {
+            const auto type_name = type->cql3_type_name();
+            cquery_nofail(e, format("create table t_{} (pk int primary key, v {})", type_name, type_name));
+            cquery_nofail(e, format("insert into t_{} (pk, v) values (0, {})", type_name, value));
+            cquery_nofail(e, format("select cast(v as {}) from t_{} where pk = 0", type_name, type_name, value));
+        }
+    });
+}
+
 // FIXME: Add test with user-defined functions after they are available.
