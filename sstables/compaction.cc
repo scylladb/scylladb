@@ -259,6 +259,7 @@ public:
     }
 
     virtual void write_failed() override {
+        _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(std::move(_sst));
     }
 
     virtual uint64_t written() const {
