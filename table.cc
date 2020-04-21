@@ -2574,7 +2574,7 @@ table::as_mutation_source_excluding(std::vector<sstables::shared_sstable>& ssts)
 }
 
 stop_iteration db::view::view_updating_consumer::consume_end_of_partition() {
-    if (_as.abort_requested()) {
+    if (_as->abort_requested()) {
         return stop_iteration::yes;
     }
     try {

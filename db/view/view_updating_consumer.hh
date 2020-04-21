@@ -37,14 +37,14 @@ class view_updating_consumer {
     schema_ptr _schema;
     lw_shared_ptr<table> _table;
     std::vector<sstables::shared_sstable> _excluded_sstables;
-    const seastar::abort_source& _as;
+    const seastar::abort_source* _as;
     std::optional<mutation> _m;
 public:
     view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as)
             : _schema(std::move(schema))
             , _table(table.shared_from_this())
             , _excluded_sstables(std::move(excluded_sstables))
-            , _as(as)
+            , _as(&as)
             , _m()
     { }
 
@@ -57,7 +57,7 @@ public:
     }
 
     stop_iteration consume(static_row&& sr) {
-        if (_as.abort_requested()) {
+        if (_as->abort_requested()) {
             return stop_iteration::yes;
         }
         _m->partition().apply(*_schema, std::move(sr));
@@ -65,7 +65,7 @@ public:
     }
 
     stop_iteration consume(clustering_row&& cr) {
-        if (_as.abort_requested()) {
+        if (_as->abort_requested()) {
             return stop_iteration::yes;
         }
         _m->partition().apply(*_schema, std::move(cr));
@@ -73,7 +73,7 @@ public:
     }
 
     stop_iteration consume(range_tombstone&& rt) {
-        if (_as.abort_requested()) {
+        if (_as->abort_requested()) {
             return stop_iteration::yes;
         }
         _m->partition().apply(*_schema, std::move(rt));
@@ -84,7 +84,7 @@ public:
     stop_iteration consume_end_of_partition();
 
     stop_iteration consume_end_of_stream() {
-        return stop_iteration(_as.abort_requested());
+        return stop_iteration(_as->abort_requested());
     }
 };
 
