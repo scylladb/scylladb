@@ -138,6 +138,14 @@ SEASTAR_TEST_CASE(test_inject_future_disabled) {
     });
 }
 
+SEASTAR_TEST_CASE(test_error_exceptions) {
+
+    auto exc = std::make_exception_ptr(utils::injected_error("test"));
+    BOOST_TEST(!is_timeout_exception(exc));
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_inject_exception) {
     utils::error_injection<true> errinj;
 
