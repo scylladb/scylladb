@@ -91,7 +91,6 @@ Scan and Query are mostly supported, with the following limitations:
   operator, and the FilterExpression syntax is not yet supported at all.
 * The "Select" options which allows to count items instead of returning them
   is not yet supported.
-* Parallel scan is not yet supported.
 ### Secondary Indexes
 Global Secondary Indexes (GSI) and Local Secondary Indexes (LSI) are
 implemented, with the following limitations:
