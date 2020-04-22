@@ -5050,8 +5050,8 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             auto expected_sst = sstable_run.begin();
             auto closed_sstables_tracker = sstable_run.begin();
             auto replacer = [&] (sstables::compaction_completion_desc desc) {
-                auto old_sstables = std::move(desc.input_sstables);
-                auto new_sstables = std::move(desc.output_sstables);
+                auto old_sstables = std::move(desc.old_sstables);
+                auto new_sstables = std::move(desc.new_sstables);
                 BOOST_REQUIRE(expected_sst != sstable_run.end());
                 if (incremental_enabled) {
                     do_incremental_replace(std::move(old_sstables), std::move(new_sstables), expected_sst, closed_sstables_tracker);
@@ -5586,8 +5586,8 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         BOOST_REQUIRE(is_partition_dead(alpha));
 
         auto replacer = [&] (sstables::compaction_completion_desc desc) {
-            auto old_sstables = std::move(desc.input_sstables);
-            auto new_sstables = std::move(desc.output_sstables);
+            auto old_sstables = std::move(desc.old_sstables);
+            auto new_sstables = std::move(desc.new_sstables);
             // expired_sst is exhausted, and new sstable is written with mut 2.
             BOOST_REQUIRE(old_sstables.size() == 1);
             BOOST_REQUIRE(old_sstables.front() == expired_sst);

@@ -91,8 +91,10 @@ namespace sstables {
     };
 
     struct compaction_completion_desc {
-        std::vector<shared_sstable> input_sstables;
-        std::vector<shared_sstable> output_sstables;
+        // Old, existing SSTables that should be deleted and removed from the SSTable set.
+        std::vector<shared_sstable> old_sstables;
+        // New, fresh SSTables that should be added to SSTable set, replacing the old ones.
+        std::vector<shared_sstable> new_sstables;
         // Set of compacted partition ranges that should be invalidated in the cache.
         dht::partition_range_vector ranges_for_cache_invalidation;
     };
