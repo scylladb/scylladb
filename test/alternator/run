@@ -99,7 +99,7 @@ echo "Scylla is: $SCYLLA."
 echo -n "Booting Scylla..."
 ok=
 SECONDS=0
-while ((SECONDS < 100))
+while ((SECONDS < 200))
 do
     sleep 2
     echo -n .
