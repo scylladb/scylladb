@@ -279,7 +279,7 @@ token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_co
 }
 
 int64_t token::to_int64(token t) {
-    return t._data;
+    return long_token(t);
 }
 
 dht::token token::from_int64(int64_t i) {
