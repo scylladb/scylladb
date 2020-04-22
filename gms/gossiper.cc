@@ -632,7 +632,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     // We can not run on_remove callbacks here becasue on_remove in
     // storage_service might take the gossiper::timer_callback_lock
     (void)seastar::async([this, endpoint] {
-        _subscribers.for_each([endpoint] (auto& subscriber) {
+        _subscribers.for_each([endpoint] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
             subscriber->on_remove(endpoint);
         });
     }).handle_exception([] (auto ep) {
@@ -1464,7 +1464,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
         logger.info("InetAddress {} is now UP, status = {}", addr, status);
     }
 
-    _subscribers.for_each([addr, local_state] (auto& subscriber) {
+    _subscribers.for_each([addr, local_state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         subscriber->on_alive(addr, local_state);
         logger.trace("Notified {}", subscriber.get());
     });
@@ -1478,7 +1478,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     _live_endpoints_just_added.remove(addr);
     _unreachable_endpoints[addr] = now();
     logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(local_state));
-    _subscribers.for_each([addr, local_state] (auto& subscriber) {
+    _subscribers.for_each([addr, local_state] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         subscriber->on_dead(addr, local_state);
         logger.trace("Notified {}", subscriber.get());
     });
@@ -1510,7 +1510,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
 
     if (eps_old) {
         // the node restarted: it is up to the subscriber to take whatever action is necessary
-        _subscribers.for_each([ep, eps_old] (auto& subscriber) {
+        _subscribers.for_each([ep, eps_old] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
             subscriber->on_restart(ep, *eps_old);
         });
     }
@@ -1525,7 +1525,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
 
     auto* eps_new = get_endpoint_state_for_endpoint_ptr(ep);
     if (eps_new) {
-        _subscribers.for_each([ep, eps_new] (auto& subscriber) {
+        _subscribers.for_each([ep, eps_new] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
             subscriber->on_join(ep, *eps_new);
         });
     }
@@ -1618,14 +1618,14 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
 
 // Runs inside seastar::async context
 void gossiper::do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value) {
-    _subscribers.for_each([addr, ep_state, ap_state, new_value] (auto& subscriber) {
+    _subscribers.for_each([addr, ep_state, ap_state, new_value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         subscriber->before_change(addr, ep_state, ap_state, new_value);
     });
 }
 
 // Runs inside seastar::async context
 void gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value) {
-    _subscribers.for_each([addr, state, value] (auto& subscriber) {
+    _subscribers.for_each([addr, state, value] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         subscriber->on_change(addr, state, value);
     });
 }
