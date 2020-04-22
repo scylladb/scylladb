@@ -3658,12 +3658,12 @@ static std::map<sstring, sstring> get_network_topology_options(int rf) {
 // manually create the keyspace to override this predefined behavior.
 future<> executor::create_keyspace(std::string_view keyspace_name) {
     sstring keyspace_name_str(keyspace_name);
-    return gms::get_up_endpoint_count().then([this, keyspace_name_str = std::move(keyspace_name_str)] (int up_endpoint_count) {
+    return gms::get_all_endpoint_count().then([this, keyspace_name_str = std::move(keyspace_name_str)] (int endpoint_count) {
         int rf = 3;
-        if (up_endpoint_count < rf) {
+        if (endpoint_count < rf) {
             rf = 1;
-            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} live nodes.",
-                    keyspace_name_str, rf, up_endpoint_count);
+            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
+                    keyspace_name_str, rf, endpoint_count);
         }
         auto opts = get_network_topology_options(rf);
         auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
