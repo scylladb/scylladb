@@ -591,6 +591,7 @@ public:
     std::map<sstring, sstring> get_simple_states();
     int get_down_endpoint_count();
     int get_up_endpoint_count();
+    int get_all_endpoint_count();
     sstring get_endpoint_state(sstring address);
     failure_detector& fd() { return _fd; }
 };
@@ -634,6 +635,12 @@ inline future<int> get_down_endpoint_count() {
 inline future<int> get_up_endpoint_count() {
     return smp::submit_to(0, [] {
         return get_local_gossiper().get_up_endpoint_count();
+    });
+}
+
+inline future<int> get_all_endpoint_count() {
+    return smp::submit_to(0, [] {
+        return static_cast<int>(get_local_gossiper().get_endpoint_states().size());
     });
 }
 
