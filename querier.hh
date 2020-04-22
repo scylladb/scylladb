@@ -499,11 +499,11 @@ public:
 class querier_cache_context {
     querier_cache* _cache{};
     utils::UUID _key;
-    bool _is_first_page;
+    query::is_first_page _is_first_page;
 
 public:
     querier_cache_context() = default;
-    querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page);
+    querier_cache_context(querier_cache& cache, utils::UUID key, query::is_first_page is_first_page);
     void insert(data_querier&& q, tracing::trace_state_ptr trace_state);
     void insert(mutation_querier&& q, tracing::trace_state_ptr trace_state);
     void insert(shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);

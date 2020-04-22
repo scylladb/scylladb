@@ -206,6 +206,8 @@ public:
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
 
+using is_first_page = bool_class<class is_first_page_tag>;
+
 // Full specification of a query to the database.
 // Intended for passing across replicas.
 // Can be accessed across cores.
@@ -230,7 +232,7 @@ public:
     // read request as far the replica is concerned. Can be used by the replica
     // to avoid doing work normally done on paged requests, e.g. attempting to
     // reused suspended readers.
-    bool is_first_page;
+    query::is_first_page is_first_page;
     api::timestamp_type read_timestamp; // not serialized
 public:
     read_command(utils::UUID cf_id,
@@ -241,7 +243,7 @@ public:
                  std::optional<tracing::trace_info> ti = std::nullopt,
                  uint32_t partition_limit = max_partitions,
                  utils::UUID query_uuid = utils::UUID(),
-                 bool is_first_page = false,
+                 query::is_first_page is_first_page = is_first_page::no,
                  api::timestamp_type rt = api::new_timestamp())
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))

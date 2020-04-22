@@ -402,7 +402,7 @@ void querier_cache::evict_all_for_table(const utils::UUID& schema_id) {
     }
 }
 
-querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page)
+querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, query::is_first_page is_first_page)
     : _cache(&cache)
     , _key(key)
     , _is_first_page(is_first_page) {
