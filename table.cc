@@ -1193,7 +1193,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
     // unbounded time, because all shards must agree on the deletion).
 
     // make sure all old sstables belong *ONLY* to current shard before we proceed to their deletion.
-    for (auto& sst : desc.input_sstables) {
+    for (auto& sst : desc.old_sstables) {
         auto shards = sst->get_shards_for_this_sstable();
         if (shards.size() > 1) {
             throw std::runtime_error(format("A regular compaction for {}.{} INCORRECTLY used shared sstable {}. Only resharding work with those!",
@@ -1207,11 +1207,11 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
 
     auto new_compacted_but_not_deleted = _sstables_compacted_but_not_deleted;
     // rebuilding _sstables_compacted_but_not_deleted first to make the entire rebuild operation exception safe.
-    new_compacted_but_not_deleted.insert(new_compacted_but_not_deleted.end(), desc.input_sstables.begin(), desc.input_sstables.end());
+    new_compacted_but_not_deleted.insert(new_compacted_but_not_deleted.end(), desc.old_sstables.begin(), desc.old_sstables.end());
 
     _cache.invalidate([this, &desc] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
-        rebuild_sstable_list(desc.output_sstables, desc.input_sstables);
+        rebuild_sstable_list(desc.new_sstables, desc.old_sstables);
     }, std::move(desc.ranges_for_cache_invalidation)).get();
 
     // refresh underlying data source in row cache to prevent it from holding reference
@@ -1222,7 +1222,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
 
     rebuild_statistics();
 
-    auto f = seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove = desc.input_sstables] {
+    auto f = seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove = desc.old_sstables] {
        return with_semaphore(_sstable_deletion_sem, 1, [sstables_to_remove = std::move(sstables_to_remove)] {
            return sstables::delete_atomically(std::move(sstables_to_remove));
        });
@@ -1240,7 +1240,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
     // or they could stay forever in the set, resulting in deleted files remaining
     // opened and disk space not being released until shutdown.
     std::unordered_set<sstables::shared_sstable> s(
-           desc.input_sstables.begin(), desc.input_sstables.end());
+           desc.old_sstables.begin(), desc.old_sstables.end());
     auto e = boost::range::remove_if(_sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) -> bool {
         return s.count(sst);
     });
@@ -1300,11 +1300,11 @@ table::compact_sstables(sstables::compaction_descriptor descriptor) {
                 return sst;
         };
         descriptor.replacer = [this, release_exhausted = descriptor.release_exhausted] (sstables::compaction_completion_desc desc) {
-            _compaction_strategy.notify_completion(desc.input_sstables, desc.output_sstables);
-            _compaction_manager.propagate_replacement(this, desc.input_sstables, desc.output_sstables);
+            _compaction_strategy.notify_completion(desc.old_sstables, desc.new_sstables);
+            _compaction_manager.propagate_replacement(this, desc.old_sstables, desc.new_sstables);
             this->on_compaction_completion(desc);
             if (release_exhausted) {
-                release_exhausted(desc.input_sstables);
+                release_exhausted(desc.old_sstables);
             }
         };
 
