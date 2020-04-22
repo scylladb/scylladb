@@ -87,4 +87,20 @@ inline std::ostream& operator<<(std::ostream& os, const sharder& sharder) {
     return os;
 }
 
+/*
+ * Finds the first token in token range (`start`, `end`] that belongs to shard shard_idx.
+ *
+ * If there is no token that belongs to shard shard_idx in this range,
+ * `end` is returned.
+ *
+ * The first token means the one that appears first on the ring when going
+ * from `start` to `end`.
+ * 'first token' is not always the smallest.
+ * For example, if in vnode (100, 10] only tokens 110 and 1 belong to
+ * shard shard_idx then token 110 is the first because it appears first
+ * when going from 100 to 10 on the ring.
+ */
+dht::token find_first_token_for_shard(
+        const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx);
+
 } //namespace dht
