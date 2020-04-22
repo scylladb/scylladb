@@ -39,6 +39,13 @@
 
 namespace utils {
 
+// Exception thrown by enabled error injection
+class injected_error : public std::runtime_error {
+public:
+    injected_error(const sstring& err_name)
+    : runtime_error{err_name} { }
+};
+
 inline auto& get_local_injector();
 
 extern logging::logger errinj_logger;
