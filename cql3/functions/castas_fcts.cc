@@ -187,124 +187,18 @@ static data_value castas_fctn_from_dv_to_string(data_value from) {
 
 // FIXME: Add conversions for counters, after they are fully implemented...
 
-// Map <ToType, FromType> -> castas_fctn
-using castas_fctn_key = std::pair<data_type, data_type>;
-struct castas_fctn_hash {
-    std::size_t operator()(const castas_fctn_key& x) const noexcept {
-        return boost::hash_value(x);
+static constexpr unsigned next_power_of_2(unsigned val) {
+    unsigned ret = 1;
+    while (ret <= val) {
+        ret *= 2;
     }
-};
-using castas_fctns_map = std::unordered_map<castas_fctn_key, castas_fctn, castas_fctn_hash>;
+    return ret;
+}
 
-// List of supported castas functions...
-thread_local castas_fctns_map castas_fctns {
-    { {byte_type, short_type}, castas_fctn_simple<int8_t, int16_t> },
-    { {byte_type, int32_type}, castas_fctn_simple<int8_t, int32_t> },
-    { {byte_type, long_type}, castas_fctn_simple<int8_t, int64_t> },
-    { {byte_type, float_type}, castas_fctn_simple<int8_t, float> },
-    { {byte_type, double_type}, castas_fctn_simple<int8_t, double> },
-    { {byte_type, varint_type}, castas_fctn_from_varint_to_integer<int8_t> },
-    { {byte_type, decimal_type}, castas_fctn_from_decimal_to_integer<int8_t> },
-
-    { {short_type, byte_type}, castas_fctn_simple<int16_t, int8_t> },
-    { {short_type, int32_type}, castas_fctn_simple<int16_t, int32_t> },
-    { {short_type, long_type}, castas_fctn_simple<int16_t, int64_t> },
-    { {short_type, float_type}, castas_fctn_simple<int16_t, float> },
-    { {short_type, double_type}, castas_fctn_simple<int16_t, double> },
-    { {short_type, varint_type}, castas_fctn_from_varint_to_integer<int16_t> },
-    { {short_type, decimal_type}, castas_fctn_from_decimal_to_integer<int16_t> },
-
-    { {int32_type, byte_type}, castas_fctn_simple<int32_t, int8_t> },
-    { {int32_type, short_type}, castas_fctn_simple<int32_t, int16_t> },
-    { {int32_type, long_type}, castas_fctn_simple<int32_t, int64_t> },
-    { {int32_type, float_type}, castas_fctn_simple<int32_t, float> },
-    { {int32_type, double_type}, castas_fctn_simple<int32_t, double> },
-    { {int32_type, varint_type}, castas_fctn_from_varint_to_integer<int32_t> },
-    { {int32_type, decimal_type}, castas_fctn_from_decimal_to_integer<int32_t> },
-
-    { {long_type, byte_type}, castas_fctn_simple<int64_t, int8_t> },
-    { {long_type, short_type}, castas_fctn_simple<int64_t, int16_t> },
-    { {long_type, int32_type}, castas_fctn_simple<int64_t, int32_t> },
-    { {long_type, float_type}, castas_fctn_simple<int64_t, float> },
-    { {long_type, double_type}, castas_fctn_simple<int64_t, double> },
-    { {long_type, varint_type}, castas_fctn_from_varint_to_integer<int64_t> },
-    { {long_type, decimal_type}, castas_fctn_from_decimal_to_integer<int64_t> },
-
-    { {float_type, byte_type}, castas_fctn_simple<float, int8_t> },
-    { {float_type, short_type}, castas_fctn_simple<float, int16_t> },
-    { {float_type, int32_type}, castas_fctn_simple<float, int32_t> },
-    { {float_type, long_type}, castas_fctn_simple<float, int64_t> },
-    { {float_type, double_type}, castas_fctn_simple<float, double> },
-    { {float_type, varint_type}, castas_fctn_simple<float, utils::multiprecision_int> },
-    { {float_type, decimal_type}, castas_fctn_from_decimal_to_float<float> },
-
-    { {double_type, byte_type}, castas_fctn_simple<double, int8_t> },
-    { {double_type, short_type}, castas_fctn_simple<double, int16_t> },
-    { {double_type, int32_type}, castas_fctn_simple<double, int32_t> },
-    { {double_type, long_type}, castas_fctn_simple<double, int64_t> },
-    { {double_type, float_type}, castas_fctn_simple<double, float> },
-    { {double_type, varint_type}, castas_fctn_simple<double, utils::multiprecision_int> },
-    { {double_type, decimal_type}, castas_fctn_from_decimal_to_float<double> },
-
-    { {varint_type, byte_type}, castas_fctn_simple<utils::multiprecision_int, int8_t> },
-    { {varint_type, short_type}, castas_fctn_simple<utils::multiprecision_int, int16_t> },
-    { {varint_type, int32_type}, castas_fctn_simple<utils::multiprecision_int, int32_t> },
-    { {varint_type, long_type}, castas_fctn_simple<utils::multiprecision_int, int64_t> },
-    { {varint_type, float_type}, castas_fctn_simple<utils::multiprecision_int, float> },
-    { {varint_type, double_type}, castas_fctn_simple<utils::multiprecision_int, double> },
-    { {varint_type, varint_type}, castas_fctn_simple<utils::multiprecision_int, utils::multiprecision_int> },
-    { {varint_type, decimal_type}, castas_fctn_from_decimal_to_varint },
-
-    { {decimal_type, byte_type}, castas_fctn_from_integer_to_decimal<int8_t> },
-    { {decimal_type, short_type}, castas_fctn_from_integer_to_decimal<int16_t> },
-    { {decimal_type, int32_type}, castas_fctn_from_integer_to_decimal<int32_t> },
-    { {decimal_type, long_type}, castas_fctn_from_integer_to_decimal<int64_t> },
-    { {decimal_type, float_type}, castas_fctn_from_float_to_decimal<float> },
-    { {decimal_type, double_type}, castas_fctn_from_float_to_decimal<double> },
-    { {decimal_type, varint_type}, castas_fctn_from_integer_to_decimal<utils::multiprecision_int> },
-
-    { {ascii_type, byte_type}, castas_fctn_to_string<int8_t> },
-    { {ascii_type, short_type}, castas_fctn_to_string<int16_t> },
-    { {ascii_type, int32_type}, castas_fctn_to_string<int32_t> },
-    { {ascii_type, long_type}, castas_fctn_to_string<int64_t> },
-    { {ascii_type, float_type}, castas_fctn_to_string<float> },
-    { {ascii_type, double_type}, castas_fctn_to_string<double> },
-    { {ascii_type, varint_type}, castas_fctn_from_varint_to_string },
-    { {ascii_type, decimal_type}, castas_fctn_from_decimal_to_string },
-
-    { {utf8_type, byte_type}, castas_fctn_to_string<int8_t> },
-    { {utf8_type, short_type}, castas_fctn_to_string<int16_t> },
-    { {utf8_type, int32_type}, castas_fctn_to_string<int32_t> },
-    { {utf8_type, long_type}, castas_fctn_to_string<int64_t> },
-    { {utf8_type, float_type}, castas_fctn_to_string<float> },
-    { {utf8_type, double_type}, castas_fctn_to_string<double> },
-    { {utf8_type, varint_type}, castas_fctn_from_varint_to_string },
-    { {utf8_type, decimal_type}, castas_fctn_from_decimal_to_string },
-
-    { {simple_date_type, timestamp_type}, castas_fctn_from_timestamp_to_date },
-    { {simple_date_type, timeuuid_type}, castas_fctn_from_timeuuid_to_date },
-
-    { {timestamp_type, simple_date_type}, castas_fctn_from_date_to_timestamp },
-    { {timestamp_type, timeuuid_type}, castas_fctn_from_timeuuid_to_timestamp },
-
-    { {ascii_type, timestamp_type}, castas_fctn_from_dv_to_string },
-    { {ascii_type, simple_date_type}, castas_fctn_from_dv_to_string },
-    { {ascii_type, time_type}, castas_fctn_from_dv_to_string },
-    { {ascii_type, timeuuid_type}, castas_fctn_from_dv_to_string },
-    { {ascii_type, uuid_type}, castas_fctn_from_dv_to_string },
-    { {ascii_type, boolean_type}, castas_fctn_from_dv_to_string },
-    { {ascii_type, inet_addr_type}, castas_fctn_from_dv_to_string },
-
-    { {utf8_type, timestamp_type}, castas_fctn_from_dv_to_string },
-    { {utf8_type, simple_date_type}, castas_fctn_from_dv_to_string },
-    { {utf8_type, time_type}, castas_fctn_from_dv_to_string },
-    { {utf8_type, timeuuid_type}, castas_fctn_from_dv_to_string },
-    { {utf8_type, uuid_type}, castas_fctn_from_dv_to_string },
-    { {utf8_type, boolean_type}, castas_fctn_from_dv_to_string },
-    { {utf8_type, inet_addr_type}, castas_fctn_from_dv_to_string },
-    { {utf8_type, ascii_type}, castas_fctn_simple<sstring, sstring> },
-};
-
+static constexpr unsigned next_kind_power_of_2 = next_power_of_2(static_cast<unsigned>(abstract_type::kind::last));
+static constexpr unsigned cast_switch_case_val(abstract_type::kind A, abstract_type::kind B) {
+    return static_cast<unsigned>(A) * next_kind_power_of_2 + static_cast<unsigned>(B);
+}
 } /* Anonymous Namespace */
 
 castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
@@ -314,12 +208,190 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
         // message about TypeX not being castable to TypeX.
         return identity_castas_fctn;
     }
-    auto it_candidate = castas_fctns.find(castas_fctn_key{to_type, from_type});
-    if (it_candidate == castas_fctns.end()) {
-        throw exceptions::invalid_request_exception(format("{} cannot be cast to {}", from_type->name(), to_type->name()));
-    }
 
-    return it_candidate->second;
+    using kind = abstract_type::kind;
+    switch(cast_switch_case_val(to_type->get_kind(), from_type->get_kind())) {
+    case cast_switch_case_val(kind::byte, kind::short_kind):
+        return castas_fctn_simple<int8_t, int16_t>;
+    case cast_switch_case_val(kind::byte, kind::int32):
+        return castas_fctn_simple<int8_t, int32_t>;
+    case cast_switch_case_val(kind::byte, kind::long_kind):
+        return castas_fctn_simple<int8_t, int64_t>;
+    case cast_switch_case_val(kind::byte, kind::float_kind):
+        return castas_fctn_simple<int8_t, float>;
+    case cast_switch_case_val(kind::byte, kind::double_kind):
+        return castas_fctn_simple<int8_t, double>;
+    case cast_switch_case_val(kind::byte, kind::varint):
+        return castas_fctn_from_varint_to_integer<int8_t>;
+    case cast_switch_case_val(kind::byte, kind::decimal):
+        return castas_fctn_from_decimal_to_integer<int8_t>;
+
+    case cast_switch_case_val(kind::short_kind, kind::byte):
+        return castas_fctn_simple<int16_t, int8_t>;
+    case cast_switch_case_val(kind::short_kind, kind::int32):
+        return castas_fctn_simple<int16_t, int32_t>;
+    case cast_switch_case_val(kind::short_kind, kind::long_kind):
+        return castas_fctn_simple<int16_t, int64_t>;
+    case cast_switch_case_val(kind::short_kind, kind::float_kind):
+        return castas_fctn_simple<int16_t, float>;
+    case cast_switch_case_val(kind::short_kind, kind::double_kind):
+        return castas_fctn_simple<int16_t, double>;
+    case cast_switch_case_val(kind::short_kind, kind::varint):
+        return castas_fctn_from_varint_to_integer<int16_t>;
+    case cast_switch_case_val(kind::short_kind, kind::decimal):
+        return castas_fctn_from_decimal_to_integer<int16_t>;
+
+    case cast_switch_case_val(kind::int32, kind::byte):
+        return castas_fctn_simple<int32_t, int8_t>;
+    case cast_switch_case_val(kind::int32, kind::short_kind):
+        return castas_fctn_simple<int32_t, int16_t>;
+    case cast_switch_case_val(kind::int32, kind::long_kind):
+        return castas_fctn_simple<int32_t, int64_t>;
+    case cast_switch_case_val(kind::int32, kind::float_kind):
+        return castas_fctn_simple<int32_t, float>;
+    case cast_switch_case_val(kind::int32, kind::double_kind):
+        return castas_fctn_simple<int32_t, double>;
+    case cast_switch_case_val(kind::int32, kind::varint):
+        return castas_fctn_from_varint_to_integer<int32_t>;
+    case cast_switch_case_val(kind::int32, kind::decimal):
+        return castas_fctn_from_decimal_to_integer<int32_t>;
+
+    case cast_switch_case_val(kind::long_kind, kind::byte):
+        return castas_fctn_simple<int64_t, int8_t>;
+    case cast_switch_case_val(kind::long_kind, kind::short_kind):
+        return castas_fctn_simple<int64_t, int16_t>;
+    case cast_switch_case_val(kind::long_kind, kind::int32):
+        return castas_fctn_simple<int64_t, int32_t>;
+    case cast_switch_case_val(kind::long_kind, kind::float_kind):
+        return castas_fctn_simple<int64_t, float>;
+    case cast_switch_case_val(kind::long_kind, kind::double_kind):
+        return castas_fctn_simple<int64_t, double>;
+    case cast_switch_case_val(kind::long_kind, kind::varint):
+        return castas_fctn_from_varint_to_integer<int64_t>;
+    case cast_switch_case_val(kind::long_kind, kind::decimal):
+        return castas_fctn_from_decimal_to_integer<int64_t>;
+
+    case cast_switch_case_val(kind::float_kind, kind::byte):
+        return castas_fctn_simple<float, int8_t>;
+    case cast_switch_case_val(kind::float_kind, kind::short_kind):
+        return castas_fctn_simple<float, int16_t>;
+    case cast_switch_case_val(kind::float_kind, kind::int32):
+        return castas_fctn_simple<float, int32_t>;
+    case cast_switch_case_val(kind::float_kind, kind::long_kind):
+        return castas_fctn_simple<float, int64_t>;
+    case cast_switch_case_val(kind::float_kind, kind::double_kind):
+        return castas_fctn_simple<float, double>;
+    case cast_switch_case_val(kind::float_kind, kind::varint):
+        return castas_fctn_simple<float, utils::multiprecision_int>;
+    case cast_switch_case_val(kind::float_kind, kind::decimal):
+        return castas_fctn_from_decimal_to_float<float>;
+
+    case cast_switch_case_val(kind::double_kind, kind::byte):
+        return castas_fctn_simple<double, int8_t>;
+    case cast_switch_case_val(kind::double_kind, kind::short_kind):
+        return castas_fctn_simple<double, int16_t>;
+    case cast_switch_case_val(kind::double_kind, kind::int32):
+        return castas_fctn_simple<double, int32_t>;
+    case cast_switch_case_val(kind::double_kind, kind::long_kind):
+        return castas_fctn_simple<double, int64_t>;
+    case cast_switch_case_val(kind::double_kind, kind::float_kind):
+        return castas_fctn_simple<double, float>;
+    case cast_switch_case_val(kind::double_kind, kind::varint):
+        return castas_fctn_simple<double, utils::multiprecision_int>;
+    case cast_switch_case_val(kind::double_kind, kind::decimal):
+        return castas_fctn_from_decimal_to_float<double>;
+
+    case cast_switch_case_val(kind::varint, kind::byte):
+        return castas_fctn_simple<utils::multiprecision_int, int8_t>;
+    case cast_switch_case_val(kind::varint, kind::short_kind):
+        return castas_fctn_simple<utils::multiprecision_int, int16_t>;
+    case cast_switch_case_val(kind::varint, kind::int32):
+        return castas_fctn_simple<utils::multiprecision_int, int32_t>;
+    case cast_switch_case_val(kind::varint, kind::long_kind):
+        return castas_fctn_simple<utils::multiprecision_int, int64_t>;
+    case cast_switch_case_val(kind::varint, kind::float_kind):
+        return castas_fctn_simple<utils::multiprecision_int, float>;
+    case cast_switch_case_val(kind::varint, kind::double_kind):
+        return castas_fctn_simple<utils::multiprecision_int, double>;
+    case cast_switch_case_val(kind::varint, kind::decimal):
+        return castas_fctn_from_decimal_to_varint;
+
+    case cast_switch_case_val(kind::decimal, kind::byte):
+        return castas_fctn_from_integer_to_decimal<int8_t>;
+    case cast_switch_case_val(kind::decimal, kind::short_kind):
+        return castas_fctn_from_integer_to_decimal<int16_t>;
+    case cast_switch_case_val(kind::decimal, kind::int32):
+        return castas_fctn_from_integer_to_decimal<int32_t>;
+    case cast_switch_case_val(kind::decimal, kind::long_kind):
+        return castas_fctn_from_integer_to_decimal<int64_t>;
+    case cast_switch_case_val(kind::decimal, kind::float_kind):
+        return castas_fctn_from_float_to_decimal<float>;
+    case cast_switch_case_val(kind::decimal, kind::double_kind):
+        return castas_fctn_from_float_to_decimal<double>;
+    case cast_switch_case_val(kind::decimal, kind::varint):
+        return castas_fctn_from_integer_to_decimal<utils::multiprecision_int>;
+
+    case cast_switch_case_val(kind::ascii, kind::byte):
+    case cast_switch_case_val(kind::utf8, kind::byte):
+        return castas_fctn_to_string<int8_t>;
+
+    case cast_switch_case_val(kind::ascii, kind::short_kind):
+    case cast_switch_case_val(kind::utf8, kind::short_kind):
+        return castas_fctn_to_string<int16_t>;
+
+    case cast_switch_case_val(kind::ascii, kind::int32):
+    case cast_switch_case_val(kind::utf8, kind::int32):
+        return castas_fctn_to_string<int32_t>;
+
+    case cast_switch_case_val(kind::ascii, kind::long_kind):
+    case cast_switch_case_val(kind::utf8, kind::long_kind):
+        return castas_fctn_to_string<int64_t>;
+
+    case cast_switch_case_val(kind::ascii, kind::float_kind):
+    case cast_switch_case_val(kind::utf8, kind::float_kind):
+        return castas_fctn_to_string<float>;
+
+    case cast_switch_case_val(kind::ascii, kind::double_kind):
+    case cast_switch_case_val(kind::utf8, kind::double_kind):
+        return castas_fctn_to_string<double>;
+
+    case cast_switch_case_val(kind::ascii, kind::varint):
+    case cast_switch_case_val(kind::utf8, kind::varint):
+        return castas_fctn_from_varint_to_string;
+
+    case cast_switch_case_val(kind::ascii, kind::decimal):
+    case cast_switch_case_val(kind::utf8, kind::decimal):
+        return castas_fctn_from_decimal_to_string;
+
+    case cast_switch_case_val(kind::simple_date, kind::timestamp):
+        return castas_fctn_from_timestamp_to_date;
+    case cast_switch_case_val(kind::simple_date, kind::timeuuid):
+        return castas_fctn_from_timeuuid_to_date;
+
+    case cast_switch_case_val(kind::timestamp, kind::simple_date):
+        return castas_fctn_from_date_to_timestamp;
+    case cast_switch_case_val(kind::timestamp, kind::timeuuid):
+        return castas_fctn_from_timeuuid_to_timestamp;
+
+    case cast_switch_case_val(kind::ascii, kind::timestamp):
+    case cast_switch_case_val(kind::ascii, kind::simple_date):
+    case cast_switch_case_val(kind::ascii, kind::time):
+    case cast_switch_case_val(kind::ascii, kind::timeuuid):
+    case cast_switch_case_val(kind::ascii, kind::uuid):
+    case cast_switch_case_val(kind::ascii, kind::boolean):
+    case cast_switch_case_val(kind::ascii, kind::inet):
+    case cast_switch_case_val(kind::utf8, kind::timestamp):
+    case cast_switch_case_val(kind::utf8, kind::simple_date):
+    case cast_switch_case_val(kind::utf8, kind::time):
+    case cast_switch_case_val(kind::utf8, kind::timeuuid):
+    case cast_switch_case_val(kind::utf8, kind::uuid):
+    case cast_switch_case_val(kind::utf8, kind::boolean):
+    case cast_switch_case_val(kind::utf8, kind::inet):
+        return castas_fctn_from_dv_to_string;
+    case cast_switch_case_val(kind::utf8, kind::ascii):
+        return castas_fctn_simple<sstring, sstring>;
+    }
+    throw exceptions::invalid_request_exception(format("{} cannot be cast to {}", from_type->name(), to_type->name()));
 }
 
 shared_ptr<function> castas_functions::get(data_type to_type, const std::vector<shared_ptr<cql3::selection::selector>>& provided_args) {

@@ -486,6 +486,7 @@ public:
         utf8,
         uuid,
         varint,
+        last = varint,
     };
 private:
     kind _kind;
