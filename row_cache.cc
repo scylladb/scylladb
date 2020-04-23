@@ -1170,23 +1170,6 @@ void row_cache::evict() {
     while (_tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) {}
 }
 
-void row_cache::invalidate_unwrapped(const dht::partition_range& range) {
-    logalloc::reclaim_lock _(_tracker.region());
-
-    auto cmp = cache_entry::compare(_schema);
-    auto begin = _partitions.lower_bound(dht::ring_position_view::for_range_start(range), cmp);
-    auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
-    with_allocator(_tracker.allocator(), [this, begin, end] {
-        auto it = _partitions.erase_and_dispose(begin, end, [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
-            _tracker.on_partition_erase();
-            p->evict(_tracker);
-            deleter(p);
-        });
-        assert(it != _partitions.end());
-        _tracker.clear_continuity(*it);
-    });
-}
-
 row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, is_continuous cont)
     : _tracker(tracker)
     , _schema(std::move(s))

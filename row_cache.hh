@@ -398,7 +398,6 @@ private:
     void on_mispopulate();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
-    void invalidate_unwrapped(const dht::partition_range&);
     void clear_now() noexcept;
 
     struct previous_entry_pointer {
