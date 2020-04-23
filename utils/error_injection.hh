@@ -142,6 +142,18 @@ class error_injection {
     }
 
 public:
+    // \brief Enter into error injection if it's enabled
+    // \param name error injection name to check
+    bool enter(const std::string_view& name) {
+        if (!is_enabled(name)) {
+            return false;
+        }
+        if (is_one_shot(name)) {
+            disable(name);
+        }
+        return true;
+    }
+
     void enable(const std::string_view& injection_name, bool one_shot = false) {
         _enabled.emplace(injection_name, one_shot);
         errinj_logger.debug("Enabling injection {} \"{}\"",
@@ -270,6 +282,10 @@ template <>
 class error_injection<false> {
     using handler_fun = std::function<void()>;
 public:
+    bool enter(const std::string_view& name) const {
+        return false;
+    }
+
     [[gnu::always_inline]]
     void enable(const std::string_view& injection_name, const bool one_shot = false) {}
 
