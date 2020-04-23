@@ -253,15 +253,19 @@ void set_cache_service(http_context& ctx, routes& r) {
     cs::get_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
         // In origin row size is the weighted size.
         // We currently do not support weights, so we use num entries instead
-        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
-            return cf.get_row_cache().partitions();
-        }, std::plus<uint64_t>());
+        return ctx.db.map_reduce0([](database& db) -> uint64_t {
+            return db.row_cache_tracker().partitions();
+        }, uint64_t(0), std::plus<uint64_t>()).then([](const int64_t& res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
     });
 
     cs::get_row_entries.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
-            return cf.get_row_cache().partitions();
-        }, std::plus<uint64_t>());
+        return ctx.db.map_reduce0([](database& db) -> uint64_t {
+            return db.row_cache_tracker().partitions();
+        }, uint64_t(0), std::plus<uint64_t>()).then([](const int64_t& res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
     });
 
     cs::get_counter_capacity.set(r, [] (std::unique_ptr<request> req) {

@@ -556,9 +556,6 @@ public:
     // If it did, use invalidate() instead.
     void evict();
 
-    size_t partitions() const {
-        return _partitions.size();
-    }
     const cache_tracker& get_cache_tracker() const {
         return _tracker;
     }
