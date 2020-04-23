@@ -547,9 +547,13 @@ int main(int ac, char** av) {
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
 
             feature_service.start(fcfg).get();
-            auto stop_feature_service = defer_verbose_shutdown("feature service", [&feature_service] {
-                feature_service.stop().get();
-            });
+            // FIXME storage_proxy holds a reference on it and is not yet stopped.
+            // also the proxy leaves range_slice_read_executor-s hanging around
+            // and willing to find out if the cluster_supports_digest_multipartition_reads
+            //
+            //auto stop_feature_service = defer_verbose_shutdown("feature service", [&feature_service] {
+            //    feature_service.stop().get();
+            //});
 
             schema::set_default_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
             auto make_sched_group = [&] (sstring name, unsigned shares) {
