@@ -98,6 +98,12 @@ public:
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
     virtual size_t get_replication_factor() const = 0;
+    // Decide if the replication strategy allow removing the node being
+    // replaced from the natural endpoints when a node is being replaced in the
+    // cluster. LocalStrategy is the not allowed to do so because it always
+    // returns the node itself as the natural_endpoints and the node will not
+    // appear in the pending_endpoints.
+    virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const = 0;
     uint64_t get_cache_hits_count() const { return _cache_hits_count; }
     replication_strategy_type get_type() const { return _my_type; }
 
