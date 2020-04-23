@@ -51,6 +51,8 @@ namespace validation {
 
 constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
+// Returns an error string if key is invalid, a disengaged optional otherwise.
+std::optional<sstring> is_cql_key_invalid(const schema& schema, partition_key_view key);
 void validate_cql_key(const schema& schema, partition_key_view key);
 schema_ptr validate_column_family(database& db, const sstring& keyspace_name, const sstring& cf_name);
 schema_ptr validate_column_family(const sstring& keyspace_name, const sstring& cf_name);
