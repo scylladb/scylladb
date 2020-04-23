@@ -33,9 +33,10 @@ import os
 procs = os.sysconf('SC_NPROCESSORS_ONLN')
 mem = os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGESIZE')
 
+mem_reserve = 1000000000
 job_mem = 4000000000
 
-jobs = min(procs, mem // job_mem)
+jobs = min(procs, (mem-mem_reserve) // job_mem)
 jobs = max(jobs, 1)
 
 print(jobs)
