@@ -44,7 +44,9 @@ SEASTAR_TEST_CASE(test_inject_noop) {
     BOOST_REQUIRE_NO_THROW(errinj.inject("noop1",
             [] () { throw std::runtime_error("shouldn't happen"); }).get());
 
+    errinj.enable("error");
     BOOST_ASSERT(errinj.enabled_injections().empty());
+    BOOST_ASSERT(errinj.is_enabled("error") == false);
 
     auto start_time = steady_clock::now();
     return errinj.inject("noop2", sleep_msec).then([start_time] {
@@ -52,6 +54,17 @@ SEASTAR_TEST_CASE(test_inject_noop) {
         BOOST_REQUIRE_LT(wait_time.count(), sleep_msec.count());
         return make_ready_future<>();
     });
+}
+
+SEASTAR_TEST_CASE(test_is_enabled) {
+    utils::error_injection<true> errinj;
+
+    errinj.enable("is_enabled_test", true);
+    BOOST_ASSERT(errinj.enabled_injections().size() == 1);
+    BOOST_ASSERT(errinj.is_enabled("is_enabled_test"));
+    BOOST_ASSERT(errinj.is_enabled("is_enabled_test", true));
+    BOOST_ASSERT(errinj.enabled_injections().size() == 0);
+    return make_ready_future<>();
 }
 
 SEASTAR_TEST_CASE(test_inject_lambda) {
