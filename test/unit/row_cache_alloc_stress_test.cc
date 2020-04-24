@@ -43,6 +43,8 @@ clustering_key new_ckey(schema_ptr s) {
     return clustering_key::from_single_value(*s, to_bytes(format("ckey{:d}", next++)));
 }
 
+void *leak;
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
@@ -242,7 +244,9 @@ int main(int argc, char** argv) {
                     auto reader = cache.make_reader(s, range);
                     assert(!reader(db::no_timeout).get0());
                     auto evicted_from_cache = logalloc::segment_size + large_cell_size;
-                    new char[evicted_from_cache + logalloc::segment_size];
+                    // GCC's -fallocation-dce can remove dead calls to new and malloc, so
+                    // assign the result to a global variable to disable it.
+                    leak = new char[evicted_from_cache + logalloc::segment_size];
                     assert(false); // The test is not invoking the case which it's supposed to test
                 } catch (const std::bad_alloc&) {
                     // expected
