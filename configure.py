@@ -1314,7 +1314,7 @@ for pkg in pkgs:
 user_cflags = args.user_cflags + ' -fvisibility=hidden'
 user_ldflags = args.user_ldflags + ' -fvisibility=hidden'
 if args.staticcxx:
-    user_ldflags += " -static-libgcc -static-libstdc++"
+    user_ldflags += " -static-libstdc++"
 if args.staticthrift:
     thrift_libs = "-Wl,-Bstatic -lthrift -Wl,-Bdynamic"
 else:
