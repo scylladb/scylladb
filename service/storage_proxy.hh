@@ -296,7 +296,22 @@ private:
     class view_update_handlers_list;
     std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
 
+    /* This is a pointer to the shard-local part of the sharded cdc_service:
+     * storage_proxy needs access to cdc_service to augument mutations.
+     *
+     * It is a pointer and not a reference since cdc_service must be initialized after storage_proxy,
+     * because it uses storage_proxy to perform pre-image queries, for one thing.
+     * Therefore, at the moment of initializing storage_proxy, we don't have access to cdc_service yet.
+     *
+     * Furthermore, storage_proxy must keep the service object alive while augmenting mutations
+     * (storage_proxy is never deintialized, and even if it would be, it would be after deinitializing cdc_service).
+     * Thus cdc_service inherits from enable_shared_from_this and storage_proxy code must remember to call
+     * shared_from_this().
+     *
+     * Eventual deinitialization of cdc_service is enabled by cdc_service::stop setting this pointer to nullptr.
+     */
     cdc::cdc_service* _cdc = nullptr;
+
     cdc_stats _cdc_stats;
 private:
     future<> uninit_messaging_service();
