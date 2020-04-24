@@ -481,8 +481,8 @@ def parse_scylla_dirs_with_default(conf='/etc/scylla/scylla.yaml'):
         y['data_file_directories'] = [os.path.join(y['workdir'], 'data')]
     for t in [ "commitlog", "hints", "view_hints", "saved_caches" ]:
         key = "%s_directory" % t
-        if key not in y or not y[k]:
-            y[k] = os.path.join(y['workdir'], t)
+        if key not in y or not y[key]:
+            y[key] = os.path.join(y['workdir'], t)
     return y
 
 
