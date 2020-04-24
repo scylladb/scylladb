@@ -61,7 +61,6 @@ public:
         {
             nest n;
             std::cout << prefix() << "sizeof(decorated_key) = " << sizeof(dht::decorated_key) << "\n";
-            std::cout << prefix() << "sizeof(cache_link_type) = " << sizeof(cache_entry::cache_link_type) << "\n";
             print_mutation_partition_size();
         }
 
