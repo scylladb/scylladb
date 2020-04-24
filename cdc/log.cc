@@ -286,6 +286,7 @@ cdc::cdc_service::cdc_service(db_context ctxt)
 }
 
 future<> cdc::cdc_service::stop() {
+    _impl->_ctxt._proxy.set_cdc_service(nullptr);
     return _impl->stop();
 }
 

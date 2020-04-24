@@ -75,7 +75,7 @@ class metadata;
 /// CDC service will listen for schema changes and iff CDC is enabled/changed
 /// create/modify/delete corresponding log tables etc as part of the schema change. 
 ///
-class cdc_service {
+class cdc_service final : public async_sharded_service<cdc::cdc_service> {
     class impl;
     std::unique_ptr<impl> _impl;
 public:
