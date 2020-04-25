@@ -2956,7 +2956,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
 
 static dht::token token_for_segment(int segment, int total_segments) {
     assert(total_segments > 1 && segment >= 0 && segment < total_segments);
-    int64_t delta = std::numeric_limits<int64_t>::max() / total_segments * 2;
+    uint64_t delta = std::numeric_limits<uint64_t>::max() / total_segments;
     return dht::token::from_int64(std::numeric_limits<int64_t>::min() + delta * segment);
 }
 
