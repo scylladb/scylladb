@@ -74,6 +74,26 @@ future<redis_message> exists::execute(service::storage_proxy& proxy, redis::redi
     });
 }
 
+shared_ptr<abstract_command> ttl::prepare(service::storage_proxy& proxy, request&& req) {
+    if (req.arguments_size() != 1) {
+        throw wrong_arguments_exception(1, req.arguments_size(), req._command);
+    }
+    return seastar::make_shared<ttl> (std::move(req._command), std::move(req._args[0]));
+}
+
+future<redis_message> ttl::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
+    return redis::read_strings(proxy, options, _key, permit).then([] (auto result) {
+        if (result->has_result()) {
+            if (result->has_ttl()) {
+                return redis_message::number(result->ttl().count());
+            }else{
+                return redis_message::number(-1);
+            }
+        }
+        return redis_message::number(-2);
+    });
+}
+
 shared_ptr<abstract_command> set::prepare(service::storage_proxy& proxy, request&& req) {
     if (req.arguments_size() != 2) {
         throw wrong_arguments_exception(2, req.arguments_size(), req._command);
