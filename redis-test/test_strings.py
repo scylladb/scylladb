@@ -199,3 +199,32 @@ Georg Nees - schotter, plotter on paper, 1968\. Redis ver\. [0-9]+\.[0-9]+\.[0-9
     assert re.match(pattern2, res)
     res = r.execute_command('LOLWUT', 10, 4, 2)
     assert re.match(pattern3, res)
+
+def test_strlen():
+    r = connect()
+    key1 = random_string(10)
+    val1 = random_string(10)
+    key2 = random_string(10)
+    val2 = random_string(1000)
+    key3 = random_string(10)
+
+    assert r.set(key1, val1) == True
+    assert r.set(key2, val2) == True
+    r.delete(key3)
+    assert r.strlen(key1) == 10
+    assert r.strlen(key2) == 1000
+    assert r.strlen(key3) == 0
+
+@pytest.mark.xfail(reason="types on redis does not implemented yet")
+def test_strlen_wrongtype():
+    r = connect()
+    key1 = random_string(10)
+    val1 = random_string(10)
+    val2 = random_string(10)
+
+    assert r.rpush(key1, val1)
+    assert r.rpush(key1, val2)
+    try:
+        r.strlen(key1)
+    except redis.exceptions.ResponseError as ex:
+        assert str(ex) == 'WRONGTYPE Operation against a key holding the wrong kind of value'
