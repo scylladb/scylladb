@@ -87,6 +87,20 @@ future<redis_message> set::execute(service::storage_proxy& proxy, redis::redis_o
     });
 }
 
+shared_ptr<abstract_command> setex::prepare(service::storage_proxy& proxy, request&& req) {
+    if (req.arguments_size() != 3) {
+        throw wrong_arguments_exception(3, req.arguments_size(), req._command);
+    }
+    long ttl;
+    try {
+        ttl = std::stol(std::string(reinterpret_cast<const char*>(req._args[1].data()), req._args[1].size()));
+    }
+    catch (...) {
+        throw invalid_arguments_exception(req._command);
+    }
+    return seastar::make_shared<setex> (std::move(req._command), std::move(req._args[0]), std::move(req._args[2]), ttl);
+}
+
 shared_ptr<abstract_command> del::prepare(service::storage_proxy& proxy, request&& req) {
     if (req.arguments_size() == 0) {
         throw wrong_number_of_arguments_exception(req._command);
