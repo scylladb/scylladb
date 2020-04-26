@@ -59,6 +59,17 @@ public:
     virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
 };
 
+class strlen : public abstract_command {
+    bytes _key;
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    strlen(bytes&& name, bytes&& key)
+        : abstract_command(std::move(name))
+        , _key(std::move(key)) {
+    }
+    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
 class set : public abstract_command {
     bytes _key;
     bytes _data;
