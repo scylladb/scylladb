@@ -21,6 +21,7 @@
 import pytest
 import redis
 import logging
+import time
 from util import random_string, connect
 
 logger = logging.getLogger('redis-test')
@@ -141,3 +142,12 @@ def test_exists_multiple_existent_key():
     assert r.get(key3) == val3
     assert r.get(key4) == None
     assert r.exists(key1, key2, key3, key4) == 3
+
+def test_setex_ttl():
+    r = connect()
+    key = random_string(10)
+    val = random_string(10)
+
+    assert r.setex(key, 100, val) == True
+    time.sleep(1)
+    assert r.ttl(key) == 99
