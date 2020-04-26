@@ -2492,7 +2492,8 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
     return push_view_replica_updates(s, std::move(m), timeout);
 }
 
-future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source, const io_priority_class& io_priority) const {
+future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source,
+        const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const {
     if (!_config.view_update_concurrency_semaphore->current()) {
         // We don't have resources to generate view updates for this write. If we reached this point, we failed to
         // throttle the client. The memory queue is already full, waiting on the semaphore would cause this node to
@@ -2526,6 +2527,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     opts.set(query::partition_slice::option::send_clustering_key);
     opts.set(query::partition_slice::option::send_timestamp);
     opts.set(query::partition_slice::option::send_ttl);
+    opts.add(custom_opts);
     auto slice = query::partition_slice(
             std::move(cr_ranges), { }, std::move(columns), std::move(opts), { }, cql_serialization_format::internal(), query::max_rows);
     // Take the shard-local lock on the base-table row or partition as needed.
@@ -2550,13 +2552,15 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
 }
 
 future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout) const {
-    return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source(), service::get_local_sstable_query_read_priority());
+    return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source(),
+            service::get_local_sstable_query_read_priority(), {});
 }
 
 future<row_locker::lock_holder>
 table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout,
         std::vector<sstables::shared_sstable>& excluded_sstables) const {
-    return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source_excluding(excluded_sstables), service::get_local_streaming_read_priority());
+    return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source_excluding(excluded_sstables),
+            service::get_local_streaming_read_priority(), query::partition_slice::option_set::of<query::partition_slice::option::bypass_cache>());
 }
 
 mutation_source
