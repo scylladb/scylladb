@@ -58,6 +58,8 @@ EOF
     exit 1
 }
 
+docker --version >/dev/null 2>&1 || die "Please install Docker on this machine to run dbuild"
+
 if [[ $# -eq 0 ]]; then
     interactive=y
     docker_args=(-it)
