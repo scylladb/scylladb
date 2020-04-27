@@ -6,9 +6,6 @@
 	path = swagger-ui
 	url = ../scylla-swagger-ui
 	ignore = dirty
-[submodule "xxHash"]
-	path = xxHash
-	url = ../xxHash
 [submodule "libdeflate"]
 	path = libdeflate
 	url = ../libdeflate
