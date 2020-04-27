@@ -262,11 +262,10 @@ int main(int argc, char** argv) {
         auto conf_seed = app.configuration()["random-seed"];
         auto seed = conf_seed.empty() ? std::random_device()() : conf_seed.as<unsigned>();
         std::cout << "random-seed=" << seed << '\n';
-        smp::invoke_on_all([seed] {
+        return smp::invoke_on_all([seed] {
             seastar::testing::local_random_engine.seed(seed + this_shard_id());
-        }).get();
-
-        return do_with_cql_env_thread([&app] (auto&& env) {
+        }).then([&app] {
+          return do_with_cql_env_thread([&app] (auto&& env) {
             auto cfg = test_config();
             cfg.partitions = app.configuration()["partitions"].as<unsigned>();
             cfg.duration_in_seconds = app.configuration()["duration"].as<unsigned>();
@@ -300,5 +299,6 @@ int main(int argc, char** argv) {
                 write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, median, mad, max, min);
             }
           });
+        });
     });
 }
