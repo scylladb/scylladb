@@ -147,6 +147,10 @@ decorated_key::less_comparator::operator()(const decorated_key& lhs, const ring_
     return lhs.tri_compare(*s, rhs) < 0;
 }
 
+std::ostream& operator<<(std::ostream& out, const ring_position_ext& pos) {
+    return out << (ring_position_view)pos;
+}
+
 std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
     out << "{" << pos.token();
     if (pos.has_key()) {
