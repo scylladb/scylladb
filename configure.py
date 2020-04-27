@@ -1289,10 +1289,12 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
                  maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc'), ])
 
-xxhash_dir = 'xxHash'
+pkgconfig_libs = [
+    'libxxhash',
+]
 
-if not os.path.exists(xxhash_dir) or not os.listdir(xxhash_dir):
-    raise Exception(xxhash_dir + ' is empty. Run "git submodule update --init".')
+args.user_cflags += ' ' + ' '.join([pkg_config(lib, '--cflags') for lib in pkgconfig_libs])
+libs += ' ' + ' '.join([pkg_config(lib, '--libs') for lib in pkgconfig_libs])
 
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'

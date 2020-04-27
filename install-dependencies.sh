@@ -89,6 +89,7 @@ fedora_packages=(
     hwloc
     glibc-langpack-en
     lld
+    xxhash-devel
 )
 
 centos_packages=(

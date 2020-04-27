@@ -26,7 +26,7 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
-#include <xxHash/xxhash.h>
+#include <xxhash.h>
 #pragma GCC diagnostic pop
 
 #include <array>
