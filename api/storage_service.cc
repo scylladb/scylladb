@@ -1000,6 +1000,9 @@ void set_snapshot(http_context& ctx, routes& r) {
         if (column_family.empty()) {
             resp = service::get_local_storage_service().take_snapshot(tag, keynames);
         } else {
+            if (keynames.empty()) {
+                throw httpd::bad_param_exception("The keyspace of column families must be specified");
+            }
             if (keynames.size() > 1) {
                 throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
             }
