@@ -21,6 +21,8 @@
 
 #pragma once
 #include "types.hh"
+#include <vector>
+#include <map>
 
 class service_permit;
 
@@ -34,6 +36,10 @@ namespace redis {
 class redis_options;
 
 future<> write_strings(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, bytes&& data, long ttl, service_permit permit);
+future<> write_lists(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, std::vector<bytes>&& data, long ttl, service_permit permit);
+future<> write_hashes(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, std::map<bytes, bytes>&& data, long ttl, service_permit permit);
+future<> write_sets(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, std::vector<bytes>&& data, long ttl, service_permit permit);
+future<> write_zsets(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, std::vector<bytes>&& data, long ttl, service_permit permit);
 future<> delete_objects(service::storage_proxy& proxy, redis::redis_options& options, std::vector<bytes>&& keys, service_permit permit);
 
 }

@@ -29,6 +29,8 @@
 #include "redis/options.hh"
 #include "mutation.hh"
 #include "service_permit.hh"
+#include "serializer.hh"
+#include "serializer_impl.hh"
 
 using namespace seastar;
 
@@ -68,6 +70,23 @@ future<> write_strings(service::storage_proxy& proxy, redis::redis_options& opti
     return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit);
 }
 
+future<> write_lists(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, std::vector<bytes>&& data, long ttl, service_permit permit) {
+    bytes buf = ser::serialize_to_buffer<bytes>(data);
+    return write_strings(proxy, options, std::move(key), std::move(buf), ttl, permit);
+}
+
+future<> write_hashes(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, std::map<bytes, bytes>&& data, long ttl, service_permit permit) {
+    bytes buf = ser::serialize_to_buffer<bytes>(data);
+    return write_strings(proxy, options, std::move(key), std::move(buf), ttl, permit);
+}
+
+future<> write_sets(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, std::vector<bytes>&& data, long ttl, service_permit permit) {
+    return write_lists(proxy, options, std::move(key), std::move(data), ttl, permit);
+}
+
+future<> write_zsets(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, std::vector<bytes>&& data, long ttl, service_permit permit) {
+    return write_lists(proxy, options, std::move(key), std::move(data), ttl, permit);
+}
 
 mutation make_tombstone(service::storage_proxy& proxy, const redis_options& options, const sstring& cf_name, const bytes& key) {
     auto schema = get_schema(proxy, options.get_keyspace_name(), cf_name);

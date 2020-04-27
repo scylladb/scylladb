@@ -24,6 +24,8 @@
 #include "seastar/core/shared_ptr.hh"
 #include "seastar/core/future.hh"
 #include "bytes.hh"
+#include <vector>
+#include <map>
 
 using namespace seastar;
 
@@ -45,6 +47,24 @@ struct strings_result {
     bool has_result() const { return _has_result; }
 };
 
+struct lists_result {
+    std::vector<bytes> _result;
+    bool _has_result;
+    std::vector<bytes>& result() { return _result; }
+    bool has_result() const { return _has_result; }
+};
+
+struct hashes_result {
+    std::map<bytes, bytes> _result;
+    bool _has_result;
+    std::map<bytes, bytes>& result() { return _result; }
+    bool has_result() const { return _has_result; }
+};
+
 future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
+future<lw_shared_ptr<lists_result>> read_lists(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
+future<lw_shared_ptr<hashes_result>> read_hashes(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
+future<lw_shared_ptr<lists_result>> read_sets(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
+future<lw_shared_ptr<lists_result>> read_zsets(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
 
 }

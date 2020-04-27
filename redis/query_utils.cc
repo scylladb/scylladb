@@ -31,6 +31,8 @@
 #include "gc_clock.hh"
 #include "service_permit.hh"
 #include "redis/keyspace_utils.hh"
+#include "serializer.hh"
+#include "serializer_impl.hh"
 
 namespace redis {
 class strings_result_builder {
@@ -86,6 +88,36 @@ future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy& proxy
             return pd;
         }); 
     }); 
+}
+
+future<lw_shared_ptr<lists_result>> read_lists(service::storage_proxy& proxy, const redis_options& options, const bytes& key, service_permit permit) {
+    return read_strings(proxy, options, key, permit).then([] (lw_shared_ptr<strings_result> sres) {
+        auto res = make_lw_shared<lists_result>();
+        res->_has_result = sres->has_result();
+        if (res->has_result()) {
+            res->_result = ser::deserialize_from_buffer(sres->result(), boost::type<std::vector<bytes>>());
+        }
+        return res;
+    });
+}
+
+future<lw_shared_ptr<hashes_result>> read_hashes(service::storage_proxy& proxy, const redis_options& options, const bytes& key, service_permit permit) {
+    return read_strings(proxy, options, key, permit).then([] (lw_shared_ptr<strings_result> sres) {
+        auto res = make_lw_shared<hashes_result>();
+        res->_has_result = sres->has_result();
+        if (res->has_result()) {
+            res->_result = ser::deserialize_from_buffer(sres->result(), boost::type<std::map<bytes, bytes>>());
+        }
+        return res;
+    });
+}
+
+future<lw_shared_ptr<lists_result>> read_sets(service::storage_proxy& proxy, const redis_options& options, const bytes& key, service_permit permit) {
+    return read_lists(proxy, options, key, permit);
+}
+
+future<lw_shared_ptr<lists_result>> read_zsets(service::storage_proxy& proxy, const redis_options& options, const bytes& key, service_permit permit) {
+    return read_lists(proxy, options, key, permit);
 }
 
 }
