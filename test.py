@@ -351,6 +351,7 @@ class RunTest(Test):
         self.path = os.path.join(suite.path, shortname)
         self.xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["--junit-xml={}".format(self.xmlout)]
+        self.env = { 'SCYLLA': os.path.join("build", self.mode, "scylla") }
 
     def print_summary(self):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
@@ -358,7 +359,7 @@ class RunTest(Test):
 
     async def run(self, options):
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
-        self.success = await run_test(self, options, gentle_kill=True)
+        self.success = await run_test(self, options, gentle_kill=True, env=self.env)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
 
@@ -404,7 +405,7 @@ class TabularConsoleOutput:
             print(msg)
 
 
-async def run_test(test, options, gentle_kill=False):
+async def run_test(test, options, gentle_kill=False, env=dict()):
     """Run test program, return True if success else False"""
 
     with open(test.log_filename, "wb") as log:
@@ -436,6 +437,7 @@ async def run_test(test, options, gentle_kill=False):
                 env=dict(os.environ,
                          UBSAN_OPTIONS=":".join(filter(None, UBSAN_OPTIONS)),
                          ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
+                         **env,
                          ),
                 preexec_fn=os.setsid,
             )
