@@ -438,6 +438,7 @@ arg_parser.add_argument('--so', dest='so', action='store_true',
                         help='Build shared object (SO) instead of executable')
 arg_parser.add_argument('--mode', action='append', choices=list(modes.keys()), dest='selected_modes')
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
+arg_parser.add_argument('--with-seastar', action='store', dest='seastar_path', default='seastar', help='Path to Seastar sources')
 arg_parser.add_argument('--cflags', action='store', dest='user_cflags', default='',
                         help='Extra flags for the C++ compiler')
 arg_parser.add_argument('--ldflags', action='store', dest='user_ldflags', default='',
@@ -1229,11 +1230,11 @@ def configure_seastar(build_dir, mode):
     if args.alloc_failure_injector:
         seastar_cmake_args += ['-DSeastar_ALLOC_FAILURE_INJECTION=ON']
 
-    seastar_cmd = ['cmake', '-G', 'Ninja', os.path.relpath('seastar', seastar_build_dir)] + seastar_cmake_args
+    seastar_cmd = ['cmake', '-G', 'Ninja', os.path.relpath(args.seastar_path, seastar_build_dir)] + seastar_cmake_args
     cmake_dir = seastar_build_dir
     if args.dpdk:
         # need to cook first
-        cmake_dir = 'seastar' # required by cooking.sh
+        cmake_dir = args.seastar_path # required by cooking.sh
         relative_seastar_build_dir = os.path.join('..', seastar_build_dir)  # relative to seastar/
         seastar_cmd = ['./cooking.sh', '-i', 'dpdk', '-d', relative_seastar_build_dir, '--'] + seastar_cmd[4:]
 
@@ -1366,7 +1367,7 @@ with open(buildfile_tmp, 'w') as f:
             command = echo -e $text > $out
             description = GEN $out
         rule swagger
-            command = seastar/scripts/seastar-json2code.py -f $in -o $out
+            command = {args.seastar_path}/scripts/seastar-json2code.py -f $in -o $out
             description = SWAGGER $out
         rule serializer
             command = {python} ./idl-compiler.py --ns ser -f $in -o $out
@@ -1572,7 +1573,7 @@ with open(buildfile_tmp, 'w') as f:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[src], **modeval))
         for hh in swaggers:
             src = swaggers[hh]
-            f.write('build {}: swagger {} | seastar/scripts/seastar-json2code.py\n'.format(hh, src))
+            f.write('build {}: swagger {} | {}/scripts/seastar-json2code.py\n'.format(hh, src, args.seastar_path))
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
@@ -1647,7 +1648,7 @@ with open(buildfile_tmp, 'w') as f:
         rule configure
           command = {python} configure.py $configure_args
           generator = 1
-        build build.ninja: configure | configure.py SCYLLA-VERSION-GEN seastar/CMakeLists.txt
+        build build.ninja: configure | configure.py SCYLLA-VERSION-GEN {args.seastar_path}/CMakeLists.txt
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
