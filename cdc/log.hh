@@ -91,7 +91,8 @@ public:
     future<std::tuple<std::vector<mutation>, lw_shared_ptr<operation_result_tracker>>> augment_mutation_call(
         lowres_clock::time_point timeout,
         std::vector<mutation>&& mutations,
-        tracing::trace_state_ptr tr_state
+        tracing::trace_state_ptr tr_state,
+        db::consistency_level write_cl
         );
     bool needs_cdc_augmentation(const std::vector<mutation>&) const;
 };

@@ -197,6 +197,14 @@ protected:
         , failures{failures_}
         , block_for{block_for_}
     {}
+
+    request_failure_exception(exception_code code, const sstring& msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_) noexcept
+        : cassandra_exception{code, msg}
+        , consistency{consistency_}
+        , received{received_}
+        , failures{failures_}
+        , block_for{block_for_}
+    {}
 };
 
 struct mutation_write_failure_exception : public request_failure_exception {
@@ -212,6 +220,11 @@ struct read_failure_exception : public request_failure_exception {
 
     read_failure_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_) noexcept
         : request_failure_exception{exception_code::READ_FAILURE, ks, cf, consistency_, received_, failures_, block_for_}
+        , data_present{data_present_}
+    { }
+
+    read_failure_exception(const sstring& msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_) noexcept
+        : request_failure_exception{exception_code::READ_FAILURE, msg, consistency_, received_, failures_, block_for_}
         , data_present{data_present_}
     { }
 };
