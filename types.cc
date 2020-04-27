@@ -1985,8 +1985,10 @@ struct compare_visitor {
     int32_t operator()(const empty_type_impl&) { return 0; }
     int32_t operator()(const tuple_type_impl& t) { return compare_aux(t, v1, v2); }
     int32_t operator()(const counter_type_impl&) {
-        fail(unimplemented::cause::COUNTERS);
-        return 0;
+        // untouched (empty) counter evaluates as 0
+        const auto a = v1.empty() ? 0 : simple_type_traits<int64_t>::read_nonempty(v1);
+        const auto b = v2.empty() ? 0 : simple_type_traits<int64_t>::read_nonempty(v2);
+        return a == b ? 0 : a < b ? -1 : 1;
     }
     int32_t operator()(const decimal_type_impl& d) {
         if (v1.empty()) {

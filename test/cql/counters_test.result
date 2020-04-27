@@ -1,0 +1,190 @@
+CREATE TABLE ks.tbl_cnt (pk int PRIMARY KEY, c1 counter, c2 counter);
+{
+	"status" : "ok"
+}
+
+-- insert some values in one column
+UPDATE ks.tbl_cnt SET c1 = c1+1 WHERE pk = 1;
+{
+	"status" : "ok"
+}
+UPDATE ks.tbl_cnt SET c1 = c1+2 WHERE pk = 2;
+{
+	"status" : "ok"
+}
+UPDATE ks.tbl_cnt SET c1 = c1+3 WHERE pk = 3;
+{
+	"status" : "ok"
+}
+UPDATE ks.tbl_cnt SET c1 = c1+4 WHERE pk = 4;
+{
+	"status" : "ok"
+}
+
+-- test various filtering options on counter column
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 < 3 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"c1" : "1",
+			"pk" : "1"
+		},
+		{
+			"c1" : "2",
+			"pk" : "2"
+		}
+	]
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 < 1 ALLOW FILTERING;
+{
+	"rows" : null
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 <= 3 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"c1" : "1",
+			"pk" : "1"
+		},
+		{
+			"c1" : "2",
+			"pk" : "2"
+		},
+		{
+			"c1" : "3",
+			"pk" : "3"
+		}
+	]
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 > 2 AND pk = 4 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"c1" : "4",
+			"pk" : "4"
+		}
+	]
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 >= 3 and pk = 3 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"c1" : "3",
+			"pk" : "3"
+		}
+	]
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 > 4 ALLOW FILTERING;
+{
+	"rows" : null
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 in (-1, 2, 3) ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"c1" : "2",
+			"pk" : "2"
+		},
+		{
+			"c1" : "3",
+			"pk" : "3"
+		}
+	]
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 = 0 ALLOW FILTERING;
+{
+	"rows" : null
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 = 1 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"c1" : "1",
+			"pk" : "1"
+		}
+	]
+}
+
+-- now filter through untouched counters `c2` - they should appear as NULLs and evaluate as zeros
+SELECT pk, c1, c2 FROM ks.tbl_cnt WHERE c2 = 0 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"c1" : "1",
+			"pk" : "1"
+		},
+		{
+			"c1" : "2",
+			"pk" : "2"
+		},
+		{
+			"c1" : "4",
+			"pk" : "4"
+		},
+		{
+			"c1" : "3",
+			"pk" : "3"
+		}
+	]
+}
+SELECT pk, c2 FROM ks.tbl_cnt WHERE c2 < 0 ALLOW FILTERING;
+{
+	"rows" : null
+}
+SELECT pk, c2 FROM ks.tbl_cnt WHERE c2 > 0 ALLOW FILTERING;
+{
+	"rows" : null
+}
+
+-- delete `c1` and make sure it doesn't appear in filtering results
+DELETE c1 from ks.tbl_cnt WHERE pk = 1;
+{
+	"status" : "ok"
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 = 1 ALLOW FILTERING;
+{
+	"rows" : null
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 <= 1000 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"c1" : "2",
+			"pk" : "2"
+		},
+		{
+			"c1" : "4",
+			"pk" : "4"
+		},
+		{
+			"c1" : "3",
+			"pk" : "3"
+		}
+	]
+}
+SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 > -1000 ALLOW FILTERING;
+{
+	"rows" : 
+	[
+		{
+			"c1" : "2",
+			"pk" : "2"
+		},
+		{
+			"c1" : "4",
+			"pk" : "4"
+		},
+		{
+			"c1" : "3",
+			"pk" : "3"
+		}
+	]
+}
