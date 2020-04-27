@@ -144,10 +144,10 @@ bool schema::has_custom_partitioner() const {
     return _raw._partitioner.get().name() != default_partitioner_name;
 }
 
-::shared_ptr<cql3::column_specification>
+lw_shared_ptr<cql3::column_specification>
 schema::make_column_specification(const column_definition& def) {
     auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
-    return ::make_shared<cql3::column_specification>(_raw._ks_name, _raw._cf_name, std::move(id), def.type);
+    return make_lw_shared<cql3::column_specification>(_raw._ks_name, _raw._cf_name, std::move(id), def.type);
 }
 
 v3_columns::v3_columns(std::vector<column_definition> cols, bool is_dense, bool is_compound)
@@ -194,7 +194,7 @@ v3_columns v3_columns::from_v2_schema(const schema& s) {
     for (column_definition& def : cols) {
         data_type name_type = def.is_static() ? static_column_name_type : utf8_type;
         auto id = ::make_shared<cql3::column_identifier>(def.name(), name_type);
-        def.column_specification = ::make_shared<cql3::column_specification>(s.ks_name(), s.cf_name(), std::move(id), def.type);
+        def.column_specification = make_lw_shared<cql3::column_specification>(s.ks_name(), s.cf_name(), std::move(id), def.type);
     }
 
     return v3_columns(std::move(cols), s.is_dense(), s.is_compound());

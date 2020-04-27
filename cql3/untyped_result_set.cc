@@ -51,11 +51,11 @@ cql3::untyped_result_set_row::untyped_result_set_row(const std::unordered_map<ss
     : _data(data)
 {}
 
-cql3::untyped_result_set_row::untyped_result_set_row(const std::vector<::shared_ptr<column_specification>>& columns, std::vector<bytes_opt> data)
+cql3::untyped_result_set_row::untyped_result_set_row(const std::vector<lw_shared_ptr<column_specification>>& columns, std::vector<bytes_opt> data)
 : _columns(columns)
 , _data([&columns, data = std::move(data)] () mutable {
     std::unordered_map<sstring, bytes_opt> tmp;
-    std::transform(columns.begin(), columns.end(), data.begin(), std::inserter(tmp, tmp.end()), [](::shared_ptr<column_specification> c, bytes_opt& d) {
+    std::transform(columns.begin(), columns.end(), data.begin(), std::inserter(tmp, tmp.end()), [](lw_shared_ptr<column_specification> c, bytes_opt& d) {
        return std::make_pair<sstring, bytes_opt>(c->name->to_string(), std::move(d));
     });
     return tmp;

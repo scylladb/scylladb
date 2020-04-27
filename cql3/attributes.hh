@@ -78,9 +78,9 @@ public:
 
         std::unique_ptr<attributes> prepare(database& db, const sstring& ks_name, const sstring& cf_name) const;
     private:
-        ::shared_ptr<column_specification> timestamp_receiver(const sstring& ks_name, const sstring& cf_name) const;
+        lw_shared_ptr<column_specification> timestamp_receiver(const sstring& ks_name, const sstring& cf_name) const;
 
-        ::shared_ptr<column_specification> time_to_live_receiver(const sstring& ks_name, const sstring& cf_name) const;
+        lw_shared_ptr<column_specification> time_to_live_receiver(const sstring& ks_name, const sstring& cf_name) const;
     };
 };
 

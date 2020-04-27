@@ -30,6 +30,12 @@
 #include "utils/chunked_vector.hh"
 #include "schema_fwd.hh"
 
+namespace cql3 {
+
+class column_specification;
+
+}
+
 class collection_type_impl : public abstract_type {
     static logging::logger _logger;
 public:
@@ -43,7 +49,7 @@ public:
     bool is_multi_cell() const { return _is_multi_cell; }
     virtual data_type name_comparator() const = 0;
     virtual data_type value_comparator() const = 0;
-    shared_ptr<cql3::column_specification> make_collection_receiver(const cql3::column_specification& collection, bool is_key) const;
+    lw_shared_ptr<cql3::column_specification> make_collection_receiver(const cql3::column_specification& collection, bool is_key) const;
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     template <typename BytesViewIterator>

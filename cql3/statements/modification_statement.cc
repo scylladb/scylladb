@@ -408,9 +408,9 @@ modification_statement::build_cas_result_set(seastar::shared_ptr<cql3::metadata>
 
 void modification_statement::build_cas_result_set_metadata() {
 
-    std::vector<shared_ptr<column_specification>> columns;
+    std::vector<lw_shared_ptr<column_specification>> columns;
     // Add the mandatory [applied] column to result set metadata
-    auto applied = seastar::make_shared<cql3::column_specification>(s->ks_name(), s->cf_name(),
+    auto applied = make_lw_shared<cql3::column_specification>(s->ks_name(), s->cf_name(),
             make_shared<cql3::column_identifier>("[applied]", false), boolean_type);
 
     columns.push_back(applied);

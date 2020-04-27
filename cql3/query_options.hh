@@ -245,7 +245,7 @@ public:
         return _cql_config;
     }
 
-    void prepare(const std::vector<::shared_ptr<column_specification>>& specs);
+    void prepare(const std::vector<lw_shared_ptr<column_specification>>& specs);
 private:
     void fill_value_views();
 };

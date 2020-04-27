@@ -51,7 +51,7 @@ column_specification::column_specification(std::string_view ks_name_, std::strin
     { }
 
 
-bool column_specification::all_in_same_table(const std::vector<::shared_ptr<column_specification>>& names)
+bool column_specification::all_in_same_table(const std::vector<lw_shared_ptr<column_specification>>& names)
 {
     assert(!names.empty());
 

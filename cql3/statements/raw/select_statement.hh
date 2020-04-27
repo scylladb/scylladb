@@ -157,7 +157,7 @@ private:
 
     bool contains_alias(const column_identifier& name) const;
 
-    ::shared_ptr<column_specification> limit_receiver(bool per_partition = false);
+    lw_shared_ptr<column_specification> limit_receiver(bool per_partition = false);
 
 #if 0
     public:

@@ -63,7 +63,7 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
     static const sstring virtual_table_name("users");
 
     static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
-        return ::make_shared<column_specification>(
+        return make_lw_shared<column_specification>(
             auth::meta::AUTH_KS,
             virtual_table_name,
             ::make_shared<column_identifier>(name, true),
@@ -71,7 +71,7 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
     };
 
     static thread_local const auto metadata = ::make_shared<cql3::metadata>(
-        std::vector<::shared_ptr<column_specification>>{
+        std::vector<lw_shared_ptr<column_specification>>{
                 make_column_spec("name", utf8_type),
                 make_column_spec("super", boolean_type)});
 

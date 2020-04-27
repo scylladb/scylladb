@@ -370,7 +370,7 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
 {
     assert(dynamic_pointer_cast<constants::literal>(_json_value) || dynamic_pointer_cast<abstract_marker::raw>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
-    auto prepared_json_value = _json_value->prepare(db, "", ::make_shared<column_specification>("", "", json_column_placeholder, utf8_type));
+    auto prepared_json_value = _json_value->prepare(db, "", make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
     prepared_json_value->collect_marker_specification(bound_names);
     auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(bound_names.size(), schema, std::move(attrs), stats, std::move(prepared_json_value), _default_unset);
     prepare_conditions(db, *schema, bound_names, *stmt);

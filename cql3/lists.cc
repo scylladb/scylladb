@@ -30,28 +30,28 @@
 
 namespace cql3 {
 
-shared_ptr<column_specification>
+lw_shared_ptr<column_specification>
 lists::index_spec_of(const column_specification& column) {
-    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("idx({})", *column.name), true), int32_type);
 }
 
-shared_ptr<column_specification>
+lw_shared_ptr<column_specification>
 lists::value_spec_of(const column_specification& column) {
-    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("value({})", *column.name), true),
                 dynamic_pointer_cast<const list_type_impl>(column.type)->get_elements_type());
 }
 
-shared_ptr<column_specification>
+lw_shared_ptr<column_specification>
 lists::uuid_index_spec_of(const column_specification& column) {
-    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("uuid_idx({})", *column.name), true), uuid_type);
 }
 
 
 shared_ptr<term>
-lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
+lists::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, *receiver);
 
     // In Cassandra, an empty (unfrozen) map/set/list is equivalent to the column being null. In
@@ -101,7 +101,7 @@ lists::literal::validate_assignable_to(database& db, const sstring keyspace, con
 }
 
 assignment_testable::test_result
-lists::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
+lists::literal::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     if (!dynamic_pointer_cast<const list_type_impl>(receiver->type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }

@@ -53,7 +53,7 @@ using namespace cql3::restrictions;
 namespace cql3 {
 
 ::shared_ptr<term>
-single_column_relation::to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
+single_column_relation::to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                                 const term::raw& raw,
                                 database& db,
                                 const sstring& keyspace,
@@ -107,7 +107,7 @@ single_column_relation::new_LIKE_restriction(
     return ::make_shared<single_column_restriction::LIKE>(column_def, std::move(term));
 }
 
-std::vector<::shared_ptr<column_specification>>
+std::vector<lw_shared_ptr<column_specification>>
 single_column_relation::to_receivers(const schema& schema, const column_definition& column_def) const
 {
     using namespace statements::request_validations;

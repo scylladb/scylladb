@@ -141,12 +141,12 @@ void functions::remove_function(const function_name& name, const std::vector<dat
     with_udf_iter(name, arg_types, [] (functions::declared_t::iterator i) { _declared.erase(i); });
 }
 
-shared_ptr<column_specification>
+lw_shared_ptr<column_specification>
 functions::make_arg_spec(const sstring& receiver_ks, const sstring& receiver_cf,
         const function& fun, size_t i) {
     auto&& name = boost::lexical_cast<std::string>(fun.name());
     std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-    return ::make_shared<column_specification>(receiver_ks,
+    return make_lw_shared<column_specification>(receiver_ks,
                                    receiver_cf,
                                    ::make_shared<column_identifier>(format("arg{:d}({})", i, name), true),
                                    fun.arg_types()[i]);
@@ -187,7 +187,7 @@ functions::get(database& db,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
         const sstring& receiver_cf,
-        shared_ptr<column_specification> receiver) {
+        lw_shared_ptr<column_specification> receiver) {
 
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
@@ -507,7 +507,7 @@ function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, c
 }
 
 ::shared_ptr<term>
-function_call::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const {
+function_call::raw::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     std::vector<shared_ptr<assignment_testable>> args;
     args.reserve(_terms.size());
     std::transform(_terms.begin(), _terms.end(), std::back_inserter(args),
@@ -572,7 +572,7 @@ function_call::raw::execute(scalar_function& fun, std::vector<shared_ptr<term>> 
 }
 
 assignment_testable::test_result
-function_call::raw::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
+function_call::raw::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     // Note: Functions.get() will return null if the function doesn't exist, or throw is no function matching
     // the arguments can be found. We may get one of those if an undefined/wrong function is used as argument
     // of another, existing, function. In that case, we return true here because we'll throw a proper exception

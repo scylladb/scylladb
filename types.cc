@@ -502,19 +502,19 @@ empty_type_impl::empty_type_impl()
 logging::logger collection_type_impl::_logger("collection_type_impl");
 const size_t collection_type_impl::max_elements;
 
-shared_ptr<cql3::column_specification> collection_type_impl::make_collection_receiver(
+lw_shared_ptr<cql3::column_specification> collection_type_impl::make_collection_receiver(
         const cql3::column_specification& collection, bool is_key) const {
     struct visitor {
         const cql3::column_specification& collection;
         bool is_key;
-        shared_ptr<cql3::column_specification> operator()(const abstract_type&) { abort(); }
-        shared_ptr<cql3::column_specification> operator()(const list_type_impl&) {
+        lw_shared_ptr<cql3::column_specification> operator()(const abstract_type&) { abort(); }
+        lw_shared_ptr<cql3::column_specification> operator()(const list_type_impl&) {
             return cql3::lists::value_spec_of(collection);
         }
-        shared_ptr<cql3::column_specification> operator()(const map_type_impl&) {
+        lw_shared_ptr<cql3::column_specification> operator()(const map_type_impl&) {
             return is_key ? cql3::maps::key_spec_of(collection) : cql3::maps::value_spec_of(collection);
         }
-        shared_ptr<cql3::column_specification> operator()(const set_type_impl&) {
+        lw_shared_ptr<cql3::column_specification> operator()(const set_type_impl&) {
             return cql3::sets::value_spec_of(collection);
         }
     };

@@ -51,22 +51,22 @@
 
 namespace cql3 {
 
-shared_ptr<column_specification>
+lw_shared_ptr<column_specification>
 maps::key_spec_of(const column_specification& column) {
-    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
                 ::make_shared<column_identifier>(format("key({})", *column.name), true),
                  dynamic_pointer_cast<const map_type_impl>(column.type)->get_keys_type());
 }
 
-shared_ptr<column_specification>
+lw_shared_ptr<column_specification>
 maps::value_spec_of(const column_specification& column) {
-    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
                 ::make_shared<column_identifier>(format("value({})", *column.name), true),
                  dynamic_pointer_cast<const map_type_impl>(column.type)->get_values_type());
 }
 
 ::shared_ptr<term>
-maps::literal::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const {
+maps::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, *receiver);
 
     auto key_spec = maps::key_spec_of(*receiver);
@@ -114,7 +114,7 @@ maps::literal::validate_assignable_to(database& db, const sstring& keyspace, con
 }
 
 assignment_testable::test_result
-maps::literal::test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const {
+maps::literal::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     if (!dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }

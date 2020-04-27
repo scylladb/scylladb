@@ -400,9 +400,9 @@ void batch_statement::build_cas_result_set_metadata() {
     _columns_of_cas_result_set.resize(schema.all_columns_count());
 
     // Add the mandatory [applied] column to result set metadata
-    std::vector<shared_ptr<column_specification>> columns;
+    std::vector<lw_shared_ptr<column_specification>> columns;
 
-    auto applied = ::make_shared<cql3::column_specification>(schema.ks_name(), schema.cf_name(),
+    auto applied = make_lw_shared<cql3::column_specification>(schema.ks_name(), schema.cf_name(),
             ::make_shared<cql3::column_identifier>("[applied]", false), boolean_type);
     columns.push_back(applied);
 

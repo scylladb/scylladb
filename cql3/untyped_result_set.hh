@@ -54,11 +54,11 @@ namespace cql3 {
 
 class untyped_result_set_row {
 private:
-    const std::vector<::shared_ptr<column_specification>> _columns;
+    const std::vector<lw_shared_ptr<column_specification>> _columns;
     const std::unordered_map<sstring, bytes_opt> _data;
 public:
     untyped_result_set_row(const std::unordered_map<sstring, bytes_opt>&);
-    untyped_result_set_row(const std::vector<::shared_ptr<column_specification>>&, std::vector<bytes_opt>);
+    untyped_result_set_row(const std::vector<lw_shared_ptr<column_specification>>&, std::vector<bytes_opt>);
     untyped_result_set_row(untyped_result_set_row&&) = default;
     untyped_result_set_row(const untyped_result_set_row&) = delete;
 
@@ -144,7 +144,7 @@ public:
         get_set_data<V>(name, std::inserter(res, res.end()), valtype);
         return res;
     }
-    const std::vector<::shared_ptr<column_specification>>& get_columns() const {
+    const std::vector<lw_shared_ptr<column_specification>>& get_columns() const {
         return _columns;
     }
 };

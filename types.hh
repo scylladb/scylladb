@@ -64,7 +64,6 @@ class multiprecision_int;
 namespace cql3 {
 
 class cql3_type;
-class column_specification;
 
 }
 

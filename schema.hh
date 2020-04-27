@@ -315,7 +315,7 @@ public:
     ordinal_column_id ordinal_id;
 
     column_kind kind;
-    ::shared_ptr<cql3::column_specification> column_specification;
+    lw_shared_ptr<cql3::column_specification> column_specification;
 
     // NOTICE(sarna): This copy constructor is hand-written instead of default,
     // because it involves deep copying of the computation object.
@@ -685,7 +685,7 @@ public:
         data_type type;
     };
 private:
-    ::shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
+    lw_shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
     void rebuild();
     schema(const raw_schema&, std::optional<raw_view_info>);
 public:

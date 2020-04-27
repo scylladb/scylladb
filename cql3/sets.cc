@@ -27,15 +27,15 @@
 
 namespace cql3 {
 
-shared_ptr<column_specification>
+lw_shared_ptr<column_specification>
 sets::value_spec_of(const column_specification& column) {
-    return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+    return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("value({})", *column.name), true),
             dynamic_pointer_cast<const set_type_impl>(column.type)->get_elements_type());
 }
 
 shared_ptr<term>
-sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
+sets::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, *receiver);
 
     if (_elements.empty()) {
@@ -105,7 +105,7 @@ sets::literal::validate_assignable_to(database& db, const sstring& keyspace, con
 }
 
 assignment_testable::test_result
-sets::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
+sets::literal::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     if (!dynamic_pointer_cast<const set_type_impl>(receiver->type)) {
         // We've parsed empty maps as a set literal to break the ambiguity so handle that case now
         if (dynamic_pointer_cast<const map_type_impl>(receiver->type) && _elements.empty()) {
@@ -224,7 +224,7 @@ sets::delayed_value::bind(const query_options& options) {
 }
 
 
-sets::marker::marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+sets::marker::marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
     : abstract_marker{bind_index, std::move(receiver)} {
         assert(dynamic_cast<const set_type_impl*>(_receiver->type.get()));
     }

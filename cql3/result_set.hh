@@ -74,15 +74,15 @@ public:
     // used to include columns in the resultSet that we need to do post-query re-orderings
     // (SelectStatement.orderResults) but that shouldn't be sent to the user as they haven't been requested
     // (CASSANDRA-4911). So the serialization code will exclude any columns in name whose index is >= columnCount.
-        std::vector<::shared_ptr<column_specification>> _names;
+        std::vector<lw_shared_ptr<column_specification>> _names;
         uint32_t _column_count;
 
-        column_info(std::vector<::shared_ptr<column_specification>> names, uint32_t column_count)
+        column_info(std::vector<lw_shared_ptr<column_specification>> names, uint32_t column_count)
             : _names(std::move(names))
             , _column_count(column_count)
         { }
 
-        explicit column_info(std::vector<::shared_ptr<column_specification>> names)
+        explicit column_info(std::vector<lw_shared_ptr<column_specification>> names)
             : _names(std::move(names))
             , _column_count(_names.size())
         { }
@@ -95,15 +95,15 @@ private:
     lw_shared_ptr<const service::pager::paging_state> _paging_state;
 
 public:
-    metadata(std::vector<::shared_ptr<column_specification>> names_);
+    metadata(std::vector<lw_shared_ptr<column_specification>> names_);
 
-    metadata(flag_enum_set flags, std::vector<::shared_ptr<column_specification>> names_, uint32_t column_count,
+    metadata(flag_enum_set flags, std::vector<lw_shared_ptr<column_specification>> names_, uint32_t column_count,
             lw_shared_ptr<const service::pager::paging_state> paging_state);
 
     // The maximum number of values that the ResultSet can hold. This can be bigger than columnCount due to CASSANDRA-4911
     uint32_t value_count() const;
 
-    void add_non_serialized_column(::shared_ptr<column_specification> name);
+    void add_non_serialized_column(lw_shared_ptr<column_specification> name);
 
 private:
     bool all_in_same_cf() const;
@@ -120,7 +120,7 @@ public:
 
     lw_shared_ptr<const service::pager::paging_state> paging_state() const;
 
-    const std::vector<::shared_ptr<column_specification>>& get_names() const {
+    const std::vector<lw_shared_ptr<column_specification>>& get_names() const {
         return _column_info->_names;
     }
 };
@@ -139,14 +139,14 @@ public:
     using flag_enum_set = enum_set<flag_enum>;
 private:
     flag_enum_set _flags;
-    std::vector<::shared_ptr<column_specification>> _names;
+    std::vector<lw_shared_ptr<column_specification>> _names;
     std::vector<uint16_t> _partition_key_bind_indices;
 public:
-    prepared_metadata(const std::vector<::shared_ptr<column_specification>>& names,
+    prepared_metadata(const std::vector<lw_shared_ptr<column_specification>>& names,
                       const std::vector<uint16_t>& partition_key_bind_indices);
 
     flag_enum_set flags() const;
-    const std::vector<::shared_ptr<column_specification>>& names() const;
+    const std::vector<lw_shared_ptr<column_specification>>& names() const;
     const std::vector<uint16_t>& partition_key_bind_indices() const;
 };
 
@@ -167,7 +167,7 @@ class result_set {
 
     friend class result;
 public:
-    result_set(std::vector<::shared_ptr<column_specification>> metadata_);
+    result_set(std::vector<lw_shared_ptr<column_specification>> metadata_);
 
     result_set(::shared_ptr<metadata> metadata);
 

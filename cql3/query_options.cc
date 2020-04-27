@@ -189,7 +189,7 @@ bytes_view query_options::linearize(fragmented_temporary_buffer::view view) cons
     }
 }
 
-void query_options::prepare(const std::vector<::shared_ptr<column_specification>>& specs)
+void query_options::prepare(const std::vector<lw_shared_ptr<column_specification>>& specs)
 {
     if (!_names) {
         return;

@@ -297,7 +297,7 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
         throw exceptions::invalid_request_exception("Conditions on counters are not supported");
     }
     shared_ptr<term> collection_element_term;
-    shared_ptr<column_specification> value_spec = receiver.column_specification;
+    lw_shared_ptr<column_specification> value_spec = receiver.column_specification;
 
     if (_collection_element) {
         if (!receiver.type->is_collection()) {
@@ -306,7 +306,7 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
         }
         // Pass  a correct type specification to the collection_element->prepare(), so that it can
         // later be used to validate the parameter type is compatible with receiver type.
-        shared_ptr<column_specification> element_spec;
+        lw_shared_ptr<column_specification> element_spec;
         auto ctype = static_cast<const collection_type_impl*>(receiver.type.get());
         const column_specification& recv_column_spec = *receiver.column_specification;
         if (ctype->get_kind() == abstract_type::kind::list) {

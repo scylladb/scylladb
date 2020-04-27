@@ -249,7 +249,7 @@ protected:
      * @return the <code>Term</code> corresponding to the specified <code>Raw</code>
      * @throws InvalidRequestException if the <code>Raw</code> term is not valid
      */
-    virtual ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
+    virtual ::shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                                        const term::raw& raw,
                                        database& db,
                                        const sstring& keyspace,
@@ -265,7 +265,7 @@ protected:
      * @return the <code>Term</code>s corresponding to the specified <code>Raw</code> terms
      * @throws InvalidRequestException if the <code>Raw</code> terms are not valid
      */
-    std::vector<::shared_ptr<term>> to_terms(const std::vector<::shared_ptr<column_specification>>& receivers,
+    std::vector<::shared_ptr<term>> to_terms(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                                              const std::vector<::shared_ptr<term::raw>>& raws,
                                              database& db,
                                              const sstring& keyspace,

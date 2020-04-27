@@ -107,7 +107,7 @@ public:
      */
     virtual void reset() = 0;
 
-    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override {
+    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
         auto t1 = receiver->type->underlying_type();
         auto t2 = get_type()->underlying_type();
         // We want columns of `counter_type' to be served by underlying type's overloads
@@ -142,7 +142,7 @@ public:
      * @param schema the column family schema
      * @return a column specification
      */
-    ::shared_ptr<column_specification> get_column_specification(const schema& schema) const;
+    lw_shared_ptr<column_specification> get_column_specification(const schema& schema) const;
 
     /**
      * Creates a new <code>selector</code> instance.

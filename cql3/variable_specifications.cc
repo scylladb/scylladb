@@ -55,11 +55,11 @@ size_t variable_specifications::size() const {
     return _variable_names.size();
 }
 
-std::vector<::shared_ptr<column_specification>> variable_specifications::get_specifications() const & {
-    return std::vector<::shared_ptr<column_specification>>(_specs.begin(), _specs.end());
+std::vector<lw_shared_ptr<column_specification>> variable_specifications::get_specifications() const & {
+    return std::vector<lw_shared_ptr<column_specification>>(_specs.begin(), _specs.end());
 }
 
-std::vector<::shared_ptr<column_specification>> variable_specifications::get_specifications() && {
+std::vector<lw_shared_ptr<column_specification>> variable_specifications::get_specifications() && {
     return std::move(_specs);
 }
 
@@ -83,12 +83,12 @@ std::vector<uint16_t> variable_specifications::get_partition_key_bind_indexes(co
     return partition_key_positions;
 }
 
-void variable_specifications::add(int32_t bind_index, ::shared_ptr<column_specification> spec) {
+void variable_specifications::add(int32_t bind_index, lw_shared_ptr<column_specification> spec) {
     _target_columns[bind_index] = spec;
     auto name = _variable_names[bind_index];
     // Use the user name, if there is one
     if (name) {
-        spec = ::make_shared<column_specification>(spec->ks_name, spec->cf_name, name, spec->type);
+        spec = make_lw_shared<column_specification>(spec->ks_name, spec->cf_name, name, spec->type);
     }
     _specs[bind_index] = spec;
 }

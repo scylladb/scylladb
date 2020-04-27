@@ -110,14 +110,14 @@ cql3::statements::list_permissions_statement::execute(
         service::query_state& state,
         const query_options& options) const {
     static auto make_column = [](sstring name) {
-        return ::make_shared<column_specification>(
+        return make_lw_shared<column_specification>(
                 auth::meta::AUTH_KS,
                 "permissions",
                 ::make_shared<column_identifier>(std::move(name), true),
                 utf8_type);
     };
 
-    static thread_local const std::vector<::shared_ptr<column_specification>> metadata({
+    static thread_local const std::vector<lw_shared_ptr<column_specification>> metadata({
         make_column("role"), make_column("username"), make_column("resource"), make_column("permission")
     });
 

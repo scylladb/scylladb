@@ -26,9 +26,9 @@
 
 namespace cql3 {
 
-shared_ptr<column_specification>
+lw_shared_ptr<column_specification>
 tuples::component_spec_of(const column_specification& column, size_t component) {
-    return ::make_shared<column_specification>(
+    return make_lw_shared<column_specification>(
             column.ks_name,
             column.cf_name,
             ::make_shared<column_identifier>(format("{}[{:d}]", column.name, component), true),
@@ -36,7 +36,7 @@ tuples::component_spec_of(const column_specification& column, size_t component) 
 }
 
 shared_ptr<term>
-tuples::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
+tuples::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, *receiver);
     std::vector<shared_ptr<term>> values;
     bool all_terminal = true;
@@ -56,7 +56,7 @@ tuples::literal::prepare(database& db, const sstring& keyspace, shared_ptr<colum
 }
 
 shared_ptr<term>
-tuples::literal::prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) const {
+tuples::literal::prepare(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receivers) const {
     if (_elements.size() != receivers.size()) {
         throw exceptions::invalid_request_exception(format("Expected {:d} elements in value tuple, but got {:d}: {}", receivers.size(), _elements.size(), *this));
     }
@@ -102,8 +102,8 @@ tuples::in_value::from_serialized(const fragmented_temporary_buffer::view& value
     }
 }
 
-::shared_ptr<column_specification>
-tuples::in_raw::make_in_receiver(const std::vector<shared_ptr<column_specification>>& receivers) {
+lw_shared_ptr<column_specification>
+tuples::in_raw::make_in_receiver(const std::vector<lw_shared_ptr<column_specification>>& receivers) {
     std::vector<data_type> types;
     types.reserve(receivers.size());
     sstring in_name = "in(";
@@ -123,10 +123,10 @@ tuples::in_raw::make_in_receiver(const std::vector<shared_ptr<column_specificati
 
     auto identifier = ::make_shared<column_identifier>(in_name, true);
     auto type = tuple_type_impl::get_instance(types);
-    return ::make_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
+    return make_lw_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
 }
 
-tuples::in_marker::in_marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+tuples::in_marker::in_marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
     : abstract_marker(bind_index, std::move(receiver))
 {
     assert(dynamic_pointer_cast<const list_type_impl>(_receiver->type));

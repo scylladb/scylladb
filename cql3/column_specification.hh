@@ -45,7 +45,6 @@
 
 namespace cql3 {
 
-class column_specification;
 class column_identifier;
 
 class column_specification final {
@@ -63,15 +62,15 @@ public:
      * @param alias the column alias
      * @return a new <code>ColumnSpecification</code> for the same column but with the specified alias.
      */
-    ::shared_ptr<column_specification> with_alias(::shared_ptr<column_identifier> alias) {
-        return ::make_shared<column_specification>(ks_name, cf_name, alias, type);
+    lw_shared_ptr<column_specification> with_alias(::shared_ptr<column_identifier> alias) {
+        return make_lw_shared<column_specification>(ks_name, cf_name, alias, type);
     }
     
     bool is_reversed_type() const {
         return ::dynamic_pointer_cast<const reversed_type_impl>(type) != nullptr;
     }
 
-    static bool all_in_same_table(const std::vector<::shared_ptr<column_specification>>& names);
+    static bool all_in_same_table(const std::vector<lw_shared_ptr<column_specification>>& names);
 };
 
 }

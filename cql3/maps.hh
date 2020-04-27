@@ -56,8 +56,8 @@ class maps {
 private:
     maps() = delete;
 public:
-    static shared_ptr<column_specification> key_spec_of(const column_specification& column);
-    static shared_ptr<column_specification> value_spec_of(const column_specification& column);
+    static lw_shared_ptr<column_specification> key_spec_of(const column_specification& column);
+    static lw_shared_ptr<column_specification> value_spec_of(const column_specification& column);
 
     class literal : public term::raw {
     public:
@@ -66,11 +66,11 @@ public:
         literal(const std::vector<std::pair<::shared_ptr<term::raw>, ::shared_ptr<term::raw>>>& entries_)
             : entries{entries_}
         { }
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override;
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
     public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override;
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
         virtual sstring to_string() const override;
     };
 
@@ -104,7 +104,7 @@ public:
 
     class marker : public abstract_marker {
     public:
-        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+        marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
             : abstract_marker{bind_index, std::move(receiver)}
         { }
         virtual ::shared_ptr<terminal> bind(const query_options& options) override;

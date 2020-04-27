@@ -132,7 +132,7 @@ public:
          * case this RawTerm describe a list index or a map key, etc...
          * @return the prepared term.
          */
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const = 0;
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const = 0;
 
         virtual sstring to_string() const = 0;
 
@@ -147,7 +147,7 @@ public:
 
     class multi_column_raw : public virtual raw {
     public:
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receiver) const = 0;
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<lw_shared_ptr<column_specification>>& receiver) const = 0;
     };
 };
 

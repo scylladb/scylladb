@@ -52,8 +52,8 @@ namespace cql3 {
 class variable_specifications final {
 private:
     std::vector<shared_ptr<column_identifier>> _variable_names;
-    std::vector<::shared_ptr<column_specification>> _specs;
-    std::vector<::shared_ptr<column_specification>> _target_columns;
+    std::vector<lw_shared_ptr<column_specification>> _specs;
+    std::vector<lw_shared_ptr<column_specification>> _target_columns;
 
 public:
 
@@ -68,13 +68,13 @@ public:
 
     size_t size() const;
 
-    std::vector<::shared_ptr<column_specification>> get_specifications() const &;
+    std::vector<lw_shared_ptr<column_specification>> get_specifications() const &;
 
-    std::vector<::shared_ptr<column_specification>> get_specifications() &&;
+    std::vector<lw_shared_ptr<column_specification>> get_specifications() &&;
 
     std::vector<uint16_t> get_partition_key_bind_indexes(const schema& schema) const;
 
-    void add(int32_t bind_index, ::shared_ptr<column_specification> spec);
+    void add(int32_t bind_index, lw_shared_ptr<column_specification> spec);
 
     void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bound_names);
 };

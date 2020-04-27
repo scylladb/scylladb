@@ -53,7 +53,7 @@ std::vector<const column_definition*> cql3::token_relation::get_column_definitio
     return res;
 }
 
-std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_receivers(
+std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_receivers(
         const schema& schema,
         const std::vector<const column_definition*>& column_defs) const {
     auto pk = schema.partition_key_columns();
@@ -74,7 +74,7 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
                         std::to_string(column_defs)));
     }
     //auto* c = column_defs.front();
-    return {::make_shared<column_specification>(schema.ks_name(), schema.cf_name(),
+    return {make_lw_shared<column_specification>(schema.ks_name(), schema.cf_name(),
                 ::make_shared<column_identifier>("partition key token", true),
                 dht::token::get_token_validator())};
 }
@@ -126,7 +126,7 @@ sstring cql3::token_relation::to_string() const {
 }
 
 ::shared_ptr<cql3::term> cql3::token_relation::to_term(
-        const std::vector<::shared_ptr<column_specification>>& receivers,
+        const std::vector<lw_shared_ptr<column_specification>>& receivers,
         const term::raw& raw, database& db, const sstring& keyspace,
         variable_specifications& bound_names) const {
     auto term = raw.prepare(db, keyspace, receivers.front());

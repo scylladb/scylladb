@@ -43,12 +43,12 @@
 
 namespace cql3 {
 
-metadata::metadata(std::vector<::shared_ptr<column_specification>> names_)
+metadata::metadata(std::vector<lw_shared_ptr<column_specification>> names_)
         : _flags(flag_enum_set())
         , _column_info(make_lw_shared<column_info>(std::move(names_)))
 { }
 
-metadata::metadata(flag_enum_set flags, std::vector<::shared_ptr<column_specification>> names_, uint32_t column_count,
+metadata::metadata(flag_enum_set flags, std::vector<lw_shared_ptr<column_specification>> names_, uint32_t column_count,
         lw_shared_ptr<const service::pager::paging_state> paging_state)
     : _flags(flags)
     , _column_info(make_lw_shared<column_info>(std::move(names_), column_count))
@@ -60,7 +60,7 @@ uint32_t metadata::value_count() const {
     return _flags.contains<flag::NO_METADATA>() ? _column_info->_column_count : _column_info->_names.size();
 }
 
-void metadata::add_non_serialized_column(::shared_ptr<column_specification> name) {
+void metadata::add_non_serialized_column(lw_shared_ptr<column_specification> name) {
     // See comment above. Because columnCount doesn't account the newly added name, it
     // won't be serialized.
     _column_info->_names.emplace_back(std::move(name));
@@ -101,7 +101,7 @@ lw_shared_ptr<const service::pager::paging_state> metadata::paging_state() const
     return _paging_state;
 }
 
-prepared_metadata::prepared_metadata(const std::vector<::shared_ptr<column_specification>>& names,
+prepared_metadata::prepared_metadata(const std::vector<lw_shared_ptr<column_specification>>& names,
                                      const std::vector<uint16_t>& partition_key_bind_indices)
     : _names{names}
     , _partition_key_bind_indices{partition_key_bind_indices}
@@ -115,7 +115,7 @@ prepared_metadata::flag_enum_set prepared_metadata::flags() const {
     return _flags;
 }
 
-const std::vector<::shared_ptr<column_specification>>& prepared_metadata::names() const {
+const std::vector<lw_shared_ptr<column_specification>>& prepared_metadata::names() const {
     return _names;
 }
 
@@ -123,7 +123,7 @@ const std::vector<uint16_t>& prepared_metadata::partition_key_bind_indices() con
     return _partition_key_bind_indices;
 }
 
-result_set::result_set(std::vector<::shared_ptr<column_specification>> metadata_)
+result_set::result_set(std::vector<lw_shared_ptr<column_specification>> metadata_)
     : _metadata(::make_shared<metadata>(std::move(metadata_)))
 { }
 
@@ -179,7 +179,7 @@ const std::deque<std::vector<bytes_opt>>& result_set::rows() const {
 shared_ptr<const cql3::metadata>
 make_empty_metadata() {
     static thread_local shared_ptr<const metadata> empty_metadata_cache = [] {
-        auto result = ::make_shared<metadata>(std::vector<::shared_ptr<cql3::column_specification>>{});
+        auto result = ::make_shared<metadata>(std::vector<lw_shared_ptr<cql3::column_specification>>{});
         result->set_skip_metadata();
         return result;
     }();

@@ -56,7 +56,7 @@ namespace cql3 {
 class sets {
     sets() = delete;
 public:
-    static shared_ptr<column_specification> value_spec_of(const column_specification& column);
+    static lw_shared_ptr<column_specification> value_spec_of(const column_specification& column);
 
     class literal : public term::raw {
         std::vector<shared_ptr<term::raw>> _elements;
@@ -64,10 +64,10 @@ public:
         explicit literal(std::vector<shared_ptr<term::raw>> elements)
                 : _elements(std::move(elements)) {
         }
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override;
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
         void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
         assignment_testable::test_result
-        test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const;
+        test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const;
         virtual sstring to_string() const override;
     };
 
@@ -100,7 +100,7 @@ public:
 
     class marker : public abstract_marker {
     public:
-        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver);
+        marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver);
         virtual ::shared_ptr<terminal> bind(const query_options& options) override;
     };
 

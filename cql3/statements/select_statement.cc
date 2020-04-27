@@ -1584,9 +1584,9 @@ bool select_statement::contains_alias(const column_identifier& name) const {
     });
 }
 
-::shared_ptr<column_specification> select_statement::limit_receiver(bool per_partition) {
+lw_shared_ptr<column_specification> select_statement::limit_receiver(bool per_partition) {
     sstring name = per_partition ? "[per_partition_limit]" : "[limit]";
-    return ::make_shared<column_specification>(keyspace(), column_family(), ::make_shared<column_identifier>(name, true),
+    return make_lw_shared<column_specification>(keyspace(), column_family(), ::make_shared<column_identifier>(name, true),
         int32_type);
 }
 

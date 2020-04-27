@@ -140,7 +140,7 @@ protected:
     virtual shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
                                                                      variable_specifications& bound_names) override {
         auto rs = receivers(db, *schema);
-        std::vector<::shared_ptr<column_specification>> col_specs(rs.size());
+        std::vector<lw_shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
@@ -151,7 +151,7 @@ protected:
     virtual shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
                                                                      variable_specifications& bound_names) override {
         auto rs = receivers(db, *schema);
-        std::vector<::shared_ptr<column_specification>> col_specs(rs.size());
+        std::vector<lw_shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
@@ -175,7 +175,7 @@ protected:
                                                                         variable_specifications& bound_names,
                                                                         statements::bound bound, bool inclusive) override {
         auto rs = receivers(db, *schema);
-        std::vector<::shared_ptr<column_specification>> col_specs(rs.size());
+        std::vector<lw_shared_ptr<column_specification>> col_specs(rs.size());
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
@@ -200,7 +200,7 @@ protected:
         return ::make_shared(multi_column_relation(std::move(new_entities), _relation_type, _values_or_marker, _in_values, _in_marker));
     }
 
-    virtual shared_ptr<term> to_term(const std::vector<shared_ptr<column_specification>>& receivers,
+    virtual shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                                      const term::raw& raw, database& db, const sstring& keyspace,
                                      variable_specifications& bound_names) const override {
         const auto& as_multi_column_raw = dynamic_cast<const term::multi_column_raw&>(raw);

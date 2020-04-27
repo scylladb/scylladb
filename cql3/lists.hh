@@ -54,9 +54,9 @@ namespace cql3 {
 class lists {
     lists() = delete;
 public:
-    static shared_ptr<column_specification> index_spec_of(const column_specification&);
-    static shared_ptr<column_specification> value_spec_of(const column_specification&);
-    static shared_ptr<column_specification> uuid_index_spec_of(const column_specification&);
+    static lw_shared_ptr<column_specification> index_spec_of(const column_specification&);
+    static lw_shared_ptr<column_specification> value_spec_of(const column_specification&);
+    static lw_shared_ptr<column_specification> uuid_index_spec_of(const column_specification&);
 
     class literal : public term::raw {
         const std::vector<shared_ptr<term::raw>> _elements;
@@ -64,11 +64,11 @@ public:
         explicit literal(std::vector<shared_ptr<term::raw>> elements)
             : _elements(std::move(elements)) {
         }
-        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override;
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
     private:
         void validate_assignable_to(database& db, const sstring keyspace, const column_specification& receiver) const;
     public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const override;
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
         virtual sstring to_string() const override;
     };
 
@@ -113,7 +113,7 @@ public:
      */
     class marker : public abstract_marker {
     public:
-        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+        marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
             : abstract_marker{bind_index, std::move(receiver)}
         { }
         virtual ::shared_ptr<terminal> bind(const query_options& options) override;

@@ -1746,7 +1746,7 @@ void cql_server::response::write(const cql3::metadata& m, bool no_metadata) {
     }
 
     for (uint32_t i = 0; i < m.column_count(); ++i, ++names_i) {
-        ::shared_ptr<cql3::column_specification> name = *names_i;
+        lw_shared_ptr<cql3::column_specification> name = *names_i;
         if (!global_tables_spec) {
             write_string(name->ks_name);
             write_string(name->cf_name);

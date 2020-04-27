@@ -117,7 +117,7 @@ public:
     }
 
 protected:
-    virtual ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
+    virtual ::shared_ptr<term> to_term(const std::vector<lw_shared_ptr<column_specification>>& receivers,
                           const term::raw& raw, database& db, const sstring& keyspace,
                           variable_specifications& bound_names) const override;
 
@@ -202,9 +202,9 @@ private:
      * @return the receivers for the specified relation.
      * @throws exceptions::invalid_request_exception if the relation is invalid
      */
-    std::vector<::shared_ptr<column_specification>> to_receivers(const schema& schema, const column_definition& column_def) const;
+    std::vector<lw_shared_ptr<column_specification>> to_receivers(const schema& schema, const column_definition& column_def) const;
 
-    static shared_ptr<column_specification> make_collection_receiver(shared_ptr<column_specification> receiver, bool for_key) {
+    static lw_shared_ptr<column_specification> make_collection_receiver(lw_shared_ptr<column_specification> receiver, bool for_key) {
         return static_cast<const collection_type_impl*>(receiver->type.get())->make_collection_receiver(*receiver, for_key);
     }
 

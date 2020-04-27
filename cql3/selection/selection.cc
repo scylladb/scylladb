@@ -56,7 +56,7 @@ namespace selection {
 
 selection::selection(schema_ptr schema,
     std::vector<const column_definition*> columns,
-    std::vector<::shared_ptr<column_specification>> metadata_,
+    std::vector<lw_shared_ptr<column_specification>> metadata_,
     bool collect_timestamps,
     bool collect_TTLs,
     trivial is_trivial)
@@ -92,7 +92,7 @@ private:
     const bool _is_wildcard;
 public:
     static ::shared_ptr<simple_selection> make(schema_ptr schema, std::vector<const column_definition*> columns, bool is_wildcard) {
-        std::vector<::shared_ptr<column_specification>> metadata;
+        std::vector<lw_shared_ptr<column_specification>> metadata;
         metadata.reserve(columns.size());
         for (auto&& col : columns) {
             metadata.emplace_back(col->column_specification);
@@ -106,7 +106,7 @@ public:
      * get much duplicate in practice, it's more efficient not to bother.
      */
     simple_selection(schema_ptr schema, std::vector<const column_definition*> columns,
-        std::vector<::shared_ptr<column_specification>> metadata, bool is_wildcard)
+        std::vector<lw_shared_ptr<column_specification>> metadata, bool is_wildcard)
             : selection(schema, std::move(columns), std::move(metadata), false, false, trivial::yes)
             , _is_wildcard(is_wildcard)
     { }
@@ -155,7 +155,7 @@ private:
     ::shared_ptr<selector_factories> _factories;
 public:
     selection_with_processing(schema_ptr schema, std::vector<const column_definition*> columns,
-            std::vector<::shared_ptr<column_specification>> metadata, ::shared_ptr<selector_factories> factories)
+            std::vector<lw_shared_ptr<column_specification>> metadata, ::shared_ptr<selector_factories> factories)
         : selection(schema, std::move(columns), std::move(metadata),
             factories->contains_write_time_selector_factory(),
             factories->contains_ttl_selector_factory())
@@ -264,14 +264,14 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     }
 }
 
-std::vector<::shared_ptr<column_specification>>
+std::vector<lw_shared_ptr<column_specification>>
 selection::collect_metadata(const schema& schema, const std::vector<::shared_ptr<raw_selector>>& raw_selectors,
         const selector_factories& factories) {
-    std::vector<::shared_ptr<column_specification>> r;
+    std::vector<lw_shared_ptr<column_specification>> r;
     r.reserve(raw_selectors.size());
     auto i = raw_selectors.begin();
     for (auto&& factory : factories) {
-        ::shared_ptr<column_specification> col_spec = factory->get_column_specification(schema);
+        lw_shared_ptr<column_specification> col_spec = factory->get_column_specification(schema);
         ::shared_ptr<column_identifier> alias = (*i++)->alias;
         r.push_back(alias ? col_spec->with_alias(alias) : col_spec);
     }

@@ -51,11 +51,11 @@
 
 namespace cql3 {
 
-shared_ptr<column_specification> user_types::field_spec_of(const column_specification& column, size_t field) {
+lw_shared_ptr<column_specification> user_types::field_spec_of(const column_specification& column, size_t field) {
     auto&& ut = static_pointer_cast<const user_type_impl>(column.type);
     auto&& name = ut->field_name(field);
     auto&& sname = sstring(reinterpret_cast<const char*>(name.data()), name.size());
-    return ::make_shared<column_specification>(
+    return make_lw_shared<column_specification>(
                                    column.ks_name,
                                    column.cf_name,
                                    ::make_shared<column_identifier>(column.name->to_string() + "." + sname, true),
@@ -66,7 +66,7 @@ user_types::literal::literal(elements_map_type entries)
         : _entries(std::move(entries)) {
 }
 
-shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
+shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     validate_assignable_to(db, keyspace, *receiver);
     auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
     bool all_terminal = true;
@@ -128,7 +128,7 @@ void user_types::literal::validate_assignable_to(database& db, const sstring& ke
     }
 }
 
-assignment_testable::test_result user_types::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) const {
+assignment_testable::test_result user_types::literal::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
     try {
         validate_assignable_to(db, keyspace, *receiver);
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;

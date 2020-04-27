@@ -53,9 +53,9 @@ namespace cql3 {
 class abstract_marker : public non_terminal {
 protected:
     const int32_t _bind_index;
-    const ::shared_ptr<column_specification> _receiver;
+    const lw_shared_ptr<column_specification> _receiver;
 public:
-    abstract_marker(int32_t bind_index, ::shared_ptr<column_specification>&& receiver);
+    abstract_marker(int32_t bind_index, lw_shared_ptr<column_specification>&& receiver);
 
     virtual void collect_marker_specification(variable_specifications& bound_names) const override;
 
@@ -70,9 +70,9 @@ public:
     public:
         raw(int32_t bind_index);
 
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override;
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
 
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override;
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
 
         virtual sstring to_string() const override;
     };
@@ -87,9 +87,9 @@ public:
     public:
         in_raw(int32_t bind_index);
     private:
-        static ::shared_ptr<column_specification> make_in_receiver(const column_specification& receiver);
+        static lw_shared_ptr<column_specification> make_in_receiver(const column_specification& receiver);
     public:
-        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) const override;
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
     };
 };
 
