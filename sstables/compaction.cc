@@ -66,7 +66,6 @@
 #include "db_clock.hh"
 #include "mutation_compactor.hh"
 #include "leveled_manifest.hh"
-#include "utils/observable.hh"
 #include "dht/token.hh"
 
 namespace sstables {
@@ -284,68 +283,60 @@ public:
 // When compaction finishes, all the temporary sstables generated here will be deleted and removed
 // from table's sstable set.
 class garbage_collected_sstable_writer {
-    compaction* _c = nullptr;
-    std::vector<shared_sstable> _temp_sealed_gc_sstables;
-    std::deque<compaction_write_monitor> _active_write_monitors = {};
-    shared_sstable _sst;
-    std::optional<sstable_writer> _writer;
-    std::optional<utils::observer<>> _on_new_sstable_sealed_observer;
-    utils::UUID _run_identifier = utils::make_random_uuid();
-    bool _consuming_new_partition {};
-private:
-    void setup_on_new_sstable_sealed_handler();
-    void maybe_create_new_sstable_writer();
-    void finish_sstable_writer();
-    void on_end_of_stream();
 public:
-    garbage_collected_sstable_writer() = default;
-    explicit garbage_collected_sstable_writer(compaction& c) : _c(&c) {
-        setup_on_new_sstable_sealed_handler();
-    }
+    // Data for GC writer is stored separately to allow compaction class to communicate directly
+    // with garbage_collected_sstable_writer which is moved into mutation_compaction, making it
+    // unreachable after the compaction process has started.
+    class data {
+        compaction* _c = nullptr;
+        std::vector<shared_sstable> _temp_sealed_gc_sstables;
+        std::deque<compaction_write_monitor> _active_write_monitors = {};
+        shared_sstable _sst;
+        std::optional<sstable_writer> _writer;
+        utils::UUID _run_identifier = utils::make_random_uuid();
+    public:
+        explicit data(compaction& c) : _c(&c) {
+        }
+
+        data& operator=(const data&) = delete;
+        data(const data&) = delete;
+
+        void maybe_create_new_sstable_writer();
+        void finish_sstable_writer();
+        void on_end_of_stream();
+
+        friend class garbage_collected_sstable_writer;
+    };
+private:
+    garbage_collected_sstable_writer::data* _data = nullptr;
+public:
+    explicit garbage_collected_sstable_writer() = default;
+    explicit garbage_collected_sstable_writer(garbage_collected_sstable_writer::data& data) : _data(&data) {}
 
     garbage_collected_sstable_writer& operator=(const garbage_collected_sstable_writer&) = delete;
     garbage_collected_sstable_writer(const garbage_collected_sstable_writer&) = delete;
 
-    garbage_collected_sstable_writer(garbage_collected_sstable_writer&& other)
-            : _c(other._c)
-            , _temp_sealed_gc_sstables(std::move(other._temp_sealed_gc_sstables))
-            , _active_write_monitors(std::move(other._active_write_monitors))
-            , _sst(std::move(other._sst))
-            , _writer(std::move(other._writer))
-            , _run_identifier(other._run_identifier)
-            , _consuming_new_partition(other._consuming_new_partition) {
-        other._on_new_sstable_sealed_observer->disconnect();
-        setup_on_new_sstable_sealed_handler();
-    }
-
-    garbage_collected_sstable_writer& operator=(garbage_collected_sstable_writer&& other) {
-        if (this != &other) {
-            this->~garbage_collected_sstable_writer();
-            new (this) garbage_collected_sstable_writer(std::move(other));
-        }
-        return *this;
-    }
+    garbage_collected_sstable_writer(garbage_collected_sstable_writer&& other) = default;
+    garbage_collected_sstable_writer& operator=(garbage_collected_sstable_writer&& other) = default;
 
     void consume_new_partition(const dht::decorated_key& dk) {
-        maybe_create_new_sstable_writer();
-        _writer->consume_new_partition(dk);
-        _consuming_new_partition = true;
+        _data->maybe_create_new_sstable_writer();
+        _data->_writer->consume_new_partition(dk);
     }
 
-    void consume(tombstone t) { _writer->consume(t); }
-    stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer->consume(std::move(sr)); }
-    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _writer->consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone&& rt) { return _writer->consume(std::move(rt)); }
+    void consume(tombstone t) { _data->_writer->consume(t); }
+    stop_iteration consume(static_row&& sr, tombstone, bool) { return _data->_writer->consume(std::move(sr)); }
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _data->_writer->consume(std::move(cr)); }
+    stop_iteration consume(range_tombstone&& rt) { return _data->_writer->consume(std::move(rt)); }
 
     stop_iteration consume_end_of_partition() {
-        _writer->consume_end_of_partition();
-        _consuming_new_partition = false;
+        _data->_writer->consume_end_of_partition();
         return stop_iteration::no;
     }
 
     void consume_end_of_stream() {
-        finish_sstable_writer();
-        on_end_of_stream();
+        _data->finish_sstable_writer();
+        _data->on_end_of_stream();
     }
 };
 
@@ -394,8 +385,8 @@ protected:
     std::vector<unsigned long> _ancestors;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
-    utils::observable<> _on_new_sstable_sealed;
     bool _contains_multi_fragment_runs = false;
+    garbage_collected_sstable_writer::data _gc_sstable_writer_data;
 protected:
     compaction(column_family& cf, creator_fn creator, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level)
         : _cf(cf)
@@ -404,6 +395,7 @@ protected:
         , _sstables(std::move(sstables))
         , _max_sstable_size(max_sstable_size)
         , _sstable_level(sstable_level)
+        , _gc_sstable_writer_data(*this)
     {
         _info->cf = &cf;
         for (auto& sst : _sstables) {
@@ -436,10 +428,6 @@ protected:
         writer = std::nullopt;
         sst->open_data().get0();
         _info->end_size += sst->bytes_on_disk();
-        // Notify GC'ed-data sstable writer's handler that an output sstable has just been sealed.
-        // The handler is responsible for making sure that deleting an input sstable will not
-        // result in resurrection on failure.
-        _on_new_sstable_sealed();
     }
 
     api::timestamp_type maximum_timestamp() const {
@@ -447,10 +435,6 @@ protected:
             return sst1->get_stats_metadata().max_timestamp < sst2->get_stats_metadata().max_timestamp;
         });
         return (*m)->get_stats_metadata().max_timestamp;
-    }
-
-    utils::observer<> add_on_new_sstable_sealed_handler(std::function<void (void)> handler) noexcept {
-        return _on_new_sstable_sealed.observe(std::move(handler));
     }
 
     encoding_stats get_encoding_stats() const {
@@ -564,10 +548,9 @@ private:
         };
     }
 
-    virtual shared_sstable create_new_sstable() const = 0;
-
     // select a sstable writer based on decorated key.
     virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) = 0;
+
     // stop current writer
     virtual void stop_sstable_writer() = 0;
     // finish all writers.
@@ -603,7 +586,7 @@ private:
     }
 public:
     garbage_collected_sstable_writer make_garbage_collected_sstable_writer() {
-        return garbage_collected_sstable_writer(*this);
+        return garbage_collected_sstable_writer(_gc_sstable_writer_data);
     }
 
     bool contains_multi_fragment_runs() const {
@@ -618,6 +601,7 @@ public:
 
     friend class compacting_sstable_writer;
     friend class garbage_collected_sstable_writer;
+    friend class garbage_collected_sstable_writer::data;
 };
 
 void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
@@ -644,22 +628,9 @@ void compacting_sstable_writer::consume_end_of_stream() {
     _c.finish_sstable_writer();
 }
 
-void garbage_collected_sstable_writer::setup_on_new_sstable_sealed_handler() {
-    _on_new_sstable_sealed_observer = _c->add_on_new_sstable_sealed_handler([this] {
-        // NOTE: This handler is called, BEFORE an input sstable is possibly deleted
-        // *AND* AFTER a new output sstable is sealed, to flush a garbage collected
-        // sstable being currently written.
-        // That way, data is resurrection is prevented by making sure that the
-        // GC'able data is still reachable in a temporary sstable.
-        assert(!_consuming_new_partition);
-        // Wait for current gc'ed-only-sstable to be flushed and added to table's set.
-        this->finish_sstable_writer();
-    });
-}
-
-void garbage_collected_sstable_writer::maybe_create_new_sstable_writer() {
+void garbage_collected_sstable_writer::data::maybe_create_new_sstable_writer() {
     if (!_writer) {
-        _sst = _c->create_new_sstable();
+        _sst = _c->_sstable_creator(this_shard_id());
 
         auto&& priority = service::get_local_compaction_priority();
         _active_write_monitors.emplace_back(_sst, _c->_cf, _c->maximum_timestamp(), _c->_sstable_level);
@@ -670,7 +641,7 @@ void garbage_collected_sstable_writer::maybe_create_new_sstable_writer() {
     }
 }
 
-void garbage_collected_sstable_writer::finish_sstable_writer() {
+void garbage_collected_sstable_writer::data::finish_sstable_writer() {
     if (_writer) {
         _writer->consume_end_of_stream();
         _writer = std::nullopt;
@@ -680,7 +651,7 @@ void garbage_collected_sstable_writer::finish_sstable_writer() {
     }
 }
 
-void garbage_collected_sstable_writer::on_end_of_stream() {
+void garbage_collected_sstable_writer::data::on_end_of_stream() {
     for (auto&& sst : _temp_sealed_gc_sstables) {
         clogger.debug("Asking for deletion of temporary tombstone-only sstable {}", sst->get_filename());
         _c->eventually_delete_garbage_collected_sstable(std::move(sst));
@@ -753,10 +724,6 @@ public:
         return [&s = *_schema] (const dht::decorated_key& dk){
             return dht::shard_of(s, dk.token()) == engine().cpu_id();
         };
-    }
-
-    virtual shared_sstable create_new_sstable() const override {
-        return _sstable_creator(0);
     }
 
     virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
@@ -834,6 +801,9 @@ private:
                 // Fully expired sstable is not actually compacted, therefore it's not present in the compacting set.
                 _compacting->erase(sst);
             });
+            // Make sure SSTable created by garbage collected writer is made available
+            // before exhausted SSTable is released, so as to prevent data resurrection.
+            _gc_sstable_writer_data.finish_sstable_writer();
             auto exhausted_ssts = std::vector<shared_sstable>(exhausted, _sstables.end());
             _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
@@ -1219,10 +1189,6 @@ public:
     }
 
     void backlog_tracker_adjust_charges() override { }
-
-    shared_sstable create_new_sstable() const override {
-        return _sstable_creator(_shard);
-    }
 
     sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
         _shard = dht::shard_of(*_schema, dk.token());
