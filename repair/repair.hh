@@ -177,6 +177,7 @@ public:
     sstring keyspace;
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;
+    std::vector<utils::UUID> table_ids;
     int id;
     shard_id shard;
     std::vector<sstring> data_centers;
@@ -211,6 +212,7 @@ public:
             const sstring& keyspace_,
             const dht::token_range_vector& ranges_,
             const std::vector<sstring>& cfs_,
+            std::vector<utils::UUID> table_ids_,
             int id_,
             const std::vector<sstring>& data_centers_,
             const std::vector<sstring>& hosts_,

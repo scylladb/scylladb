@@ -87,6 +87,17 @@ static std::vector<sstring> list_column_families(const database& db, const sstri
     return ret;
 }
 
+// Must run inside a seastar thread
+static std::vector<utils::UUID> get_table_ids(const database& db, const sstring& keyspace, const std::vector<sstring>& tables) {
+    std::vector<utils::UUID> table_ids;
+    table_ids.reserve(tables.size());
+    for (auto& table : tables) {
+        thread::maybe_yield();
+        table_ids.push_back(db.find_uuid(keyspace, table));
+    }
+    return table_ids;
+}
+
 template<typename Collection, typename T>
 void remove_item(Collection& c, T& item) {
     auto it = std::find(c.begin(), c.end(), item);
@@ -670,6 +681,7 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     const sstring& keyspace_,
     const dht::token_range_vector& ranges_,
     const std::vector<sstring>& cfs_,
+    std::vector<utils::UUID> table_ids_,
     int id_,
     const std::vector<sstring>& data_centers_,
     const std::vector<sstring>& hosts_,
@@ -679,6 +691,7 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     , keyspace(keyspace_)
     , ranges(ranges_)
     , cfs(cfs_)
+    , table_ids(std::move(table_ids_))
     , id(id_)
     , shard(this_shard_id())
     , data_centers(data_centers_)
@@ -1472,11 +1485,12 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options)] () mutable {
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
+        auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = db.invoke_on(shard, [&db, keyspace, cfs, id, ranges,
+            auto f = db.invoke_on(shard, [&db, keyspace, cfs, table_ids, id, ranges,
                     data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
                 auto ri = make_lw_shared<repair_info>(db,
-                        std::move(keyspace), std::move(ranges), std::move(cfs),
+                        std::move(keyspace), std::move(ranges), std::move(cfs), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), streaming::stream_reason::repair);
                 return repair_ranges(ri);
             });
@@ -1553,14 +1567,15 @@ future<> sync_data_using_repair(seastar::sharded<database>& db,
                 rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
                 return;
             }
+            auto table_ids = get_table_ids(db.local(), keyspace, cfs);
             std::vector<future<>> repair_results;
             repair_results.reserve(smp::count);
             for (auto shard : boost::irange(unsigned(0), smp::count)) {
-                auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges, neighbors, reason] (database& localdb) mutable {
+                auto f = db.invoke_on(shard, [keyspace, cfs, table_ids, id, ranges, neighbors, reason] (database& localdb) mutable {
                     auto data_centers = std::vector<sstring>();
                     auto hosts = std::vector<sstring>();
                     auto ri = make_lw_shared<repair_info>(service::get_local_storage_service().db(),
-                            std::move(keyspace), std::move(ranges), std::move(cfs),
+                            std::move(keyspace), std::move(ranges), std::move(cfs), std::move(table_ids),
                             id, std::move(data_centers), std::move(hosts), reason);
                     ri->neighbors = std::move(neighbors);
                     return repair_ranges(ri);
