@@ -10,12 +10,12 @@ print_usage() {
     echo "  --reloc-pkg specify relocatable package path"
     exit 1
 }
-DIST=false
+DIST=0
 RELOC_PKG=
 while [ $# -gt 0 ]; do
     case "$1" in
         "--dist")
-            DIST=true
+            DIST=1
             shift 1
             ;;
         "--target") # This is obsolete, but I keep this in order not to break people's scripts.
@@ -69,13 +69,6 @@ fi
 if [ ! -f /usr/bin/git ]; then
     pkg_install git
 fi
-if [ ! -f /usr/bin/pystache ]; then
-    if is_redhat_variant; then
-        sudo yum install -y python2-pystache || sudo yum install -y pystache
-    elif is_debian_variant; then
-        sudo apt-get install -y python2-pystache
-    fi
-fi
 
 RELOC_PKG_BASENAME=$(basename $RELOC_PKG)
 SCYLLA_VERSION=$(cat SCYLLA-VERSION-FILE)
@@ -93,5 +86,15 @@ fi
 rpm_payload_opts=(--define "_binary_payload w2${xz_thread_param}.xzdio")
 
 ln -fv $RELOC_PKG $RPMBUILD/SOURCES/
-pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST, \"product\": \"$PRODUCT\", \"$PRODUCT\": true, \"reloc_pkg\": \"$RELOC_PKG_BASENAME\" }" > $RPMBUILD/SPECS/scylla.spec
-rpmbuild -ba "${rpm_payload_opts[@]}" --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla.spec
+
+parameters=(
+    -D"version $SCYLLA_VERSION"
+    -D"release $SCYLLA_RELEASE"
+    -D"housekeeping $DIST"
+    -D"product $PRODUCT"
+    -D"${PRODUCT/-/_} 1"
+    -D"reloc_pkg $RELOC_PKG_BASENAME"
+)
+
+cp dist/redhat/scylla.spec $RPMBUILD/SPECS/
+rpmbuild "${parameters[@]}" -ba "${rpm_payload_opts[@]}" --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla.spec
