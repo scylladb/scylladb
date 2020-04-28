@@ -49,7 +49,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
 class repair_info;
 
 future<> repair_cf_range_row_level(repair_info& ri,
-        sstring cf_name, dht::token_range range,
+        sstring cf_name, utils::UUID table_id, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes);
 
 future<> shutdown_all_row_level_repair();

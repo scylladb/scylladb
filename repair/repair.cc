@@ -1041,13 +1041,14 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
             neighbors.swap(live_neighbors);
       }
       return ::service::get_local_migration_manager().sync_schema(ri.db.local(), neighbors).then([&neighbors, &ri, range, id] {
-        return do_for_each(ri.cfs.begin(), ri.cfs.end(), [&ri, &neighbors, range] (auto&& cf) {
+        return do_for_each(ri.table_ids.begin(), ri.table_ids.end(), [&ri, &neighbors, range] (utils::UUID table_id) {
+            auto cf = ri.db.local().find_column_family(table_id).schema()->cf_name();
             ri._sub_ranges_nr++;
             if (ri.row_level_repair()) {
                 if (ri.dropped_tables.count(cf)) {
                     return make_ready_future<>();
                 }
-                return repair_cf_range_row_level(ri, cf, range, neighbors).handle_exception_type([&ri, cf] (no_such_column_family&) mutable {
+                return repair_cf_range_row_level(ri, cf, table_id, range, neighbors).handle_exception_type([&ri, cf] (no_such_column_family&) mutable {
                     ri.dropped_tables.insert(cf);
                     return make_ready_future<>();
                 }).handle_exception([&ri] (std::exception_ptr ep) mutable {
