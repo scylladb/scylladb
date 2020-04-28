@@ -1136,13 +1136,6 @@ static lw_shared_ptr<query::read_command> previous_item_read_command(schema_ptr 
     return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
 }
 
-static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr schema) {
-    // Note that because this read-nothing command has an empty slice,
-    // storage_proxy::query() returns immediately - without any networking.
-    auto partition_slice = query::partition_slice({}, {}, {}, query::partition_slice::option_set());
-    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
-}
-
 static dht::partition_range_vector to_partition_ranges(const schema& schema, const partition_key& pk) {
     return dht::partition_range_vector{dht::partition_range(dht::decorate_key(schema, pk))};
 }
@@ -1298,7 +1291,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     auto selection = cql3::selection::selection::wildcard(schema());
     auto read_command = needs_read_before_write ?
             previous_item_read_command(schema(), _ck, selection) :
-            read_nothing_read_command(schema());
+            nullptr;
     return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command] (bool is_applied) mutable {
@@ -1565,9 +1558,8 @@ public:
 static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, dht::decorated_key dk, std::vector<put_or_delete_item>&& mutation_builders,
         service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
     auto timeout = default_timeout();
-    auto read_command = read_nothing_read_command(schema);
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
-    return proxy.cas(schema, op, read_command, to_partition_ranges(dk),
+    return proxy.cas(schema, op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM,
             timeout, timeout).discard_result();
