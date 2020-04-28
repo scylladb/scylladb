@@ -107,8 +107,8 @@ protected:
     cql_stats& _stats;
 private:
     // Separating normal and static conditions makes things somewhat easier
-    std::vector<::shared_ptr<column_condition>> _regular_conditions;
-    std::vector<::shared_ptr<column_condition>> _static_conditions;
+    std::vector<lw_shared_ptr<column_condition>> _regular_conditions;
+    std::vector<lw_shared_ptr<column_condition>> _static_conditions;
     const ks_selector _ks_sel;
 
     // True if this statement has _if_exists or _if_not_exists or other
@@ -185,7 +185,7 @@ public:
         return *_restrictions;
     }
 public:
-    void add_condition(::shared_ptr<column_condition> cond);
+    void add_condition(lw_shared_ptr<column_condition> cond);
 
     void set_if_not_exist_condition();
 

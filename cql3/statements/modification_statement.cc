@@ -213,7 +213,7 @@ bool modification_statement::applies_to(const update_parameters::prefetch_data::
         return row == nullptr;
     }
 
-    auto condition_applies = [&row, &options](const shared_ptr<column_condition>& cond) {
+    auto condition_applies = [&row, &options](const lw_shared_ptr<column_condition>& cond) {
         const data_value* value = nullptr;
         if (row != nullptr) {
             auto it = row->cells.find(cond->column.ordinal_id);
@@ -647,7 +647,7 @@ void modification_statement::inc_cql_stats(bool is_internal) const {
     ++_stats.query_cnt(src_sel, _ks_sel, cond_sel, type);
 }
 
-void modification_statement::add_condition(::shared_ptr<column_condition> cond) {
+void modification_statement::add_condition(lw_shared_ptr<column_condition> cond) {
     if (cond->column.is_static()) {
         _has_static_column_conditions = true;
         _static_conditions.emplace_back(std::move(cond));

@@ -105,7 +105,7 @@ options {
 using namespace cql3::statements;
 using namespace cql3::selection;
 using cql3::cql3_type;
-using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::column_condition::raw>>>;
+using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,lw_shared_ptr<cql3::column_condition::raw>>>;
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>;
 
 // ANTLR forces us to define a default-initialized return value
