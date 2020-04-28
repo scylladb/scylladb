@@ -86,6 +86,7 @@ done
         --server-encryption-options keyfile="$tmp_dir/scylla.key" \
         --server-encryption-options certificate="$tmp_dir/scylla.crt" \
         --auto-snapshot 0 \
+        --skip-wait-for-gossip-to-settle 0 \
         >"$tmp_dir/log" 2>&1 &
 SCYLLA_PROCESS=$!
 
@@ -101,7 +102,7 @@ ok=
 SECONDS=0
 while ((SECONDS < 200))
 do
-    sleep 2
+    sleep 1
     echo -n .
     if ! kill -0 $SCYLLA_PROCESS 2>/dev/null
     then
