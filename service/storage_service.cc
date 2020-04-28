@@ -288,9 +288,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         std::tie(_bootstrap_tokens, _cdc_streams_ts) = prepare_replacement_info(loaded_peer_features).get0();
         // kbraun: I think we don't have to gossip tokens nor streams timestmap when HIBERNATEd
         // (any state for this node will be ignored by other nodes anyway), but since TOKENS was already there, I added CDC_STREAMS_TIMESTAMP too.
-        app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens));
-        app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(_cdc_streams_ts));
-        app_states.emplace(gms::application_state::STATUS, value_factory.hibernate(true));
+        app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens));
+        app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts));
+        app_states.emplace(gms::application_state::STATUS, versioned_value::hibernate(true));
     } else if (should_bootstrap()) {
         check_for_endpoint_collision(loaded_peer_features).get();
     } else {
@@ -384,22 +384,22 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     auto& proxy = service::get_storage_proxy();
     // Ensure we know our own actual Schema UUID in preparation for updates
     auto schema_version = update_schema_version(proxy, _feature_service.cluster_schema_features()).get0();
-    app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
-    app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
-    app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
-    app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
-    app_states.emplace(gms::application_state::SUPPORTED_FEATURES, value_factory.supported_features(features));
-    app_states.emplace(gms::application_state::CACHE_HITRATES, value_factory.cache_hitrates(""));
+    app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
+    app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
+    app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
+    app_states.emplace(gms::application_state::RELEASE_VERSION, versioned_value::release_version());
+    app_states.emplace(gms::application_state::SUPPORTED_FEATURES, versioned_value::supported_features(features));
+    app_states.emplace(gms::application_state::CACHE_HITRATES, versioned_value::cache_hitrates(""));
     app_states.emplace(gms::application_state::SCHEMA_TABLES_VERSION, versioned_value(db::schema_tables::version));
-    app_states.emplace(gms::application_state::RPC_READY, value_factory.cql_ready(false));
+    app_states.emplace(gms::application_state::RPC_READY, versioned_value::cql_ready(false));
     app_states.emplace(gms::application_state::VIEW_BACKLOG, versioned_value(""));
-    app_states.emplace(gms::application_state::SCHEMA, value_factory.schema(schema_version));
+    app_states.emplace(gms::application_state::SCHEMA, versioned_value::schema(schema_version));
     if (restarting_normal_node) {
         // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
         // Exception: there might be no CDC streams timestamp proposed by us if we're upgrading from a non-CDC version.
-        app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(my_tokens));
-        app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(_cdc_streams_ts));
-        app_states.emplace(gms::application_state::STATUS, value_factory.normal(my_tokens));
+        app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(my_tokens));
+        app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts));
+        app_states.emplace(gms::application_state::STATUS, versioned_value::normal(my_tokens));
     }
     slogger.info("Starting up server gossip");
 
@@ -764,7 +764,7 @@ bool storage_service::do_handle_cdc_generation(db_clock::time_point ts) {
         _cdc_streams_ts = ts;
         db::system_keyspace::update_cdc_streams_timestamp(ts).get();
         _gossiper.add_local_application_state(
-                gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(ts)).get();
+                gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(ts)).get();
     }
 
     class orer {
@@ -916,9 +916,9 @@ void storage_service::bootstrap() {
 
         _gossiper.add_local_application_state({
             // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
-            { gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens) },
-            { gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(_cdc_streams_ts) },
-            { gms::application_state::STATUS, value_factory.bootstrapping(_bootstrap_tokens) },
+            { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
+            { gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts) },
+            { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
         }).get();
 
         set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
@@ -1469,17 +1469,8 @@ void storage_service::update_peer_info(gms::inet_address endpoint) {
 std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
     auto tokens_string = _gossiper.get_application_state_value(endpoint, application_state::TOKENS);
     slogger.trace("endpoint={}, tokens_string={}", endpoint, tokens_string);
-    if (tokens_string.size() == 0) {
-        return {}; // boost::split produces one element for emty string
-    }
-    std::vector<sstring> tokens;
-    std::unordered_set<token> ret;
-    boost::split(tokens, tokens_string, boost::is_any_of(";"));
-    for (auto str : tokens) {
-        auto t = dht::token::from_sstring(str);
-        slogger.trace("endpoint={}, token_str={} token={}", endpoint, str, t);
-        ret.emplace(std::move(t));
-    }
+    auto ret = versioned_value::tokens_from_string(tokens_string);
+    slogger.trace("endpoint={}, tokens={}", endpoint, ret);
     return ret;
 }
 
@@ -1492,9 +1483,9 @@ void storage_service::set_gossip_tokens(
 
     // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
     _gossiper.add_local_application_state({
-        { gms::application_state::TOKENS, value_factory.tokens(tokens) },
-        { gms::application_state::CDC_STREAMS_TIMESTAMP, value_factory.cdc_streams_timestamp(cdc_streams_ts) },
-        { gms::application_state::STATUS, value_factory.normal(tokens) }
+        { gms::application_state::TOKENS, versioned_value::tokens(tokens) },
+        { gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(cdc_streams_ts) },
+        { gms::application_state::STATUS, versioned_value::normal(tokens) }
     }).get();
 }
 
@@ -1676,15 +1667,15 @@ future<> storage_service::gossip_snitch_info() {
     auto dc = snitch->get_datacenter(addr);
     auto rack = snitch->get_rack(addr);
     return _gossiper.add_local_application_state({
-        { gms::application_state::DC, value_factory.datacenter(dc) },
-        { gms::application_state::RACK, value_factory.rack(rack) },
+        { gms::application_state::DC, versioned_value::datacenter(dc) },
+        { gms::application_state::RACK, versioned_value::rack(rack) },
     });
 }
 
 future<> storage_service::gossip_sharder() {
     return _gossiper.add_local_application_state({
-        { gms::application_state::SHARD_COUNT, value_factory.shard_count(smp::count) },
-        { gms::application_state::IGNORE_MSB_BITS, value_factory.ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()) },
+        { gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count) },
+        { gms::application_state::IGNORE_MSB_BITS, versioned_value::ignore_msb_bits(_db.local().get_config().murmur3_partitioner_ignore_msb_bits()) },
     });
 }
 
@@ -2856,7 +2847,7 @@ void storage_service::leave_ring() {
 
     auto expire_time = _gossiper.compute_expire_time().time_since_epoch().count();
     _gossiper.add_local_application_state(gms::application_state::STATUS,
-            value_factory.left(db::system_keyspace::get_local_tokens().get0(), expire_time)).get();
+            versioned_value::left(db::system_keyspace::get_local_tokens().get0(), expire_time)).get();
     auto delay = std::max(get_ring_delay(), gms::gossiper::INTERVAL);
     slogger.info("Announcing that I have left the ring for {}ms", delay.count());
     sleep_abortable(delay, _abort_source).get();
@@ -2890,7 +2881,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
 }
 
 future<> storage_service::start_leaving() {
-    return _gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(db::system_keyspace::get_local_tokens().get0())).then([this] {
+    return _gossiper.add_local_application_state(application_state::STATUS, versioned_value::leaving(db::system_keyspace::get_local_tokens().get0())).then([this] {
         _token_metadata.add_leaving_endpoint(get_broadcast_address());
         return update_pending_ranges();
     });
@@ -3415,7 +3406,7 @@ void feature_enabled_listener::on_enabled() {
             return make_ready_future<>();
         }
         return gms::get_local_gossiper().add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-                                                                     _s.value_factory.supported_features(_s.get_config_supported_features()));
+                                                                     gms::versioned_value::supported_features(_s.get_config_supported_features()));
     });
 }
 
@@ -3432,7 +3423,7 @@ future<> read_sstables_format(distributed<storage_service>& ss) {
 }
 
 future<> storage_service::set_cql_ready(bool ready) {
-    return _gossiper.add_local_application_state(application_state::RPC_READY, value_factory.cql_ready(ready));
+    return _gossiper.add_local_application_state(application_state::RPC_READY, versioned_value::cql_ready(ready));
 }
 
 void storage_service::notify_down(inet_address endpoint) {

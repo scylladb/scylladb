@@ -54,8 +54,49 @@ constexpr const char* versioned_value::HIBERNATE;
 constexpr const char* versioned_value::SHUTDOWN;
 constexpr const char* versioned_value::REMOVAL_COORDINATOR;
 
-versioned_value versioned_value::factory::network_version() {
+versioned_value versioned_value::network_version() {
     return versioned_value(format("{}", netw::messaging_service::current_version));
+}
+
+sstring versioned_value::make_full_token_string(const std::unordered_set<dht::token>& tokens) {
+    return ::join(";", tokens | boost::adaptors::transformed([] (const dht::token& t) {
+        return t.to_sstring(); })
+    );
+}
+
+sstring versioned_value::make_token_string(const std::unordered_set<dht::token>& tokens) {
+    if (tokens.empty()) {
+        return "";
+    }
+    return tokens.begin()->to_sstring();
+}
+
+sstring versioned_value::make_cdc_streams_timestamp_string(std::optional<db_clock::time_point> t) {
+    // We assume that the db_clock epoch is the same on all receiving nodes.
+    if (!t) {
+        return "";
+    }
+    return std::to_string(t->time_since_epoch().count());
+}
+
+std::unordered_set<dht::token> versioned_value::tokens_from_string(const sstring& s) {
+    if (s.size() == 0) {
+        return {}; // boost::split produces one element for empty string
+    }
+    std::vector<sstring> tokens;
+    boost::split(tokens, s, boost::is_any_of(";"));
+    std::unordered_set<dht::token> ret;
+    for (auto str : tokens) {
+        ret.emplace(dht::token::from_sstring(str));
+    }
+    return ret;
+}
+
+std::optional<db_clock::time_point> versioned_value::cdc_streams_timestamp_from_string(const sstring& s) {
+    if (s.empty()) {
+        return {};
+    }
+    return db_clock::time_point(db_clock::duration(std::stoll(s)));
 }
 
 }

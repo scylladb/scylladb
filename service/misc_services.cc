@@ -117,9 +117,8 @@ void load_broadcaster::start_broadcasting() {
             }
             return res;
         }, int64_t(0), std::plus<int64_t>()).then([this] (int64_t size) {
-            gms::versioned_value::factory value_factory;
             return _gossiper.add_local_application_state(gms::application_state::LOAD,
-                value_factory.load(size)).then([this] {
+                gms::versioned_value::load(size)).then([this] {
                 _timer.arm(BROADCAST_INTERVAL);
                 return make_ready_future<>();
             });
@@ -213,9 +212,8 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         });
     }).then([this] {
         auto& g = gms::get_local_gossiper();
-        auto& ss = get_local_storage_service();
         _slen = _gstate.size();
-        return g.add_local_application_state(gms::application_state::CACHE_HITRATES, ss.value_factory.cache_hitrates(_gstate)).then([this] {
+        return g.add_local_application_state(gms::application_state::CACHE_HITRATES, gms::versioned_value::cache_hitrates(_gstate)).then([this] {
             // if max difference during this round is big schedule next recalculate earlier
             if (_diff < 0.01) {
                 return std::chrono::milliseconds(2000);

@@ -147,7 +147,7 @@ public:
         return utils::fb_utilities::get_broadcast_address();
     }
     void set_cluster_name(sstring name);
-    std::set<inet_address> get_seeds();
+    const std::set<inet_address>& get_seeds() const;
     void set_seeds(std::set<inet_address> _seeds);
 public:
     static clk::time_point inline now() { return clk::now(); }
@@ -583,7 +583,6 @@ public:
     void maybe_enable_features();
 private:
     seastar::metrics::metric_groups _metrics;
-    gms::versioned_value::factory _value_factory;
 public:
     void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 public:
