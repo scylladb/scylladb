@@ -1,5 +1,5 @@
 ---
-name: "𝄞 installation Issue"
+name: "𝄞 installation Issue: I fail to install Scylla"
 about: Use this template for instllation related issues
 labels: install
 ---

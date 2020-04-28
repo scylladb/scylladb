@@ -1,8 +1,7 @@
 ---
-name: "🏃 Performance Issue"
-about: Use this template for reporting a performance issue
+name: "🏃 Scylla Performance are not what I expected"
+about: Use this template for reporting a suspected performance issue.
 labels: performance
-
 ---
 
 **Please make sure that this is an issue related to Scylla performance**

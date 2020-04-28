@@ -1,5 +1,5 @@
 ---
-name: "⭐ Feature Request"
+name: "⭐ Feature Request: I want Scylla to do X"
 about: Use this template for raising a feature request
 labels: enhancement
 assignees: ''

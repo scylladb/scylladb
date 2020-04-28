@@ -1,6 +1,6 @@
 ---
-name: "🐛 Bug Issue"
-about: Use this template for reporting a bug
+name: "🐛 Report a Scylla bug"
+about: Use this template for reporting a suspected bug or an issue
 title: ''
 labels: bug
 assignees: ''
