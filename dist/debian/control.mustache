@@ -42,6 +42,7 @@ Package: {{product}}
 Section: metapackages
 Architecture: any
 Depends: {{product}}-server, {{product}}-jmx, {{product}}-tools, {{product}}-tools-core, {{product}}-kernel-conf
+Conflicts: openjdk-11-jre-headless, openjdk-11-jre, oracle-java11-set-default
 Description: Scylla database metapackage
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
