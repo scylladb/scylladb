@@ -2927,6 +2927,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
         uint32_t limit,
         db::consistency_level cl,
         ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions,
+        query::partition_slice::option_set custom_opts,
         service::client_state& client_state,
         cql3::cql_stats& cql_stats,
         tracing::trace_state_ptr trace_state,
@@ -2949,7 +2950,9 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
     auto static_columns = boost::copy_range<query::column_id_vector>(
             schema->static_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto selection = cql3::selection::selection::wildcard(schema);
-    auto partition_slice = query::partition_slice(std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), selection->get_query_options());
+    query::partition_slice::option_set opts = selection->get_query_options();
+    opts.add(custom_opts);
+    auto partition_slice = query::partition_slice(std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), opts);
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
 
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
@@ -3069,7 +3072,8 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
         partition_ranges = filtering_restrictions->get_partition_key_ranges(query_options);
         ck_bounds = filtering_restrictions->get_clustering_bounds(query_options);
     }
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats, trace_state, std::move(permit));
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+            std::move(filtering_restrictions), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit));
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, comparison_operator_type op, const rjson::value& attrs) {
@@ -3512,11 +3516,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
     if (rjson::find(request, "FilterExpression")) {
         return make_ready_future<request_return_type>(api_error("ValidationException", "FilterExpression is not yet implemented in alternator"));
     }
-    bool forward = get_bool_attribute(request, "ScanIndexForward", true);
-    if (!forward) {
-        // FIXME: need to support the !forward (i.e., reverse sort order) case. See issue #5153.
-        return make_ready_future<request_return_type>(api_error("ValidationException", "ScanIndexForward=false is not yet implemented in alternator"));
-    }
+    const bool forward = get_bool_attribute(request, "ScanIndexForward", true);
 
     rjson::value* key_conditions = rjson::find(request, "KeyConditions");
     rjson::value* key_condition_expression = rjson::find(request, "KeyConditionExpression");
@@ -3559,7 +3559,10 @@ future<executor::request_return_type> executor::query(client_state& client_state
     }
     verify_all_are_used(request, "ExpressionAttributeValues", used_attribute_values, "KeyConditionExpression");
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "KeyConditionExpression");
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl, std::move(filtering_restrictions), client_state, _stats.cql_stats, std::move(trace_state), std::move(permit));
+    query::partition_slice::option_set opts;
+    opts.set_if<query::partition_slice::option::reversed>(!forward);
+    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+            std::move(filtering_restrictions), opts, client_state, _stats.cql_stats, std::move(trace_state), std::move(permit));
 }
 
 future<executor::request_return_type> executor::list_tables(client_state& client_state, service_permit permit, rjson::value request) {
