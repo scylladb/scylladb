@@ -881,49 +881,6 @@ SEASTAR_TEST_CASE(set_generation) {
     });
 }
 
-SEASTAR_TEST_CASE(reshuffle) {
-    return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (test_env& env, sstring uncompressed_dir, sstring generation_dir) {
-        return env.reusable_sst(uncompressed_schema(), uncompressed_dir, 1).then([generation_dir] (auto sstp) {
-            return sstp->create_links(generation_dir, 1).then([sstp, generation_dir] {
-                return sstp->create_links(generation_dir, 5).then([sstp, generation_dir] {
-                    return sstp->create_links(generation_dir, 10);
-                });
-            }).then([sstp] {});
-        }).then([generation_dir] {
-            auto cm = make_lw_shared<compaction_manager>();
-            cm->start();
-
-            auto tracker = make_lw_shared<cache_tracker>();
-            column_family::config cfg = column_family_test_config();
-            cfg.datadir = generation_dir;
-            cfg.enable_commitlog = false;
-            cfg.enable_incremental_backups = false;
-            auto cl_stats = make_lw_shared<cell_locker_stats>();
-            auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
-            cf->start();
-            cf->mark_ready_for_writes();
-            std::set<int64_t> existing_sstables = { 1, 5 };
-            return cf->reshuffle_sstables(existing_sstables, 6).then([cm, cf, generation_dir] (std::vector<sstables::entry_descriptor> reshuffled) {
-                BOOST_REQUIRE(reshuffled.size() == 1);
-                BOOST_REQUIRE(reshuffled[0].generation  == 6);
-                return when_all(
-                    test_sstable_exists(generation_dir, 1, true),
-                    test_sstable_exists(generation_dir, 2, false),
-                    test_sstable_exists(generation_dir, 3, false),
-                    test_sstable_exists(generation_dir, 4, false),
-                    test_sstable_exists(generation_dir, 5, true),
-                    test_sstable_exists(generation_dir, 6, true),
-                    test_sstable_exists(generation_dir, 10, false)
-                ).discard_result().then([cm] {
-                    return cm->stop();
-                });
-            }).then([cm, cf, cl_stats, tracker] () mutable {
-                cf = { };
-            });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(statistics_rewrite) {
     return test_setup::do_with_cloned_tmp_directory(uncompressed_dir(), [] (test_env& env, sstring uncompressed_dir, sstring generation_dir) {
         return env.reusable_sst(uncompressed_schema(), uncompressed_dir, 1).then([generation_dir] (auto sstp) {

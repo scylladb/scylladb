@@ -1037,14 +1037,9 @@ table::stop() {
 future<std::vector<sstables::entry_descriptor>>
 table::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
     struct work {
-        int64_t current_gen;
         std::set<int64_t> all_generations; // Stores generation of all live sstables in the system.
-        std::map<int64_t, sstables::shared_sstable> sstables;
-        std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
-        std::vector<sstables::entry_descriptor> reshuffled;
         work(int64_t start, std::set<int64_t> gens)
-            : current_gen(start ? start : 1)
-            , all_generations(gens) {}
+            : all_generations(gens) {}
     };
 
     return do_with(work(start, std::move(all_generations)), [this] (work& work) {
@@ -1058,35 +1053,10 @@ table::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
             if (work.all_generations.count(comps.generation) != 0) {
                 return make_ready_future<>();
             }
-            auto sst = make_sstable(_config.datadir, comps.generation, comps.version, comps.format);
-            work.sstables.emplace(comps.generation, std::move(sst));
-            work.descriptors.emplace(comps.generation, std::move(comps));
-            // FIXME: This is the only place in which we actually issue disk activity aside from
-            // directory metadata operations.
-            //
-            // But without the TOC information, we don't know which files we should link.
-            // The alternative to that would be to change create link to try creating a
-            // link for all possible files and handling the failures gracefuly, but that's not
-            // exactly fast either.
-            //
-            // Those SSTables are not known by anyone in the system. So we don't have any kind of
-            // object describing them. There isn't too much of a choice.
-            return work.sstables[comps.generation]->read_toc();
+            return make_exception_future<>(std::runtime_error("Loading SSTables from the main SSTable directory is unsafe and no longer supported."
+                   " You will find a directory called upload/ inside the table directory that can be used to load new SSTables into the system"));
         }, &manifest_json_filter).then([&work] {
-            // Note: cannot be parallel because we will be shuffling things around at this stage. Can't race.
-            return do_for_each(work.sstables, [&work] (auto& pair) {
-                auto&& comps = std::move(work.descriptors.at(pair.first));
-                comps.generation = work.current_gen;
-                work.reshuffled.push_back(std::move(comps));
-
-                if (pair.first == work.current_gen) {
-                    ++work.current_gen;
-                    return make_ready_future<>();
-                }
-                return pair.second->set_generation(work.current_gen++);
-            });
-        }).then([&work] {
-            return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(work.reshuffled));
+            return make_ready_future<std::vector<sstables::entry_descriptor>>();
         });
     });
 }
