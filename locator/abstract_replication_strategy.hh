@@ -95,6 +95,7 @@ public:
                                               token_metadata& token_metadata,
                                               const std::map<sstring, sstring>& config_options);
     virtual std::vector<inet_address> get_natural_endpoints(const token& search_token);
+    virtual std::vector<inet_address> get_natural_endpoints_without_node_being_replaced(const token& search_token);
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
     virtual size_t get_replication_factor() const = 0;

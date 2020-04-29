@@ -22,6 +22,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
+#include <boost/range/algorithm/remove_if.hpp>
 
 namespace locator {
 
@@ -86,6 +87,29 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
 
     ++_cache_hits_count;
     return res->second;
+}
+
+std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints_without_node_being_replaced(const token& search_token) {
+    std::vector<gms::inet_address> natural_endpoints = get_natural_endpoints(search_token);
+    if (_token_metadata.is_any_node_being_replaced() &&
+        allow_remove_node_being_replaced_from_natural_endpoints()) {
+        // When a new node is started to replace an existing dead node, we want
+        // to make the replacing node take writes but do not count it for
+        // consistency level, because the replacing node can die and go away.
+        // To do this, we filter out the existing node being replaced from
+        // natural_endpoints and make the replacing node in the pending_endpoints.
+        //
+        // However, we can only apply the filter for the replication strategy
+        // that allows it. For example, we can not apply the filter for
+        // LocalStrategy because LocalStrategy always returns the node itself
+        // as the natural_endpoints and the node will not appear in the
+        // pending_endpoints.
+        auto it = boost::range::remove_if(natural_endpoints, [this] (gms::inet_address& p) {
+            return _token_metadata.is_being_replaced(p);
+        });
+        natural_endpoints.erase(it, natural_endpoints.end());
+    }
+    return natural_endpoints;
 }
 
 void abstract_replication_strategy::validate_replication_factor(sstring rf) const
