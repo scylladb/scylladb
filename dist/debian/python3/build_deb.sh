@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-PRODUCT=$(cat SCYLLA-PRODUCT-FILE)
+PRODUCT=$(cat scylla-python3/SCYLLA-PRODUCT-FILE)
 
 . /etc/os-release
 print_usage() {
@@ -40,7 +40,7 @@ pkg_install() {
     fi
 }
 
-if [ ! -e SCYLLA-RELOCATABLE-FILE ]; then
+if [ ! -e scylla-python3/SCYLLA-RELOCATABLE-FILE ]; then
     echo "do not directly execute build_deb.sh, use reloc/build_deb.sh instead."
     exit 1
 fi
@@ -119,12 +119,12 @@ if [ -z "$TARGET" ]; then
 fi
 RELOC_PKG_FULLPATH=$(readlink -f $RELOC_PKG)
 RELOC_PKG_BASENAME=$(basename $RELOC_PKG)
-SCYLLA_VERSION=$(cat SCYLLA-VERSION-FILE)
-SCYLLA_RELEASE=$(cat SCYLLA-RELEASE-FILE)
+SCYLLA_VERSION=$(cat scylla-python3/SCYLLA-VERSION-FILE)
+SCYLLA_RELEASE=$(cat scylla-python3/SCYLLA-RELEASE-FILE)
 
 ln -fv $RELOC_PKG_FULLPATH ../$PRODUCT-python3_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz
 
-cp -al dist/debian/python3/debian debian
+cp -al scylla-python3/dist/debian/python3/debian debian
 if [ "$PRODUCT" != "scylla" ]; then
     # rename all 'scylla-' prefixed artifacts in the debian folder to have the 
     # product name as a prefix
@@ -132,9 +132,9 @@ if [ "$PRODUCT" != "scylla" ]; then
 fi
 REVISION="1"
 MUSTACHE_DIST="\"debian\": true, \"product\": \"$PRODUCT\", \"$PRODUCT\": true"
-pystache dist/debian/python3/changelog.mustache "{ $MUSTACHE_DIST, \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"revision\": \"$REVISION\", \"codename\": \"$TARGET\" }" > debian/changelog
-pystache dist/debian/python3/rules.mustache "{ $MUSTACHE_DIST }" > debian/rules
-pystache dist/debian/python3/control.mustache "{ $MUSTACHE_DIST }" > debian/control
+pystache scylla-python3/dist/debian/python3/changelog.mustache "{ $MUSTACHE_DIST, \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"revision\": \"$REVISION\", \"codename\": \"$TARGET\" }" > debian/changelog
+pystache scylla-python3/dist/debian/python3/rules.mustache "{ $MUSTACHE_DIST }" > debian/rules
+pystache scylla-python3/dist/debian/python3/control.mustache "{ $MUSTACHE_DIST }" > debian/control
 chmod a+rx debian/rules
 
 debuild -rfakeroot -us -uc

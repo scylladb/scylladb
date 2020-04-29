@@ -34,4 +34,4 @@ fi
 mkdir -p build/debian/scylla-python3-package
 tar -C build/debian/scylla-python3-package -xpf $RELOC_PKG
 cd build/debian/scylla-python3-package
-exec ./dist/debian/python3/build_deb.sh $OPTS
+exec ./scylla-python3/dist/debian/python3/build_deb.sh $OPTS

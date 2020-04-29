@@ -36,7 +36,7 @@ RELOC_PKG=$(readlink -f $RELOC_PKG)
 if [[ ! $OPTS =~ --reloc-pkg ]]; then
     OPTS="$OPTS --reloc-pkg $RELOC_PKG"
 fi
-mkdir -p $BUILDDIR/scylla-python3-package
-tar -C $BUILDDIR/scylla-python3-package -xpf $RELOC_PKG SCYLLA-RELOCATABLE-FILE SCYLLA-RELEASE-FILE SCYLLA-VERSION-FILE SCYLLA-PRODUCT-FILE dist/redhat/python3
-cd $BUILDDIR/scylla-python3-package
+mkdir -p $BUILDDIR/scylla-python3
+tar -C $BUILDDIR -xpf $RELOC_PKG scylla-python3/SCYLLA-RELOCATABLE-FILE scylla-python3/SCYLLA-RELEASE-FILE scylla-python3/SCYLLA-VERSION-FILE scylla-python3/SCYLLA-PRODUCT-FILE scylla-python3/dist/redhat/python3
+cd $BUILDDIR/scylla-python3
 exec ./dist/redhat/python3/build_rpm.sh $OPTS

@@ -52,8 +52,8 @@ RELOC_PKG=$(readlink -f $RELOC_PKG)
 if [[ ! $OPTS =~ --reloc-pkg ]]; then
     OPTS="$OPTS --reloc-pkg $RELOC_PKG"
 fi
-mkdir -p $BUILDDIR/scylla-package
-tar -C $BUILDDIR/scylla-package -xpf $RELOC_PKG SCYLLA-RELOCATABLE-FILE SCYLLA-RELEASE-FILE SCYLLA-VERSION-FILE SCYLLA-PRODUCT-FILE dist/redhat
-cd $BUILDDIR/scylla-package
-echo "Running './dist/redhat/build_rpm.sh $OPTS' under $BUILDDIR/scylla-package directory"
+mkdir -p $BUILDDIR/
+tar -C $BUILDDIR/ -xpf $RELOC_PKG scylla/SCYLLA-RELOCATABLE-FILE scylla/SCYLLA-RELEASE-FILE scylla/SCYLLA-VERSION-FILE scylla/SCYLLA-PRODUCT-FILE scylla/dist/redhat
+cd $BUILDDIR/scylla
+echo "Running './dist/redhat/build_rpm.sh $OPTS' under $BUILDDIR/scylla directory"
 exec ./dist/redhat/build_rpm.sh $OPTS

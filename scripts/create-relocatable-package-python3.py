@@ -34,6 +34,21 @@ import tarfile
 from tempfile import mkstemp
 import magic
 
+
+RELOC_PREFIX='scylla-python3'
+def reloc_add(self, name, arcname=None, recursive=True, *, filter=None):
+    if arcname:
+        return self.add(name, arcname="{}/{}".format(RELOC_PREFIX, arcname))
+    else:
+        return self.add(name, arcname="{}/{}".format(RELOC_PREFIX, name))
+
+def reloc_addfile(self, tarinfo, fileobj=None):
+    tarinfo.name = "{}/{}".format(RELOC_PREFIX, tarinfo.name)
+    return self.addfile(tarinfo, fileobj)
+
+tarfile.TarFile.reloc_add = reloc_add
+tarfile.TarFile.reloc_addfile = reloc_addfile
+
 def should_copy(f):
     '''Given a file, returns whether or not we are interested in copying this file.
     We want the actual python interepreter, and the files in /lib(64) and /usr/lib(64)
@@ -95,14 +110,14 @@ def fix_python_binary(ar, binpath):
     interpreter = subprocess.check_output(['patchelf',
                                            '--print-interpreter',
                                            patched_binary], universal_newlines=True).splitlines()[0]
-    ar.add(os.path.realpath(interpreter), arcname=os.path.join("libexec", "ld.so"))
-    ar.add(patched_binary, arcname=os.path.join("libexec", pyname + ".bin"))
+    ar.reloc_add(os.path.realpath(interpreter), arcname=os.path.join("libexec", "ld.so"))
+    ar.reloc_add(patched_binary, arcname=os.path.join("libexec", pyname + ".bin"))
     os.remove(patched_binary)
 
 def fix_sharedlib(ar, binpath, targetpath):
     relpath =  os.path.join(os.path.relpath("lib64", targetpath), "lib64")
     patched_binary = fix_binary(ar, binpath, '$ORIGIN/' + relpath)
-    ar.add(patched_binary, arcname=targetpath)
+    ar.reloc_add(patched_binary, arcname=targetpath)
     os.remove(patched_binary)
 
 def gen_python_thunk(ar, pybin):
@@ -124,12 +139,12 @@ PYTHONPATH="$d/{sitepackages}:$d/{sitepackages64}:$PYTHONPATH" exec -a "$0" "$ld
     ti = tarfile.TarInfo(name=os.path.join("bin", pybin))
     ti.size = len(thunk)
     ti.mode = 0o755
-    ar.addfile(ti, fileobj=io.BytesIO(thunk))
+    ar.reloc_addfile(ti, fileobj=io.BytesIO(thunk))
 
     ti = tarfile.TarInfo(name=os.path.join("bin", "python3"))
     ti.type = tarfile.SYMTYPE
     ti.linkname = pybin
-    ar.addfile(ti)
+    ar.reloc_addfile(ti)
 
 def copy_file_to_python_env(ar, f):
     if f.startswith("/usr/bin/python"):
@@ -154,7 +169,7 @@ def copy_file_to_python_env(ar, f):
         # links to the current directory are usually safe, but because we are manipulating
         # the directory structure, very likely links that transverse paths will break.
         if os.path.islink(f) and os.readlink(f) != os.path.basename(os.readlink(f)):
-            ar.add(os.path.realpath(f), arcname=libfile)
+            ar.reloc_add(os.path.realpath(f), arcname=libfile)
         else:
             m = magic.detect_from_filename(f)
             if m and (m.mime_type.startswith('application/x-sharedlib') or m.mime_type.startswith('application/x-pie-executable')):
@@ -163,7 +178,7 @@ def copy_file_to_python_env(ar, f):
                 # in case this is a directory that is listed, we don't want to include everything that is in that directory
                 # for instance, the python3 package will own site-packages, but other packages that we are not packaging could have
                 # filled it with stuff.
-                ar.add(f, arcname=libfile, recursive=False)
+                ar.reloc_add(f, arcname=libfile, recursive=False)
 
 def filter_basic_packages(package):
     '''Returns true if this package should be filtered out. We filter out packages that are too basic like the Fedora repos,
@@ -228,19 +243,24 @@ packages= ["python3"] + args.modules
 
 file_list = generate_file_list(dependencies(packages))
 ar = tarfile.open(args.output, mode='w|gz')
+# relocatable package format version = 2
+with open('build/.relocatable_package_version', 'w') as f:
+    f.write('2\n')
+ar.add('build/.relocatable_package_version', arcname='.relocatable_package_version')
+
 pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
-ar.add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
-ar.add('dist/redhat/python3')
-ar.add('dist/debian/python3')
-ar.add('build/python3/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
-ar.add('build/python3/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
-ar.add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
-ar.add('python3/install.sh', arcname='install.sh')
+ar.reloc_add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
+ar.reloc_add('dist/redhat/python3')
+ar.reloc_add('dist/debian/python3')
+ar.reloc_add('build/python3/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
+ar.reloc_add('build/python3/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
+ar.reloc_add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
+ar.reloc_add('python3/install.sh', arcname='install.sh')
 for p in ['pyhton3-libs'] + packages:
     pdir = pathlib.Path('/usr/share/licenses/{}/'.format(p))
     if pdir.exists():
         for f in pdir.glob('*'):
-            ar.add(f, arcname='licenses/{}/{}'.format(p, f.name))
+            ar.reloc_add(f, arcname='licenses/{}/{}'.format(p, f.name))
 
 for f in file_list:
     copy_file_to_python_env(ar, f)

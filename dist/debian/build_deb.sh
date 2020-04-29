@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-PRODUCT=$(cat SCYLLA-PRODUCT-FILE)
+PRODUCT=$(cat scylla/SCYLLA-PRODUCT-FILE)
 
 . /etc/os-release
 print_usage() {
@@ -45,7 +45,7 @@ pkg_install() {
     fi
 }
 
-if [ ! -e SCYLLA-RELOCATABLE-FILE ]; then
+if [ ! -e scylla/SCYLLA-RELOCATABLE-FILE ]; then
     echo "do not directly execute build_deb.sh, use reloc/build_deb.sh instead."
     exit 1
 fi
@@ -103,11 +103,12 @@ fi
 
 RELOC_PKG_FULLPATH=$(readlink -f $RELOC_PKG)
 RELOC_PKG_BASENAME=$(basename $RELOC_PKG)
-SCYLLA_VERSION=$(cat SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/')
-SCYLLA_RELEASE=$(cat SCYLLA-RELEASE-FILE)
+SCYLLA_VERSION=$(cat scylla/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/')
+SCYLLA_RELEASE=$(cat scylla/SCYLLA-RELEASE-FILE)
 
 ln -fv $RELOC_PKG_FULLPATH ../$PRODUCT-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz
 
+cp -al scylla/debian debian
 if $DIST; then
     export DEB_BUILD_OPTIONS="housekeeping"
 fi
