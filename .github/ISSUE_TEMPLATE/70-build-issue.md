@@ -1,5 +1,5 @@
 ---
-name: "☕ Build Issue: I want to build Scylla from source, but I cant!"
+name: "☕ Build Issue: I want to build Scylla from source, but I can't!"
 about: Use this template for build related issues
 labels: build
 ---

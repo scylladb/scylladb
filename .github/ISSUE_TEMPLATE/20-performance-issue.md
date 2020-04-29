@@ -1,5 +1,5 @@
 ---
-name: "🏃 Scylla Performance are not what I expected"
+name: "🏃 Scylla Performance is not what I expected"
 about: Use this template for reporting a suspected performance issue.
 labels: performance
 ---
