@@ -23,7 +23,7 @@ functionality). All shared libraries needed for the interpreter to
 operate are shipped with it.
 
 %prep
-%setup -q -c
+%setup -n scylla-python3
 
 %install
 ./install.sh --root "$RPM_BUILD_ROOT"

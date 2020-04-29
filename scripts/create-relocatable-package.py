@@ -29,6 +29,15 @@ import tarfile
 import pathlib
 
 
+RELOC_PREFIX='scylla'
+def reloc_add(self, name, arcname=None, recursive=True, *, filter=None):
+    if arcname:
+        return self.add(name, arcname="{}/{}".format(RELOC_PREFIX, arcname))
+    else:
+        return self.add(name, arcname="{}/{}".format(RELOC_PREFIX, name))
+
+tarfile.TarFile.reloc_add = reloc_add
+
 def ldd(executable):
     '''Given an executable file, return a dictionary with the keys
     containing its shared library dependencies and the values pointing
@@ -60,6 +69,10 @@ def filter_dist(info):
         if info.name.startswith(x):
             return None
     return info
+
+SCYLLA_DIR='scylla-package'
+def reloc_add(ar, name, arcname=None):
+    ar.add(name, arcname="{}/{}".format(SCYLLA_DIR, arcname if arcname else name))
 
 ap = argparse.ArgumentParser(description='Create a relocatable scylla package.')
 ap.add_argument('dest',
@@ -104,38 +117,42 @@ have_gnutls = any([lib.startswith('libgnutls.so')
 gzip_process = subprocess.Popen("pigz > "+output, shell=True, stdin=subprocess.PIPE)
 
 ar = tarfile.open(fileobj=gzip_process.stdin, mode='w|')
-pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
-ar.add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
+# relocatable package format version = 2
+with open('build/.relocatable_package_version', 'w') as f:
+    f.write('2\n')
+ar.add('build/.relocatable_package_version', arcname='.relocatable_package_version')
 
 for exe in executables:
     basename = os.path.basename(exe)
-    ar.add(exe, arcname='libexec/' + basename)
+    ar.reloc_add(exe, arcname='libexec/' + basename)
 for lib, libfile in libs.items():
-    ar.add(libfile, arcname='libreloc/' + lib)
+    ar.reloc_add(libfile, arcname='libreloc/' + lib)
 if have_gnutls:
     gnutls_config_nolink = os.path.realpath('/etc/crypto-policies/back-ends/gnutls.config')
-    ar.add(gnutls_config_nolink, arcname='libreloc/gnutls.config')
-ar.add('conf')
-ar.add('dist', filter=filter_dist)
-ar.add('build/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
-ar.add('build/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
-ar.add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
-ar.add('seastar/scripts')
-ar.add('seastar/dpdk/usertools')
-ar.add('install.sh')
+    ar.reloc_add(gnutls_config_nolink, arcname='libreloc/gnutls.config')
+    ar.reloc_add('conf')
+ar.reloc_add('dist', filter=filter_dist)
+pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
+ar.reloc_add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
+ar.reloc_add('build/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
+ar.reloc_add('build/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
+ar.reloc_add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
+ar.reloc_add('seastar/scripts')
+ar.reloc_add('seastar/dpdk/usertools')
+ar.reloc_add('install.sh')
 # scylla_post_install.sh lives at the top level together with install.sh in the src tree, but while install.sh is
 # not distributed in the .rpm and .deb packages, scylla_post_install is, so we'll add it in the package
 # together with the other scripts that will end up in /usr/lib/scylla
-ar.add('scylla_post_install.sh', arcname="dist/common/scripts/scylla_post_install.sh")
-ar.add('README.md')
-ar.add('NOTICE.txt')
-ar.add('ORIGIN')
-ar.add('licenses')
-ar.add('swagger-ui')
-ar.add('api')
-ar.add('tools')
-ar.add('scylla-gdb.py')
-ar.add('build/debian/debian', arcname='debian')
+ar.reloc_add('scylla_post_install.sh', arcname="dist/common/scripts/scylla_post_install.sh")
+ar.reloc_add('README.md')
+ar.reloc_add('NOTICE.txt')
+ar.reloc_add('ORIGIN')
+ar.reloc_add('licenses')
+ar.reloc_add('swagger-ui')
+ar.reloc_add('api')
+ar.reloc_add('tools')
+ar.reloc_add('scylla-gdb.py')
+ar.reloc_add('build/debian/debian', arcname='debian')
 
 # Complete the tar output, and wait for the gzip process to complete
 ar.close()
