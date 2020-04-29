@@ -652,14 +652,14 @@ future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstri
 
 static
 const dht::sharder&
-get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, const std::vector<sstring>& names) {
+get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, const std::vector<sstring>& table_names, const std::vector<utils::UUID>& table_ids) {
     schema_ptr last_s;
-    for (auto& name : names) {
+    for (size_t idx = 0 ; idx < table_ids.size(); idx++) {
         schema_ptr s;
         try {
-            s = db.local().find_column_family(keyspace, name).schema();
+            s = db.local().find_column_family(table_ids[idx]).schema();
         } catch(...) {
-            throw std::runtime_error(format("No column family '{}' in keyspace '{}'", name, keyspace));
+            throw std::runtime_error(format("No column family '{}' in keyspace '{}'", table_names[idx], keyspace));
         }
         if (last_s && last_s->get_sharder() != s->get_sharder()) {
             throw std::runtime_error(
@@ -672,7 +672,7 @@ get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, 
     }
     if (!last_s) {
         throw std::runtime_error(format("Failed to find sharder for keyspace={}, tables={}, no table in this keyspace",
-                keyspace, names));
+                keyspace, table_names));
     }
     return last_s->get_sharder();
 }
@@ -687,7 +687,7 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     const std::vector<sstring>& hosts_,
     streaming::stream_reason reason_)
     : db(db_)
-    , sharder(get_sharder_for_tables(db_, keyspace_, cfs_))
+    , sharder(get_sharder_for_tables(db_, keyspace_, cfs_, table_ids_))
     , keyspace(keyspace_)
     , ranges(ranges_)
     , cfs(cfs_)
