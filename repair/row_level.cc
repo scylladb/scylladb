@@ -565,6 +565,11 @@ public:
             return write_partition_end(node_idx).then([this, node_idx] () mutable {
                 // Empty mutation_fragment_opt means no more data, so the writer can seal the sstables.
                 return _mq[node_idx]->push_eventually(mutation_fragment_opt());
+            }).handle_exception([this, node_idx] (std::exception_ptr ep) {
+                _mq[node_idx]->abort(ep);
+                rlogger.warn("repair_writer: keyspace={}, table={}, write_end_of_stream failed: {}",
+                        _schema->ks_name(), _schema->cf_name(), ep);
+                return make_exception_future<>(std::move(ep));
             });
         } else {
             return make_ready_future<>();
