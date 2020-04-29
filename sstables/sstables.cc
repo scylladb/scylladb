@@ -197,6 +197,7 @@ std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_t
     { sstable::version_types::ka , "ka" },
     { sstable::version_types::la , "la" },
     { sstable::version_types::mc , "mc" },
+    { sstable::version_types::md , "md" },
 };
 
 std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
@@ -661,7 +662,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                 case metadata_type::Stats:
                     return parse<stats_metadata>(schema, v, in, s.contents[type]);
                 case metadata_type::Serialization:
-                    if (v != sstable_version_types::mc) {
+                    if (v < sstable_version_types::mc) {
                         throw std::runtime_error(
                             "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
                     } else {
@@ -1389,7 +1390,7 @@ future<> sstable::read_filter(const io_priority_class& pc) {
         read_simple<component_type::Filter>(filter, pc).get();
         auto nr_bits = filter.buckets.elements.size() * std::numeric_limits<typename decltype(filter.buckets.elements)::value_type>::digits;
         large_bitset bs(nr_bits, std::move(filter.buckets.elements));
-        utils::filter_format format = (_version == sstable_version_types::mc)
+        utils::filter_format format = (_version >= sstable_version_types::mc)
                                       ? utils::filter_format::m_format
                                       : utils::filter_format::k_l_format;
         _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs), format);
@@ -2361,7 +2362,7 @@ void sstable_writer_k_l::consume_end_of_stream()
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, const io_priority_class& pc, shard_id shard) {
     sst.make_metadata_collector();
-    if (sst.get_version() == sstable_version_types::mc) {
+    if (sst.get_version() >= sstable_version_types::mc) {
         _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
     } else {
         _impl = std::make_unique<sstable_writer_k_l>(sst, s, estimated_partitions, cfg, pc, shard);
@@ -2521,7 +2522,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                     auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                             sem->make_permit(), s, trust_promoted_index::yes, *_schema, "", index_file, std::move(options), 0, index_size,
-                            (_version == sstable_version_types::mc
+                            (_version >= sstable_version_types::mc
                                 ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
                                 : std::optional<column_values_fixed_lengths>{}));
                     return ctx->consume_input().finally([ctx] {
@@ -2620,6 +2621,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     case sstable::version_types::la:
         return v + "-" + g + "-" + f + "-" + component;
     case sstable::version_types::mc:
+    case sstable::version_types::md:
         return v + "-" + g + "-" + f + "-" + component;
     }
     assert(0 && "invalid version");
@@ -2724,7 +2726,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
-    static std::regex la_mc("(la|mc)-(\\d+)-(\\w+)-(.*)");
+    static std::regex la_mx("(la|m[cd])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     static std::regex dir(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
@@ -2741,7 +2743,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
 
     sstlog.debug("Make descriptor sstdir: {}; fname: {}", sstdir, fname);
     std::string s(fname);
-    if (std::regex_match(s, match, la_mc)) {
+    if (std::regex_match(s, match, la_mx)) {
         std::string sdir(sstdir);
         std::smatch dirmatch;
         if (std::regex_match(sdir, dirmatch, dir)) {
@@ -2806,7 +2808,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 
     input_stream<char> stream;
     if (_components->compression) {
-        if (_version == sstable_version_types::mc) {
+        if (_version >= sstable_version_types::mc) {
              return make_compressed_file_m_format_input_stream(f, &_components->compression,
                 pos, len, std::move(options));
         } else {

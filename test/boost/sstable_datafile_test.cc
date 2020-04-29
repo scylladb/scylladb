@@ -4524,7 +4524,7 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
     // delete from ks.test where pk = 1 and ck = 2;
     return test_env::do_with_async([] (test_env& env) {
         for (const auto version : all_sstable_versions) {
-            if (version != sstables::sstable::version_types::mc) { // Does not apply to 'mc' format
+            if (version < sstable_version_types::mc) { // Applies only to formats older than 'm'
                 auto s = schema_builder("ks", "test")
                     .with_column("pk", int32_type, column_kind::partition_key)
                     .with_column("ck", int32_type, column_kind::clustering_key)
