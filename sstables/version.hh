@@ -30,11 +30,11 @@ namespace sstables {
 enum class sstable_version_types { ka, la, mc, md };
 enum class sstable_format_types { big };
 
-inline std::array<sstable_version_types, 3> all_sstable_versions = {
+inline std::array<sstable_version_types, 4> all_sstable_versions = {
     sstable_version_types::ka,
     sstable_version_types::la,
     sstable_version_types::mc,
-    // sstable_version_types::md, // FIXME: not yet
+    sstable_version_types::md,
 };
 
 inline sstable_version_types from_string(const seastar::sstring& format) {
