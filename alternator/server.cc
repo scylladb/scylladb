@@ -39,6 +39,8 @@ using namespace httpd;
 namespace alternator {
 
 static constexpr auto TARGET = "X-Amz-Target";
+static constexpr auto LOWERCASE_TARGET = "x-amz-target";
+static constexpr auto UPPERCASE_TARGET = "X-AMZ-TARGET";
 
 inline std::vector<std::string_view> split(std::string_view text, char separator) {
     std::vector<std::string_view> tokens;
@@ -271,6 +273,20 @@ future<> server::verify_signature(const request& req) {
 future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request>&& req) {
     _executor._stats.total_operations++;
     sstring target = req->get_header(TARGET);
+    // Workaround for the fact that Seastar HTTP server treats headers in a case-sensitive manner,
+    // https://github.com/scylladb/seastar/issues/636
+    // AWS-CPP driver is affected, as it sends its headers in lowercase
+    // TODO: remove once the issue is solved in Seastar
+    if (target == "") {
+        target = req->get_header(LOWERCASE_TARGET);
+    }
+    if (target == "") {
+        target = req->get_header(UPPERCASE_TARGET);
+    }
+    if (target == "") {
+        return make_exception_future<executor::request_return_type>(api_error("UnknownOperationException",
+                format("Required {} header was not found in the request", TARGET)));
+    }
     std::vector<std::string_view> split_target = split(target, '.');
     //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
     std::string op = split_target.empty() ? std::string() : std::string(split_target.back());
