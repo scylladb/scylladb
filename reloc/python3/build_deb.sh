@@ -32,6 +32,6 @@ if [[ ! $OPTS =~ --reloc-pkg ]]; then
     OPTS="$OPTS --reloc-pkg $RELOC_PKG"
 fi
 mkdir -p build/debian/scylla-python3-package
-tar -C build/debian/scylla-python3-package -xpf $RELOC_PKG
+tar -C build/debian -xpf $RELOC_PKG
 cd build/debian/scylla-python3-package
 exec ./dist/debian/python3/build_deb.sh $OPTS

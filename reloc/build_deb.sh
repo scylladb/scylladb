@@ -36,7 +36,7 @@ RELOC_PKG=$(readlink -f $RELOC_PKG)
 if [[ ! $OPTS =~ --reloc-pkg ]]; then
     OPTS="$OPTS --reloc-pkg $RELOC_PKG"
 fi
-mkdir -p build/debian/scylla-package
-tar -C build/debian/scylla-package -xpf $RELOC_PKG
+mkdir -p build/debian/
+tar -C build/debian/ -xpf $RELOC_PKG
 cd build/debian/scylla-package
 exec ./dist/debian/build_deb.sh $OPTS
