@@ -117,6 +117,53 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
     });
 }
 
+SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto test_random_streams = [] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
+            auto muts = gen(partition_nr);
+            schema_ptr s = gen.schema();
+            auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(muts) : make_empty_flat_reader(s);
+            int mf_produced = 0;
+            auto get_next_mutation_fragment = [&source_reader, &mf_produced] () mutable {
+                if (mf_produced++ > 800) {
+                    return make_exception_future<mutation_fragment_opt>(std::runtime_error("the producer failed"));
+                } else {
+                    return source_reader(db::no_timeout);
+                }
+            };
+            auto& partitioner = s->get_partitioner();
+            try {
+                distribute_reader_and_consume_on_shards(s,
+                    make_generating_reader(s, std::move(get_next_mutation_fragment)),
+                    [&partitioner, error] (flat_mutation_reader reader) mutable {
+                        if (error) {
+                            return make_exception_future<>(std::runtime_error("Failed to write"));
+                        }
+                        return repeat([&partitioner, reader = std::move(reader), error] () mutable {
+                            return reader(db::no_timeout).then([&partitioner,  error] (mutation_fragment_opt mf_opt) mutable {
+                                if (mf_opt) {
+                                    if (mf_opt->is_partition_start()) {
+                                        auto shard = partitioner.shard_of(mf_opt->as_partition_start().key().token());
+                                        BOOST_REQUIRE_EQUAL(shard, this_shard_id());
+                                    }
+                                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                                } else {
+                                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                                }
+                            });
+                        });
+                    }
+                ).get0();
+            } catch (...) {
+                // The distribute_reader_and_consume_on_shards is expected to fail and not block forever
+            }
+        };
+
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::yes), 1000, generate_error::no);
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::yes), 1000, generate_error::yes);
+    });
+}
+
 namespace {
 
 class bucket_writer {
