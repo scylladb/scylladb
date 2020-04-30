@@ -1661,16 +1661,22 @@ void storage_proxy_stats::stats::register_stats() {
     });
 }
 
-inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(gms::inet_address ep) {
+inline uint64_t& storage_proxy_stats::split_stats::get_ep_stat(gms::inet_address ep) noexcept {
     if (fbu::is_me(ep)) {
         return _local.val;
     }
 
-    sstring dc = get_dc(ep);
-    if (_auto_register_metrics) {
-        register_metrics_for(ep);
+    try {
+        sstring dc = get_dc(ep);
+        if (_auto_register_metrics) {
+            register_metrics_for(ep);
+        }
+        return _dc_stats[dc].val;
+    } catch (...) {
+        static thread_local uint64_t dummy_stat;
+        slogger.error("Failed to obtain stats ({}), fall-back to dummy", std::current_exception());
+        return dummy_stat;
     }
-    return _dc_stats[dc].val;
 }
 
 void storage_proxy_stats::split_stats::register_metrics_local() {

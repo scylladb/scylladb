@@ -74,7 +74,7 @@ public:
      *
      * @return a reference to the requested counter
      */
-    uint64_t& get_ep_stat(gms::inet_address ep);
+    uint64_t& get_ep_stat(gms::inet_address ep) noexcept;
 };
 
 struct write_stats {
