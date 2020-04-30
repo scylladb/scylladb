@@ -444,7 +444,7 @@ class repair_writer {
     uint64_t _estimated_partitions;
     size_t _nr_peer_nodes;
     // Needs more than one for repair master
-    std::vector<std::optional<future<uint64_t>>> _writer_done;
+    std::vector<std::optional<future<>>> _writer_done;
     std::vector<std::optional<seastar::queue<mutation_fragment_opt>>> _mq;
     // Current partition written to disk
     std::vector<lw_shared_ptr<const decorated_key_with_hash>> _current_dk_written_to_sstable;
@@ -524,7 +524,15 @@ public:
                 return consumer(std::move(reader));
             });
         },
-        t.stream_in_progress());
+        t.stream_in_progress()).then([this, node_idx] (uint64_t partitions) {
+            rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
+                _schema->ks_name(), _schema->cf_name(), partitions);
+        }).handle_exception([this, node_idx] (std::exception_ptr ep) {
+            rlogger.warn("repair_writer: keyspace={}, table={}, multishard_writer failed: {}",
+                    _schema->ks_name(), _schema->cf_name(), ep);
+            _mq[node_idx]->abort(ep);
+            return make_exception_future<>(std::move(ep));
+        });
     }
 
     future<> write_partition_end(unsigned node_idx) {
@@ -551,21 +559,33 @@ public:
         }
     }
 
+    future<> write_end_of_stream(unsigned node_idx) {
+        if (_mq[node_idx]) {
+            // Partition_end is never sent on wire, so we have to write one ourselves.
+            return write_partition_end(node_idx).then([this, node_idx] () mutable {
+                // Empty mutation_fragment_opt means no more data, so the writer can seal the sstables.
+                return _mq[node_idx]->push_eventually(mutation_fragment_opt());
+            });
+        } else {
+            return make_ready_future<>();
+        }
+    }
+
+    future<> do_wait_for_writer_done(unsigned node_idx) {
+        if (_writer_done[node_idx]) {
+            return std::move(*(_writer_done[node_idx]));
+        } else {
+            return make_ready_future<>();
+        }
+    }
+
     future<> wait_for_writer_done() {
         return parallel_for_each(boost::irange(unsigned(0), unsigned(_nr_peer_nodes)), [this] (unsigned node_idx) {
-            if (_writer_done[node_idx] && _mq[node_idx]) {
-                // Partition_end is never sent on wire, so we have to write one ourselves.
-                return write_partition_end(node_idx).then([this, node_idx] () mutable {
-                    // Empty mutation_fragment_opt means no more data, so the writer can seal the sstables.
-                    return _mq[node_idx]->push_eventually(mutation_fragment_opt()).then([this, node_idx] () mutable {
-                        return (*_writer_done[node_idx]).then([] (uint64_t partitions) {
-                            rlogger.debug("Managed to write partitions={} to sstable", partitions);
-                            return make_ready_future<>();
-                        });
-                    });
-                });
-            }
-            return make_ready_future<>();
+            return when_all_succeed(write_end_of_stream(node_idx), do_wait_for_writer_done(node_idx));
+        }).handle_exception([this] (std::exception_ptr ep) {
+            rlogger.warn("repair_writer: keyspace={}, table={}, wait_for_writer_done failed: {}",
+                    _schema->ks_name(), _schema->cf_name(), ep);
+            return make_exception_future<>(std::move(ep));
         });
     }
 };
