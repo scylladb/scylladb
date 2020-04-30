@@ -127,7 +127,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
 }
 
 void storage_service::enable_all_features() {
-    auto features = get_known_features_set();
+    auto features = _feature_service.known_feature_set();
     _feature_service.enable(features);
 }
 
@@ -184,20 +184,6 @@ storage_service::isolate_on_commit_error() {
 
 bool storage_service::is_auto_bootstrap() const {
     return _db.local().get_config().auto_bootstrap();
-}
-
-// The features this node supports
-std::set<std::string_view> storage_service::get_known_features_set() {
-    return _feature_service.known_feature_set();
-}
-
-sstring storage_service::get_config_supported_features() {
-    return join(",", get_config_supported_features_set());
-}
-
-// The features this node supports and is allowed to advertise to other nodes
-std::set<std::string_view> storage_service::get_config_supported_features_set() {
-    return _feature_service.supported_feature_set();
 }
 
 std::unordered_set<token> get_replace_tokens() {
@@ -279,7 +265,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     } else {
         auto seeds = _gossiper.get_seeds();
         auto my_ep = get_broadcast_address();
-        auto local_features = get_known_features_set();
+        auto local_features = _feature_service.known_feature_set();
 
         if (seeds.count(my_ep)) {
             // This node is a seed node
@@ -369,7 +355,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     get_storage_service().invoke_on_all([local_host_id] (auto& ss) {
         ss._local_host_id = local_host_id;
     }).get();
-    auto features = get_config_supported_features();
+    auto features = _feature_service.supported_feature_set();
     if (!replacing_a_node_with_diff_ip) {
         // Replacing node with a different ip should own the host_id only after
         // the replacing node becomes NORMAL status. It is updated in
@@ -1710,7 +1696,7 @@ future<> storage_service::check_for_endpoint_collision(const std::unordered_map<
     return seastar::async([this, loaded_peer_features] {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
-        auto local_features = get_known_features_set();
+        auto local_features = _feature_service.known_feature_set();
         do {
             slogger.info("Checking remote features with gossip");
             _gossiper.do_shadow_round().get();
@@ -1783,7 +1769,7 @@ storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_add
     // make magic happen
     slogger.info("Checking remote features with gossip");
     return _gossiper.do_shadow_round().then([this, loaded_peer_features, replace_address] {
-        auto local_features = get_known_features_set();
+        auto local_features = _feature_service.known_feature_set();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
 
         // now that we've gossiped at least once, we should be able to find the node we're replacing

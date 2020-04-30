@@ -67,7 +67,7 @@ future<> sstables_format_selector::do_maybe_select_format(sstables::sstable_vers
             return make_ready_future<>();
         }
         return _gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-                     gms::versioned_value::supported_features(join(",", _features.local().supported_feature_set())));
+                 gms::versioned_value::supported_features(_features.local().supported_feature_set()));
     });
 }
 
