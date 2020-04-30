@@ -37,15 +37,18 @@ namespace service { class storage_service; }
 
 namespace gms {
 
+class feature_service;
+
 struct feature_config {
-    bool enable_sstables_mc_format = false;
-    bool enable_user_defined_functions = false;
-    bool enable_cdc = false;
-    std::set<sstring> disabled_features;
+private:
+    std::set<sstring> _disabled_features;
     feature_config();
+
+    friend class feature_service;
+    friend feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled);
 };
 
-feature_config feature_config_from_db_config(db::config& cfg);
+feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled = {});
 
 /**
  * A gossip feature tracks whether all the nodes the current one is
