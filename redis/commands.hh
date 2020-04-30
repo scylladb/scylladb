@@ -48,6 +48,17 @@ public:
     virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
 };
 
+class ttl : public abstract_command {
+    bytes _key;
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    ttl(bytes&& name, bytes&& key)
+        : abstract_command(std::move(name))
+        , _key(std::move(key)) {
+    }
+    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
 class set : public abstract_command {
     bytes _key;
     bytes _data;
@@ -62,6 +73,14 @@ public:
     }
     set(bytes&& name, bytes&& key, bytes&& data) : set(std::move(name), std::move(key), std::move(data), 0) {}
     virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
+class setex : public set {
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    setex(bytes&& name, bytes&& key, bytes&& data, long ttl)
+        : set(std::move(name), std::move(key), std::move(data), ttl) {
+    }
 };
 
 class del : public abstract_command {

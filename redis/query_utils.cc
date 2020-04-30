@@ -41,10 +41,13 @@ private:
     void add_cell(const column_definition& col, const std::optional<query::result_atomic_cell_view>& cell)
     {
         if (cell) {
-            cell->value().with_linearized([this, &col] (bytes_view cell_view) {
+            cell->value().with_linearized([this, &col, &cell] (bytes_view cell_view) {
                 auto&& dv = col.type->deserialize_value(cell_view);
                 auto&& d = dv.serialize_nonnull();
                 _data->_result = std::move(d);
+                if (cell->expiry().has_value()) {
+                    _data->_ttl = cell->expiry().value() - gc_clock::now();
+                }
                 _data->_has_result = true;
             });
         }

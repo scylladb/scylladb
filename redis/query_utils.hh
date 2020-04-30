@@ -24,6 +24,7 @@
 #include "seastar/core/shared_ptr.hh"
 #include "seastar/core/future.hh"
 #include "bytes.hh"
+#include "gc_clock.hh"
 
 using namespace seastar;
 
@@ -41,8 +42,11 @@ class redis_options;
 struct strings_result {
     bytes _result;
     bool _has_result;
+    ttl_opt _ttl;
     bytes& result() { return _result; }
     bool has_result() const { return _has_result; }
+    gc_clock::duration ttl() { return _ttl.value(); }
+    bool has_ttl() { return _ttl.has_value(); }
 };
 
 future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy&, const redis_options&, const bytes&, service_permit);

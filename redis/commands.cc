@@ -74,6 +74,26 @@ future<redis_message> exists::execute(service::storage_proxy& proxy, redis::redi
     });
 }
 
+shared_ptr<abstract_command> ttl::prepare(service::storage_proxy& proxy, request&& req) {
+    if (req.arguments_size() != 1) {
+        throw wrong_arguments_exception(1, req.arguments_size(), req._command);
+    }
+    return seastar::make_shared<ttl> (std::move(req._command), std::move(req._args[0]));
+}
+
+future<redis_message> ttl::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
+    return redis::read_strings(proxy, options, _key, permit).then([] (auto result) {
+        if (result->has_result()) {
+            if (result->has_ttl()) {
+                return redis_message::number(result->ttl().count());
+            }else{
+                return redis_message::number(-1);
+            }
+        }
+        return redis_message::number(-2);
+    });
+}
+
 shared_ptr<abstract_command> set::prepare(service::storage_proxy& proxy, request&& req) {
     if (req.arguments_size() != 2) {
         throw wrong_arguments_exception(2, req.arguments_size(), req._command);
@@ -85,6 +105,20 @@ future<redis_message> set::execute(service::storage_proxy& proxy, redis::redis_o
     return redis::write_strings(proxy, options, std::move(_key), std::move(_data), _ttl, permit).then([] {
         return redis_message::ok();
     });
+}
+
+shared_ptr<abstract_command> setex::prepare(service::storage_proxy& proxy, request&& req) {
+    if (req.arguments_size() != 3) {
+        throw wrong_arguments_exception(3, req.arguments_size(), req._command);
+    }
+    long ttl;
+    try {
+        ttl = std::stol(std::string(reinterpret_cast<const char*>(req._args[1].data()), req._args[1].size()));
+    }
+    catch (...) {
+        throw invalid_arguments_exception(req._command);
+    }
+    return seastar::make_shared<setex> (std::move(req._command), std::move(req._args[0]), std::move(req._args[2]), ttl);
 }
 
 shared_ptr<abstract_command> del::prepare(service::storage_proxy& proxy, request&& req) {
