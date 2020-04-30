@@ -134,6 +134,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         }
     } else {
         _sstables_format = sstables::sstable_version_types::mc;
+        _feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
     }
 }
 
@@ -208,13 +209,7 @@ sstring storage_service::get_config_supported_features() {
 
 // The features this node supports and is allowed to advertise to other nodes
 std::set<std::string_view> storage_service::get_config_supported_features_set() {
-    auto features = _feature_service.known_feature_set();
-
-    if (sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
-        features.erase(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
-    }
-
-    return features;
+    return _feature_service.supported_feature_set();
 }
 
 std::unordered_set<token> get_replace_tokens() {
@@ -3453,6 +3448,9 @@ void feature_enabled_listener::on_enabled() {
         return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(_format)).then([this] {
             return get_storage_service().invoke_on_all([this] (storage_service& s) {
                 s._sstables_format = _format;
+                if (sstables::is_later(_format, sstables::sstable_version_types::la)) {
+                    s._feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
+                }
             });
         }).then([] { return true; });
     }).then([this] (bool update_features) {
@@ -3470,6 +3468,9 @@ future<> read_sstables_format(distributed<storage_service>& ss) {
             sstables::sstable_version_types format = sstables::from_string(*format_opt);
             return ss.invoke_on_all([format] (storage_service& s) {
                 s._sstables_format = format;
+                if (sstables::is_later(format, sstables::sstable_version_types::la)) {
+                    s._feature_service.support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
+                }
             });
         }
         return make_ready_future<>();

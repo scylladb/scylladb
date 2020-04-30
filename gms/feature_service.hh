@@ -42,6 +42,7 @@ class feature_service;
 struct feature_config {
 private:
     std::set<sstring> _disabled_features;
+    std::set<sstring> _masked_features;
     feature_config();
 
     friend class feature_service;
@@ -67,9 +68,11 @@ public:
     future<> stop();
     // Has to run inside seastar::async context
     void enable(const sstring& name);
+    void support(const std::string_view& name);
     void enable(const std::set<std::string_view>& list);
     db::schema_features cluster_schema_features() const;
     std::set<std::string_view> known_feature_set();
+    std::set<std::string_view> supported_feature_set();
 
 private:
     gms::feature _range_tombstones_feature;

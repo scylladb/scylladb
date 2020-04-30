@@ -96,6 +96,8 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
 feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
     feature_config fcfg;
 
+    fcfg._masked_features.insert(sstring(gms::features::UNBOUNDED_RANGE_TOMBSTONES));
+
     fcfg._disabled_features = std::move(disabled);
 
     if (!cfg.enable_sstables_mc_format()) {
@@ -139,6 +141,10 @@ void feature_service::enable(const sstring& name) {
     }
 }
 
+void feature_service::support(const std::string_view& name) {
+    _config._masked_features.erase(sstring(name));
+}
+
 std::set<std::string_view> feature_service::known_feature_set() {
     // Add features known by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
@@ -176,6 +182,15 @@ std::set<std::string_view> feature_service::known_feature_set() {
     };
 
     for (const sstring& s : _config._disabled_features) {
+        features.erase(s);
+    }
+    return features;
+}
+
+std::set<std::string_view> feature_service::supported_feature_set() {
+    auto features = known_feature_set();
+
+    for (const sstring& s : _config._masked_features) {
         features.erase(s);
     }
     return features;
