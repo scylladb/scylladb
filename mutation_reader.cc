@@ -1844,6 +1844,10 @@ void queue_reader_handle::push_end_of_stream() {
     _reader = nullptr;
 }
 
+bool queue_reader_handle::is_terminated() const {
+    return _reader == nullptr;
+}
+
 void queue_reader_handle::abort(std::exception_ptr ep) {
     _ex = std::move(ep);
     if (_reader) {

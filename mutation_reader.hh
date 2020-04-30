@@ -536,6 +536,9 @@ public:
     ///
     /// All future operations on the handle or the reader will raise `ep`.
     void abort(std::exception_ptr ep);
+
+    /// Checks if the queue is already terminated with either a success or failure (abort)
+    bool is_terminated() const;
 };
 
 std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s);

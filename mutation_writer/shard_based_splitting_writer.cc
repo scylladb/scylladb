@@ -48,7 +48,13 @@ class shard_based_splitting_mutation_writer {
             return _handle.push(std::move(mf));
         }
         future<> consume_end_of_stream() {
-            _handle.push_end_of_stream();
+            // consume_end_of_stream is always called from a finally block,
+            // and that's because we wait for _consume_fut to return. We
+            // don't want to generate another exception here if the read was
+            // aborted.
+            if (!_handle.is_terminated()) {
+                _handle.push_end_of_stream();
+            }
             return std::move(_consume_fut);
         }
     };
