@@ -42,9 +42,7 @@ private:
     }
 
 public:
-    tmpdir()
-     : _path(fs::temp_directory_path() /
-             fs::path(fmt::format(FMT_STRING("scylla-{}"), utils::make_random_uuid()))) {
+    tmpdir() : _path(tmpdir::temp_directory_path()) {
         fs::create_directories(_path);
     }
 
@@ -60,5 +58,12 @@ public:
         remove();
     }
 
-    const fs::path& path() const noexcept { return _path; }
+    const fs::path& path() const & noexcept { return _path; }
+    // tmpdir().path() must not be allowed, use tmpdir::temp_directory_path() for this.
+    const fs::path& path() const && = delete;
+
+    static const fs::path temp_directory_path() {
+      return fs::temp_directory_path() /
+             fs::path(fmt::format(FMT_STRING("scylla-{}"), utils::make_random_uuid()));
+    }
 };
