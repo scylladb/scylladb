@@ -1948,7 +1948,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
             if (p.first == component_type::TOC) {
                 return make_ready_future<>();
             }
-            return remove_file(sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
+            return sstable_write_io_check(remove_file, sstable::filename(old_dir, _schema->ks_name(), _schema->cf_name(), _version, old_generation, _format, p.second));
         });
     }).then([this, old_dir, new_dir, do_sync_dirs] {
         if (!do_sync_dirs) {
