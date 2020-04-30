@@ -51,6 +51,11 @@ public:
     virtual void validate_options() const override;
 
     virtual std::optional<std::set<sstring>> recognized_options() const override;
+
+    virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const override {
+        return false;
+    }
+
 };
 
 }

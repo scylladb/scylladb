@@ -650,6 +650,13 @@ private:
      */
     void handle_state_removing(inet_address endpoint, std::vector<sstring> pieces);
 
+    /**
+     * Handle notification that a node is replacing another node.
+     *
+     * @param endpoint node
+     */
+    void handle_state_replacing(inet_address endpoint);
+
 private:
     void excise(std::unordered_set<token> tokens, inet_address endpoint);
     void excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time);

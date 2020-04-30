@@ -1900,7 +1900,7 @@ future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, locator:
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector ranges = strat.get_ranges(myip);
+            dht::token_range_vector ranges = strat.get_ranges(myip, tm);
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc, ranges.size());
             for (auto it = ranges.begin(); it != ranges.end();) {
@@ -1942,9 +1942,10 @@ future<> rebuild_with_repair(seastar::sharded<database>& db, locator::token_meta
     return do_rebuild_replace_with_repair(db, std::move(tm), std::move(op), std::move(source_dc), reason);
 }
 
-future<> replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm) {
+future<> replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> replacing_tokens) {
     auto op = sstring("replace_with_repair");
     auto source_dc = get_local_dc();
     auto reason = streaming::stream_reason::bootstrap;
+    tm.update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
     return do_rebuild_replace_with_repair(db, std::move(tm), std::move(op), std::move(source_dc), reason);
 }

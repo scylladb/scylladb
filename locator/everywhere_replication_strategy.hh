@@ -61,5 +61,9 @@ public:
     virtual size_t get_replication_factor() const override {
         return _token_metadata.get_all_endpoints_count();
     }
+
+    virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const override {
+        return true;
+    }
 };
 }

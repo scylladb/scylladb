@@ -95,9 +95,16 @@ public:
                                               token_metadata& token_metadata,
                                               const std::map<sstring, sstring>& config_options);
     virtual std::vector<inet_address> get_natural_endpoints(const token& search_token);
+    virtual std::vector<inet_address> get_natural_endpoints_without_node_being_replaced(const token& search_token);
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
     virtual size_t get_replication_factor() const = 0;
+    // Decide if the replication strategy allow removing the node being
+    // replaced from the natural endpoints when a node is being replaced in the
+    // cluster. LocalStrategy is the not allowed to do so because it always
+    // returns the node itself as the natural_endpoints and the node will not
+    // appear in the pending_endpoints.
+    virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const = 0;
     uint64_t get_cache_hits_count() const { return _cache_hits_count; }
     replication_strategy_type get_type() const { return _my_type; }
 
@@ -106,6 +113,10 @@ public:
     // It the analogue of Origin's getAddressRanges().get(endpoint).
     // This function is not efficient, and not meant for the fast path.
     dht::token_range_vector get_ranges(inet_address ep) const;
+
+    // Use the token_metadata provided by the caller instead of _token_metadata
+    dht::token_range_vector get_ranges(inet_address ep, token_metadata& tm) const;
+
     // get_primary_ranges() returns the list of "primary ranges" for the given
     // endpoint. "Primary ranges" are the ranges that the node is responsible
     // for storing replica primarily, which means this is the first node

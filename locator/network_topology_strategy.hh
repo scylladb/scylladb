@@ -66,6 +66,10 @@ public:
         return _datacenteres;
     }
 
+    virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const override {
+        return true;
+    }
+
 protected:
     /**
      * calculate endpoints in one pass through the tokens by tracking our
