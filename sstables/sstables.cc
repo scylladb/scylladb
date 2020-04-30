@@ -1888,11 +1888,103 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
     return all;
 }
 
+static bool is_same_file(const seastar::stat_data& sd1, const seastar::stat_data& sd2) noexcept {
+    return sd1.device_id == sd2.device_id && sd1.inode_number == sd2.inode_number;
+}
+
+future<bool> same_file(sstring path1, sstring path2) noexcept {
+    return when_all_succeed(file_stat(std::move(path1)), file_stat(std::move(path2))).then_unpack([] (seastar::stat_data sd1, seastar::stat_data sd2) {
+        return is_same_file(sd1, sd2);
+    });
+}
+
+// support replay of link by considering link_file EEXIST error as successful when the newpath is hard linked to oldpath.
+future<> idempotent_link_file(sstring oldpath, sstring newpath) noexcept {
+    return do_with(std::move(oldpath), std::move(newpath), [] (const sstring& oldpath, const sstring& newpath) {
+        return link_file(oldpath, newpath).handle_exception([&] (std::exception_ptr eptr) mutable {
+            try {
+                std::rethrow_exception(eptr);
+            } catch (const std::system_error& ex) {
+                if (ex.code().value() != EEXIST) {
+                    throw;
+                }
+            }
+            return same_file(oldpath, newpath).then_wrapped([eptr = std::move(eptr)] (future<bool> fut) mutable {
+                if (!fut.failed()) {
+                    auto same = fut.get0();
+                    if (same) {
+                        return make_ready_future<>();
+                    }
+                }
+                return make_exception_future<>(eptr);
+            });
+        });
+    });
+}
+
+// Check is the operation is replayed, possibly when moving sstables
+// from staging to the base dir, for example, right after create_links completes,
+// and right before deleting the source links.
+// We end up in two valid sstables in this case, so make create_links idempotent.
+future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_gen,
+        const std::vector<std::pair<sstables::component_type, sstring>>& comps) const {
+    return parallel_for_each(comps, [this, &dst_dir, dst_gen] (const auto& p) mutable {
+        auto comp = p.second;
+        auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, comp);
+        auto dst = sstable::filename(dst_dir, _schema->ks_name(), _schema->cf_name(), _version, dst_gen, _format, comp);
+        return do_with(std::move(src), std::move(dst), [this] (const sstring& src, const sstring& dst) mutable {
+            return file_exists(dst).then([&, this] (bool exists) mutable {
+                if (!exists) {
+                    return make_ready_future<>();
+                }
+                return same_file(src, dst).then_wrapped([&, this] (future<bool> fut) {
+                    if (fut.failed()) {
+                        auto eptr = fut.get_exception();
+                        sstlog.error("Error while linking SSTable: {} to {}: {}", src, dst, eptr);
+                        return make_exception_future<>(eptr);
+                    }
+                    auto same = fut.get0();
+                    if (!same) {
+                        auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
+                        sstlog.error("{}", msg);
+                        throw malformed_sstable_exception(msg, _dir);
+                    }
+                    return make_ready_future<>();
+                });
+            });
+        });
+    });
+}
+
+/// create_links links all component files from the sstable directory to
+/// the given destination directory, using the provided generation.
+///
+/// It first checks if this is a replay of a previous
+/// create_links call, by testing if the destination names already
+/// exist, and if so, if they point to the same inodes as the
+/// source names.  Otherwise, we return an error.
+/// This is an indication that something went wrong.
+///
+/// Creating the links is done by:
+/// First, linking the source TOC component to the destination TemporaryTOC,
+/// to mark the destination for rollback, in case we crash mid-way.
+/// The all other components are linked.
+/// Eventually, the detination TemporaryTOC is renamed to TOC,
+/// to "commit" the destination sstable.
+///
+/// Note that idempotent versions of link_file and rename_file
+/// are used.  These versions handle EEXIST errors that may happen
+/// when the respective operations are replayed.
+///
+/// \param dir - the destination directory.
+/// \param generation - the generation of the destination sstable
 future<> sstable::create_links(const sstring& dir, int64_t generation) const {
     sstlog.trace("create_links: {} -> {} generation={}", get_filename(), dir, generation);
-    // TemporaryTOC is always first, TOC is always last
-    auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
-    return sstable_write_io_check(::link_file, filename(component_type::TOC), dst).then([this, dir] {
+  return do_with(dir, all_components(), [this, generation] (const sstring& dir, auto& comps) {
+    return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps] {
+        // TemporaryTOC is always first, TOC is always last
+        auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
+    return sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), dst).then([this, &dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([this, dir, generation] {
         // FIXME: Should clean already-created links if we failed midway.
@@ -1902,10 +1994,11 @@ future<> sstable::create_links(const sstring& dir, int64_t generation) const {
             }
             auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
             auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
-            return sstable_write_io_check(::link_file, std::move(src), std::move(dst));
+            return sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
         });
     }).then([this, dir] {
         return sstable_write_io_check(sync_directory, dir);
+    });
     }).then([dir, this, generation] {
         auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
         auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TOC);
@@ -1915,6 +2008,7 @@ future<> sstable::create_links(const sstring& dir, int64_t generation) const {
     }).then([this, dir, generation] {
         sstlog.trace("create_links: {} -> {} generation={}: done", get_filename(), dir, generation);
     });
+  });
 }
 
 future<> sstable::set_generation(int64_t new_generation) {

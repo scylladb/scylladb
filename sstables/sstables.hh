@@ -637,6 +637,8 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
+
+    future<> check_create_links_replay(const sstring& dst_dir, int64_t dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
 public:
     future<> read_toc() noexcept;
 
