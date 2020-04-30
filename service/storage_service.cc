@@ -2076,30 +2076,37 @@ future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspa
 
 }
 
-future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag) {
+future<> storage_service::take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag) {
     if (ks_name.empty()) {
         throw std::runtime_error("You must supply a keyspace name");
     }
-    if (cf_name.empty()) {
+    if (tables.empty()) {
         throw std::runtime_error("You must supply a table name");
     }
-    if (cf_name.find(".") != sstring::npos) {
-        throw std::invalid_argument("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
-    }
-
     if (tag.empty()) {
         throw std::runtime_error("You must supply a snapshot name.");
     }
 
-    return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), cf_name = std::move(cf_name), tag = std::move(tag)] {
-        return check_snapshot_not_exist(_db.local(), ks_name, tag).then([this, ks_name, cf_name, tag] {
-            return _db.invoke_on_all([ks_name, cf_name, tag] (database &db) {
-                auto& cf = db.find_column_family(ks_name, cf_name);
-                return cf.snapshot(tag);
+    return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), tables = std::move(tables), tag = std::move(tag)] {
+        return check_snapshot_not_exist(_db.local(), ks_name, tag).then([this, ks_name, tables = std::move(tables), tag] {
+            return do_with(std::vector<sstring>(std::move(tables)),[this, ks_name, tag](const std::vector<sstring>& tables) {
+                return do_for_each(tables, [ks_name, tag, this] (const sstring& table_name) {
+                    if (table_name.find(".") != sstring::npos) {
+                        throw std::invalid_argument("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
+                    }
+                    return _db.invoke_on_all([ks_name, table_name, tag] (database &db) {
+                        auto& cf = db.find_column_family(ks_name, table_name);
+                        return cf.snapshot(tag);
+                    });
+                });
             });
         });
     });
 }
+future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag) {
+    return take_column_family_snapshot(ks_name, std::vector<sstring>{cf_name}, tag);
+}
+
 
 future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
     return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] {
