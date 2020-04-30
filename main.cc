@@ -903,7 +903,7 @@ int main(int ac, char** av) {
                 db.register_connection_drop_notifier(netw::get_local_messaging_service());
             }).get();
             supervisor::notify("setting up system keyspace");
-            db::system_keyspace::setup(db, qp, service::get_storage_service()).get();
+            db::system_keyspace::setup(db, qp, feature_service).get();
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
             if (cl != nullptr) {
