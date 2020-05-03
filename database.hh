@@ -1506,10 +1506,10 @@ public:
     future<> stop_large_data_handler();
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>, cache_temperature> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
+    future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
                                                                   uint64_t max_result_size, db::timeout_clock::time_point timeout);
-    future<reconcilable_result, cache_temperature> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
+    future<std::tuple<reconcilable_result, cache_temperature>> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
                                                 query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state,
                                                 db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.

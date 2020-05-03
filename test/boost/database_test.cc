@@ -62,7 +62,7 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
         auto assert_query_result = [&] (size_t expected_size) {
             auto max_size = std::numeric_limits<size_t>::max();
             auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), 1000);
-            auto result = db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0();
+            auto&& [result, cache_tempature] = db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0();
             assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(expected_size);
         };
         assert_query_result(1000);
@@ -105,21 +105,21 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
             auto max_size = std::numeric_limits<size_t>::max();
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), 3);
-                auto result = db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0();
+                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0());
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
             }
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(),
                         query::max_rows, gc_clock::now(), std::nullopt, 5);
-                auto result = db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0();
+                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0());
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(5);
             }
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(),
                         query::max_rows, gc_clock::now(), std::nullopt, 3);
-                auto result = db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0();
+                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0());
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
             }
         });

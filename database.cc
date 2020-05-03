@@ -1166,7 +1166,7 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     return 0;
 }
 
-future<lw_shared_ptr<query::result>, cache_temperature>
+future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, uint64_t max_result_size, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
@@ -1183,17 +1183,17 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
             std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
-            return make_exception_future<lw_shared_ptr<query::result>, cache_temperature>(f.get_exception());
+            return make_exception_future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>(f.get_exception());
         } else {
             ++s->total_reads;
             auto result = f.get0();
             s->short_data_queries += bool(result->is_short_read());
-            return make_ready_future<lw_shared_ptr<query::result>, cache_temperature>(std::move(result), hit_rate);
+            return make_ready_future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>(std::tuple(std::move(result), hit_rate));
         }
     });
 }
 
-future<reconcilable_result, cache_temperature>
+future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
@@ -1212,12 +1212,12 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
-            return make_exception_future<reconcilable_result, cache_temperature>(f.get_exception());
+            return make_exception_future<std::tuple<reconcilable_result, cache_temperature>>(f.get_exception());
         } else {
             ++s->total_reads;
             auto result = f.get0();
             s->short_mutation_queries += bool(result.is_short_read());
-            return make_ready_future<reconcilable_result, cache_temperature>(std::move(result), hit_rate);
+            return make_ready_future<std::tuple<reconcilable_result, cache_temperature>>(std::tuple(std::move(result), hit_rate));
         }
     });
 }
