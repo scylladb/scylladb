@@ -3823,7 +3823,8 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
         return _db.invoke_on(shard, _read_smp_service_group, [max_size, gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
             auto trace_state = gt.get();
             tracing::trace(trace_state, "Start querying the token range that starts with {}", seastar::value_of([&prv] { return prv.begin()->start()->value().token(); }));
-            return db.query(gs, *cmd, opts, prv, trace_state, max_size, timeout).then([trace_state](auto&& f, cache_temperature ht) {
+            return db.query(gs, *cmd, opts, prv, trace_state, max_size, timeout).then([trace_state](std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& f_ht) {
+                auto&& [f, ht] = f_ht;
                 tracing::trace(trace_state, "Querying is done");
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(std::move(f)), ht));
             });
@@ -5089,7 +5090,8 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _db.invoke_on(shard, _read_smp_service_group, [max_size, cmd, &pr, gs=global_schema_ptr(s), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
           return db.get_result_memory_limiter().new_mutation_read(max_size).then([&] (query::result_memory_accounter ma) {
-            return db.query_mutations(gs, *cmd, pr, std::move(ma), gt, timeout).then([] (reconcilable_result&& result, cache_temperature ht) {
+            return db.query_mutations(gs, *cmd, pr, std::move(ma), gt, timeout).then([] (std::tuple<reconcilable_result, cache_temperature> result_ht) {
+                auto&& [result, ht] = result_ht;
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared(std::move(result))), ht));
             });
           });
