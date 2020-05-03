@@ -33,6 +33,7 @@
 
 #include "auth/resource.hh"
 #include "seastarx.hh"
+#include "exceptions/exceptions.hh"
 
 namespace auth {
 
@@ -52,9 +53,9 @@ struct role_config_update final {
 ///
 /// A logical argument error for a role-management operation.
 ///
-class roles_argument_exception : public std::invalid_argument {
+class roles_argument_exception : public exceptions::invalid_request_exception {
 public:
-    using std::invalid_argument::invalid_argument;
+    using exceptions::invalid_request_exception::invalid_request_exception;
 };
 
 class role_already_exists : public roles_argument_exception {
