@@ -1045,6 +1045,9 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
 
     auto cm = make_lw_shared<compaction_manager>();
     cm->start();
+    auto stop_cm = defer([&cm] {
+        cm->stop().get();
+    });
 
     auto tmp = tmpdir();
     column_family::config cfg = column_family_test_config();
@@ -1058,9 +1061,8 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
     cf->mark_ready_for_writes();
     cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
 
-    auto generations = make_lw_shared<std::vector<unsigned long>>({1, 2, 3, 4});
-
-    do_for_each(*generations, [&env, generations, cf, cm, s, &tmp] (unsigned long generation) {
+    auto generations = std::vector<unsigned long>({1, 2, 3, 4});
+    for (auto generation : generations) {
         // create 4 sstables of similar size to be compacted later on.
 
         auto mt = make_lw_shared<memtable>(s);
@@ -1077,43 +1079,29 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
 
         auto sst = env.make_sstable(s, tmp.path().string(), column_family_test::calculate_generation_for_new_table(*cf), la, big);
 
-        return write_memtable_to_sstable_for_test(*mt, sst).then([mt, sst, cf] {
-            return sst->load().then([sst, cf] {
-                column_family_test(cf).add_sstable(sst);
-                return make_ready_future<>();
-            });
-        });
-    }).then([&env, cf, cm, generations] {
-        // submit cf to compaction manager and then check that cf's sstables
-        // were compacted.
+        write_memtable_to_sstable_for_test(*mt, sst).get();
+        sst->load().get();
+        column_family_test(cf).add_sstable(sst);
+    }
 
-        BOOST_REQUIRE(cf->sstables_count() == generations->size());
-        cf->trigger_compaction();
-        BOOST_REQUIRE(cm->get_stats().pending_tasks == 1 || cm->get_stats().active_tasks == 1);
+    BOOST_REQUIRE(cf->sstables_count() == generations.size());
+    cf->trigger_compaction();
+    BOOST_REQUIRE(cm->get_stats().pending_tasks == 1 || cm->get_stats().active_tasks == 1);
 
-        // wait for submitted job to finish.
-        auto end = [cm] { return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0; };
-        return do_until(end, [] {
-            // sleep until compaction manager selects cf for compaction.
-            return sleep(std::chrono::milliseconds(100));
-        }).then([cf, cm] {
-            BOOST_REQUIRE(cm->get_stats().completed_tasks == 1);
-            BOOST_REQUIRE(cm->get_stats().errors == 0);
+    // wait for submitted job to finish.
+    auto end = [cm] { return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0; };
+    while (!end()) {
+        // sleep until compaction manager selects cf for compaction.
+        sleep(std::chrono::milliseconds(100)).get();
+    }
+    BOOST_REQUIRE(cm->get_stats().completed_tasks == 1);
+    BOOST_REQUIRE(cm->get_stats().errors == 0);
 
-            // remove cf from compaction manager; this will wait for the
-            // ongoing compaction to finish.
-            return cf->stop().then([cf, cm] {
-                // expect sstables of cf to be compacted.
-                BOOST_REQUIRE(cf->sstables_count() == 1);
-                // stop all compaction manager tasks.
-                return cm->stop().then([cf, cm] {
-                    return make_ready_future<>();
-                });
-            });
-        });
-    }).finally([&env, s, cm, cl_stats, tracker] {
-        return cm->stop().then([&env, cm] {});
-    }).get();
+    // remove cf from compaction manager; this will wait for the
+    // ongoing compaction to finish.
+    cf->stop().get();
+    // expect sstables of cf to be compacted.
+    BOOST_REQUIRE(cf->sstables_count() == 1);
   });
 }
 
