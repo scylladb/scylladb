@@ -564,7 +564,7 @@ public:
     future<bool> cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
-            clock_type::time_point write_timeout, clock_type::time_point cas_timeout);
+            clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
 
     future<> stop();
     future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
@@ -714,6 +714,9 @@ public:
     }
     const partition_key& key() const {
         return _key.key();
+    }
+    void set_cl_for_learn(db::consistency_level cl) {
+        _cl_for_learn = cl;
     }
 };
 
