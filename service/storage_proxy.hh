@@ -145,11 +145,10 @@ public:
 };
 
 // An instance of this class is passed as an argument to storage_proxy::cas().
-// The apply() method, which must be defined by the implementation, is supposed
-// to apply update operations to the rows fetched from the database and return
-// mutations corresponding to the update. If the update is impossible, because
-// the fetched rows doesn't match the values expected by the request, it must
-// return an empty optional object, which will signal cas() to return immediately.
+// The apply() method, which must be defined by the implementation. It can
+// either return a mutation that will be used as a value for paxos 'propose'
+// stage or it can return an empty option in which case an empty mutation will
+// be used
 class cas_request {
 public:
     virtual ~cas_request() = default;
@@ -709,6 +708,12 @@ public:
     }
     size_t block_for() const {
         return _required_participants;
+    }
+    schema_ptr schema() const {
+        return _schema;
+    }
+    const partition_key& key() const {
+        return _key.key();
     }
 };
 

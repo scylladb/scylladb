@@ -4445,28 +4445,35 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                     }();
                     return f.then([this, handler, schema, cmd, request, ballot = v.ballot, &contentions] (auto&& qr) {
                         auto mutation = request->apply(std::move(qr), cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
+                        bool condition_met;
                         if (!mutation) {
                             paxos::paxos_state::logger.debug("CAS[{}] precondition does not match current values", handler->id());
                             tracing::trace(handler->tr_state, "CAS precondition does not match current values");
                             ++get_stats().cas_write_condition_not_met;
-                            return make_ready_future<std::optional<bool>>(false);
+                            condition_met = false;
+                            // If a condition is not met we still need to complete paxos round to achieve
+                            // linearizability otherwise next write attempt may read differnt value as described
+                            // in https://github.com/scylladb/scylla/issues/6299
+                            // Let's use empty mutation as a value and proceed
+                            mutation.emplace(handler->schema(), handler->key());
+                        } else {
+                            paxos::paxos_state::logger.debug("CAS[{}] precondition is met; proposing client-requested updates for {}",
+                                handler->id(), ballot);
+                            tracing::trace(handler->tr_state, "CAS precondition is met; proposing client-requested updates for {}", ballot);
+                            condition_met = true;
                         }
 
                         auto proposal = make_lw_shared<paxos::proposal>(ballot, freeze(*mutation));
 
-                        paxos::paxos_state::logger.debug("CAS[{}] precondition is met; proposing client-requested updates for {}",
-                                handler->id(), proposal->ballot);
-                        tracing::trace(handler->tr_state, "CAS precondition is met; proposing client-requested updates for {}",
-                                proposal->ballot);
-                        return handler->accept_proposal(proposal).then([handler, proposal, &contentions] (bool is_accepted) mutable {
+                        return handler->accept_proposal(proposal).then([handler, proposal, &contentions, condition_met] (bool is_accepted) mutable {
                             if (is_accepted) {
                                 // The majority (aka a QUORUM) has promised the coordinator to
                                 // accept the action associated with the computed ballot.
                                 // Apply the mutation.
-                                return handler->learn_decision(std::move(proposal)).then([handler] {
+                                return handler->learn_decision(std::move(proposal)).then([handler, condition_met] {
                                     paxos::paxos_state::logger.debug("CAS[{}] successful", handler->id());
                                     tracing::trace(handler->tr_state, "CAS successful");
-                                    return std::optional<bool>(true);
+                                    return std::optional<bool>(condition_met);
                                 });
                             }
                             paxos::paxos_state::logger.debug("CAS[{}] PAXOS proposal not accepted (pre-empted by a higher ballot)",
