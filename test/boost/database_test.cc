@@ -336,8 +336,9 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 // Snapshot tests and their helpers
 future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func) {
     return seastar::async([func = std::move(func)] () mutable {
+        tmpdir tmpdir_for_data;
         auto db_cfg_ptr = make_shared<db::config>();
-        db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir().path().string() }));
+        db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data.path().string() }));
         do_with_cql_env_thread([func = std::move(func)] (cql_test_env& e) {
             e.create_table([](std::string_view ks_name) {
                 return schema({}, ks_name, "cf",
