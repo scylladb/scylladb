@@ -37,6 +37,7 @@
 #include "database.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/config.hh"
+#include "sstables/compaction_manager.hh"
 
 namespace db::view {
 class view_update_generator;
@@ -84,6 +85,10 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
         db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata)).get();
+        db.invoke_on_all([] (database& db) {
+            db.get_compaction_manager().start();
+        }).get();
+
         auto stop_db = defer([&] { db.stop().get(); });
         auto stop_database_d = defer([&db] {
             stop_database(db).get();
