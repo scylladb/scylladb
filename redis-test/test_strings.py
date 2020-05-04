@@ -153,6 +153,15 @@ def test_setex_ttl():
     time.sleep(1)
     assert r.ttl(key) == 99
 
+def test_set_ex():
+    r = connect()
+    key = random_string(10)
+    val = random_string(10)
+
+    assert r.execute_command('SET', key, val, 'EX', 100)
+    time.sleep(1)
+    assert r.ttl(key) == 99
+
 def test_lolwut():
     pattern1 = r'''
 ^⠀⡤⠤⠤⠤⠤⠤⠤⠤⡄
