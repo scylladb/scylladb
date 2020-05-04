@@ -277,9 +277,9 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
     return _rpc->unregister_handler(verb);
 }
 
-messaging_service::messaging_service(gms::inet_address ip, uint16_t port, bool listen_now)
+messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
     : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, tcp_nodelay_what::all, 0, nullptr, memory_config{1'000'000},
-            scheduling_config{}, false, listen_now)
+            scheduling_config{}, false)
 {}
 
 static
@@ -292,7 +292,24 @@ rpc_resource_limits(size_t memory_limit) {
     return limits;
 }
 
-void messaging_service::start_listen() {
+future<> messaging_service::start_listen() {
+    if (_credentials_builder && !_credentials) {
+        return _credentials_builder->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
+            if (ep) {
+                mlogger.warn("Exception loading {}: {}", files, ep);
+            } else {
+                mlogger.info("Reloaded {}", files);
+            }
+        }).then([this](shared_ptr<seastar::tls::server_credentials> creds) {
+            _credentials = std::move(creds);
+            do_start_listen();
+        });
+    }
+    do_start_listen();
+    return make_ready_future<>();
+}
+
+void messaging_service::do_start_listen() {
     bool listen_to_bc = _should_listen_to_broadcast_address && _listen_address != utils::fb_utilities::get_broadcast_address();
     rpc::server_options so;
     if (_compress_what != compress_what::none) {
@@ -325,6 +342,9 @@ void messaging_service::start_listen() {
                 if (_encrypt_what == encrypt_what::none) {
                     return nullptr;
                 }
+                if (!_credentials) {
+                    throw std::invalid_argument("No certificates specified for encrypted service");
+                }
                 listen_options lo;
                 lo.reuse_address = true;
                 lo.lba =  server_socket::load_balancing_algorithm::port;
@@ -356,8 +376,7 @@ messaging_service::messaging_service(gms::inet_address ip
         , std::shared_ptr<seastar::tls::credentials_builder> credentials
         , messaging_service::memory_config mcfg
         , scheduling_config scfg
-        , bool sltba
-        , bool listen_now)
+        , bool sltba)
     : _listen_address(ip)
     , _port(port)
     , _ssl_port(ssl_port)
@@ -366,7 +385,7 @@ messaging_service::messaging_service(gms::inet_address ip
     , _tcp_nodelay_what(tnw)
     , _should_listen_to_broadcast_address(sltba)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
-    , _credentials(credentials ? credentials->build_server_credentials() : nullptr)
+    , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
     , _mcfg(mcfg)
     , _scheduling_config(scfg)
 {
@@ -377,10 +396,6 @@ messaging_service::messaging_service(gms::inet_address ip
         ci.attach_auxiliary("max_result_size", max_result_size.value_or(query::result_memory_limiter::maximum_result_size));
         return rpc::no_wait;
     });
-
-    if (listen_now) {
-        start_listen();
-    }
 }
 
 msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {

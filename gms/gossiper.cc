@@ -432,9 +432,9 @@ future<> gossiper::handle_shutdown_msg(inet_address from) {
     });
 }
 
-void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
+future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
     if (_ms_registered) {
-        return;
+        return make_ready_future<>();
     }
     _ms_registered = true;
     ms().register_gossip_digest_syn([] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
@@ -485,8 +485,9 @@ void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
 
     // Start listening messaging_service after gossip message handlers are registered
     if (do_bind) {
-        ms().start_listen();
+        return ms().start_listen();
     }
+    return make_ready_future<>();
 }
 
 future<> gossiper::uninit_messaging_service_handler() {
@@ -1724,7 +1725,7 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
     // Although gossiper runs on cpu0 only, we need to listen incoming gossip
     // message on all cpus and forard them to cpu0 to process.
     return get_gossiper().invoke_on_all([do_bind] (gossiper& g) {
-        g.init_messaging_service_handler(do_bind);
+        return g.init_messaging_service_handler(do_bind);
     }).then([this, generation_nbr, preload_local_states] () mutable {
         build_seeds_list();
         if (_cfg.force_gossip_generation() > 0) {
@@ -1762,7 +1763,7 @@ future<> gossiper::do_shadow_round() {
         // When peer node receives a syn message, it will send back a ack message.
         // So, we need to register gossip message handlers before sending syn message.
         get_gossiper().invoke_on_all([] (gossiper& g) {
-            g.init_messaging_service_handler();
+            return g.init_messaging_service_handler();
         }).get();
 
         while (this->_in_shadow_round) {

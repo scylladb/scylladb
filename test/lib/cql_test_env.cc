@@ -420,7 +420,7 @@ public:
             const gms::inet_address listen("127.0.0.1");
             auto& ms = netw::get_messaging_service();
             // don't start listening so tests can be run in parallel
-            ms.start(listen, std::move(7000), false).get();
+            ms.start(listen, std::move(7000)).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
             sharded<auth::service> auth_service;

@@ -109,13 +109,12 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
 
     // Init messaging_service
     // Delay listening messaging_service until gossip message handlers are registered
-    bool listen_now = false;
     netw::messaging_service::memory_config mcfg = { std::max<size_t>(0.08 * available_memory, 1'000'000) };
     netw::messaging_service::scheduling_config scfg;
     scfg.statement = scheduling_config.statement;
     scfg.streaming = scheduling_config.streaming;
     scfg.gossip = scheduling_config.gossip;
-    netw::get_messaging_service().start(listen, storage_port, ew, cw, tndw, ssl_storage_port, creds, mcfg, scfg, sltba, listen_now).get();
+    netw::get_messaging_service().start(listen, storage_port, ew, cw, tndw, ssl_storage_port, creds, mcfg, scfg, sltba).get();
 
     // #293 - do not stop anything
     //engine().at_exit([] { return netw::get_messaging_service().stop(); });
