@@ -95,10 +95,24 @@ future<redis_message> ttl::execute(service::storage_proxy& proxy, redis::redis_o
 }
 
 shared_ptr<abstract_command> set::prepare(service::storage_proxy& proxy, request&& req) {
-    if (req.arguments_size() != 2) {
-        throw wrong_arguments_exception(2, req.arguments_size(), req._command);
+    if (req.arguments_size() == 2) {
+        return seastar::make_shared<set> (std::move(req._command), std::move(req._args[0]), std::move(req._args[1]));
+    } else if (req.arguments_size() == 4) {
+        bytes opt;
+        opt.resize(req._args[2].size());
+        std::transform(req._args[2].begin(), req._args[2].end(), opt.begin(), ::tolower);
+        if (opt == "ex") {
+            long ttl;
+            try {
+                ttl = std::stol(std::string(reinterpret_cast<const char*>(req._args[3].data()), req._args[3].size()));
+            }
+            catch (...) {
+                throw invalid_arguments_exception(req._command);
+            }
+            return seastar::make_shared<set> (std::move(req._command), std::move(req._args[0]), std::move(req._args[1]), ttl);
+        }
     }
-    return seastar::make_shared<set> (std::move(req._command), std::move(req._args[0]), std::move(req._args[1]), 0);
+    throw invalid_arguments_exception(req._command);
 }
 
 future<redis_message> set::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
