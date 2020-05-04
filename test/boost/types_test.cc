@@ -285,7 +285,8 @@ void test_timestamp_like_string_conversions(data_type timestamp_type) {
     BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "2015-07-03T00:00:00");
 
     auto now = time(nullptr);
-    auto local_now = *localtime(&now);
+    ::tm local_now;
+    ::localtime_r(&now, &local_now);
     char buf[100];
     db_clock::time_point now_tp(db_clock::duration(now * 1000));
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S%z", &local_now);

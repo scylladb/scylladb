@@ -231,7 +231,8 @@ void write_json_result(std::string result_file, const test_config& cfg, double m
     // It'd be nice to have std::chrono::format(), wouldn't it?
     auto current_time = std::time(nullptr);
     char time_str[100];
-    std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", std::localtime(&current_time));
+    ::tm time_buf;
+    std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ::localtime_r(&current_time, &time_buf));
     version["run_date_time"] = time_str;
 
     results["versions"]["scylla-server"] = std::move(version);

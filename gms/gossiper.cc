@@ -2008,7 +2008,8 @@ void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_poi
     char expire_time_buf[100];
     auto expire_time_tm = clk::to_time_t(expire_time);
     auto now_ = now();
-    strftime(expire_time_buf, sizeof(expire_time_buf), "%Y-%m-%d %T", std::localtime(&expire_time_tm));
+    ::tm t_buf;
+    strftime(expire_time_buf, sizeof(expire_time_buf), "%Y-%m-%d %T", ::localtime_r(&expire_time_tm, &t_buf));
     auto diff = std::chrono::duration_cast<std::chrono::seconds>(expire_time - now_).count();
     logger.info("Node {} will be removed from gossip at [{}]: (expire = {}, now = {}, diff = {} seconds)",
             endpoint, expire_time_buf, expire_time.time_since_epoch().count(),
