@@ -4444,7 +4444,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                         }
                     }();
                     return f.then([this, handler, schema, cmd, request, ballot = v.ballot, &contentions] (auto&& qr) {
-                        auto mutation = request->apply(*qr, cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
+                        auto mutation = request->apply(std::move(qr), cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
                         if (!mutation) {
                             paxos::paxos_state::logger.debug("CAS[{}] precondition does not match current values", handler->id());
                             tracing::trace(handler->tr_state, "CAS precondition does not match current values");
