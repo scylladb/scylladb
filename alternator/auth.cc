@@ -66,8 +66,9 @@ static std::string format_time_point(db_clock::time_point tp) {
     time_t time_point_repr = db_clock::to_time_t(tp);
     std::string time_point_str;
     time_point_str.resize(17);
+    ::tm time_buf;
     // strftime prints the terminating null character as well
-    std::strftime(time_point_str.data(), time_point_str.size(), "%Y%m%dT%H%M%SZ", std::gmtime(&time_point_repr));
+    std::strftime(time_point_str.data(), time_point_str.size(), "%Y%m%dT%H%M%SZ", ::gmtime_r(&time_point_repr, &time_buf));
     time_point_str.resize(16);
     return time_point_str;
 }
