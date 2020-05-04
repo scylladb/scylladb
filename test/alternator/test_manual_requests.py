@@ -81,6 +81,16 @@ def test_exceed_nested_level_a_little(dynamodb, test_table):
     with pytest.raises(ClientError, match='.*Exception.*nested'):
         test_table.put_item(Item={'p': p, 'c': c, 'nested': nested})
 
+# Test that we indeed allow the maximum level of 32 nested objects
+def test_almost_exceed_nested_level(dynamodb, test_table):
+    p = 'xxx'
+    c = 'yyy'
+    nested = dict()
+    nested_it = nested
+    for i in range(30): # 30 added levels + top level + the item itself == 32 total
+        nested_it['a'] = dict()
+        nested_it = nested_it['a']
+    test_table.put_item(Item={'p': p, 'c': c, 'nested': nested})
 
 def test_too_large_request(dynamodb, test_table):
     p = 'abc'

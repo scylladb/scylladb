@@ -123,7 +123,7 @@ protected:
 
 std::string print(const rjson::value& value) {
     string_buffer buffer;
-    guarded_yieldable_json_handler<writer, false> writer(buffer, 39);
+    guarded_yieldable_json_handler<writer, false> writer(buffer, 78);
     value.Accept(writer);
     return std::string(buffer.GetString());
 }
@@ -133,7 +133,7 @@ rjson::value copy(const rjson::value& value) {
 }
 
 rjson::value parse(std::string_view str) {
-    guarded_yieldable_json_handler<document, false> d(39);
+    guarded_yieldable_json_handler<document, false> d(78);
     d.Parse(str.data(), str.size());
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
@@ -143,7 +143,7 @@ rjson::value parse(std::string_view str) {
 }
 
 rjson::value parse_yieldable(std::string_view str) {
-    guarded_yieldable_json_handler<document, true> d(39);
+    guarded_yieldable_json_handler<document, true> d(78);
     d.Parse(str.data(), str.size());
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
