@@ -409,7 +409,6 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 _http_server.set_content_length_limit(server::content_length_limit);
                 _http_server.listen(socket_address{addr, *port}).get();
                 _enabled_servers.push_back(std::ref(_http_server));
-                slogger.info("Alternator HTTP server listening on {} port {}", addr, *port);
             }
             if (https_port) {
                 set_routes(_https_server._routes);
@@ -423,7 +422,6 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
                 }).get0());
                 _https_server.listen(socket_address{addr, *https_port}).get();
                 _enabled_servers.push_back(std::ref(_https_server));
-                slogger.info("Alternator HTTPS server listening on {} port {}", addr, *https_port);
             }
         } catch (...) {
             slogger.error("Failed to set up Alternator HTTP server on {} port {}, TLS port {}: {}",
