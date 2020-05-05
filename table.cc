@@ -469,7 +469,7 @@ table::make_reader(schema_ptr s,
         readers.emplace_back(mt->make_flat_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
-    if (_config.enable_cache && !slice.options.contains(query::partition_slice::option::bypass_cache)) {
+    if (cache_enabled() && !slice.options.contains(query::partition_slice::option::bypass_cache)) {
         readers.emplace_back(_cache.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     } else {
         readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
@@ -720,7 +720,7 @@ table::update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable sst) {
         m->mark_flushed(std::move(newtab_ms));
         try_trigger_compaction();
     };
-    if (_config.enable_cache) {
+    if (cache_enabled()) {
         return _cache.update(adder, *m);
     } else {
         adder();
@@ -841,7 +841,7 @@ table::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
                           try_trigger_compaction();
                           tlogger.debug("Flushing to {} done", newtab->get_filename());
                       };
-                      if (_config.enable_cache) {
+                      if (cache_enabled()) {
                         return _cache.update_invalidating(adder, *old);
                       } else {
                         adder();

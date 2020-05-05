@@ -574,6 +574,9 @@ public:
         _is_bootstrap_or_replace = false;
     }
 private:
+    bool cache_enabled() const {
+        return _config.enable_cache && _schema->caching_options().enabled();
+    }
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
