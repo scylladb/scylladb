@@ -1129,6 +1129,9 @@ int main(int ac, char** av) {
                             [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization] (alternator::server& server) mutable {
                         auto& ss = service::get_local_storage_service();
                         return server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization, &ss.service_memory_limiter());
+                    }).then([addr, alternator_port, alternator_https_port] {
+                        startlog.info("Alternator server listening on {}, HTTP port {}, HTTPS port {}",
+                                addr, alternator_port ? std::to_string(*alternator_port) : "OFF", alternator_https_port ? std::to_string(*alternator_https_port) : "OFF");
                     });
                 }).get();
                 auto stop_alternator = [ssg] {
