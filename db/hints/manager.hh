@@ -471,6 +471,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<ep_key_type> _eps_with_pending_hints;
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
+    std::unordered_set<utils::UUID> _tables_blocked_from_generating_hints;
 
 public:
     manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
@@ -482,10 +483,11 @@ public:
     future<> stop();
     bool store_hint(gms::inet_address ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
 
-    /// \brief Check if a hint may be generated to the give end point
+    /// \brief Check if a hint may be generated to the given end point and schema
     /// \param ep end point to check
+    /// \param s schema for which the hint will be generated
     /// \return true if we should generate the hint to the given end point if it becomes unavailable
-    bool can_hint_for(ep_key_type ep) const noexcept;
+    bool can_hint_for(ep_key_type ep, schema_ptr s) const noexcept;
 
     /// \brief Check if there aren't too many in-flight hints
     ///
@@ -695,6 +697,11 @@ private:
     bool replay_allowed() const noexcept {
         return _state.contains(state::replay_allowed);
     }
+
+    /// \brief Allows to prevent from generating hints for a table and its views.
+    void forbid_generating_hints_for_table_and_its_views(utils::UUID cf_id);
+    void allow_generating_hints_for_table_and_its_views(utils::UUID cf_id);
+    bool is_generating_hints_for_schema_allowed(schema_ptr s) const;
 
 public:
     ep_managers_map_type::iterator find_ep_manager(ep_key_type ep_key) noexcept {

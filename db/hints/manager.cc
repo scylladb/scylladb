@@ -38,6 +38,7 @@
 #include "service/priority_manager.hh"
 #include "database.hh"
 #include "service_permit.hh"
+#include "view_info.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -154,6 +155,21 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
             ep_man.allow_hints();
         }
     });
+}
+
+void manager::forbid_generating_hints_for_table_and_its_views(utils::UUID cf_id) {
+    manager_logger.debug("Stop generating hints for table {} and all its views", cf_id);
+    _tables_blocked_from_generating_hints.insert(cf_id);
+}
+
+void manager::allow_generating_hints_for_table_and_its_views(utils::UUID cf_id) {
+    manager_logger.debug("Resume generating hints for table {} and all its views", cf_id);
+    _tables_blocked_from_generating_hints.erase(cf_id);
+}
+
+bool manager::is_generating_hints_for_schema_allowed(schema_ptr s) const {
+    const auto base_id = s->is_view() ? s->view_info()->base_id() : s->id();
+    return _tables_blocked_from_generating_hints.count(base_id);
 }
 
 bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
@@ -290,7 +306,7 @@ inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
 }
 
 bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
-    if (stopping() || !started() || !can_hint_for(ep)) {
+    if (stopping() || !started() || !can_hint_for(ep, s)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
         return false;
@@ -482,13 +498,17 @@ bool manager::too_many_in_flight_hints_for(ep_key_type ep) const noexcept {
     return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
-bool manager::can_hint_for(ep_key_type ep) const noexcept {
+bool manager::can_hint_for(ep_key_type ep, schema_ptr s) const noexcept {
     if (utils::fb_utilities::is_me(ep)) {
         return false;
     }
 
     auto it = find_ep_manager(ep);
     if (it != ep_managers_end() && (it->second.stopping() || !it->second.can_hint())) {
+        return false;
+    }
+
+    if (is_generating_hints_for_schema_allowed(s)) {
         return false;
     }
 
