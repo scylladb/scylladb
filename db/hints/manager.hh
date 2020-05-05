@@ -472,6 +472,7 @@ private:
     std::unordered_set<ep_key_type> _eps_with_pending_hints;
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
     std::unordered_set<utils::UUID> _tables_blocked_from_generating_hints;
+    std::unordered_set<utils::UUID> _tables_to_ignore_hints_for;
 
 public:
     manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
@@ -702,6 +703,11 @@ private:
     void forbid_generating_hints_for_table_and_its_views(utils::UUID cf_id);
     void allow_generating_hints_for_table_and_its_views(utils::UUID cf_id);
     bool is_generating_hints_for_schema_allowed(schema_ptr s) const;
+
+    /// \brief When called, hints to the specified table and its views won't be sent, only silently dropped.
+    void start_ignoring_hints_during_replay_for_table_and_its_views(utils::UUID cf_id);
+    void stop_ignoring_hints_during_replay_for_table_and_its_views(utils::UUID cf_id);
+    bool should_ignore_hints_during_replay_for_table(schema_ptr s) const;
 
 public:
     ep_managers_map_type::iterator find_ep_manager(ep_key_type ep_key) noexcept {

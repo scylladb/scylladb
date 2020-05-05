@@ -172,6 +172,21 @@ bool manager::is_generating_hints_for_schema_allowed(schema_ptr s) const {
     return _tables_blocked_from_generating_hints.count(base_id);
 }
 
+void manager::start_ignoring_hints_during_replay_for_table_and_its_views(utils::UUID cf_id) {
+    manager_logger.debug("Start ignoring hints for table {} and all its views", cf_id);
+    _tables_to_ignore_hints_for.insert(cf_id);
+}
+
+void manager::stop_ignoring_hints_during_replay_for_table_and_its_views(utils::UUID cf_id) {
+    manager_logger.debug("Start ignoring hints for table {} and all its views", cf_id);
+    _tables_to_ignore_hints_for.erase(cf_id);
+}
+
+bool manager::should_ignore_hints_during_replay_for_table(schema_ptr s) const {
+    const auto base_id = s->is_view() ? s->view_info()->base_id() : s->id();
+    return _tables_to_ignore_hints_for.count(base_id);
+}
+
 bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
@@ -723,6 +738,11 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 // Files are aggregated for at most manager::hints_timer_period therefore the oldest hint there is
                 // (last_modification - manager::hints_timer_period) old.
                 if (gc_clock::now().time_since_epoch() - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
+                    ctx_ptr->rps_set.erase(rp);
+                    return make_ready_future<>();
+                }
+
+                if (_shard_manager.should_ignore_hints_during_replay_for_table(m.s)) {
                     ctx_ptr->rps_set.erase(rp);
                     return make_ready_future<>();
                 }
