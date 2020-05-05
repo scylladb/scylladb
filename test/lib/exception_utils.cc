@@ -23,6 +23,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 
 std::function<bool(const std::exception&)> exception_predicate::make(
         std::function<bool(const std::exception&)> check,
