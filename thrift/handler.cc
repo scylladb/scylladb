@@ -937,35 +937,6 @@ public:
         throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
-    class cql3_result_visitor final : public cql_transport::messages::result_message::visitor {
-        CqlResult _result;
-    public:
-        const CqlResult& result() const {
-            return _result;
-        }
-        virtual void visit(const cql_transport::messages::result_message::void_message&) override {
-            _result.__set_type(CqlResultType::VOID);
-        }
-        virtual void visit(const cql_transport::messages::result_message::set_keyspace& m) override {
-            _result.__set_type(CqlResultType::VOID);
-        }
-        virtual void visit(const cql_transport::messages::result_message::prepared::cql& m) override {
-            throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
-        }
-        virtual void visit(const cql_transport::messages::result_message::prepared::thrift& m) override {
-            throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
-        }
-        virtual void visit(const cql_transport::messages::result_message::schema_change& m) override {
-            _result.__set_type(CqlResultType::VOID);
-        }
-        virtual void visit(const cql_transport::messages::result_message::rows& m) override {
-            _result = to_thrift_result(m.rs());
-        }
-        virtual void visit(const cql_transport::messages::result_message::bounce_to_shard& m) override {
-            throw TProtocolException(TProtocolException::TProtocolExceptionType::NOT_IMPLEMENTED, "Thrift does not support executing LWT statements");
-        }
-    };
-
     class cql_result_consumer final : public cql3::query_result_consumer {
     private:
         CqlResult _response;
