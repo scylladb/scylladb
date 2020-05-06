@@ -143,14 +143,6 @@ implemented, with the following limitations:
   and tagging it later are not atomic operations, so in case of failure it's possible
   for first to succeed (and leave side effects in the form of a table) and for the second
   one to fail, adding no tags to the table.
-### Write isolation policies
- * By default, alternator will use LWT for all writes. It can, however, be configured
-   per table by tagging it with a 'system:write_isolation' key and one of the following values:
-    * 'a', 'always', 'always_use_lwt' - always use LWT
-    * 'o', 'only_rmw_uses_lwt' - use LWT only for requests that require read-before-write
-    * 'f', 'forbid', 'forbid_rmw' - forbid statements that need read-before-write. Using such statements
-      (e.g. UpdateItem with ConditionExpression) will result in an error
-    * 'u', 'unsafe', 'unsafe_rmw' - (unsafe) perform read-modify-write without any consistency guarantees
 ### Accounting and capping
 * Not yet supported. Mainly for multi-tenant cloud use, we need to track
   resource use of individual requests (the API should also optionally
@@ -168,6 +160,57 @@ implemented, with the following limitations:
   monitoring is rather advanced and provide more insights to the internals.
 
 ## Alternator-specific API
+
+### Write isolation policies
+DynamoDB API update requests may involve a read before the write - e.g., a
+_conditional_ update, or an update based on the old value of an attribute.
+The read and the write should be treated as a single transaction - protected
+(_isolated_) from other parallel writes to the same item.
+
+By default, Alternator does this isolation by using Scylla's LWT (lightweight
+transactions) for every write operation. However, LWT significantly slows
+writes down, so Alternator supports three additional _write isolation
+policies_, which can be chosen on a per-table basis and may make sense for
+certain workloads as explained below.
+
+The write isolation policy of a table is configured by tagging the table (at
+CreateTable time, or any time later with TagResource) with the key
+`system:write_isolation`, and one of the following values:
+
+  * `a`, `always`, or `always_use_lwt` - This is the default choice.
+    It performs every write operation - even those that do not need a read
+    before the write - as a lightweight transaction.
+
+    This is the slowest choice, but also the only choice guaranteed to work
+    correctly for every workload.
+
+  * `f`, `forbid`, or `forbid_rmw` - This mode _forbids_ write requests
+    which need a read before the write. An attempt to use such statements
+    (e.g.,  UpdateItem with a ConditionExpression) will result in an error.
+    In this mode, the remaining write requests which are allowed - pure writes
+    without a read - are performed using standard Scylla writes, not LWT,
+    so they are significantly faster than they would have been in the
+    `always_use_lwt`, but their isolation is still correct.
+
+    This mode is the fastest mode which is still guaranteed to be always
+    safe. However, it is not useful for workloads that do need read-modify-
+    write requests on this table - which this mode forbids.
+
+  * `o`, or `only_rmw_uses_lwt` - This mode uses LWT only for updates that
+    require read-modify-write, and does normal quorum writes for write-only
+    updates.
+
+    The benefit of this mode is that it allows fast write-only updates to some
+    items, while still allowing some slower read-modify-write operations to
+    other items. However, This mode is only safe if the workload does not mix
+    read-modify-write and write-only updates to the same item, concurrently.
+    It cannot verify that this condition is actually honored by the workload.
+
+  * `u`, `unsafe`, or `unsafe_rmw` - This mode performs read-modify-write
+    operations as separate reads and writes, without any isolation guarantees.
+    It is the fastest option, but not safe - it does not correctly isolate
+    read-modify-write updates. This mode is not recommended for any use case,
+    and will likely be removed in the future.
 
 ### Accessing system tables from Scylla
  * Scylla exposes lots of useful information via its internal system tables,
@@ -224,15 +267,12 @@ The DynamoDB API, however, provides many types of requests that need a read
 before the write (a.k.a. RMW requests - read-modify-write). For example,
 a request may copy an existing attribute, increment an attribute,
 be conditional on some expression involving existing values of attribute,
-or request that the previous values of attributes be returned.
-Alternator offers various write isolation policies:
- * treat every write as transactional (using lightweight transactions - LWT)
- * use LWT only for RMW requests
- * forbid the usage of RMW - throw an error if it's attempted,
-   e.g. by using ConditionExpression
- * (unsafe) perform RMW without consistency guarantees
-By default, alternator will always enforce LWT, but it can be configured
-with table granularity via tags.
+or request that the previous values of attributes be returned. These
+read-modify-write transactions should be _isolated_ from each other, so
+by default Alternator implements every write operation using Scylla's
+LWT (lightweight transactions). This default can be overridden on a per-table
+basis, by tagging the table as explained above in the "write isolation
+policies" section.
 
 DynamoDB allows attributes to be **nested** - a top-level attribute may
 be a list or a map, and each of its elements may further be lists or
