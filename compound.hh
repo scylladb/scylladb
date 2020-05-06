@@ -29,7 +29,6 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include "utils/serialization.hh"
 #include <seastar/util/backtrace.hh>
-#include "unimplemented.hh"
 
 enum class allow_prefixes { no, yes };
 
@@ -225,8 +224,18 @@ public:
         return begin(v) == end(v);
     }
     void validate(bytes_view v) const {
-        // FIXME: implement
-        warn(unimplemented::cause::VALIDATION);
+        std::vector<bytes_view> values(begin(v), end(v));
+        if (AllowPrefixes == allow_prefixes::no && values.size() < _types.size()) {
+            throw marshal_exception(fmt::format("compound::validate(): non-prefixable compound cannot be a prefix"));
+        }
+        if (values.size() > _types.size()) {
+            throw marshal_exception(fmt::format("compound::validate(): cannot have more values than types, have {} values but only {} types",
+                        values.size(), _types.size()));
+        }
+        for (size_t i = 0; i != values.size(); ++i) {
+            //FIXME: is it safe to assume internal serialization-format format?
+            _types[i]->validate(values[i], cql_serialization_format::internal());
+        }
     }
     bool equal(bytes_view v1, bytes_view v2) const {
         if (_byte_order_equal) {
