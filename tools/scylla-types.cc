@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/algorithm/string/join.hpp>
 #include <seastar/core/app-template.hh>
 
 #include "db/marshal/type_parser.hh"
@@ -55,11 +56,29 @@ void compare_handler(data_type type, std::vector<bytes> values) {
         << std::endl;
 }
 
-using action_handler = void(*)(data_type, std::vector<bytes>);
+using action_handler_func = void(*)(data_type, std::vector<bytes>);
 
-const std::unordered_map<sstring, action_handler> action_handlers = {
-    {"print", print_handler},
-    {"compare", compare_handler},
+class action_handler {
+    std::string _name;
+    std::string _description;
+    action_handler_func _func;
+
+public:
+    action_handler(std::string name, std::string description, action_handler_func func)
+        : _name(std::move(name)), _description(std::move(description)), _func(func) {
+    }
+
+    const std::string& name() const { return _name; }
+    const std::string& description() const { return _description; }
+
+    void operator()(data_type type, std::vector<bytes> values) const {
+        _func(std::move(type), std::move(values));
+    }
+};
+
+const std::vector<action_handler> action_handlers = {
+    {"print", "print the value in a human readable form, takes 1+ values", print_handler},
+    {"compare", "compare two values and print the result, takes 2 values", compare_handler},
 };
 
 }
@@ -69,7 +88,8 @@ int main(int argc, char** argv) {
 
     app_template::config app_cfg;
     app_cfg.name = "scylla_types";
-    app_cfg.description =
+
+    auto description_template =
 R"(scylla_types - a command-line tool to examine values belonging to scylla types.
 
 Allows examining raw values obtained from e.g. sstables, logs or coredumps and
@@ -81,20 +101,25 @@ the int32_type. The org.apache.cassandra.db.marshal. prefix can be ommited.
 Compound types specify their subtypes inside () separated by comma, e.g.:
 MapType(Int32Type, BytesType). All provided values have to share the same type.
 scylla_types executes so called actions on the provided values. Each action has
-a required number of arguments. The supported actions, with the number of
-required values are:
-* print - print the value in a human readable form; 1+ values
-* compare - compare two values and print the result; 2 values
+a required number of arguments. The supported actions are:
+{}
 
 Examples:
-$ scylla_types -a print -t Int32Type b34b62d4
+$ scylla_types --print -t Int32Type b34b62d4
 -1286905132
 
-$ scylla_types -a compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
+$ scylla_types --compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
 b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
 )";
+    app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
+                    [] (const action_handler& ah) { return format("* --{} - {}", ah.name(), ah.description()); } ), "\n"));
 
     app_template app(std::move(app_cfg));
+
+    for (const auto& ah : action_handlers) {
+        app.add_options()(ah.name().c_str(), ah.description().c_str());
+    }
+
     app.add_options()
         ("action,a", bpo::value<sstring>()->default_value("print"), "the action to execute on the values, "
                 " valid actions are (with values required): print (1+), compare (2); default: print")
@@ -107,15 +132,25 @@ b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
 
     //FIXME: this exposes all core options, which we are not interested in.
     return app.run(argc, argv, [&app] {
-        action_handler handler;
-        {
-            const auto action = app.configuration()["action"].as<sstring>();
-            if (const auto it = action_handlers.find(action); it != action_handlers.end()) {
-                handler = it->second;
-            } else {
-                throw std::invalid_argument(fmt::format("error: invalid action '{}', valid actions are: print, compare", action));
+        const action_handler& handler = [&app] () -> const action_handler& {
+            std::vector<const action_handler*> found_handlers;
+            for (const auto& ah : action_handlers) {
+                if (app.configuration().count(ah.name())) {
+                    found_handlers.push_back(&ah);
+                }
             }
-        }
+            if (found_handlers.size() == 1) {
+                return *found_handlers.front();
+            }
+
+            const auto all_handler_names = boost::algorithm::join(action_handlers | boost::adaptors::transformed(
+                    [] (const action_handler& ah) { return format("--{}", ah.name()); } ), ", ");
+
+            if (found_handlers.empty()) {
+                throw std::invalid_argument(fmt::format("error: missing action, exactly one of {} should be specified", all_handler_names));
+            }
+            throw std::invalid_argument(fmt::format("error: need exactly one action, cannot specify more then one of {}", all_handler_names));
+        }();
 
         if (!app.configuration().count("type")) {
             throw std::invalid_argument("error: missing required option '--type'");
