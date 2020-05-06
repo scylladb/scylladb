@@ -1088,11 +1088,11 @@ public:
             auto& qp = _query_processor.local();
             auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), _timeout_config, std::nullopt, std::move(bytes_values),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
-            auto f = qp.execute_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization);
-            return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
-                cql3_result_visitor visitor;
-                ret->accept(visitor);
-                return cob(visitor.result());
+            auto visitor = std::make_unique<cql_result_consumer>();
+
+            auto f = qp.execute_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization, *visitor);
+            return f.then([cob = std::move(cob), opts = std::move(opts), visitor = std::move(visitor)] {
+                return cob(visitor->get_response());
             });
         });
     }

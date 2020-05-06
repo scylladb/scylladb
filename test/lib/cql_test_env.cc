@@ -264,8 +264,10 @@ public:
 
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_prepared(std::move(prepared), std::move(id), *qs, lqo, true)
-            .finally([qs, qo = std::move(qo)] {});
+        auto fmt = std::make_unique<cql_result_message_builder>();
+        return local_qp().execute_prepared(std::move(prepared), std::move(id), *qs, lqo, true, *fmt).then([qs, fmt = std::move(fmt), qo = std::move(qo)] {
+            return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(fmt->get_result());
+        });
     }
 
     virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) override {

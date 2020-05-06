@@ -497,13 +497,14 @@ query_processor::execute_direct(const sstring_view& query_string, service::query
     });
 }
 
-future<::shared_ptr<result_message>>
+future<>
 query_processor::execute_prepared(
         statements::prepared_statement::checked_weak_ptr prepared,
         cql3::prepared_cache_key_type cache_key,
         service::query_state& query_state,
         const query_options& options,
-        bool needs_authorization) {
+        bool needs_authorization,
+        query_result_consumer& result_consumer) {
 
     ::shared_ptr<cql_statement> statement = prepared->statement;
     future<> fut = make_ready_future<>();
@@ -516,8 +517,8 @@ query_processor::execute_prepared(
     }
     log.trace("execute_prepared: \"{}\"", statement->raw_cql_statement);
 
-    return fut.then([this, statement = std::move(statement), &query_state, &options] () mutable {
-        return process_authorized_statement(std::move(statement), query_state, options);
+    return fut.then([this, statement = std::move(statement), &query_state, &options, &result_consumer] () mutable {
+        return process_authorized_statement(std::move(statement), query_state, options, result_consumer);
     });
 }
 

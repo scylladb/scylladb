@@ -194,13 +194,14 @@ public:
         return *it;
     }
 
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute_prepared(
             statements::prepared_statement::checked_weak_ptr statement,
             cql3::prepared_cache_key_type cache_key,
             service::query_state& query_state,
             const query_options& options,
-            bool needs_authorization);
+            bool needs_authorization,
+            query_result_consumer& result_consumer);
 
     /// Execute a client statement that was not prepared.
     future<>
