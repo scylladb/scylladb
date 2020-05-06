@@ -198,3 +198,27 @@ drop table lwt;
 -- update is on column d
 -- a composite read command is built and both rows are retreieved,
 -- conditions are executed correctly and mutations are applied accordingly
+--
+--
+-- Issue: #6273
+-- Delete have priority above Insert.
+create table lwt (key bigint, ck int, cv set<text>, PRIMARY KEY((key), ck));
+insert into lwt (key, ck, cv) values (1, 0, {'a', 'b'}) if not exists;
+begin batch
+    delete from lwt where key=1 and ck=0 if exists
+    insert into lwt (key, ck, cv) values (1, 0, {'b', 'c'})
+apply batch;
+select * from lwt;
+drop table lwt;
+--
+-- Workaround for Issue #6273.
+-- Delete individual cells instead of entire partition.
+--
+create table lwt (key bigint, ck int, cv set<text>, PRIMARY KEY((key), ck));
+insert into lwt (key, ck, cv) values (1, 0, {'a', 'b'}) if not exists;
+begin batch
+    update lwt set cv=null where key=1 and ck=0 if exists
+    insert into lwt (key, ck, cv) values (1, 0, {'b', 'c'})
+apply batch;
+select * from lwt;
+drop table lwt;
