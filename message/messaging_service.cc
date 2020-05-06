@@ -501,6 +501,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GOSSIP_DIGEST_ACK:
     case messaging_verb::DEFINITIONS_UPDATE:
     case messaging_verb::TRUNCATE:
+    case messaging_verb::TRUNCATE_PREPARE:
+    case messaging_verb::TRUNCATE_ACCEPT:
     case messaging_verb::MIGRATION_REQUEST:
     case messaging_verb::SCHEMA_CHECK:
     case messaging_verb::COUNTER_MUTATION:
@@ -1375,6 +1377,32 @@ future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_poi
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::HINT_MUTATION, std::move(id), fm, std::move(forward),
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
+}
+
+// Wrapper for TRUNCATE_PREPARE
+void messaging_service::register_truncate_prepare(std::function<future<> (sstring, sstring, bool)>&& func) {
+    register_handler(this, netw::messaging_verb::TRUNCATE_PREPARE, std::move(func));
+}
+
+future<> messaging_service::unregister_truncate_prepare() {
+    return unregister_handler(netw::messaging_verb::TRUNCATE_PREPARE);
+}
+
+future<> messaging_service::send_truncate_prepare(msg_addr id, std::chrono::milliseconds timeout, sstring ks, sstring cf, bool wait_for_writes_and_reject_new) {
+    return send_message_timeout<void>(this, netw::messaging_verb::TRUNCATE_PREPARE, std::move(id), std::move(timeout), std::move(ks), std::move(cf), wait_for_writes_and_reject_new);
+}
+
+// Wrapper for TRUNCATE_ACCEPT
+void messaging_service::register_truncate_accept(std::function<future<> (sstring, sstring)>&& func) {
+    register_handler(this, netw::messaging_verb::TRUNCATE_ACCEPT, std::move(func));
+}
+
+future<> messaging_service::unregister_truncate_accept() {
+    return unregister_handler(netw::messaging_verb::TRUNCATE_ACCEPT);
+}
+
+future<> messaging_service::send_truncate_accept(msg_addr id, std::chrono::milliseconds timeout, sstring ks, sstring cf) {
+    return send_message_timeout<void>(this, netw::messaging_verb::TRUNCATE_ACCEPT, std::move(id), std::move(timeout), std::move(ks), std::move(cf));
 }
 
 } // namespace net

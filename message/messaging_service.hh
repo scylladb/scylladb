@@ -140,7 +140,9 @@ enum class messaging_verb : int32_t {
     PAXOS_LEARN = 41,
     HINT_MUTATION = 42,
     PAXOS_PRUNE = 43,
-    LAST = 44,
+    TRUNCATE_PREPARE = 44,
+    TRUNCATE_ACCEPT = 45,
+    LAST = 46,
 };
 
 } // namespace netw
@@ -529,6 +531,16 @@ public:
     future<> unregister_hint_mutation();
     future<> send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
+
+    // Wrappers for TRUNCATE_PREPARE
+    void register_truncate_prepare(std::function<future<>(sstring, sstring, bool)>&& func);
+    future<> unregister_truncate_prepare();
+    future<> send_truncate_prepare(msg_addr, std::chrono::milliseconds, sstring ks, sstring cf, bool wait_for_writes_and_reject_new);
+
+    // Wrappers for TRUNCATE_ACCEPT
+    void register_truncate_accept(std::function<future<>(sstring, sstring)>&& func);
+    future<> unregister_truncate_accept();
+    future<> send_truncate_accept(msg_addr, std::chrono::milliseconds, sstring ks, sstring cf);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
