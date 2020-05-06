@@ -22,24 +22,71 @@
 #include <boost/algorithm/string/join.hpp>
 #include <seastar/core/app-template.hh>
 
+#include "compound.hh"
 #include "db/marshal/type_parser.hh"
 
 using namespace seastar;
 
 namespace {
 
-void print_handler(data_type type, std::vector<bytes> values) {
+using type_variant = std::variant<
+        data_type,
+        compound_type<allow_prefixes::yes>,
+        compound_type<allow_prefixes::no>>;
+
+struct printing_visitor {
+    bytes_view value;
+
+    sstring operator()(const data_type& type) {
+        return type->to_string(value);
+    }
+    template <allow_prefixes AllowPrefixes>
+    sstring operator()(const compound_type<AllowPrefixes>& type) {
+        std::vector<sstring> printable_values;
+        printable_values.reserve(type.types().size());
+
+        const auto types = type.types();
+        const auto values = type.deserialize_value(value);
+
+        for (size_t i = 0; i != values.size(); ++i) {
+            printable_values.emplace_back(types.at(i)->to_string(values.at(i)));
+        }
+        return format("({})", boost::algorithm::join(printable_values, ", "));
+    }
+};
+
+sstring to_printable_string(const type_variant& type, bytes_view value) {
+    return std::visit(printing_visitor{value}, type);
+}
+
+void print_handler(type_variant type, std::vector<bytes> values) {
     for (const auto& value : values) {
-        std::cout << type->to_string(value) << std::endl;
+        std::cout << to_printable_string(type, value) << std::endl;
     }
 }
 
-void compare_handler(data_type type, std::vector<bytes> values) {
+void compare_handler(type_variant type, std::vector<bytes> values) {
     if (values.size() != 2) {
         throw std::runtime_error(fmt::format("compare_handler(): expected 2 values, got {}", values.size()));
     }
-    const auto res = type->compare(values[0], values[1]);
+
+    struct {
+        bytes_view lhs, rhs;
+
+        int operator()(const data_type& type) {
+            return type->compare(lhs, rhs);
+        }
+        int operator()(const compound_type<allow_prefixes::yes>& type) {
+            return type.compare(lhs, rhs);
+        }
+        int operator()(const compound_type<allow_prefixes::no>& type) {
+            return type.compare(lhs, rhs);
+        }
+    } compare_visitor{values[0], values[1]};
+
+    const auto res = std::visit(compare_visitor, type);
     sstring_view res_str;
+
     if (res == 0) {
         res_str = "==";
     } else if (res < 0) {
@@ -48,15 +95,15 @@ void compare_handler(data_type type, std::vector<bytes> values) {
         res_str = ">";
     }
     std::cout
-        << type->to_string(values[0])
+        << to_printable_string(type, values[0])
         << " "
         << res_str
         << " "
-        << type->to_string(values[1])
+        << to_printable_string(type, values[1])
         << std::endl;
 }
 
-using action_handler_func = void(*)(data_type, std::vector<bytes>);
+using action_handler_func = void(*)(type_variant, std::vector<bytes>);
 
 class action_handler {
     std::string _name;
@@ -71,7 +118,7 @@ public:
     const std::string& name() const { return _name; }
     const std::string& description() const { return _description; }
 
-    void operator()(data_type type, std::vector<bytes> values) const {
+    void operator()(type_variant type, std::vector<bytes> values) const {
         _func(std::move(type), std::move(values));
     }
 };
@@ -110,6 +157,9 @@ $ scylla_types --print -t Int32Type b34b62d4
 
 $ scylla_types --compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
 b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
+
+$ scylla_types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+(d0081989-6f6b-11ea-0000-0000001c571b, 16)
 )";
     app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
                     [] (const action_handler& ah) { return format("* --{} - {}", ah.name(), ah.description()); } ), "\n"));
@@ -121,9 +171,11 @@ b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
     }
 
     app.add_options()
-        ("action,a", bpo::value<sstring>()->default_value("print"), "the action to execute on the values, "
-                " valid actions are (with values required): print (1+), compare (2); default: print")
-        ("type,t", bpo::value<sstring>(), "the type of the values, all values must be of the same type")
+        ("type,t", bpo::value<std::vector<sstring>>(), "the type of the values, all values must be of the same type;"
+                " when values are compounds, multiple types can be specified, one for each type making up the compound, "
+                "note that the order of the types on the command line will be their order in the compound too")
+        ("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types")
+        ("full-compound", "values are full compounds (e.g. partition key), composed of multiple values of possibly different types")
         ;
 
     app.add_positional_options({
@@ -155,7 +207,20 @@ b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
         if (!app.configuration().count("type")) {
             throw std::invalid_argument("error: missing required option '--type'");
         }
-        auto type = db::marshal::type_parser::parse(app.configuration()["type"].as<sstring>());
+        type_variant type = [&app] () -> type_variant {
+            auto types = boost::copy_range<std::vector<data_type>>(app.configuration()["type"].as<std::vector<sstring>>()
+                    | boost::adaptors::transformed([] (const sstring_view type_name) { return db::marshal::type_parser::parse(type_name); }));
+            if (app.configuration().count("prefix-compound")) {
+                return compound_type<allow_prefixes::yes>(std::move(types));
+            } else if (app.configuration().count("full-compound")) {
+                return compound_type<allow_prefixes::no>(std::move(types));
+            } else { // non-compound type
+                if (types.size() != 1) {
+                    throw std::invalid_argument(fmt::format("error: expected a single '--type' argument, got  {}", types.size()));
+                }
+                return std::move(types.front());
+            }
+        }();
 
         if (!app.configuration().count("value")) {
             throw std::invalid_argument("error: no values specified");
