@@ -49,7 +49,7 @@ relation::to_column_definition(const schema& schema, const column_identifier::ra
     auto id = entity.prepare_column_identifier(schema);
     auto def = get_column_definition(schema, *id);
     if (!def || def->is_hidden_from_cql()) {
-        throw exceptions::unrecognized_entity_exception(id, shared_from_this());
+        throw exceptions::unrecognized_entity_exception(*id, to_string());
     }
     return *def;
 }
