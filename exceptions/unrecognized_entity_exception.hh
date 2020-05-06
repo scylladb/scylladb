@@ -56,22 +56,22 @@ public:
     /**
      * The unrecognized entity.
      */
-    ::shared_ptr<cql3::column_identifier> entity;
+    cql3::column_identifier entity;
 
     /**
-     * The entity relation.
+     * The entity relation in a stringified form.
      */
-    cql3::relation_ptr relation;
+    sstring relation_str;
 
     /**
      * Creates a new <code>UnrecognizedEntityException</code>.
      * @param entity the unrecognized entity
-     * @param relation the entity relation
+     * @param relation_str the entity relation string
      */
-    unrecognized_entity_exception(::shared_ptr<cql3::column_identifier> entity, cql3::relation_ptr relation)
-        : invalid_request_exception(format("Undefined name {} in where clause ('{}')", *entity, relation->to_string()))
-        , entity(entity)
-        , relation(relation)
+    unrecognized_entity_exception(cql3::column_identifier entity, sstring relation_str)
+        : invalid_request_exception(format("Undefined name {} in where clause ('{}')", entity, relation_str))
+        , entity(std::move(entity))
+        , relation_str(std::move(relation_str))
     { }
 };
 
