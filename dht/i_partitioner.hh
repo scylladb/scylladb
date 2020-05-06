@@ -179,12 +179,6 @@ public:
     //virtual token.tokenFactory gettokenFactory() = 0;
 
     /**
-     * @return True if the implementing class preserves key order in the tokens
-     * it generates.
-     */
-    virtual bool preserves_order() const = 0;
-
-    /**
      * @return name of partitioner.
      */
     virtual const sstring name() const = 0;

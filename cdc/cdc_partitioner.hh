@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright (C) 2020 ScyllaDB
  */
 
 /*
@@ -21,23 +21,28 @@
 
 #pragma once
 
-#include "i_partitioner.hh"
+#include <seastar/core/sstring.hh>
+
 #include "bytes.hh"
-#include <vector>
+#include "dht/i_partitioner.hh"
 
-namespace dht {
+class schema;
+class partition_key_view;
 
-class murmur3_partitioner final : public i_partitioner {
-public:
-    murmur3_partitioner() = default;
-    virtual const sstring name() const { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
-    virtual token get_token(const schema& s, partition_key_view key) const override;
-    virtual token get_token(const sstables::key_view& key) const override;
-private:
-    token get_token(bytes_view key) const;
-    token get_token(uint64_t value) const;
+namespace sstables {
+
+class key_view;
+
+}
+
+namespace cdc {
+
+struct cdc_partitioner final : public dht::i_partitioner {
+    cdc_partitioner() = default;
+    virtual const sstring name() const override;
+    virtual dht::token get_token(const schema& s, partition_key_view key) const override;
+    virtual dht::token get_token(const sstables::key_view& key) const override;
 };
 
 
 }
-

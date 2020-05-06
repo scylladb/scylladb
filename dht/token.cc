@@ -279,11 +279,42 @@ token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_co
 }
 
 int64_t token::to_int64(token t) {
-    return t._data;
+    return long_token(t);
 }
 
 dht::token token::from_int64(int64_t i) {
     return {kind::key, i};
+}
+
+static
+dht::token find_first_token_for_shard_in_not_wrap_around_range(const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx) {
+    // Invariant start < end
+    // It is guaranteed that start is not MAX_INT64 because end is greater
+    auto t = dht::token::from_int64(dht::token::to_int64(start) + 1);
+    if (sharder.shard_of(t) != shard_idx) {
+        t = sharder.token_for_next_shard(t, shard_idx);
+    }
+    return std::min(t, end);
+}
+
+dht::token find_first_token_for_shard(
+        const dht::sharder& sharder, dht::token start, dht::token end, size_t shard_idx) {
+    if (start < end) { // Not a wrap around token range
+        return find_first_token_for_shard_in_not_wrap_around_range(sharder, start, end, shard_idx);
+    } else { // A wrap around token range
+        dht::token t;
+        if (dht::token::to_int64(start) != std::numeric_limits<int64_t>::max()) {
+            t = find_first_token_for_shard_in_not_wrap_around_range(sharder, start, dht::maximum_token(), shard_idx);
+            if (!t.is_maximum()) {
+                // This means we have found a token for shard shard_idx before 2^63
+                return t;
+            }
+        }
+        // No token owned by shard shard_idx was found in (start, 2^63 - 1]
+        // so we have to search in (-2^63, end]
+        return find_first_token_for_shard_in_not_wrap_around_range(
+                sharder, dht::minimum_token(), end, shard_idx);
+    }
 }
 
 } // namespace dht
