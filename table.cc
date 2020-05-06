@@ -766,6 +766,17 @@ public:
             , _maximum_timestamp(max_timestamp)
     {}
 
+    database_sstable_write_monitor(const database_sstable_write_monitor&) = delete;
+    database_sstable_write_monitor(database_sstable_write_monitor&& x) = default;
+
+    ~database_sstable_write_monitor() {
+        // We failed to finish handling this SSTable, so we have to update the backlog_tracker
+        // about it.
+        if (_sst) {
+            _compaction_strategy.get_backlog_tracker().revert_charges(_sst);
+        }
+    }
+
     virtual void on_write_started(const sstables::writer_offset_tracker& t) override {
         _tracker = &t;
         _compaction_strategy.get_backlog_tracker().register_partially_written_sstable(_sst, *this);
@@ -778,7 +789,9 @@ public:
     }
 
     virtual void write_failed() override {
-        _compaction_strategy.get_backlog_tracker().revert_charges(_sst);
+        if (_sst) {
+            _compaction_strategy.get_backlog_tracker().revert_charges(std::move(_sst));
+        }
     }
 
     virtual uint64_t written() const override {
