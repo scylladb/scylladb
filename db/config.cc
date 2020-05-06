@@ -515,7 +515,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , streaming_socket_timeout_in_ms(this, "streaming_socket_timeout_in_ms", value_status::Unused, 0,
         "Enable or disable socket timeout for streaming operations. When a timeout occurs during streaming, streaming is retried from the start of the current file. Avoid setting this value too low, as it can result in a significant amount of data re-streaming.")
     /* Native transport (CQL Binary Protocol) */
-    , start_native_transport(this, "start_native_transport", value_status::Unused, true,
+    , start_native_transport(this, "start_native_transport", value_status::Used, true,
         "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port.")
     , native_transport_port(this, "native_transport_port", value_status::Used, 9042,
         "Port on which the CQL native transport listens for clients.")

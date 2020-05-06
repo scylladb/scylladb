@@ -88,10 +88,12 @@ protocol. Scylla supports several Scylla-only extensions to this protocol,
 described in [protocol-extensions.md](protocol-extensions.md).
 
 By default scylla listens to the CQL protocol on port 9042, which can be
-configured via the `native_transport_port` configuration option. Again, this
-name is used for backward-compatibility with Cassandra configuration files:
-It refers to CQL as the "native transport", to contrast with the older Thrift
-protocol (described below) which wasn't native to Cassandra.
+configured via the `native_transport_port` configuration option, or entirely
+disabled by setting the `start_native_transport` option to 0.
+Again these option names were chosen for backward-compatibility with Cassandra
+configuration files: They refers to CQL as the "native transport", to contrast
+with the older Thrift protocol (described below) which wasn't native to
+Cassandra.
 
 There is also a `rpc_address` configuration option to set the IP address
 (and therefore network interface) on which Scylla should listen for the
