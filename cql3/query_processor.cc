@@ -551,26 +551,25 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
     return statement->execute(_proxy, query_state, options, result_consumer).then([statement] {});
 }
 
-future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
 query_processor::prepare(sstring query_string, service::query_state& query_state) {
     auto& client_state = query_state.get_client_state();
     return prepare(std::move(query_string), client_state, client_state.is_thrift());
 }
 
-future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
 query_processor::prepare(sstring query_string, const service::client_state& client_state, bool for_thrift) {
     using namespace cql_transport::messages;
     if (for_thrift) {
-        return prepare_one<result_message::prepared::thrift>(
+        return prepare_one(
                 std::move(query_string),
                 client_state,
-                compute_thrift_id, prepared_cache_key_type::thrift_id);
+                compute_thrift_id);
     } else {
-        return prepare_one<result_message::prepared::cql>(
+        return prepare_one(
                 std::move(query_string),
                 client_state,
-                compute_id,
-                prepared_cache_key_type::cql_id);
+                compute_id);
     }
 }
 

@@ -30,6 +30,8 @@
 
 namespace cql3 {
 
+class prepared_cache_key_type;
+
 class query_result_consumer {
 public:
     query_result_consumer() = default;

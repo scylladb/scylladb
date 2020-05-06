@@ -1021,29 +1021,22 @@ public:
         throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
-    class prepared_result_visitor final : public cql_transport::messages::result_message::visitor_base {
-        CqlPreparedResult _result;
-    public:
-        const CqlPreparedResult& result() const {
-            return _result;
+    static CqlPreparedResult build_prepare_result(cql3::prepared_cache_key_type key, const cql3::statements::prepared_statement& prep_stmt) {
+        CqlPreparedResult result;
+        result.__set_itemId(cql3::prepared_cache_key_type::thrift_id(key));
+        auto& names = prep_stmt.bound_names;
+        result.__set_count(names.size());
+        std::vector<std::string> variable_types;
+        std::vector<std::string> variable_names;
+        for (auto& csp : names) {
+            variable_types.emplace_back(csp->type->name());
+            variable_names.emplace_back(csp->name->to_string());
         }
-        virtual void visit(const cql_transport::messages::result_message::prepared::cql& m) override {
-            throw std::runtime_error("Unexpected result message type.");
-        }
-        virtual void visit(const cql_transport::messages::result_message::prepared::thrift& m) override {
-            _result.__set_itemId(m.get_id());
-            auto& names = m.metadata()->names();
-            _result.__set_count(names.size());
-            std::vector<std::string> variable_types;
-            std::vector<std::string> variable_names;
-            for (auto csp : names) {
-                variable_types.emplace_back(csp->type->name());
-                variable_names.emplace_back(csp->name->to_string());
-            }
-            _result.__set_variable_types(std::move(variable_types));
-            _result.__set_variable_names(std::move(variable_names));
-        }
-    };
+        result.__set_variable_types(std::move(variable_types));
+        result.__set_variable_names(std::move(variable_names));
+
+        return result;
+    }
 
     void prepare_cql3_query(thrift_fn::function<void(CqlPreparedResult const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
         with_exn_cob(std::move(exn_cob), [&] {
@@ -1051,10 +1044,10 @@ public:
             if (compression != Compression::type::NONE) {
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
             }
-            return _query_processor.local().prepare(query, _query_state).then([cob = std::move(cob)](auto&& stmt) {
-                prepared_result_visitor visitor;
-                stmt->accept(visitor);
-                cob(visitor.result());
+
+            return _query_processor.local().prepare(query, _query_state).then([cob = std::move(cob)]
+                    (std::tuple<cql3::prepared_cache_key_type, cql3::statements::prepared_statement::checked_weak_ptr> t) {
+                return cob(build_prepare_result(std::get<0>(t), *std::get<1>(t)));
             });
         });
     }

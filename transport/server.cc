@@ -441,7 +441,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         case cql_binary_opcode::AUTH_RESPONSE: return wrap_in_foreign(process_auth_response(stream, std::move(in), client_state, trace_state));
         case cql_binary_opcode::OPTIONS:       return wrap_in_foreign(process_options(stream, std::move(in), client_state, trace_state));
         case cql_binary_opcode::QUERY:         return process_query(stream, std::move(in), client_state, std::move(permit), trace_state);
-        case cql_binary_opcode::PREPARE:       return wrap_in_foreign(process_prepare(stream, std::move(in), client_state, trace_state));
+        case cql_binary_opcode::PREPARE:       return process_prepare(stream, std::move(in), client_state, trace_state);
         case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), client_state, std::move(permit), trace_state);
         case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), client_state, std::move(permit), trace_state);
         case cql_binary_opcode::REGISTER:      return wrap_in_foreign(process_register(stream, std::move(in), client_state, trace_state));
@@ -888,7 +888,7 @@ public:
         row_count_plhldr.write(v.row_count());
     }
 
-    void set_schema_change(shared_ptr<cql_transport::event::schema_change>& change) {
+    void set_schema_change(shared_ptr<cql_transport::event::schema_change>& change) override {
         prepare_response();
         assert(change);
         assert(change->type == event::event_type::SCHEMA_CHANGE);
@@ -932,6 +932,20 @@ public:
     }
 };
 
+static foreign_ptr<std::unique_ptr<cql_server::response>>
+build_prepare_result(int16_t stream, uint8_t version, const tracing::trace_state_ptr& tr_state_ptr,
+        cql3::prepared_cache_key_type key, const cql3::statements::prepared_statement& prep_stmt) {
+    std::unique_ptr<cql_server::response> response
+            = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state_ptr);
+    response->write_int(0x0004);
+    response->write_short_bytes(cql3::prepared_cache_key_type::cql_id(key));
+    response->write(cql3::prepared_metadata(prep_stmt.bound_names, prep_stmt.partition_key_bind_indices), version);
+    if (version > 1) {
+        response->write(*prep_stmt.statement->get_result_metadata());
+    }
+    return make_foreign(std::move(response));
+}
+
 static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
 process_query_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
@@ -966,7 +980,7 @@ cql_server::connection::process_query(uint16_t stream, request_reader in, servic
     return process(stream, in, client_state, std::move(permit), std::move(trace_state), process_query_internal);
 }
 
-future<std::unique_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state& client_state,
+future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
     auto query = sstring(in.read_long_string_view());
 
@@ -975,9 +989,9 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
 
     auto cpu_id = this_shard_id();
     auto cpus = boost::irange(0u, smp::count);
-    return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &client_state] (unsigned int c) mutable {
+    return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &client_state, stream, trace_state] (unsigned int c) mutable {
         if (c != cpu_id) {
-            return smp::submit_to(c, [this, query, &client_state] () mutable {
+            return smp::submit_to(c, [this, query, &client_state, stream, trace_state] () mutable {
                 return _server._query_processor.local().prepare(std::move(query), client_state, false).discard_result();
             });
         } else {
@@ -985,11 +999,13 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
         }
     }).then([this, query, stream, &client_state, trace_state] () mutable {
         tracing::trace(trace_state, "Done preparing on remote shards");
-        return _server._query_processor.local().prepare(std::move(query), client_state, false).then([this, stream, &client_state, trace_state] (auto msg) {
-            tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
-                return messages::result_message::prepared::cql::get_id(msg);
+        return _server._query_processor.local().prepare(std::move(query), client_state, false).then([this, stream, &client_state, trace_state]
+                (std::tuple<cql3::prepared_cache_key_type, cql3::statements::prepared_statement::checked_weak_ptr> t) {
+            const auto& key = std::get<0>(t);
+            tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&key] {
+                return cql3::prepared_cache_key_type::cql_id(key);
             }));
-            return make_result(stream, *msg, trace_state, _version);
+            return build_prepare_result(stream, _version, trace_state, key, *std::get<1>(t));
         });
     });
 }

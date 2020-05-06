@@ -308,10 +308,10 @@ public:
             const timeout_config& timeout_config,
             const std::initializer_list<data_value>& = { });
 
-    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+    future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
     prepare(sstring query_string, service::query_state& query_state);
 
-    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+    future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
     prepare(sstring query_string, const service::client_state& client_state, bool for_thrift);
 
     future<> stop();
@@ -380,28 +380,22 @@ private:
     bool has_more_results(::shared_ptr<cql3::internal_query_state> state) const;
 
     ///
-    /// \tparam ResultMsgType type of the returned result message (CQL or Thrift)
     /// \tparam PreparedKeyGenerator a function that generates the prepared statement cache key for given query and
     ///         keyspace
-    /// \tparam IdGetter a function that returns the corresponding prepared statement ID (CQL or Thrift) for a given
-    ////        prepared statement cache key
     /// \param query_string
     /// \param client_state
     /// \param id_gen prepared ID generator, called before the first deferring
-    /// \param id_getter prepared ID getter, passed to deferred context by reference. The caller must ensure its
-    ////       liveness.
     /// \return
-    template <typename ResultMsgType, typename PreparedKeyGenerator, typename IdGetter>
-    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+    template <typename PreparedKeyGenerator>
+    future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
     prepare_one(
             sstring query_string,
             const service::client_state& client_state,
-            PreparedKeyGenerator&& id_gen,
-            IdGetter&& id_getter) {
+            PreparedKeyGenerator&& id_gen) {
         return do_with(
                 id_gen(query_string, client_state.get_raw_keyspace()),
                 std::move(query_string),
-                [this, &client_state, &id_getter](const prepared_cache_key_type& key, const sstring& query_string) {
+                [this, &client_state](const prepared_cache_key_type& key, const sstring& query_string) {
             return _prepared_cache.get(key, [this, &query_string, &client_state] {
                 auto prepared = get_statement(query_string, client_state);
                 auto bound_terms = prepared->statement->get_bound_terms();
@@ -413,11 +407,11 @@ private:
                 }
                 assert(bound_terms == prepared->bound_names.size());
                 return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
-            }).then([&key, &id_getter] (auto prep_ptr) {
-                return make_ready_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(
-                        ::make_shared<ResultMsgType>(id_getter(key), std::move(prep_ptr)));
+            }).then([&key] (statements::prepared_statement::checked_weak_ptr prep_ptr) {
+                return make_ready_future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>(
+                        std::make_tuple(std::move(key), std::move(prep_ptr)));
             }).handle_exception_type([&query_string] (typename prepared_statements_cache::statement_is_too_big&) {
-                return make_exception_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(
+                return make_exception_future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>(
                         prepared_statement_is_too_big(query_string));
             });
         });

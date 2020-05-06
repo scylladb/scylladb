@@ -66,9 +66,9 @@ future<> table_helper::cache_table_info(service::query_state& qs) {
         _insert_stmt = nullptr;
     }
 
-    return cql3::get_local_query_processor().prepare(_insert_cql, qs.get_client_state(), false).then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) {
-        _prepared_stmt = std::move(msg_ptr->get_prepared());
-        shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
+    return cql3::get_local_query_processor().prepare(_insert_cql, qs.get_client_state(), false).then([this]
+            (std::tuple<cql3::prepared_cache_key_type, cql3::statements::prepared_statement::checked_weak_ptr> t) {
+        shared_ptr<cql3::cql_statement> cql_stmt = std::move(std::get<1>(t)->statement);
         _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
     }).handle_exception([this] (auto eptr) {
         // One of the possible causes for an error here could be the table that doesn't exist.
