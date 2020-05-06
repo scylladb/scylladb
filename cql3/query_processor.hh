@@ -315,12 +315,13 @@ public:
 
     future<> stop();
 
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute_batch(
             ::shared_ptr<statements::batch_statement>,
             service::query_state& query_state,
             query_options& options,
-            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
+            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries,
+            query_result_consumer& result_consumer);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::string_view& query,

@@ -855,18 +855,19 @@ query_processor::execute_with_params(
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<>
 query_processor::execute_batch(
         ::shared_ptr<statements::batch_statement> batch,
         service::query_state& query_state,
         query_options& options,
-        std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-    return batch->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
+        std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries,
+        query_result_consumer& result_consumer) {
+    return batch->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries), &result_consumer] () mutable {
         return parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second)).handle_exception([this] (auto eptr) {
                 log.error("failed to cache the entry: {}", eptr);
             });
-        }).then([this, &query_state, &options, batch] {
+        }).then([this, &query_state, &options, batch, &result_consumer] {
             batch->validate();
             batch->validate(_proxy, query_state.get_client_state());
             _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
@@ -877,7 +878,7 @@ query_processor::execute_batch(
                 }
                 log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
             }
-            return batch->execute(_proxy, query_state, options);
+            return batch->execute(_proxy, query_state, options, result_consumer);
         });
     });
 }
