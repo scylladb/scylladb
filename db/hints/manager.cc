@@ -187,6 +187,13 @@ bool manager::should_ignore_hints_during_replay_for_table(schema_ptr s) const {
     return _tables_to_ignore_hints_for.count(base_id);
 }
 
+future<> manager::flush_current_hints() {
+    manager_logger.debug("Flushing hints on all endpoint managers");
+    return parallel_for_each(_ep_managers, [] (auto& ep) {
+        return ep.second.flush_current_hints();
+    });
+}
+
 future<> manager::await_in_flight_hints() {
     return parallel_for_each(_ep_managers, [] (auto& ep) {
         return ep.second.await_in_flight_hints();

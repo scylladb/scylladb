@@ -710,6 +710,9 @@ private:
         return _state.contains(state::replay_allowed);
     }
 
+    /// \brief Flushes all hints written so far on all endpoint managers to the disk.
+    future<> flush_current_hints();
+
     /// \brief Waits until all hints being currently sent are finished.
     future<> await_in_flight_hints();
 
