@@ -409,6 +409,12 @@ public:
             return _sender.await_in_flight_hints();
         }
 
+        /// \brief Flushes all hints written so far to the disk.
+        ///  - Repopulates the _segments_to_replay list if needed.
+        ///
+        /// \return Ready future when the procedure above completes.
+        future<> flush_current_hints() noexcept;
+
     private:
         seastar::shared_mutex& file_update_mutex() noexcept {
             return _file_update_mutex;
@@ -422,12 +428,6 @@ public:
         ///
         /// \return A new hints store object.
         future<commitlog> add_store() noexcept;
-
-        /// \brief Flushes all hints written so far to the disk.
-        ///  - Repopulates the _segments_to_replay list if needed.
-        ///
-        /// \return Ready future when the procedure above completes.
-        future<> flush_current_hints() noexcept;
 
         struct stats& shard_stats() {
             return _shard_manager._stats;
