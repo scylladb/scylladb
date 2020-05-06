@@ -22,15 +22,15 @@
 import pytest
 from botocore.exceptions import ClientError, ParamValidationError
 import random
-from util import random_string, random_bytes, full_query, multiset
+from util import random_string, full_query, multiset
 
-# test_table_sn_with_sorted_partition is just the regular test_table_sn, with
-# a partition inserted with many items. The table, the partition key, and the
-# items are returned - the items are sorted (by column 'c'), so they can be
-# easily used to test various range queries. This fixture is useful for
-# writing many small query tests which read the same input data without
-# needing to re-insert data for every test, so overall the test suite is
-# faster.
+# The test_table_{sn,ss,sb}_with_sorted_partition fixtures are the regular
+# test_table_{sn,ss,sb} fixture with a partition inserted with many items.
+# The table, the partition key, and the items are returned - the items are
+# sorted (by column 'c'), so they can be easily used to test various range
+# queries. This fixture is useful for writing many small query tests which
+# read the same input data without needing to re-insert data for every test,
+# so overall the test suite is faster.
 @pytest.fixture(scope="session")
 def test_table_sn_with_sorted_partition(test_table_sn):
     p = random_string()
@@ -39,7 +39,7 @@ def test_table_sn_with_sorted_partition(test_table_sn):
         for item in items:
             batch.put_item(item)
         # Add another partition just to make sure that a query of just
-        # partition p can't just do a whole table scan and still succeed
+        # partition p can't just match the entire table and still succeed
         batch.put_item({'p': random_string(), 'c': 123, 'a': random_string()})
     yield test_table_sn, p, items
 
@@ -328,7 +328,7 @@ def test_key_condition_expression_bad_value(test_table_sn_with_sorted_partition)
         full_query(table, KeyConditionExpression=':a',
             ExpressionAttributeValues={':a': 3})
 
-# In all tests above the condition had p first, s second. Verify that this
+# In all tests above the condition had p first, c second. Verify that this
 # order can be reversed.
 def test_key_condition_expression_order(test_table_sn_with_sorted_partition):
     table, p, items = test_table_sn_with_sorted_partition
