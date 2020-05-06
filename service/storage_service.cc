@@ -2175,7 +2175,8 @@ storage_service::get_snapshot_details() {
 }
 
 future<int64_t> storage_service::true_snapshots_size() {
-    return _db.map_reduce(adder<int64_t>(), [] (database& db) {
+  return run_snapshot_list_operation([] {
+    return get_local_storage_service()._db.map_reduce(adder<int64_t>(), [] (database& db) {
         return do_with(int64_t(0), [&db] (auto& local_total) {
             return parallel_for_each(db.get_column_families(), [&local_total] (auto& cf_pair) {
                 return cf_pair.second->get_snapshot_details().then([&local_total] (auto map) {
@@ -2189,6 +2190,7 @@ future<int64_t> storage_service::true_snapshots_size() {
             });
         });
     });
+  });
 }
 
 static std::atomic<bool> isolated = { false };
