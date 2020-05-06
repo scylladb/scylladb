@@ -84,7 +84,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), true).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
-        db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata)).get();
+        db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources)).get();
         db.invoke_on_all([] (database& db) {
             db.get_compaction_manager().start();
         }).get();

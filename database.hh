@@ -1420,7 +1420,7 @@ public:
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     future<> parse_system_tables(distributed<service::storage_proxy>&, distributed<service::migration_manager>&);
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::token_metadata& tm);
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::token_metadata& tm, abort_source& as);
     database(database&&) = delete;
     ~database();
 

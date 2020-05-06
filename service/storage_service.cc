@@ -2602,8 +2602,11 @@ future<> storage_service::drain() {
             ss.do_stop_ms().get();
 
             // Interrupt on going compaction and shutdown to prevent further compaction
+            // No new compactions will be started from this call site on, but we don't need
+            // to wait for them to stop. Drain leaves the node alive, and a future shutdown
+            // will wait on the compaction_manager stop future.
             ss.db().invoke_on_all([] (auto& db) {
-                return db.get_compaction_manager().stop();
+                db.get_compaction_manager().do_stop();
             }).get();
 
             ss.set_mode(mode::DRAINING, "flushing column families", false);

@@ -736,7 +736,7 @@ int main(int ac, char** av) {
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
             dbcfg.available_memory = memory::stats().total_memory();
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata)).get();
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();
             start_large_data_handler(db).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
@@ -1184,12 +1184,6 @@ int main(int ac, char** av) {
                 if (cfg->view_building()) {
                     view_builder.stop().get();
                 }
-            });
-
-            auto stop_compaction_manager = defer_verbose_shutdown("compaction manager", [&db] {
-                db.invoke_on_all([](auto& db) {
-                    return db.get_compaction_manager().stop();
-                }).get();
             });
 
             auto stop_redis_service = defer_verbose_shutdown("redis service", [&cfg] {
