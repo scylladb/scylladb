@@ -103,6 +103,40 @@ void compare_handler(type_variant type, std::vector<bytes> values) {
         << std::endl;
 }
 
+void validate_handler(type_variant type, std::vector<bytes> values) {
+    struct validate_visitor {
+        bytes_view value;
+
+        void operator()(const data_type& type) {
+            type->validate(value, cql_serialization_format::internal());
+        }
+        void operator()(const compound_type<allow_prefixes::yes>& type) {
+            type.validate(value);
+        }
+        void operator()(const compound_type<allow_prefixes::no>& type) {
+            type.validate(value);
+        }
+    };
+
+    for (const auto& value : values) {
+        // Cannot convert to printable string, as it can fail for invalid values.
+        std::cout << to_hex(value) << ": ";
+
+        std::exception_ptr ex;
+        try {
+            std::visit(validate_visitor{value}, type);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            std::cout << " INVALID - " << ex;
+        } else {
+            std::cout << " VALID - " << to_printable_string(type, value);
+        }
+        std::cout << std::endl;
+    }
+}
+
 using action_handler_func = void(*)(type_variant, std::vector<bytes>);
 
 class action_handler {
@@ -126,6 +160,7 @@ public:
 const std::vector<action_handler> action_handlers = {
     {"print", "print the value in a human readable form, takes 1+ values", print_handler},
     {"compare", "compare two values and print the result, takes 2 values", compare_handler},
+    {"validate", "validate the values, takes 1+ values", validate_handler},
 };
 
 }
