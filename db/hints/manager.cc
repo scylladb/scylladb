@@ -187,6 +187,12 @@ bool manager::should_ignore_hints_during_replay_for_table(schema_ptr s) const {
     return _tables_to_ignore_hints_for.count(base_id);
 }
 
+future<> manager::await_in_flight_hints() {
+    return parallel_for_each(_ep_managers, [] (auto& ep) {
+        return ep.second.await_in_flight_hints();
+    });
+}
+
 bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).
@@ -717,6 +723,7 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
+    auto op = _hint_send_barrier.start();
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
         (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
@@ -772,7 +779,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
     }).handle_exception([this, ctx_ptr] (auto eptr) {
         manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
         ctx_ptr->state.set(send_state::segment_replay_failed);
-    });
+    }).finally([op = std::move(op)] {});
 }
 
 // runs in a seastar::async context

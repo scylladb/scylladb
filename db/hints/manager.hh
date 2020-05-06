@@ -39,6 +39,7 @@
 #include "utils/loading_shared_values.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "db/hints/resource_manager.hh"
+#include "utils/phased_barrier.hh"
 
 namespace service {
 class storage_service;
@@ -131,6 +132,7 @@ public:
             seastar::scheduling_group _hints_cpu_sched_group;
             gms::gossiper& _gossiper;
             seastar::shared_mutex& _file_update_mutex;
+            utils::phased_barrier _hint_send_barrier;
 
         public:
             sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, database& local_db, gms::gossiper& local_gossiper) noexcept;
@@ -161,6 +163,11 @@ public:
             /// \brief Check if there are still unsent segments.
             /// \return TRUE if there are still unsent segments.
             bool have_segments() const noexcept { return !_segments_to_replay.empty(); };
+
+            /// \brief Waits until all hints being currently sent are finished.
+            future<> await_in_flight_hints() {
+                return _hint_send_barrier.advance_and_await();
+            }
 
         private:
             /// \brief Send hints collected so far.
@@ -396,6 +403,10 @@ public:
 
         const fs::path& hints_dir() const noexcept {
             return _hints_dir;
+        }
+
+        future<> await_in_flight_hints() {
+            return _sender.await_in_flight_hints();
         }
 
     private:
@@ -698,6 +709,9 @@ private:
     bool replay_allowed() const noexcept {
         return _state.contains(state::replay_allowed);
     }
+
+    /// \brief Waits until all hints being currently sent are finished.
+    future<> await_in_flight_hints();
 
     /// \brief Allows to prevent from generating hints for a table and its views.
     void forbid_generating_hints_for_table_and_its_views(utils::UUID cf_id);
