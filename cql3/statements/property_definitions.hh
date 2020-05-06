@@ -86,6 +86,8 @@ protected:
 public:
     bool has_property(const sstring& name) const;
 
+    std::optional<value_type> get(const sstring& name) const;
+
     sstring get_string(sstring key, sstring default_value) const;
 
     // Return a property value, typed as a Boolean
