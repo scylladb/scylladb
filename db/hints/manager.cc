@@ -200,6 +200,21 @@ future<> manager::await_in_flight_hints() {
     });
 }
 
+future<> manager::block_hints_for_table_and_its_views(utils::UUID cf_id) {
+    forbid_generating_hints_for_table_and_its_views(cf_id);
+    start_ignoring_hints_during_replay_for_table_and_its_views(cf_id);
+
+    return when_all(
+        flush_current_hints(),
+        await_in_flight_hints()
+    ).discard_result();
+}
+
+void manager::unblock_hints_for_table_and_its_views(utils::UUID cf_id) {
+    allow_generating_hints_for_table_and_its_views(cf_id);
+    stop_ignoring_hints_during_replay_for_table_and_its_views(cf_id);
+}
+
 bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     try {
         // Future is waited on indirectly in `stop()` (via `_store_gate`).

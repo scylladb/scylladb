@@ -575,6 +575,12 @@ public:
         _state.set(state::replay_allowed);
     }
 
+    /// \brief Blocks all hint traffic for a given table and its views.
+    ///
+    /// Stops generating and sending hints, flushes currrent hints and waits for in-progress hints.
+    future<> block_hints_for_table_and_its_views(utils::UUID cf_id);
+    void unblock_hints_for_table_and_its_views(utils::UUID cf_id);
+
     /// \brief Rebalance hints segments among all present shards.
     ///
     /// The difference between the number of segments on every two shard will be not greater than 1 after the
