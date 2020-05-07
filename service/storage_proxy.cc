@@ -4990,12 +4990,7 @@ void storage_proxy::init_messaging_service() {
         });
     });
     ms.register_truncate([this](sstring ksname, sstring cfname) {
-        return do_with(utils::make_joinpoint([] { return db_clock::now();}),
-                        [this, ksname, cfname](auto& tsf) {
-            return container().invoke_on_all(_write_smp_service_group, [ksname, cfname, &tsf](storage_proxy& sp) {
-                return sp._db.local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
-            });
-        });
+        return truncate_on_all_shards(std::move(ksname), std::move(cfname));
     });
 
     ms.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
@@ -5217,6 +5212,16 @@ future<>
 storage_proxy::stop() {
     // FIXME: hints manager should be stopped here but it seems like this function is never called
     return uninit_messaging_service();
+}
+
+future<> storage_proxy::truncate_on_all_shards(sstring ksname, sstring cfname) {
+    return do_with(utils::make_joinpoint([] { return db_clock::now();}),
+                [ksname = std::move(ksname), cfname = std::move(cfname)](auto& tsf) mutable {
+        auto& sp = get_local_storage_proxy();
+        return sp.container().invoke_on_all(sp._write_smp_service_group, [ksname = std::move(ksname), cfname = std::move(cfname), &tsf](storage_proxy& sp) {
+            return sp.get_db().local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
+        });
+    });
 }
 
 }

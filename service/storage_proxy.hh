@@ -424,6 +424,8 @@ private:
 
     template<typename Range>
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
+
+    future<> truncate_on_all_shards(sstring ks_name, sstring cf_name);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, locator::token_metadata& tokens);
