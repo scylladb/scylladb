@@ -117,9 +117,9 @@ bytes random_bytes(size_t size) {
     return result;
 }
 
-sstring random_string(size_t size) {
+sstring random_name(size_t size) {
     sstring result = uninitialized_string(size);
-    static const char chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    static const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     for (size_t i = 0; i < size; ++i) {
         result[i] = chars[std::rand() % sizeof(chars)];
     }
@@ -142,7 +142,7 @@ static schema_ptr make_schema(const mutation_settings& settings) {
         .with_column("ck", bytes_type, column_kind::clustering_key);
 
     for (size_t i = 0; i < settings.column_count; ++i) {
-        builder.with_column(to_bytes(random_string(settings.column_name_size)), bytes_type);
+        builder.with_column(to_bytes(random_name(settings.column_name_size)), bytes_type);
     }
 
     return builder.build();
