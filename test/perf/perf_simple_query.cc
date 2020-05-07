@@ -68,6 +68,7 @@ struct test_config {
     bool query_single_key;
     unsigned duration_in_seconds;
     bool counters;
+    bool flush_memtables;
     unsigned operations_per_shard = 0;
 };
 
@@ -97,6 +98,11 @@ static void create_partitions(cql_test_env& env, test_config& cfg) {
         } else {
             execute_update_for_key(env, make_key(sequence));
         }
+    }
+
+    if (cfg.flush_memtables) {
+        std::cout << "Flushing partitions..." << std::endl;
+        env.db().invoke_on_all(&database::flush_all_memtables).get();
     }
 }
 
@@ -254,6 +260,7 @@ int main(int argc, char** argv) {
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
         ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
         ("counters", "test counters")
+        ("flush", "flush memtables before test")
         ("json-result", bpo::value<std::string>(), "name of the json result file")
         ;
 
@@ -273,6 +280,7 @@ int main(int argc, char** argv) {
             cfg.concurrency = app.configuration()["concurrency"].as<unsigned>();
             cfg.query_single_key = app.configuration().count("query-single-key");
             cfg.counters = app.configuration().count("counters");
+            cfg.flush_memtables = app.configuration().count("flush");
             if (app.configuration().count("write")) {
                 cfg.mode = test_config::run_mode::write;
             } else if (app.configuration().count("delete")) {
