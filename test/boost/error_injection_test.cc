@@ -134,6 +134,22 @@ SEASTAR_TEST_CASE(test_inject_sleep_deadline_manual_clock) {
     });
 }
 
+SEASTAR_TEST_CASE(test_inject_sleep_deadline_manual_clock_lambda) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        utils::error_injection<true> errinj;
+
+        // Inject sleep, deadline short-circuit
+        auto deadline = seastar::manual_clock::now() + sleep_msec;
+        errinj.enable("future_deadline");
+        auto f = errinj.inject("future_deadline", deadline, [deadline] {
+            BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(seastar::manual_clock::now() - deadline).count(), 0);
+            return make_ready_future<>();
+        });
+        manual_clock::advance(sleep_msec);
+        f.get();
+    });
+}
+
 SEASTAR_TEST_CASE(test_inject_sleep_deadline_db_clock) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         utils::error_injection<true> errinj;
