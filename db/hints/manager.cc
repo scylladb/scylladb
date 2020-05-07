@@ -776,6 +776,14 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     return make_ready_future<>();
                 }
 
+                // Don't send hints older than the truncation record of the table
+                auto& cf = _db.find_column_family(m.s);
+                const auto secs_since_truncation = cf.get_truncation_record().time_since_epoch();
+                if (secs_since_file_mod < secs_since_truncation) {
+                    ctx_ptr->rps_set.erase(rp);
+                    return make_ready_future<>();
+                }
+
                 return this->send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
                     ctx_ptr->rps_set.erase(rp);
                     ++this->shard_stats().sent;
