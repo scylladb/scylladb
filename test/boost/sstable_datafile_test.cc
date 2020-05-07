@@ -5050,8 +5050,8 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             auto expected_sst = sstable_run.begin();
             auto closed_sstables_tracker = sstable_run.begin();
             auto replacer = [&] (sstables::compaction_completion_desc desc) {
-                auto old_sstables = std::move(desc.input_sstables);
-                auto new_sstables = std::move(desc.output_sstables);
+                auto old_sstables = std::move(desc.old_sstables);
+                auto new_sstables = std::move(desc.new_sstables);
                 BOOST_REQUIRE(expected_sst != sstable_run.end());
                 if (incremental_enabled) {
                     do_incremental_replace(std::move(old_sstables), std::move(new_sstables), expected_sst, closed_sstables_tracker);
@@ -5526,9 +5526,10 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
             return m;
         };
 
+        auto deletion_time = gc_clock::now();
         auto make_delete = [&] (partition_key key) {
             mutation m(s, key);
-            tombstone tomb(next_timestamp(), gc_clock::now());
+            tombstone tomb(next_timestamp(), deletion_time);
             m.partition().apply(tomb);
             return m;
         };
@@ -5586,15 +5587,20 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         BOOST_REQUIRE(is_partition_dead(alpha));
 
         auto replacer = [&] (sstables::compaction_completion_desc desc) {
-            auto old_sstables = std::move(desc.input_sstables);
-            auto new_sstables = std::move(desc.output_sstables);
+            auto old_sstables = std::move(desc.old_sstables);
+            auto new_sstables = std::move(desc.new_sstables);
             // expired_sst is exhausted, and new sstable is written with mut 2.
             BOOST_REQUIRE(old_sstables.size() == 1);
             BOOST_REQUIRE(old_sstables.front() == expired_sst);
-            BOOST_REQUIRE(new_sstables.size() == 1);
-            assert_that(sstable_reader(new_sstables.front(), s))
+            BOOST_REQUIRE(new_sstables.size() == 2);
+            for (auto& new_sstable : new_sstables) {
+                if (new_sstable->get_max_local_deletion_time() == deletion_time) { // Skipping GC SSTable.
+                    continue;
+                }
+                assert_that(sstable_reader(new_sstable, s))
                     .produces(mut2)
                     .produces_end_of_stream();
+            }
             column_family_test(cf).rebuild_sstable_list(new_sstables, old_sstables);
             // force compaction failure after sstable containing expired tombstone is removed from set.
             throw std::runtime_error("forcing compaction failure on early replacement");
