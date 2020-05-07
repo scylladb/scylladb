@@ -3,8 +3,7 @@
 ## Introduction
 Alternator is a Scylla feature adding compatibility with Amazon DynamoDB(TM).
 DynamoDB's API uses JSON-encoded requests and responses which are sent over
-an HTTP or HTTPS transport. It is described in detail on Amazon's site:
-  https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/
+an HTTP or HTTPS transport. It is described in detail on [Amazon's site](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/ "AWS API Reference").
 
 Our goal is that any application written to use Amazon DynamoDB could
 be run, unmodified, against Scylla with Alternator enabled. However, at this
