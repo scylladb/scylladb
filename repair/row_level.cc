@@ -1731,7 +1731,8 @@ public:
             size_t sz = set_diff.size();
             return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, sz] (std::list<repair_row> row_diff) {
                 if (row_diff.size() != sz) {
-                    throw std::runtime_error("row_diff.size() != set_diff.size()");
+                    rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
+                            _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
                 }
                 return do_with(std::move(row_diff), [this, remote_node] (std::list<repair_row>& row_diff) {
                     return get_repair_rows_size(row_diff).then([this, remote_node, &row_diff] (size_t row_bytes) mutable {
@@ -1808,7 +1809,8 @@ public:
             size_t sz = set_diff.size();
             return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, node_idx, sz] (std::list<repair_row> row_diff) {
                 if (row_diff.size() != sz) {
-                    throw std::runtime_error("row_diff.size() != set_diff.size()");
+                    rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
+                            _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
                 }
                 return do_with(std::move(row_diff), [this, remote_node, node_idx] (std::list<repair_row>& row_diff) {
                     return get_repair_rows_size(row_diff).then([this, remote_node, node_idx, &row_diff] (size_t row_bytes) mutable {
