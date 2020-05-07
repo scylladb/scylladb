@@ -234,7 +234,7 @@ public:
     }
 };
 
-[[noreturn]] void on_types_internal_error(const sstring& reason);
+[[noreturn]] void on_types_internal_error(std::exception_ptr ex);
 
 // Cassandra has a notion of empty values even for scalars (i.e. int).  This is
 // distinct from NULL which means deleted or never set.  It is serialized

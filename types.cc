@@ -65,8 +65,8 @@
 
 static logging::logger tlogger("types");
 
-void on_types_internal_error(const sstring& reason) {
-    on_internal_error(tlogger, reason);
+void on_types_internal_error(std::exception_ptr ex) {
+    on_internal_error(tlogger, std::move(ex));
 }
 
 template<typename T>
@@ -2045,8 +2045,8 @@ struct compare_visitor {
 int32_t abstract_type::compare(bytes_view v1, bytes_view v2) const {
     try {
         return visit(*this, compare_visitor{v1, v2});
-    } catch (const marshal_exception& e) {
-        on_types_internal_error(e.what());
+    } catch (const marshal_exception&) {
+        on_types_internal_error(std::current_exception());
     }
 }
 

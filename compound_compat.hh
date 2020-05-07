@@ -361,10 +361,9 @@ public:
         void read_current() {
             try {
                 do_read_current();
-            } catch (marshal_exception& e) {
+            } catch (marshal_exception&) {
                 if (_strict_mode) {
-                    //FIXME: `on_internal_error()` variant that takes `std::exception_ptr`.
-                    on_internal_error(compound_logger, e.what());
+                    on_internal_error(compound_logger, std::current_exception());
                 } else {
                     throw;
                 }
