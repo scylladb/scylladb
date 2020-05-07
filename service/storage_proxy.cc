@@ -4248,9 +4248,6 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
     }
 
-    auto cl_for_learn = cl == db::consistency_level::LOCAL_SERIAL ? db::consistency_level::LOCAL_QUORUM :
-            db::consistency_level::QUORUM;
-
     if (cas_shard(*s, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
         throw std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard");
     }
@@ -4260,70 +4257,20 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     db::timeout_clock::time_point cas_timeout = db::timeout_clock::now() +
             std::chrono::milliseconds(_db.local().get_config().cas_contention_timeout_in_ms());
 
-    shared_ptr<paxos_response_handler> handler;
-    try {
-        handler = seastar::make_shared<service::paxos_response_handler>(
-                shared_from_this(), query_options.trace_state, query_options.permit,
-                partition_ranges[0].start()->value().as_decorated_key(), s, cmd, cl, cl_for_learn, timeout, cas_timeout);
-    } catch (exceptions::unavailable_exception& ex) {
-        get_stats().cas_read_unavailables.mark();
-        throw;
-    }
+    struct read_cas_request : public cas_request {
+        foreign_ptr<lw_shared_ptr<query::result>> res;
+        std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
+            const query::partition_slice& slice, api::timestamp_type ts) {
+            res = std::move(qr);
+            return std::nullopt;
+        }
+    };
 
-    return do_with(unsigned(0), [this, s = std::move(s), cmd = std::move(cmd), partition_ranges = std::move(partition_ranges),
-            query_options = std::move(query_options), cl_for_learn, handler = std::move(handler), timeout, cl] (unsigned& contentions) {
-        dht::token token = partition_ranges[0].start()->value().as_decorated_key().token();
-        utils::latency_counter lc;
-        lc.start();
-        return paxos::paxos_state::with_cas_lock(token, timeout, [this, lc, handler, s, cmd,
-                     partition_ranges = std::move(partition_ranges), query_options = std::move(query_options), cl_for_learn,
-                     &contentions] () mutable {
+    auto request = seastar::make_shared<read_cas_request>();
 
-            return handler->begin_and_repair_paxos(query_options.cstate, contentions, false).then_wrapped([this, s = std::move(s),
-                                                                                                           cmd = std::move(cmd), partition_ranges = std::move(partition_ranges), query_options = std::move(query_options),
-                                                                                                           cl_for_learn] (future<paxos_response_handler::ballot_and_data> f) mutable {
-                if (f.failed()) {
-                    try {
-                        f.get();
-                        __builtin_unreachable();
-                    } catch (mutation_write_timeout_exception& ex) {
-                        return make_exception_future<storage_proxy::coordinator_query_result>(
-                                read_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, false));
-                    } catch (mutation_write_failure_exception& ex) {
-                        return make_exception_future<storage_proxy::coordinator_query_result>(
-                                read_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, false));
-                    }
-                }
-                auto v = f.get0();
-                if (v.data) {
-                    return make_ready_future<storage_proxy::coordinator_query_result>(storage_proxy::coordinator_query_result(std::move(v.data)));
-                }
-                return do_query(s, std::move(cmd), std::move(partition_ranges), cl_for_learn, std::move(query_options));
-            });
-        }).then_wrapped([this, s, lc, &contentions, handler = std::move(handler), cl] (future<storage_proxy::coordinator_query_result> f) mutable {
-            get_stats().cas_read.mark(lc.stop().latency());
-            if (lc.is_start()) {
-                get_stats().estimated_cas_read.add(lc.latency(), get_stats().cas_read.hist.count);
-            }
-            if (contentions > 0) {
-                get_stats().cas_read_contention.add(contentions);
-            }
-            try {
-                return make_ready_future<storage_proxy::coordinator_query_result>(f.get0());
-            } catch (request_timeout_exception& ex) {
-                get_stats().cas_read_timeouts.mark();
-                return make_exception_future<storage_proxy::coordinator_query_result>(std::current_exception());
-            } catch (exceptions::unavailable_exception& ex) {
-                get_stats().cas_read_unavailables.mark();
-                return make_exception_future<storage_proxy::coordinator_query_result>(std::move(ex));
-            } catch (seastar::semaphore_timed_out& ex) {
-                paxos::paxos_state::logger.trace("CAS[{}]: timeout while waiting for row lock {}", handler->id());
-                get_stats().cas_read_timeouts.mark();
-                return make_exception_future<storage_proxy::coordinator_query_result>(read_timeout_exception(s->ks_name(), s->cf_name(),
-                            cl, 0,  handler->block_for(), 0));
-            }
-
-        });
+    return cas(std::move(s), request, cmd, std::move(partition_ranges), std::move(query_options),
+            cl, db::consistency_level::ANY, timeout, cas_timeout, false).then([this, request] (bool is_applied) mutable {
+        return make_ready_future<coordinator_query_result>(std::move(request->res));
     });
 }
 
@@ -4332,6 +4279,22 @@ static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr s
     // storage_proxy::query() returns immediately - without any networking.
     auto partition_slice = query::partition_slice({}, {}, {}, query::partition_slice::option_set());
     return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
+}
+
+static read_timeout_exception write_timeout_to_read(schema_ptr s, mutation_write_timeout_exception& ex) {
+    return read_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, false);
+}
+
+static read_failure_exception write_failure_to_read(schema_ptr s, mutation_write_failure_exception& ex) {
+    return read_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, false);
+}
+
+static mutation_write_timeout_exception read_timeout_to_write(schema_ptr s, read_timeout_exception& ex) {
+    return mutation_write_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, db::write_type::CAS);
+}
+
+static mutation_write_failure_exception read_failure_to_write(schema_ptr s, read_failure_exception& ex) {
+    return mutation_write_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS);
 }
 
 /**
@@ -4373,7 +4336,7 @@ static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr s
 future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges, storage_proxy::coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
-        clock_type::time_point write_timeout, clock_type::time_point cas_timeout) {
+        clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write) {
 
     assert(partition_ranges.size() == 1);
     assert(query::is_single_partition(partition_ranges[0]));
@@ -4400,7 +4363,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                 partition_ranges[0].start()->value().as_decorated_key(),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
     } catch (exceptions::unavailable_exception& ex) {
-        get_stats().cas_write_unavailables.mark();
+        write ?  get_stats().cas_write_unavailables.mark() : get_stats().cas_read_unavailables.mark();
         throw;
     }
 
@@ -4408,21 +4371,21 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
         db::consistency_level::LOCAL_QUORUM : db::consistency_level::QUORUM;
 
     return do_with(unsigned(0), [this, handler, schema, cmd, request, partition_ranges = std::move(partition_ranges),
-            query_options = std::move(query_options), cl, write_timeout, cl_for_paxos] (unsigned& contentions) mutable {
+            query_options = std::move(query_options), cl, write_timeout, cl_for_paxos, write] (unsigned& contentions) mutable {
         dht::token token = partition_ranges[0].start()->value().as_decorated_key().token();
         utils::latency_counter lc;
         lc.start();
 
         return paxos::paxos_state::with_cas_lock(token, write_timeout, [this, lc, handler, schema, cmd, request,
                      partition_ranges = std::move(partition_ranges), query_options = std::move(query_options), cl,
-                     &contentions] () mutable {
+                     &contentions, write] () mutable {
             return repeat_until_value([this, handler, schema, cmd, request, partition_ranges = std::move(partition_ranges),
-                                       query_options = std::move(query_options), cl, &contentions] () mutable {
+                                       query_options = std::move(query_options), cl, &contentions, write] () mutable {
                 // Finish the previous PAXOS round, if any, and, as a side effect, compute
                 // a ballot (round identifier) which is a) unique b) has good chances of being
                 // recent enough.
-                return handler->begin_and_repair_paxos(query_options.cstate, contentions, true)
-                        .then([this, handler, schema, cmd, request, partition_ranges, query_options, cl, &contentions]
+                return handler->begin_and_repair_paxos(query_options.cstate, contentions, write)
+                        .then([this, handler, schema, cmd, request, partition_ranges, query_options, cl, &contentions, write]
                                (paxos_response_handler::ballot_and_data v) mutable {
                     // Read the current values and check they validate the conditions.
                     auto f = [&]() {
@@ -4443,30 +4406,40 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                             });
                         }
                     }();
-                    return f.then([this, handler, schema, cmd, request, ballot = v.ballot, &contentions] (auto&& qr) {
-                        auto mutation = request->apply(*qr, cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
+                    return f.then([this, handler, schema, cmd, request, ballot = v.ballot, &contentions, write] (auto&& qr) {
+                        auto mutation = request->apply(std::move(qr), cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
+                        bool condition_met = true;
                         if (!mutation) {
-                            paxos::paxos_state::logger.debug("CAS[{}] precondition does not match current values", handler->id());
-                            tracing::trace(handler->tr_state, "CAS precondition does not match current values");
-                            ++get_stats().cas_write_condition_not_met;
-                            return make_ready_future<std::optional<bool>>(false);
+                            if (write) {
+                                paxos::paxos_state::logger.debug("CAS[{}] precondition does not match current values", handler->id());
+                                tracing::trace(handler->tr_state, "CAS precondition does not match current values");
+                                ++get_stats().cas_write_condition_not_met;
+                                condition_met = false;
+                            }
+                            // If a condition is not met we still need to complete paxos round to achieve
+                            // linearizability otherwise next write attempt may read differnt value as described
+                            // in https://github.com/scylladb/scylla/issues/6299
+                            // Let's use empty mutation as a value and proceed
+                            mutation.emplace(handler->schema(), handler->key());
+                            // since the value we are writing is dummy we may use minimal consistency level for learn
+                            handler->set_cl_for_learn(db::consistency_level::ANY);
+                        } else {
+                            paxos::paxos_state::logger.debug("CAS[{}] precondition is met; proposing client-requested updates for {}",
+                                handler->id(), ballot);
+                            tracing::trace(handler->tr_state, "CAS precondition is met; proposing client-requested updates for {}", ballot);
                         }
 
                         auto proposal = make_lw_shared<paxos::proposal>(ballot, freeze(*mutation));
 
-                        paxos::paxos_state::logger.debug("CAS[{}] precondition is met; proposing client-requested updates for {}",
-                                handler->id(), proposal->ballot);
-                        tracing::trace(handler->tr_state, "CAS precondition is met; proposing client-requested updates for {}",
-                                proposal->ballot);
-                        return handler->accept_proposal(proposal).then([handler, proposal, &contentions] (bool is_accepted) mutable {
+                        return handler->accept_proposal(proposal).then([handler, proposal, &contentions, condition_met] (bool is_accepted) mutable {
                             if (is_accepted) {
                                 // The majority (aka a QUORUM) has promised the coordinator to
                                 // accept the action associated with the computed ballot.
                                 // Apply the mutation.
-                                return handler->learn_decision(std::move(proposal)).then([handler] {
+                                return handler->learn_decision(std::move(proposal)).then([handler, condition_met] {
                                     paxos::paxos_state::logger.debug("CAS[{}] successful", handler->id());
                                     tracing::trace(handler->tr_state, "CAS successful");
-                                    return std::optional<bool>(true);
+                                    return std::optional<bool>(condition_met);
                                 });
                             }
                             paxos::paxos_state::logger.debug("CAS[{}] PAXOS proposal not accepted (pre-empted by a higher ballot)",
@@ -4478,27 +4451,51 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                     });
                 });
             });
-        }).then_wrapped([this, lc, &contentions, handler, schema, cl_for_paxos] (future<bool> f) mutable {
-            get_stats().cas_write.mark(lc.stop().latency());
+        }).then_wrapped([this, lc, &contentions, handler, schema, cl_for_paxos, write] (future<bool> f) mutable {
+            write ? get_stats().cas_write.mark(lc.stop().latency()) : get_stats().cas_read.mark(lc.stop().latency());
             if (lc.is_start()) {
-                get_stats().estimated_cas_write.add(lc.latency(), get_stats().cas_write.hist.count);
+                write ? get_stats().estimated_cas_write.add(lc.latency(), get_stats().cas_write.hist.count) :
+                        get_stats().estimated_cas_read.add(lc.latency(), get_stats().cas_read.hist.count);
             }
             if (contentions > 0) {
-                get_stats().cas_write_contention.add(contentions);
+                write ? get_stats().cas_write_contention.add(contentions) : get_stats().cas_read_contention.add(contentions);
             }
             try {
                 return make_ready_future<bool>(f.get0());
-            } catch (request_timeout_exception& ex) {
-                get_stats().cas_write_timeouts.mark();
-                return make_exception_future<bool>(std::current_exception());
+            } catch (read_failure_exception& ex) {
+                return write ? make_exception_future<bool>(read_failure_to_write(schema, ex)) : make_exception_future<bool>(std::move(ex));
+            } catch (read_timeout_exception& ex) {
+                if (write) {
+                    get_stats().cas_write_timeouts.mark();
+                    return make_exception_future<bool>(read_timeout_to_write(schema, ex));
+                } else {
+                    get_stats().cas_read_timeouts.mark();
+                    return make_exception_future<bool>(std::move(ex));
+                }
+            } catch (mutation_write_failure_exception& ex) {
+                return write ? make_exception_future<bool>(std::move(ex)) : make_exception_future<bool>(write_failure_to_read(schema, ex));
+            } catch (mutation_write_timeout_exception& ex) {
+                if (write) {
+                    get_stats().cas_write_timeouts.mark();
+                    return make_exception_future<bool>(std::move(ex));
+                } else {
+                    get_stats().cas_read_timeouts.mark();
+                    return make_exception_future<bool>(write_timeout_to_read(schema, ex));
+                }
             } catch (exceptions::unavailable_exception& ex) {
-                get_stats().cas_write_unavailables.mark();
+                write ? get_stats().cas_write_unavailables.mark() :  get_stats().cas_read_unavailables.mark();
                 return make_exception_future<bool>(std::move(ex));
             } catch (seastar::semaphore_timed_out& ex) {
                 paxos::paxos_state::logger.trace("CAS[{}]: timeout while waiting for row lock {}", handler->id());
-                get_stats().cas_write_timeouts.mark();
-                return make_exception_future<bool>(mutation_write_timeout_exception(schema->ks_name(), schema->cf_name(),
+                if (write) {
+                    get_stats().cas_write_timeouts.mark();
+                    return make_exception_future<bool>(mutation_write_timeout_exception(schema->ks_name(), schema->cf_name(),
                             cl_for_paxos, 0,  handler->block_for(), db::write_type::CAS));
+                } else {
+                    get_stats().cas_read_timeouts.mark();
+                    return make_exception_future<bool>(read_timeout_exception(schema->ks_name(), schema->cf_name(),
+                            cl_for_paxos, 0,  handler->block_for(), 0));
+                }
             }
         });
     });

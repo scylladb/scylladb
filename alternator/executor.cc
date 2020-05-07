@@ -1181,10 +1181,10 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
     // the request).
 }
 
-std::optional<mutation> rmw_operation::apply(query::result& qr, const query::partition_slice& slice, api::timestamp_type ts) {
-    if (qr.row_count()) {
+std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) {
+    if (qr->row_count()) {
         auto selection = cql3::selection::selection::wildcard(_schema);
-        auto previous_item = describe_item(_schema, slice, *selection, qr, {});
+        auto previous_item = describe_item(_schema, slice, *selection, *qr, {});
         return apply(std::make_unique<rjson::value>(std::move(previous_item)), ts);
     } else {
         return apply(std::unique_ptr<rjson::value>(), ts);
@@ -1541,7 +1541,7 @@ public:
     put_or_delete_item_cas_request(schema_ptr s, std::vector<put_or_delete_item>&& b) :
         schema(std::move(s)), _mutation_builders(std::move(b)) { }
     virtual ~put_or_delete_item_cas_request() = default;
-    virtual std::optional<mutation> apply(query::result& qr, const query::partition_slice& slice, api::timestamp_type ts) override {
+    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) override {
         std::optional<mutation> ret;
         for (put_or_delete_item& mutation_builder : _mutation_builders) {
             // We assume all these builders have the same partition.

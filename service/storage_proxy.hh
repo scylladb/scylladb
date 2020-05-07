@@ -145,15 +145,16 @@ public:
 };
 
 // An instance of this class is passed as an argument to storage_proxy::cas().
-// The apply() method, which must be defined by the implementation, is supposed
-// to apply update operations to the rows fetched from the database and return
-// mutations corresponding to the update. If the update is impossible, because
-// the fetched rows doesn't match the values expected by the request, it must
-// return an empty optional object, which will signal cas() to return immediately.
+// The apply() method, which must be defined by the implementation. It can
+// either return a mutation that will be used as a value for paxos 'propose'
+// stage or it can return an empty option in which case an empty mutation will
+// be used
 class cas_request {
 public:
     virtual ~cas_request() = default;
-    virtual std::optional<mutation> apply(query::result& qr,
+    // it is safe to dereference and use the qr foreign pointer, the result was
+    // created by a foreign shard but no longer used by it.
+    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
             const query::partition_slice& slice, api::timestamp_type ts) = 0;
 };
 
@@ -563,7 +564,7 @@ public:
     future<bool> cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
-            clock_type::time_point write_timeout, clock_type::time_point cas_timeout);
+            clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
 
     future<> stop();
     future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
@@ -707,6 +708,15 @@ public:
     }
     size_t block_for() const {
         return _required_participants;
+    }
+    schema_ptr schema() const {
+        return _schema;
+    }
+    const partition_key& key() const {
+        return _key.key();
+    }
+    void set_cl_for_learn(db::consistency_level cl) {
+        _cl_for_learn = cl;
     }
 };
 

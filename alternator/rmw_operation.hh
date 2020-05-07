@@ -98,7 +98,7 @@ public:
     // the constructor.
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) = 0;
     // Convert the above apply() into the signature needed by cas_request:
-    virtual std::optional<mutation> apply(query::result& qr, const query::partition_slice& slice, api::timestamp_type ts) override;
+    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) override;
     virtual ~rmw_operation() = default;
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }
