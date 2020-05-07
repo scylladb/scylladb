@@ -144,7 +144,7 @@ public:
         }
 
         virtual bool contains_bind_marker() const override {
-            return std::all_of(_elements.begin(), _elements.end(), std::mem_fn(&term::contains_bind_marker));
+            return std::any_of(_elements.begin(), _elements.end(), std::mem_fn(&term::contains_bind_marker));
         }
 
         virtual void collect_marker_specification(variable_specifications& bound_names) const override {
