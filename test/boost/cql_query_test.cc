@@ -360,6 +360,14 @@ SEASTAR_TEST_CASE(test_tuple_elements_validation) {
     });
 }
 
+/// Reproduces #4209
+SEASTAR_TEST_CASE(test_list_of_tuples_with_bound_var) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table cf (pk int PRIMARY KEY, c1 list<frozen<tuple<int,int>>>);").get();
+        BOOST_REQUIRE_THROW(e.prepare("update cf SET c1 = c1 + [(?,9999)] where pk = 999;").get0(), exceptions::invalid_request_exception);
+    });
+}
+
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
