@@ -67,9 +67,13 @@ data_consume_rows<data_consume_rows_context_m>(const schema& s, shared_sstable, 
 static
 position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
     const auto& ranges = slice.row_ranges(s, *key.key());
-    return ranges.empty()
-        ? position_in_partition_view::for_static_row()
-        : position_in_partition_view::for_range_end(ranges.back());
+    if (ranges.empty()) {
+        return position_in_partition_view::for_static_row();
+    }
+    if (slice.options.contains(query::partition_slice::option::reversed)) {
+        return position_in_partition_view::for_range_end(ranges.front());
+    }
+    return position_in_partition_view::for_range_end(ranges.back());
 }
 
 GCC6_CONCEPT(
