@@ -130,19 +130,9 @@ implemented, with the following limitations:
   (change data capture), but the "DynamoDB Streams" API is not yet supported.
 ### Encryption at rest
 * Supported by Scylla Enterprise (not in open-source). Needs to be enabled.
-### ARNs and tags
-* ARN is generated for every alternator table
-* Tagging can be used with the help of the following requests:
-  ListTagsOfResource, TagResource, UntagResource.
-  Tags are stored in a schema table (system\_schema.tables.extensions['tags']),
-  which in particular means that concurrent adding of tags for a single table
-  on more than a single node may result in a race, until Scylla schema agreement
-  is reimplemented to avoid them.
-  Also, during table creation, a 'Tags' parameter can be used
-  and it will be honored by alternator. Note however, that creating a table
-  and tagging it later are not atomic operations, so in case of failure it's possible
-  for first to succeed (and leave side effects in the form of a table) and for the second
-  one to fail, adding no tags to the table.
+### Tags
+* Tagging tables is fully supported, at CreateTable time (with the "Tags"
+  parameter) and later using TagResource, UntagResource and ListTagsOfResource.
 ### Accounting and capping
 * Not yet supported. Mainly for multi-tenant cloud use, we need to track
   resource use of individual requests (the API should also optionally
