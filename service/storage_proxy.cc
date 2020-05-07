@@ -4703,10 +4703,23 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
     auto& ms = netw::get_local_messaging_service();
     auto timeout = std::chrono::milliseconds(_db.local().get_config().truncate_request_timeout_in_ms());
 
-    slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
+    const auto start_time = db::timeout_clock::now();
+    const auto deadline = start_time + timeout;
 
-    return parallel_for_each(all_endpoints, [keyspace, cfname, &ms, timeout](auto ep) {
-        return ms.send_truncate(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
+    const bool wait_for_writes_and_reject_new = _db.local().get_config().enable_write_blocking_during_truncate();
+
+    slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
+    slogger.trace("Starting prepare phase of truncate operation");
+
+    return parallel_for_each(all_endpoints, [keyspace, cfname, &ms, deadline, wait_for_writes_and_reject_new] (auto ep) {
+        const auto timeout = deadline - db::timeout_clock::now();
+        return ms.send_truncate_prepare(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname, wait_for_writes_and_reject_new);
+    }).then([keyspace, cfname, all_endpoints, &ms, deadline] {
+        slogger.trace("Starting accept phase of truncate operation");
+        return parallel_for_each(all_endpoints, [keyspace, cfname, &ms, deadline] (auto ep) {
+            const auto timeout = deadline - db::timeout_clock::now();
+            return ms.send_truncate_accept(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
+        });
     }).handle_exception([cfname](auto ep) {
        try {
            std::rethrow_exception(ep);
