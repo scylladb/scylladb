@@ -20,6 +20,7 @@
  */
 
 
+#include <boost/algorithm/string/join.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
@@ -2723,6 +2724,85 @@ SEASTAR_TEST_CASE(test_reversed_slice_with_empty_range_before_all_rows) {
                 .is_rows().with_size(16);
         });
     });
+}
+
+// Test that the sstable layer correctly handles reversed slices, in particular
+// slices that read many clustering ranges, such that there is a large enough gap
+// between the ranges for the reader to attempt to use the promoted index for
+// skipping between them.
+// For this reason, the test writes a large partition (10MB), then issues a
+// reverse query which reads 4 singular clustering ranges from it. The ranges are
+// constructed such that there is many clustering rows between them: roughly 20%
+// which is ~2MB.
+// See #6171
+SEASTAR_TEST_CASE(test_reversed_slice_with_many_clustering_ranges) {
+    cql_test_config cfg;
+    cfg.db_config->max_memory_for_unlimited_query(std::numeric_limits<uint64_t>::max());
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE test (pk int, ck int, v text, PRIMARY KEY (pk, ck));").get();
+        auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
+
+        const int pk = 0;
+        const auto raw_pk = int32_type->decompose(data_value(pk));
+        const auto cql3_pk = cql3::raw_value::make_value(raw_pk);
+
+        const auto value = sstring(1024, 'a');
+        const auto raw_value = utf8_type->decompose(data_value(value));
+        const auto cql3_value = cql3::raw_value::make_value(raw_value);
+
+        const int num_rows = 10 * 1024;
+
+        for (int i = 0; i != num_rows; ++i) {
+            const auto cql3_ck = cql3::raw_value::make_value(int32_type->decompose(data_value(i)));
+            e.execute_prepared(id, {cql3_pk, cql3_ck, cql3_value}).get();
+        }
+
+        e.db().invoke_on_all([] (database& db) {
+            return db.flush_all_memtables();
+        }).get();
+
+        const std::vector<int> selected_cks{
+                2 * (num_rows / 10),
+                4 * (num_rows / 10),
+                6 * (num_rows / 10),
+                8 * (num_rows / 10)};
+
+        const auto make_expected_row = [&] (int ck) -> std::vector<bytes_opt> {
+            return {raw_pk, int32_type->decompose(ck), raw_value};
+        };
+
+        // Many singular ranges - to check that the right range is used for
+        // determining the disk read-range upper bound.
+        {
+            const auto select_query = format(
+                    "SELECT * FROM test WHERE pk = {} and ck IN ({}) ORDER BY ck DESC BYPASS CACHE;",
+                    pk,
+                    boost::algorithm::join(selected_cks | boost::adaptors::transformed([] (int ck) { return format("{}", ck); }), ", "));
+            assert_that(e.execute_cql(select_query).get0())
+                    .is_rows()
+                    .with_rows(boost::copy_range<std::vector<std::vector<bytes_opt>>>(
+                                selected_cks
+                                | boost::adaptors::reversed
+                                | boost::adaptors::transformed(make_expected_row)));
+        }
+
+        // A single wide range - to check that the right range bound is used for
+        // determining the disk read-range upper bound.
+        {
+            const auto select_query = format(
+                    "SELECT * FROM test WHERE pk = {} and ck >= {} and ck <= {} ORDER BY ck DESC BYPASS CACHE;",
+                    pk,
+                    selected_cks[0],
+                    selected_cks[1]);
+
+            assert_that(e.execute_cql(select_query).get0())
+                    .is_rows()
+                    .with_rows(boost::copy_range<std::vector<std::vector<bytes_opt>>>(
+                                boost::irange(selected_cks[0], selected_cks[1] + 1)
+                                | boost::adaptors::reversed
+                                | boost::adaptors::transformed(make_expected_row)));
+        }
+    }, std::move(cfg));
 }
 
 SEASTAR_TEST_CASE(test_query_with_range_tombstones) {
