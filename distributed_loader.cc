@@ -462,12 +462,11 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                                 // handles case where sstable needing rewrite doesn't produce any sstable
                                 // for a shard it belongs to when resharded (the reason is explained above).
                                 return smp::submit_to(shard, [cf, ancestors = std::move(ancestors)] () mutable {
-                                    cf->remove_ancestors_needed_rewrite(ancestors);
+                                    return cf->remove_ancestors_needed_rewrite(ancestors);
                                 });
                             } else {
-                                return forward_sstables_to(shard, directory, new_sstables_for_shard, cf, [cf, ancestors = std::move(ancestors)] (std::vector<sstables::shared_sstable> sstables) {
-                                    cf->replace_ancestors_needed_rewrite(std::move(ancestors), std::move(sstables));
-                                    return make_ready_future<>();
+                                return forward_sstables_to(shard, directory, new_sstables_for_shard, cf, [cf, ancestors = std::move(ancestors)] (std::vector<sstables::shared_sstable> sstables) mutable {
+                                    return cf->replace_ancestors_needed_rewrite(std::move(ancestors), std::move(sstables));
                                 });
                             }
                         }).then([&cf, sstables] {
