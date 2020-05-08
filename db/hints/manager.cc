@@ -686,15 +686,6 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
         (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
             try {
-                try {
-                    ctx_ptr->rps_set.emplace(rp);
-                } catch (...) {
-                    // if we failed to insert the rp into the set then its contents can't be trusted and we have to re-send the current file from the beginning
-                    ctx_ptr->state.set(send_state::restart_segment);
-                    ctx_ptr->state.set(send_state::segment_replay_failed);
-                    return make_ready_future<>();
-                }
-
                 auto m = this->get_mutation(ctx_ptr, buf);
                 gc_clock::duration gc_grace_sec = m.s->gc_grace_seconds();
 
@@ -707,11 +698,10 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 }
 
                 return this->send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
-                    ctx_ptr->rps_set.erase(rp);
                     ++this->shard_stats().sent;
-                }).handle_exception([this, ctx_ptr] (auto eptr) {
+                }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
                     manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
-                    ctx_ptr->state.set(send_state::segment_replay_failed);
+                    ctx_ptr->on_hint_send_failure(rp);
                 });
 
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
@@ -724,13 +714,23 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             } catch (no_column_mapping& e) {
                 manager_logger.debug("send_hints(): {} at {}: {}", fname, rp, e.what());
                 ++this->shard_stats().discarded;
+            } catch (...) {
+                manager_logger.debug("send_hints(): unexpected error in file {} at {}: {}", fname, rp, std::current_exception());
+                ctx_ptr->on_hint_send_failure(rp);
             }
             return make_ready_future<>();
         }).finally([units = std::move(units), ctx_ptr] {});
-    }).handle_exception([this, ctx_ptr] (auto eptr) {
+    }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
         manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
-        ctx_ptr->state.set(send_state::segment_replay_failed);
+        ctx_ptr->on_hint_send_failure(rp);
     });
+}
+
+void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) {
+    state.set(send_state::segment_replay_failed);
+    if (!first_failed_rp || rp < *first_failed_rp) {
+        first_failed_rp = rp;
+    }
 }
 
 // runs in a seastar::async context
@@ -778,11 +778,8 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
 
     // update the next iteration replay position if needed
     if (ctx_ptr->state.contains(send_state::segment_replay_failed)) {
-        if (ctx_ptr->state.contains(send_state::restart_segment)) {
-            // if _rps_set contents is inconsistent simply re-start the current file from the beginning
-            _last_not_complete_rp = replay_position();
-        } else if (!ctx_ptr->rps_set.empty()) {
-            _last_not_complete_rp = *std::min_element(ctx_ptr->rps_set.begin(), ctx_ptr->rps_set.end());
+        if (ctx_ptr->first_failed_rp) {
+            _last_not_complete_rp = *ctx_ptr->first_failed_rp;
         }
 
         manager_logger.trace("send_one_file(): error while sending hints from {}, last RP is {}", fname, _last_not_complete_rp);
