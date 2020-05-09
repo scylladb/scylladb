@@ -1,4 +1,4 @@
-{{product}}-server ({{version}}-{{release}}-{{revision}}) {{codename}}; urgency=medium
+%{product}-server (%{version}-%{release}-%{revision}) %{codename}; urgency=medium
 
   * Initial release.
 

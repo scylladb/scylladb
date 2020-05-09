@@ -1635,7 +1635,7 @@ with open(buildfile_tmp, 'w') as f:
         f.write(textwrap.dedent('''\
             build build/{mode}/iotune: copy build/{mode}/seastar/apps/iotune/iotune
             ''').format(**locals()))
-        f.write('build build/{mode}/scylla-package.tar.gz: package build/{mode}/scylla build/{mode}/iotune build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE | always\n'.format(**locals()))
+        f.write('build build/{mode}/scylla-package.tar.gz: package build/{mode}/scylla build/{mode}/iotune build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE build/debian/debian | always\n'.format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  mode = {mode}\n'.format(**locals()))
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
@@ -1681,6 +1681,9 @@ with open(buildfile_tmp, 'w') as f:
         rule scylla_version_gen
             command = ./SCYLLA-VERSION-GEN
         build build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE: scylla_version_gen
+        rule debian_files_gen
+            command = ./dist/debian/debian_files_gen.py
+        build build/debian/debian: debian_files_gen | always
         ''').format(modes_list=' '.join(build_modes), **globals()))
 
 os.rename(buildfile_tmp, buildfile)
