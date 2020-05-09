@@ -1,4 +1,4 @@
-Source: {{product}}-server
+Source: %{product}-server
 Maintainer: Takuya ASADA <syuu@scylladb.com>
 Homepage: http://scylladb.com
 Section: database
@@ -6,42 +6,42 @@ Priority: optional
 X-Python3-Version: >= 3.4
 Standards-Version: 3.9.5
 
-Package: {{product}}-conf
+Package: %{product}-conf
 Architecture: any
 Description: Scylla database main configuration file
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
-Replaces: {{product}}-server (<< 1.1)
-Conflicts: {{product}}-server (<< 1.1)
+Replaces: %{product}-server (<< 1.1)
+Conflicts: %{product}-server (<< 1.1)
 
-Package: {{product}}-server
+Package: %{product}-server
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}, {{product}}-conf, {{product}}-python3
+Depends: ${shlibs:Depends}, ${misc:Depends}, %{product}-conf, %{product}-python3
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
 
-Package: {{product}}-server-dbg
+Package: %{product}-server-dbg
 Section: debug
 Priority: extra
 Architecture: amd64
-Depends: {{product}}-server (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
-Description: debugging symbols for {{product}}-server
+Depends: %{product}-server (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Description: debugging symbols for %{product}-server
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
- This package contains the debugging symbols for {{product}}-server.
+ This package contains the debugging symbols for %{product}-server.
 
-Package: {{product}}-kernel-conf
+Package: %{product}-kernel-conf
 Architecture: any
 Depends: procps
 Description: Scylla kernel tuning configuration
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
 
-Package: {{product}}
+Package: %{product}
 Section: metapackages
 Architecture: any
-Depends: {{product}}-server, {{product}}-jmx, {{product}}-tools, {{product}}-tools-core, {{product}}-kernel-conf
+Depends: %{product}-server, %{product}-jmx, %{product}-tools, %{product}-tools-core, %{product}-kernel-conf
 Description: Scylla database metapackage
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.

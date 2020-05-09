@@ -135,6 +135,7 @@ ar.add('swagger-ui')
 ar.add('api')
 ar.add('tools')
 ar.add('scylla-gdb.py')
+ar.add('build/debian/debian', arcname='debian')
 
 # Complete the tar output, and wait for the gzip process to complete
 ar.close()

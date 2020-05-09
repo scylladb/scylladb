@@ -7,8 +7,8 @@ if [ -n "$ver" ]; then
         # for <scylla-1.2
         if [ ! -f /opt/scylladb/scripts/scylla_config_get.py ]; then
             echo
-            echo "Error: Upgrading from scylla-$ver to scylla-{{version}} is not supported."
-            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to {{version}}."
+            echo "Error: Upgrading from scylla-$ver to this version of scylla is not supported."
+            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to this version."
             echo
             exit 1
         fi
@@ -16,8 +16,8 @@ if [ -n "$ver" ]; then
         commitlog_files=$(ls $commitlog_directory | wc -l)
         if [ $commitlog_files -ne 0 ]; then
             echo
-            echo "Error: Upgrading from scylla-$ver to scylla-{{version}} is not supported when commitlog is not clean."
-            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to {{version}}."
+            echo "Error: Upgrading from scylla-$ver to this version of scylla is not supported when commitlog is not clean."
+            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to this version."
             echo "Also make sure $commitlog_directory is empty."
             echo
             exit 1
