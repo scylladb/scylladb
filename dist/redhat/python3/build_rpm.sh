@@ -74,13 +74,6 @@ fi
 if [ ! -f /usr/bin/git ]; then
     pkg_install git
 fi
-if [ ! -f /usr/bin/pystache ]; then
-    if is_redhat_variant; then
-        sudo yum install -y python2-pystache || sudo yum install -y pystache
-    elif is_debian_variant; then
-        sudo apt-get install -y python2-pystache
-    fi
-fi
 
 RELOC_PKG_BASENAME=$(basename "$RELOC_PKG")
 SCYLLA_VERSION=$(cat SCYLLA-VERSION-FILE)
@@ -89,6 +82,14 @@ SCYLLA_RELEASE=$(cat SCYLLA-RELEASE-FILE)
 RPMBUILD=$(readlink -f ../)
 mkdir -p "$RPMBUILD"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
+parameters=(
+    -D"name $PRODUCT-python3"
+    -D"version $SCYLLA_VERSION"
+    -D"release $SCYLLA_RELEASE"
+    -D"target /opt/scylladb/python3"
+    -D"reloc_pkg $RELOC_PKG_BASENAME"
+)
+
 ln -fv "$RELOC_PKG" "$RPMBUILD"/SOURCES/
-pystache dist/redhat/python3/python.spec.mustache "{ \"version\": \"${SCYLLA_VERSION}\", \"release\": \"${SCYLLA_RELEASE}\", \"reloc_pkg\": \"${RELOC_PKG_BASENAME}\", \"name\": \"$PRODUCT-python3\", \"target\": \"/opt/scylladb/python3\" }" > "$RPMBUILD"/SPECS/python.spec
-rpmbuild --nodebuginfo -ba --define '_binary_payload w2.xzdio' --define "_build_id_links none" --define "_topdir ${RPMBUILD}" "$RPMBUILD"/SPECS/python.spec
+cp dist/redhat/python3/python.spec "$RPMBUILD"/SPECS/
+rpmbuild "${parameters[@]}" --nodebuginfo -ba --define '_binary_payload w2.xzdio' --define "_build_id_links none" --define "_topdir ${RPMBUILD}" "$RPMBUILD"/SPECS/python.spec
