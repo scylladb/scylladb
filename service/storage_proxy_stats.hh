@@ -182,6 +182,9 @@ struct stats : public write_stats {
     uint64_t speculative_data_reads = 0;
 
     uint64_t cas_read_unfinished_commit = 0;
+    uint64_t cas_foreground = 0;
+    uint64_t cas_total_running = 0;
+    uint64_t cas_total_operations = 0;
 
     // Data read attempts
     split_stats data_read_attempts;

@@ -687,6 +687,13 @@ public:
         _has_dead_endpoints = pp.has_dead_endpoints;
         tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
                 _key.token(), _live_endpoints, _required_participants);
+        _proxy->get_stats().cas_foreground++;
+        _proxy->get_stats().cas_total_running++;
+        _proxy->get_stats().cas_total_operations++;
+    }
+
+    ~paxos_response_handler() {
+        _proxy->get_stats().cas_total_running--;
     }
 
     // Result of PREPARE step, i.e. begin_and_repair_paxos().

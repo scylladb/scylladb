@@ -1619,6 +1619,18 @@ void storage_proxy_stats::stats::register_stats() {
         sm::make_total_operations("cas_dropped_prune", cas_coordinator_dropped_prune,
                        sm::description("how many times a coordinator did not perfom prune after cas"),
                        {storage_proxy_stats::current_scheduling_group_label()}),
+
+        sm::make_total_operations("cas_total_operations", cas_total_operations,
+                       sm::description("number of total paxos operations executed (reads and writes)"),
+                       {storage_proxy_stats::current_scheduling_group_label()}),
+
+        sm::make_gauge("cas_foreground", cas_foreground,
+                        sm::description("how many paxos operations that did not yet produce a result are running"),
+                        {storage_proxy_stats::current_scheduling_group_label()}),
+
+        sm::make_gauge("cas_background", [this] { return cas_total_running - cas_foreground; },
+                        sm::description("how many paxos operations are still running after a result was alredy returned"),
+                        {storage_proxy_stats::current_scheduling_group_label()}),
     });
 
     _metrics.add_group(REPLICA_STATS_CATEGORY, {
@@ -4452,6 +4464,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                 });
             });
         }).then_wrapped([this, lc, &contentions, handler, schema, cl_for_paxos, write] (future<bool> f) mutable {
+            get_stats().cas_foreground--;
             write ? get_stats().cas_write.mark(lc.stop().latency()) : get_stats().cas_read.mark(lc.stop().latency());
             if (lc.is_start()) {
                 write ? get_stats().estimated_cas_write.add(lc.latency(), get_stats().cas_write.hist.count) :
