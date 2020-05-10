@@ -682,6 +682,7 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
+    ctx_ptr->last_attempted_rp = rp;
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
         (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
@@ -778,10 +779,10 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
 
     // update the next iteration replay position if needed
     if (ctx_ptr->state.contains(send_state::segment_replay_failed)) {
-        if (ctx_ptr->first_failed_rp) {
-            _last_not_complete_rp = *ctx_ptr->first_failed_rp;
-        }
-
+        // If some hints failed to be sent, first_failed_rp will tell the position of first such hint.
+        // If there was an error thrown by read_log_file function itself, we will retry sending from
+        // the last entry that was successfully read from commitlog (last_attempted_rp).
+        _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_attempted_rp.value_or(_last_not_complete_rp));
         manager_logger.trace("send_one_file(): error while sending hints from {}, last RP is {}", fname, _last_not_complete_rp);
         return false;
     }
