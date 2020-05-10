@@ -398,6 +398,7 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("operation"), data_type_for<operation_native_type>());
     b.with_column(log_meta_column_name_bytes("ttl"), long_type);
+    b.set_caching_options(caching_options::get_disabled_caching_options());
     auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
         for (const auto& column : columns) {
             auto type = column.type;

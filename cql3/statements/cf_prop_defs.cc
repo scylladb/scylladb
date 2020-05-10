@@ -146,6 +146,10 @@ void cf_prop_defs::validate(const database& db, const schema::extensions_map& sc
         cp.validate();
     }
 
+    if (auto caching_options = get_caching_options(); caching_options && !caching_options->enabled() && !db.features().cluster_supports_per_table_caching()) {
+        throw exceptions::configuration_exception(KW_CACHING + " can't contain \"'enabled':false\" unless whole cluster supports it");
+    }
+
     auto cdc_options = get_cdc_options(schema_extensions);
     if (cdc_options && cdc_options->enabled() && !db.features().cluster_supports_cdc()) {
         throw exceptions::configuration_exception("CDC not supported by the cluster");
@@ -198,6 +202,21 @@ std::optional<utils::UUID> cf_prop_defs::get_id() const {
     }
 
     return std::nullopt;
+}
+
+std::optional<caching_options> cf_prop_defs::get_caching_options() const {
+    auto value = get(KW_CACHING);
+    if (!value) {
+        return {};
+    }
+    return std::visit(make_visitor(
+        [] (const property_definitions::map_type& map) {
+            return map.empty() ? std::nullopt : std::optional<caching_options>(caching_options::from_map(map));
+        },
+        [] (const sstring& str) {
+            return std::optional<caching_options>(caching_options::from_sstring(str));
+        }
+    ), *value);
 }
 
 const cdc::options* cf_prop_defs::get_cdc_options(const schema::extensions_map& schema_exts) const {
@@ -286,11 +305,10 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
         builder.set_compressor_params(compression_parameters(*compression_options));
     }
 
-#if 0
-    CachingOptions cachingOptions = getCachingOptions();
-    if (cachingOptions != null)
-        cfm.caching(cachingOptions);
-#endif
+    auto caching_options = get_caching_options();
+    if (caching_options) {
+        builder.set_caching_options(std::move(*caching_options));
+    }
 
     // for extensions that are not altered, keep the old ones
     auto& old_exts = builder.get_extensions();

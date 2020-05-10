@@ -109,6 +109,13 @@ bool property_definitions::has_property(const sstring& name) const {
     return _properties.find(name) != _properties.end();
 }
 
+std::optional<property_definitions::value_type> property_definitions::get(const sstring& name) const {
+    if (auto it = _properties.find(name); it != _properties.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
 sstring property_definitions::get_string(sstring key, sstring default_value) const {
     auto value = get_simple(key);
     if (value) {

@@ -39,7 +39,10 @@ class caching_options {
 
     sstring _key_cache;
     sstring _row_cache;
-    caching_options(sstring k, sstring r) : _key_cache(k), _row_cache(r) {
+    bool _enabled = true;
+    caching_options(sstring k, sstring r, bool enabled)
+        : _key_cache(k), _row_cache(r), _enabled(enabled)
+    {
         if ((k != "ALL") && (k != "NONE")) {
             throw exceptions::configuration_exception("Invalid key value: " + k); 
         }
@@ -59,36 +62,53 @@ class caching_options {
     caching_options() : _key_cache(default_key), _row_cache(default_row) {}
 public:
 
+    bool enabled() const {
+        return _enabled;
+    }
+
     std::map<sstring, sstring> to_map() const {
-        return {{ "keys", _key_cache }, { "rows_per_partition", _row_cache }};
+        std::map<sstring, sstring> res = {{ "keys", _key_cache },
+                { "rows_per_partition", _row_cache }};
+        if (!_enabled) {
+            res.insert({"enabled", "false"});
+        }
+        return res;
     }
 
     sstring to_sstring() const {
         return json::to_json(to_map());
     }
 
+    static caching_options get_disabled_caching_options() {
+        return caching_options("NONE", "NONE", false);
+    }
+
     template<typename Map>
     static caching_options from_map(const Map & map) {
         sstring k = default_key;
         sstring r = default_row;
+        bool e = true;
 
         for (auto& p : map) {
             if (p.first == "keys") {
                 k = p.second;
             } else if (p.first == "rows_per_partition") {
                 r = p.second;
+            } else if (p.first == "enabled") {
+                e = p.second == "true";
             } else {
                 throw exceptions::configuration_exception("Invalid caching option: " + p.first);
             }
         }
-        return caching_options(k, r);
+        return caching_options(k, r, e);
     }
     static caching_options from_sstring(const sstring& str) {
         return from_map(json::to_map(str));
     }
 
     bool operator==(const caching_options& other) const {
-        return _key_cache == other._key_cache && _row_cache == other._row_cache;
+        return _key_cache == other._key_cache && _row_cache == other._row_cache
+            && _enabled == other._enabled;
     }
     bool operator!=(const caching_options& other) const {
         return !(*this == other);

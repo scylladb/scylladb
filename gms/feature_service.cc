@@ -55,6 +55,7 @@ constexpr std::string_view features::NONFROZEN_UDTS = "NONFROZEN_UDTS";
 constexpr std::string_view features::HINTED_HANDOFF_SEPARATE_CONNECTION = "HINTED_HANDOFF_SEPARATE_CONNECTION";
 constexpr std::string_view features::LWT = "LWT";
 constexpr std::string_view features::PER_TABLE_PARTITIONERS = "PER_TABLE_PARTITIONERS";
+constexpr std::string_view features::PER_TABLE_CACHING = "PER_TABLE_CACHING";
 
 static logging::logger logger("features");
 
@@ -88,7 +89,8 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _nonfrozen_udts(*this, features::NONFROZEN_UDTS)
         , _hinted_handoff_separate_connection(*this, features::HINTED_HANDOFF_SEPARATE_CONNECTION)
         , _lwt_feature(*this, features::LWT)
-        , _per_table_partitioners_feature(*this, features::PER_TABLE_PARTITIONERS) {
+        , _per_table_partitioners_feature(*this, features::PER_TABLE_PARTITIONERS)
+        , _per_table_caching_feature(*this, features::PER_TABLE_CACHING) {
 }
 
 feature_config feature_config_from_db_config(db::config& cfg) {
@@ -163,6 +165,7 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::UNBOUNDED_RANGE_TOMBSTONES,
         gms::features::HINTED_HANDOFF_SEPARATE_CONNECTION,
         gms::features::PER_TABLE_PARTITIONERS,
+        gms::features::PER_TABLE_CACHING,
     };
 
     if (_config.enable_sstables_mc_format) {
@@ -254,6 +257,7 @@ void feature_service::enable(const std::set<std::string_view>& list) {
         std::ref(_hinted_handoff_separate_connection),
         std::ref(_lwt_feature),
         std::ref(_per_table_partitioners_feature),
+        std::ref(_per_table_caching_feature),
     })
     {
         if (list.count(f.name())) {
