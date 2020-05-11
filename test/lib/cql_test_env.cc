@@ -58,6 +58,7 @@
 #include "auth/service.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "cql3/query_result_consumer.hh"
 
 using namespace std::chrono_literals;
 
@@ -108,6 +109,51 @@ static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features,
         });
 }
 // END TODO
+
+class cql_result_message_builder : public cql3::query_result_consumer {
+private:
+    shared_ptr<cql_transport::messages::result_message> _result;
+    std::vector<sstring> _warnings;
+    bool _action_other_than_add_warning = false;
+
+public:
+    cql_result_message_builder()
+            : _result(make_shared<cql_transport::messages::result_message::void_message>()) { }
+
+    void set_keyspace(const sstring& keyspace) override {
+        _action_other_than_add_warning = true;
+        _result = make_shared<cql_transport::messages::result_message::set_keyspace>(keyspace);
+    }
+
+    void set_result(cql3::result rs) override {
+        _action_other_than_add_warning = true;
+        _result = make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
+    }
+
+    void set_schema_change(shared_ptr<cql_transport::event::schema_change>& change) {
+        _action_other_than_add_warning = true;
+        assert(change);
+        assert(change->type == cql_transport::event::event_type::SCHEMA_CHANGE);
+        _result = make_shared<cql_transport::messages::result_message::schema_change>(std::move(change));
+    }
+
+    void move_to_shard(unsigned shard_id) override {
+        _action_other_than_add_warning = true;
+        _result = make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard_id);
+    }
+
+    void add_warning(const sstring& w) override {
+        assert(!_action_other_than_add_warning);
+        _warnings.push_back(w);
+    }
+
+    shared_ptr<cql_transport::messages::result_message> get_result() {
+        for (auto& w : _warnings) {
+            _result->add_warning(w);
+        }
+        return _result;
+    }
+};
 
 class single_node_cql_env : public cql_test_env {
 public:
