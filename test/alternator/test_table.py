@@ -200,7 +200,7 @@ def test_create_table_invalid_schema(dynamodb):
 # Test that trying to create a table that already exists fails in the
 # appropriate way (ResourceInUseException)
 def test_create_table_already_exists(dynamodb, test_table):
-    with pytest.raises(ClientError, match='ResourceInUseException'):
+    with pytest.raises(ClientError, match='ResourceInUseException.*Table.*already exists'):
         create_table(dynamodb, test_table.name)
 
 # Test that BillingMode error path works as expected - only the values
