@@ -896,7 +896,9 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         ++where_clause_it;
     }
 
-    return create_keyspace(keyspace_name).then([this, table_name, request = std::move(request), schema, view_builders = std::move(view_builders)] () mutable {
+    return create_keyspace(keyspace_name).handle_exception_type([] (exceptions::already_exists_exception&) {
+            // Ignore the fact that the keyspace may already exist. See discussion in #6340
+        }).then([this, table_name, request = std::move(request), schema, view_builders = std::move(view_builders)] () mutable {
         return futurize_invoke([&] { return _mm.announce_new_column_family(schema, false); }).then([this, table_info = std::move(request), schema, view_builders = std::move(view_builders)] () mutable {
             return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
                 return service::get_local_migration_manager().announce_new_view(view_ptr(builder.build()));
@@ -917,10 +919,6 @@ future<executor::request_return_type> executor::create_table(client_state& clien
                     api_error("ResourceInUseException",
                             format("Table {} already exists", table_name)));
         });
-    }).handle_exception_type([table_name = std::move(table_name)] (exceptions::already_exists_exception&) {
-        return make_exception_future<executor::request_return_type>(
-                api_error("ResourceInUseException",
-                        format("Keyspace for table {} already exists", table_name)));
     });
 }
 
