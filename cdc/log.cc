@@ -393,6 +393,9 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner("com.scylladb.dht.CDCPartitioner");
     b.set_comment(sprint("CDC log for %s.%s", s.ks_name(), s.cf_name()));
+    if (s.cdc_options().ttl() > 0) {
+        b.set_gc_grace_seconds(0);
+    }
     b.with_column(log_meta_column_name_bytes("stream_id"), bytes_type, column_kind::partition_key);
     b.with_column(log_meta_column_name_bytes("time"), timeuuid_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
