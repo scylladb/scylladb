@@ -29,7 +29,6 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include "utils/serialization.hh"
 #include <seastar/util/backtrace.hh>
-#include "unimplemented.hh"
 
 enum class allow_prefixes { no, yes };
 
@@ -91,7 +90,7 @@ private:
         return len;
     }
 public:
-    bytes serialize_single(bytes&& v) {
+    bytes serialize_single(bytes&& v) const {
         return serialize_value({std::move(v)});
     }
     template<typename RangeOfSerializedComponents>
@@ -109,7 +108,7 @@ public:
     static bytes serialize_value(std::initializer_list<T> values) {
         return serialize_value(boost::make_iterator_range(values.begin(), values.end()));
     }
-    bytes serialize_optionals(const std::vector<bytes_opt>& values) {
+    bytes serialize_optionals(const std::vector<bytes_opt>& values) const {
         return serialize_value(values | boost::adaptors::transformed([] (const bytes_opt& bo) -> bytes_view {
             if (!bo) {
                 throw std::logic_error("attempted to create key component from empty optional");
@@ -117,7 +116,7 @@ public:
             return *bo;
         }));
     }
-    bytes serialize_value_deep(const std::vector<data_value>& values) {
+    bytes serialize_value_deep(const std::vector<data_value>& values) const {
         // TODO: Optimize
         std::vector<bytes> partial;
         partial.reserve(values.size());
@@ -128,7 +127,7 @@ public:
         }
         return serialize_value(partial);
     }
-    bytes decompose_value(const value_type& values) {
+    bytes decompose_value(const value_type& values) const {
         return serialize_value(values);
     }
     class iterator : public std::iterator<std::input_iterator_tag, const bytes_view> {
@@ -180,7 +179,7 @@ public:
     static boost::iterator_range<iterator> components(const bytes_view& v) {
         return { begin(v), end(v) };
     }
-    value_type deserialize_value(bytes_view v) {
+    value_type deserialize_value(bytes_view v) const {
         std::vector<bytes> result;
         result.reserve(_types.size());
         std::transform(begin(v), end(v), std::back_inserter(result), [] (auto&& v) {
@@ -188,10 +187,10 @@ public:
         });
         return result;
     }
-    bool less(bytes_view b1, bytes_view b2) {
+    bool less(bytes_view b1, bytes_view b2) const {
         return compare(b1, b2) < 0;
     }
-    size_t hash(bytes_view v) {
+    size_t hash(bytes_view v) const {
         if (_byte_order_equal) {
             return std::hash<bytes_view>()(v);
         }
@@ -203,7 +202,7 @@ public:
         }
         return h;
     }
-    int compare(bytes_view b1, bytes_view b2) {
+    int compare(bytes_view b1, bytes_view b2) const {
         if (_byte_order_comparable) {
             if (_is_reversed) {
                 return compare_unsigned(b2, b1);
@@ -224,11 +223,21 @@ public:
     bool is_empty(bytes_view v) const {
         return begin(v) == end(v);
     }
-    void validate(bytes_view v) {
-        // FIXME: implement
-        warn(unimplemented::cause::VALIDATION);
+    void validate(bytes_view v) const {
+        std::vector<bytes_view> values(begin(v), end(v));
+        if (AllowPrefixes == allow_prefixes::no && values.size() < _types.size()) {
+            throw marshal_exception(fmt::format("compound::validate(): non-prefixable compound cannot be a prefix"));
+        }
+        if (values.size() > _types.size()) {
+            throw marshal_exception(fmt::format("compound::validate(): cannot have more values than types, have {} values but only {} types",
+                        values.size(), _types.size()));
+        }
+        for (size_t i = 0; i != values.size(); ++i) {
+            //FIXME: is it safe to assume internal serialization-format format?
+            _types[i]->validate(values[i], cql_serialization_format::internal());
+        }
     }
-    bool equal(bytes_view v1, bytes_view v2) {
+    bool equal(bytes_view v1, bytes_view v2) const {
         if (_byte_order_equal) {
             return compare_unsigned(v1, v2) == 0;
         }

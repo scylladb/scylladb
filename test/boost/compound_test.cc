@@ -370,3 +370,34 @@ BOOST_AUTO_TEST_CASE(test_composite_validity) {
     BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x01', 'a'}), false);
     BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x02', 'a'}), false);
 }
+
+BOOST_AUTO_TEST_CASE(test_full_compound_validity) {
+    const auto c = compound_type<allow_prefixes::no>({byte_type, utf8_type});
+
+    auto validate = [&] (bytes b) {
+        c.validate(b);
+    };
+
+    BOOST_REQUIRE_NO_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a', 'b'})); // full
+    BOOST_REQUIRE_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a'}), marshal_exception); // not enough bytes
+    BOOST_REQUIRE_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a', -1}), marshal_exception); // invalid utf8 string
+    BOOST_REQUIRE_THROW(validate({'\x00', '\x01', 0}), marshal_exception); // too few components (prefix)
+    BOOST_REQUIRE_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a', 'b', '\x00', '\x01', 'a'}), marshal_exception); // to many components
+    BOOST_REQUIRE_THROW(validate({'\x00', '\x02', 'a', 'b', '\x00', '\x01', 0}), marshal_exception); // wrong order of components
+}
+
+BOOST_AUTO_TEST_CASE(test_prefix_compound_validity) {
+    const auto c = compound_type<allow_prefixes::yes>({byte_type, utf8_type});
+
+    auto validate = [&] (bytes b) {
+        c.validate(b);
+    };
+
+    BOOST_REQUIRE_NO_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a', 'b'})); // full
+    BOOST_REQUIRE_NO_THROW(validate({'\x00', '\x01', 0})); // too few components (prefix)
+    BOOST_REQUIRE_NO_THROW(validate({})); // empty
+    BOOST_REQUIRE_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a'}), marshal_exception); // not enough bytes
+    BOOST_REQUIRE_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a', -1}), marshal_exception); // invalid utf8 string
+    BOOST_REQUIRE_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a', 'b', '\x00', '\x01', 'a'}), marshal_exception); // to many components
+    BOOST_REQUIRE_THROW(validate({'\x00', '\x02', 'a', 'b', '\x00', '\x01', 0}), marshal_exception); // wrong order of components
+}
