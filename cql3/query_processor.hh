@@ -52,6 +52,7 @@
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/query_result_consumer.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "service/migration_listener.hh"
@@ -59,6 +60,7 @@
 #include "transport/messages/result_message.hh"
 
 namespace cql3 {
+
 
 namespace statements {
 class batch_statement;
@@ -201,11 +203,12 @@ public:
             bool needs_authorization);
 
     /// Execute a client statement that was not prepared.
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute_direct(
             const std::string_view& query_string,
             service::query_state& query_state,
-            query_options& options);
+            query_options& options,
+            query_result_consumer& result_consumer);
 
     future<::shared_ptr<untyped_result_set>>
     execute_internal(const sstring& query_string, const std::initializer_list<data_value>& values = { }) {
@@ -335,6 +338,9 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options);
+
+    future<>
+    process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, query_result_consumer& result_consumer);
 
     /*!
      * \brief created a state object for paging

@@ -472,8 +472,8 @@ future<> query_processor::stop() {
     });
 }
 
-future<::shared_ptr<result_message>>
-query_processor::execute_direct(const sstring_view& query_string, service::query_state& query_state, query_options& options) {
+future<>
+query_processor::execute_direct(const sstring_view& query_string, service::query_state& query_state, query_options& options, query_result_consumer& result_consumer) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state());
@@ -492,8 +492,8 @@ query_processor::execute_direct(const sstring_view& query_string, service::query
             metrics.regularStatementsExecuted.inc();
 #endif
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return cql_statement->check_access(_proxy, query_state.get_client_state()).then([this, cql_statement, &query_state, &options] () mutable {
-        return process_authorized_statement(std::move(cql_statement), query_state, options);
+    return cql_statement->check_access(_proxy, query_state.get_client_state()).then([this, cql_statement, &query_state, &options, &result_consumer] () mutable {
+        return process_authorized_statement(std::move(cql_statement), query_state, options, result_consumer);
     });
 }
 
@@ -537,6 +537,17 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
         }
         return make_ready_future<::shared_ptr<result_message>>(::make_shared<result_message::void_message>());
     });
+}
+
+future<>
+query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, query_result_consumer& result_consumer) {
+    auto& client_state = query_state.get_client_state();
+
+    ++_stats.queries_by_cl[size_t(options.get_consistency())];
+
+    statement->validate(_proxy, client_state);
+
+    return statement->execute(_proxy, query_state, options, result_consumer).then([statement] {});
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>

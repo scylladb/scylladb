@@ -206,7 +206,10 @@ public:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) override {
         auto qs = make_query_state();
-        return local_qp().execute_direct(text, *qs, cql3::query_options::DEFAULT).finally([qs] {});
+        auto fmt = std::make_unique<cql_result_message_builder>();
+        return local_qp().execute_direct(text, *qs, cql3::query_options::DEFAULT, *fmt).then([qs, fmt = std::move(fmt)] {
+            return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(fmt->get_result());
+        });
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
@@ -215,7 +218,10 @@ public:
     {
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_direct(text, *qs, lqo).finally([qs, qo = std::move(qo)] {});
+        auto fmt = std::make_unique<cql_result_message_builder>();
+        return local_qp().execute_direct(text, *qs, lqo, *fmt).then([qs, qo = std::move(qo), fmt = std::move(fmt)] {
+            return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(fmt->get_result());
+        });
     }
 
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) override {
