@@ -76,6 +76,7 @@ public:
     placeholder<int32_t> write_int_placeholder();
     void write_long(int64_t n);
     void write_short(uint16_t n);
+    placeholder<uint16_t> write_short_placeholder();
     void write_string(std::string_view s);
     void write_bytes_as_string(bytes_view s);
     void write_long_string(const sstring& s);
@@ -132,12 +133,12 @@ private:
     }
 };
 
-template<>
-class response::placeholder<int32_t> {
+template<typename T>
+class response::placeholder {
     int8_t* _pointer;
 public:
     explicit placeholder(int8_t* ptr) : _pointer(ptr) { }
-    void write(int32_t n) {
+    void write(T n) {
         auto u = htonl(n);
         auto* s = reinterpret_cast<const int8_t*>(&u);
         std::copy_n(s, sizeof(u), _pointer);

@@ -51,6 +51,7 @@
 #include "service/client_state.hh"
 #include "exceptions/exceptions.hh"
 #include "connection_notifier.hh"
+#include "cql3/query_result_consumer.hh"
 
 #include "auth/authenticator.hh"
 
@@ -805,6 +806,132 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
     });
 }
 
+class fmt_consumer final : public cql3::query_result_consumer {
+private:
+    int16_t _stream;
+    uint8_t _version;
+    bool _skip_metadata;
+    tracing::trace_state_ptr _tr_state;
+    std::optional<unsigned> _move_to_shard;
+    std::unique_ptr<cql_server::response> _response;
+    uint16_t _warnings_count = 0;
+    std::optional<cql_server::response::placeholder<uint16_t>> _warnings_count_placeholder;
+
+    void create_response() {
+        _response = std::make_unique<cql_server::response>(_stream, cql_binary_opcode::RESULT, _tr_state);
+    }
+
+    void prepare_response() {
+        if (!_response) {
+            create_response();
+        } else {
+            maybe_close_warning_section();
+        }
+    }
+
+    void open_warning_section() {
+        _response->set_frame_flag(cql_frame_flags::warning);
+        _warnings_count = 0;
+        _warnings_count_placeholder = _response->write_short_placeholder();
+    }
+
+    bool warning_section_closed() const {
+        return !_warnings_count_placeholder;
+    }
+
+    void maybe_close_warning_section() {
+        if (_warnings_count_placeholder) {
+            _warnings_count_placeholder->write(_warnings_count);
+            _warnings_count_placeholder = std::nullopt;
+        }
+    }
+
+public:
+    fmt_consumer(int16_t stream, uint8_t version, bool skip_metadata, tracing::trace_state_ptr tr_state)
+        : _stream(stream)
+        , _version{version}
+        , _skip_metadata{skip_metadata}
+        , _tr_state(std::move(tr_state))
+    { }
+
+    void set_keyspace(const sstring& keyspace) override {
+        prepare_response();
+        _response->write_int(0x0003);
+        _response->write_string(keyspace);
+    }
+
+    void set_result(cql3::result rs) override {
+        prepare_response();
+        _response->write_int(0x0002);
+        _response->write(rs.get_metadata(), _skip_metadata);
+        auto row_count_plhldr = _response->write_int_placeholder();
+
+        class visitor {
+            cql_server::response& _response;
+            int32_t _row_count = 0;
+        public:
+            visitor(cql_server::response& r) : _response(r) { }
+
+            void start_row() {
+                _row_count++;
+            }
+            void accept_value(std::optional<query::result_bytes_view> cell) {
+                _response.write_value(cell);
+            }
+            void end_row() { }
+
+            int32_t row_count() const { return _row_count; }
+        };
+
+        auto v = visitor(*_response);
+        rs.visit(v);
+        row_count_plhldr.write(v.row_count());
+    }
+
+    void set_schema_change(shared_ptr<cql_transport::event::schema_change>& change) {
+        prepare_response();
+        assert(change);
+        assert(change->type == event::event_type::SCHEMA_CHANGE);
+        _response->write_int(0x0005);
+        _response->serialize(*change, _version);
+    }
+
+    void move_to_shard(unsigned shard_id) override {
+        _move_to_shard = shard_id;
+    }
+
+    void add_warning(const sstring& w) override {
+        if (__builtin_expect(_version > 3, true)) {
+            if (!_response) {
+                create_response();
+                open_warning_section();
+            } else if (warning_section_closed()) {
+                throw std::runtime_error(
+                        "Warning added to CQL response after warning section was closed.");
+            }
+            if (_warnings_count == std::numeric_limits<uint16_t>::max()) {
+                throw std::runtime_error("Number of warnings exceeded limit.");
+            }
+            ++_warnings_count;
+            _response->write_string(w);
+        }
+    }
+
+    std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned> get_response() {
+        if (_move_to_shard) {
+            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*_move_to_shard);
+        } else {
+            tracing::trace(_tr_state, "Done processing - preparing a result");
+            if (!_response) {
+                create_response();
+                // Mark as void message
+                _response->write_int(0x0001);
+            }
+            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(make_foreign(std::move(_response)));
+        }
+    }
+};
+
 static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
 process_query_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
@@ -1491,6 +1618,10 @@ void cql_server::response::write_short(uint16_t n)
     auto u = htons(n);
     auto *s = reinterpret_cast<const int8_t*>(&u);
     _body.write(bytes_view(s, sizeof(u)));
+}
+
+cql_server::response::placeholder<uint16_t> cql_server::response::write_short_placeholder() {
+    return placeholder<uint16_t>(_body.write_place_holder(sizeof(uint16_t)));
 }
 
 template<typename T>
