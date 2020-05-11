@@ -44,6 +44,7 @@
 #include "service/storage_service.hh"
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/query_result_consumer.hh"
 #include "timeout_config.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
@@ -962,6 +963,39 @@ public:
         }
         virtual void visit(const cql_transport::messages::result_message::bounce_to_shard& m) override {
             throw TProtocolException(TProtocolException::TProtocolExceptionType::NOT_IMPLEMENTED, "Thrift does not support executing LWT statements");
+        }
+    };
+
+    class cql_result_consumer final : public cql3::query_result_consumer {
+    private:
+        CqlResult _response;
+    public:
+        cql_result_consumer() {
+            _response.__set_type(CqlResultType::VOID);
+        }
+
+        void set_keyspace(const sstring& keyspace) override {
+            // Returning VOID message, so nothing to do
+        }
+
+        void set_result(cql3::result rs) override {
+            _response = to_thrift_result(rs);
+        }
+
+        void set_schema_change(shared_ptr<cql_transport::event::schema_change>& change) override {
+            // Returning VOID message, so nothing to do
+        }
+
+        void move_to_shard(unsigned shard_id) override {
+            throw TProtocolException(TProtocolException::TProtocolExceptionType::NOT_IMPLEMENTED, "Thrift does not support executing LWT statements");
+        }
+
+        void add_warning(const sstring& w) override {
+            throw std::runtime_error("Unimplemented add_warning");
+        }
+
+        CqlResult get_response() {
+            return std::move(_response);
         }
     };
 
