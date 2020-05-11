@@ -710,6 +710,17 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
 
+static future<> wait_for_schema_agreement(db::timeout_clock::time_point deadline) {
+    return do_until([deadline] {
+        if (db::timeout_clock::now() > deadline) {
+            throw std::runtime_error("Unable to reach schema agreement");
+        }
+        return service::get_local_migration_manager().have_schema_agreement();
+    }, [] {
+        return seastar::sleep(500ms);
+    });
+}
+
 future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
@@ -907,7 +918,9 @@ future<executor::request_return_type> executor::create_table(client_state& clien
                 if (rjson::find(table_info, "Tags")) {
                     f = add_tags(_proxy, schema, table_info);
                 }
-                return f.then([table_info = std::move(table_info), schema] () mutable {
+                return f.then([] {
+                    return wait_for_schema_agreement(db::timeout_clock::now() + 10s);
+                }).then([table_info = std::move(table_info), schema] () mutable {
                     rjson::value status = rjson::empty_object();
                     supplement_table_info(table_info, *schema);
                     rjson::set(status, "TableDescription", std::move(table_info));
