@@ -105,6 +105,13 @@ use_statement::execute(service::storage_proxy& proxy, service::query_state& stat
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);
 }
 
+future<::shared_ptr<cql_transport::messages::result_message>>
+use_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const {
+    state.get_client_state().set_keyspace(proxy.get_db().local(), _keyspace);
+    auto result =::make_shared<cql_transport::messages::result_message::set_keyspace>(_keyspace);
+    return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);
+}
+
 }
 
 }

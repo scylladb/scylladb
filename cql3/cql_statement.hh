@@ -45,6 +45,7 @@
 #include "service/query_state.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_options.hh"
+#include "cql3/query_result_consumer.hh"
 #include "timeout_config.hh"
 
 namespace cql_transport {
@@ -100,6 +101,9 @@ public:
      */
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
         execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const = 0;
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>>
+        execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const = 0;
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 

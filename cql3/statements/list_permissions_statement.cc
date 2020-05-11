@@ -182,3 +182,83 @@ cql3::statements::list_permissions_statement::execute(
         });
     });
 }
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+cql3::statements::list_permissions_statement::execute(
+        service::storage_proxy& proxy,
+        service::query_state& state,
+        const query_options& options,
+        cql3::query_result_consumer&) const {
+    static auto make_column = [](sstring name) {
+        return make_lw_shared<column_specification>(
+                auth::meta::AUTH_KS,
+                "permissions",
+                ::make_shared<column_identifier>(std::move(name), true),
+                utf8_type);
+    };
+
+    static thread_local const std::vector<lw_shared_ptr<column_specification>> metadata({
+        make_column("role"), make_column("username"), make_column("resource"), make_column("permission")
+    });
+
+    const auto make_resource_filter = [this]()
+            -> std::optional<std::pair<auth::resource, auth::recursive_permissions>> {
+        if (!_resource) {
+            return {};
+        }
+
+        return std::make_pair(
+                *_resource,
+                _recursive ? auth::recursive_permissions::yes : auth::recursive_permissions::no);
+    };
+
+    const auto& as = *state.get_client_state().get_auth_service();
+
+    return do_with(make_resource_filter(), [this, &as](const auto& resource_filter) {
+        return auth::list_filtered_permissions(
+                as,
+                _permissions,
+                _role_name,
+                resource_filter).then([this](std::vector<auth::permission_details> all_details) {
+            std::sort(all_details.begin(), all_details.end());
+
+            auto rs = std::make_unique<result_set>(metadata);
+
+            for (const auto& pd : all_details) {
+                const std::vector<sstring> sorted_permission_names = [&pd] {
+                    std::vector<sstring> names;
+
+                    std::transform(
+                            pd.permissions.begin(),
+                            pd.permissions.end(),
+                            std::back_inserter(names),
+                            &auth::permissions::to_string);
+
+                    std::sort(names.begin(), names.end());
+                    return names;
+                }();
+
+                const auto decomposed_role_name = utf8_type->decompose(pd.role_name);
+                const auto decomposed_resource = utf8_type->decompose(sstring(format("{}", pd.resource)));
+
+                for (const auto& ps : sorted_permission_names) {
+                    rs->add_row(
+                            std::vector<bytes_opt>{
+                                    decomposed_role_name,
+                                    decomposed_role_name,
+                                    decomposed_resource,
+                                    utf8_type->decompose(ps)});
+                }
+            }
+
+            auto rows = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(std::move(rs))));
+            return ::shared_ptr<cql_transport::messages::result_message>(rows);
+        }).handle_exception_type([](const auth::nonexistant_role& e) {
+            return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
+                    exceptions::invalid_request_exception(e.what()));
+        }).handle_exception_type([](const auth::unsupported_authorization_operation& e) {
+            return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
+                    exceptions::invalid_request_exception(e.what()));
+        });
+    });
+}
