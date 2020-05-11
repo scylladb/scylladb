@@ -183,12 +183,12 @@ cql3::statements::list_permissions_statement::execute(
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<>
 cql3::statements::list_permissions_statement::execute(
         service::storage_proxy& proxy,
         service::query_state& state,
         const query_options& options,
-        cql3::query_result_consumer&) const {
+        cql3::query_result_consumer& result_consumer) const {
     static auto make_column = [](sstring name) {
         return make_lw_shared<column_specification>(
                 auth::meta::AUTH_KS,
@@ -214,12 +214,12 @@ cql3::statements::list_permissions_statement::execute(
 
     const auto& as = *state.get_client_state().get_auth_service();
 
-    return do_with(make_resource_filter(), [this, &as](const auto& resource_filter) {
+    return do_with(make_resource_filter(), [this, &as, &result_consumer](const auto& resource_filter) {
         return auth::list_filtered_permissions(
                 as,
                 _permissions,
                 _role_name,
-                resource_filter).then([this](std::vector<auth::permission_details> all_details) {
+                resource_filter).then([this, &result_consumer](std::vector<auth::permission_details> all_details) {
             std::sort(all_details.begin(), all_details.end());
 
             auto rs = std::make_unique<result_set>(metadata);
@@ -251,13 +251,12 @@ cql3::statements::list_permissions_statement::execute(
                 }
             }
 
-            auto rows = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(std::move(rs))));
-            return ::shared_ptr<cql_transport::messages::result_message>(rows);
+            result_consumer.set_result(result(std::move(rs)));
         }).handle_exception_type([](const auth::nonexistant_role& e) {
-            return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
+            return make_exception_future<>(
                     exceptions::invalid_request_exception(e.what()));
         }).handle_exception_type([](const auth::unsupported_authorization_operation& e) {
-            return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
+            return make_exception_future<>(
                     exceptions::invalid_request_exception(e.what()));
         });
     });

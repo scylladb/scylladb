@@ -99,7 +99,7 @@ protected:
 protected :
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options) const;
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
+    virtual future<> do_execute(service::storage_proxy& proxy,
                             service::query_state& state,
                             const query_options& options,
                             cql3::query_result_consumer& result_consumer) const;
@@ -130,13 +130,13 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options) const override;
 
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute(service::storage_proxy& proxy,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now) const;
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute(service::storage_proxy& proxy,
                             lw_shared_ptr<query::read_command> cmd,
                             dht::partition_range_vector&& partition_ranges,
@@ -152,7 +152,7 @@ public:
 
     future<shared_ptr<cql_transport::messages::result_message>> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
-    future<shared_ptr<cql_transport::messages::result_message>>
+    future<>
     process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                     lw_shared_ptr<query::read_command> cmd,
                                     const query_options& options,
@@ -235,7 +235,7 @@ public:
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
             service::query_state& state, const query_options& options) const override;
-    future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
+    future<> do_execute(service::storage_proxy& proxy,
             service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
 
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
@@ -258,7 +258,7 @@ private:
             const query_options& options,
             gc_clock::time_point now,
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
-    future<shared_ptr<cql_transport::messages::result_message>>
+    future<>
     process_base_query_results(
             foreign_ptr<lw_shared_ptr<query::result>> results,
             lw_shared_ptr<query::read_command> cmd,
@@ -288,7 +288,7 @@ private:
             const query_options& options,
             gc_clock::time_point now,
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
-    future<shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute_base_query(
             service::storage_proxy& proxy,
             dht::partition_range_vector&& partition_ranges,
@@ -323,7 +323,7 @@ private:
             const query_options& options,
             gc_clock::time_point now,
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
-    future<shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute_base_query(
             service::storage_proxy& proxy,
             std::vector<primary_key>&& primary_keys,

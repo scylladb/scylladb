@@ -283,7 +283,7 @@ struct select_statement_executor {
 };
 
 struct select_statement_executor_consumer {
-    typedef future<shared_ptr<cql_transport::messages::result_message>>(select_statement::*do_execute_consume_type)(
+    typedef future<>(select_statement::*do_execute_consume_type)(
         service::storage_proxy&,
         service::query_state&,
         const query_options&,
@@ -299,13 +299,12 @@ static thread_local inheriting_concrete_execution_stage<
         const query_options&> select_stage{"cql3_select", select_statement_executor::get()};
 
 static thread_local inheriting_concrete_execution_stage<
-        future<shared_ptr<cql_transport::messages::result_message>>,
+        future<>,
         const select_statement*,
         service::storage_proxy&,
         service::query_state&,
         const query_options&,
         cql3::query_result_consumer&> select_stage_consumer{"cql3_select_consumer", select_statement_executor_consumer::get()};
-
 
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute(service::storage_proxy& proxy,
@@ -315,7 +314,7 @@ select_statement::execute(service::storage_proxy& proxy,
     return select_stage(this, seastar::ref(proxy), seastar::ref(state), seastar::cref(options));
 }
 
-future<shared_ptr<cql_transport::messages::result_message>>
+future<>
 select_statement::execute(service::storage_proxy& proxy,
                              service::query_state& state,
                              const query_options& options,
@@ -458,7 +457,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
             });
 }
 
-future<shared_ptr<cql_transport::messages::result_message>>
+future<>
 select_statement::do_execute(service::storage_proxy& proxy,
                           service::query_state& state,
                           const query_options& options,
@@ -512,8 +511,8 @@ select_statement::do_execute(service::storage_proxy& proxy,
         unsigned shard = dht::shard_of(*_schema, key_ranges[0].start()->value().as_decorated_key().token());
         if (this_shard_id() != shard) {
             proxy.get_stats().replica_cross_shard_ops++;
-            return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                    make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
+            result_consumer.move_to_shard(shard);
+            return make_ready_future<>();
         }
     }
 
@@ -532,21 +531,20 @@ select_statement::do_execute(service::storage_proxy& proxy,
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         options.get_cql_serialization_format(), *_group_by_cell_indices),
-                [this, p, page_size, now, timeout_duration, restrictions_need_filtering](auto& builder) {
+                [this, p, page_size, now, timeout_duration, restrictions_need_filtering, &result_consumer](auto& builder) {
                     return do_until([p] {return p->is_exhausted();},
                             [p, &builder, page_size, now, timeout_duration] {
                                 auto timeout = db::timeout_clock::now() + timeout_duration;
                                 return p->fetch_page(builder, page_size, now, timeout);
                             }
-                    ).then([this, &builder, restrictions_need_filtering] {
-                        return builder.with_thread_if_needed([this, &builder, restrictions_need_filtering] {
+                    ).then([this, &builder, restrictions_need_filtering, &result_consumer] {
+                        return builder.with_thread_if_needed([this, &builder, restrictions_need_filtering, &result_consumer] {
                             auto rs = builder.build();
                             if (restrictions_need_filtering) {
                                 _stats.filtered_rows_matched_total += rs->size();
                             }
                             update_stats_rows_read(rs->size());
-                            auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
-                            return shared_ptr<cql_transport::messages::result_message>(std::move(msg));
+                            result_consumer.set_result(result(std::move(rs)));
                         });
                     });
                 });
@@ -560,7 +558,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
 
     auto timeout = db::timeout_clock::now() + timeout_duration;
     if (_selection->is_trivial() && !restrictions_need_filtering && !_per_partition_limit) {
-        return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p] (result_generator generator) {
+        return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p, &result_consumer] (result_generator generator) {
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
                 if (!p->is_exhausted()) {
                     auto meta = make_shared<metadata>(*_selection->get_result_metadata());
@@ -571,14 +569,12 @@ select_statement::do_execute(service::storage_proxy& proxy,
                 }
             }();
 
-            return shared_ptr<cql_transport::messages::result_message>(
-                make_shared<cql_transport::messages::result_message::rows>(result(std::move(generator), std::move(meta)))
-            );
+            result_consumer.set_result(result(std::move(generator), std::move(meta)));
         });
     }
 
     return p->fetch_page(page_size, now, timeout).then(
-            [this, p, &options, now, restrictions_need_filtering](std::unique_ptr<cql3::result_set> rs) {
+            [this, p, &options, now, restrictions_need_filtering, &result_consumer](std::unique_ptr<cql3::result_set> rs) {
 
                 if (!p->is_exhausted()) {
                     rs->get_metadata().set_paging_state(p->state());
@@ -588,11 +584,9 @@ select_statement::do_execute(service::storage_proxy& proxy,
                     _stats.filtered_rows_matched_total += rs->size();
                 }
                 update_stats_rows_read(rs->size());
-                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
-                return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
+                result_consumer.set_result(result(std::move(rs)));
             });
 }
-
 
 template<typename KeyType>
 GCC6_CONCEPT(
@@ -735,7 +729,7 @@ indexed_table_select_statement::execute_base_query(
     });
 }
 
-future<shared_ptr<cql_transport::messages::result_message>>
+future<>
 indexed_table_select_statement::execute_base_query(
         service::storage_proxy& proxy,
         dht::partition_range_vector&& partition_ranges,
@@ -826,7 +820,7 @@ indexed_table_select_statement::execute_base_query(
     });
 }
 
-future<shared_ptr<cql_transport::messages::result_message>>
+future<>
 indexed_table_select_statement::execute_base_query(
         service::storage_proxy& proxy,
         std::vector<primary_key>&& primary_keys,
@@ -880,7 +874,7 @@ select_statement::execute(service::storage_proxy& proxy,
     }
 }
 
-future<shared_ptr<cql_transport::messages::result_message>>
+future<>
 select_statement::execute(service::storage_proxy& proxy,
                           lw_shared_ptr<query::read_command> cmd,
                           dht::partition_range_vector&& partition_ranges,
@@ -937,7 +931,7 @@ indexed_table_select_statement::process_base_query_results(
     return process_results(std::move(results), std::move(cmd), options, now);
 }
 
-future<shared_ptr<cql_transport::messages::result_message>>
+future<>
 indexed_table_select_statement::process_base_query_results(
         foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd,
@@ -1001,26 +995,27 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
     });
 }
 
-future<shared_ptr<cql_transport::messages::result_message>>
+future<>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
                                   gc_clock::time_point now,
-                                  cql3::query_result_consumer&) const
+                                  cql3::query_result_consumer& result_consumer) const
 {
     const bool restrictions_need_filtering = _restrictions->need_filtering();
     const bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !restrictions_need_filtering;
     if (fast_path) {
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(make_shared<cql_transport::messages::result_message::rows>(result(
+        result_consumer.set_result(result(
             result_generator(_schema, std::move(results), std::move(cmd), _selection, _stats),
             ::make_shared<metadata>(*_selection->get_result_metadata()))
-        ));
+        );
+        return make_ready_future<>();
     }
 
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
-    return do_with(std::move(builder), [this, cmd, restrictions_need_filtering, results = std::move(results), options] (cql3::selection::result_set_builder& builder) mutable {
-        return builder.with_thread_if_needed([this, &builder, cmd, restrictions_need_filtering, results = std::move(results), options] {
+    return do_with(std::move(builder), [this, cmd, restrictions_need_filtering, results = std::move(results), options, &result_consumer] (cql3::selection::result_set_builder& builder) mutable {
+        return builder.with_thread_if_needed([this, &builder, cmd, restrictions_need_filtering, results = std::move(results), options, &result_consumer] {
             if (restrictions_need_filtering) {
                 results->ensure_counts();
                 _stats.filtered_rows_read_total += *results->row_count();
@@ -1043,7 +1038,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
             }
             update_stats_rows_read(rs->size());
             _stats.filtered_rows_matched_total += restrictions_need_filtering ? rs->size() : 0;
-            return shared_ptr<cql_transport::messages::result_message>(::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs))));
+            result_consumer.set_result(result(std::move(rs)));
         });
     });
 }
@@ -1336,7 +1331,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     }
 }
 
-future<shared_ptr<cql_transport::messages::result_message>>
+future<>
 indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                              service::query_state& state,
                              const query_options& options,
@@ -1405,7 +1400,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     if (aggregate) {
         const bool restrictions_need_filtering = _restrictions->need_filtering();
         return do_with(cql3::selection::result_set_builder(*_selection, now, options.get_cql_serialization_format()), std::make_unique<cql3::query_options>(cql3::query_options(options)),
-                [this, &options, &proxy, &state, now, whole_partitions, partition_slices, restrictions_need_filtering] (cql3::selection::result_set_builder& builder, std::unique_ptr<cql3::query_options>& internal_options) {
+                [this, &options, &proxy, &result_consumer, &state, now, whole_partitions, partition_slices, restrictions_need_filtering] (cql3::selection::result_set_builder& builder, std::unique_ptr<cql3::query_options>& internal_options) {
             // page size is set to the internal count page size, regardless of the user-provided value
             internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), DEFAULT_COUNT_PAGE_SIZE));
             return repeat([this, &builder, &options, &internal_options, &proxy, &state, now, whole_partitions, partition_slices, restrictions_need_filtering] () {
@@ -1437,12 +1432,11 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                         });
                     });
                 }
-            }).then([this, &builder, restrictions_need_filtering] () {
+            }).then([this, &builder, &result_consumer, restrictions_need_filtering] () {
                 auto rs = builder.build();
                 update_stats_rows_read(rs->size());
                 _stats.filtered_rows_matched_total += restrictions_need_filtering ? rs->size() : 0;
-                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
-                return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
+                result_consumer.set_result(result(std::move(rs)));
             });
         });
     }

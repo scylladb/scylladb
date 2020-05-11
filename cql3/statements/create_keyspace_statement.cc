@@ -161,20 +161,18 @@ create_keyspace_statement::execute(service::storage_proxy& proxy, service::query
     });
 }
 
-future<::shared_ptr<messages::result_message>>
-create_keyspace_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer&) const {
-    return schema_altering_statement::execute(proxy, state, options).then([this, p = proxy.shared_from_this()] (::shared_ptr<messages::result_message> msg) {
+future<>
+create_keyspace_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const {
+    return schema_altering_statement::execute(proxy, state, options, result_consumer).then([this, p = proxy.shared_from_this(), &result_consumer] {
         bool multidc = p->get_token_metadata().get_topology().get_datacenter_endpoints().size() > 1;
         bool simple = _attrs->get_replication_strategy_class() == "SimpleStrategy";
 
         if (multidc && simple) {
             static const auto warning = "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
 
-            msg->add_warning(warning);
+            result_consumer.add_warning(warning);
             _logger.warn(warning);
         }
-
-        return msg;
     });
 }
 

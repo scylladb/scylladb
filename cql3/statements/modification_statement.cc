@@ -279,7 +279,7 @@ struct modification_statement_executor {
     static do_execute_type get() { return &modification_statement::do_execute; }
 };
 struct modification_statement_executor_consumer {
-    typedef future<::shared_ptr<cql_transport::messages::result_message>>(modification_statement::*do_execute_consume_type)(
+    typedef future<>(modification_statement::*do_execute_consume_type)(
         service::storage_proxy&,
         service::query_state&,
         const query_options&,
@@ -294,7 +294,7 @@ static thread_local inheriting_concrete_execution_stage<
         const query_options&> modify_stage{"cql3_modification", modification_statement_executor::get()};
 
 static thread_local inheriting_concrete_execution_stage<
-        future<::shared_ptr<cql_transport::messages::result_message>>,
+        future<>,
         const modification_statement*,
         service::storage_proxy&,
         service::query_state&,
@@ -306,7 +306,7 @@ modification_statement::execute(service::storage_proxy& proxy, service::query_st
     return modify_stage(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options));
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<>
 modification_statement::execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options, cql3::query_result_consumer& result_consumer) const {
     return modify_stage_consumer(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options), seastar::ref(result_consumer));
 }
@@ -331,7 +331,7 @@ modification_statement::do_execute(service::storage_proxy& proxy, service::query
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<>
 modification_statement::do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options, cql3::query_result_consumer& result_consumer) const {
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
@@ -345,10 +345,7 @@ modification_statement::do_execute(service::storage_proxy& proxy, service::query
         return execute_with_condition(proxy, qs, options, result_consumer);
     }
 
-    return execute_without_condition(proxy, qs, options).then([] {
-        return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
-                ::shared_ptr<cql_transport::messages::result_message>{});
-    });
+    return execute_without_condition(proxy, qs, options);
 }
 
 future<>
@@ -404,7 +401,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<>
 modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options, cql3::query_result_consumer& result_consumer) const {
 
     auto cl_for_learn = options.get_consistency();
@@ -433,14 +430,14 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     auto shard = service::storage_proxy::cas_shard(*s, request->key()[0].start()->value().as_decorated_key().token());
     if (shard != this_shard_id()) {
         proxy.get_stats().replica_cross_shard_ops++;
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
+        result_consumer.move_to_shard(shard);
+        return make_ready_future<>();
     }
 
     return proxy.cas(s, request, request->read_command(), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request, &result_consumer] (bool is_applied) {
-        return build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied, request->rows(), result_consumer);
+        build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied, request->rows(), result_consumer);
     });
 }
 
@@ -491,11 +488,11 @@ modification_statement::build_cas_result_set(seastar::shared_ptr<cql3::metadata>
     return seastar::make_shared<cql_transport::messages::result_message::rows>(std::move(result));
 }
 
-seastar::shared_ptr<cql_transport::messages::result_message> modification_statement::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
+void modification_statement::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
         const column_set& columns,
         bool is_applied,
         const update_parameters::prefetch_data& rows,
-        cql3::query_result_consumer&) {
+        cql3::query_result_consumer& result_consumer) {
 
     auto result_set = std::make_unique<cql3::result_set>(metadata);
     for (const auto& it : rows.rows) {
@@ -534,8 +531,7 @@ seastar::shared_ptr<cql_transport::messages::result_message> modification_statem
         row.resize(metadata->value_count());
         result_set->add_row(std::move(row));
     }
-    cql3::result result(std::move(result_set));
-    return seastar::make_shared<cql_transport::messages::result_message::rows>(std::move(result));
+    result_consumer.set_result(result(std::move(result_set)));
 }
 
 void modification_statement::build_cas_result_set_metadata() {

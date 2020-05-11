@@ -158,11 +158,11 @@ create_role_statement::execute(service::storage_proxy&,
     });
 }
 
-future<result_message_ptr>
+future<>
 create_role_statement::execute(service::storage_proxy&,
                                service::query_state& state,
                                const query_options&,
-                               cql3::query_result_consumer&) const {
+                               cql3::query_result_consumer& result_consumer) const {
     auth::role_config config;
     config.is_superuser = *_options.is_superuser;
     config.can_login = *_options.can_login;
@@ -176,16 +176,13 @@ create_role_statement::execute(service::storage_proxy&,
 
         return auth::create_role(as, _role, config, authen_options).then([this, &cs] {
             return grant_permissions_to_creator(cs);
-        }).then([] {
-            return void_result_message();
         }).handle_exception_type([this](const auth::role_already_exists& e) {
             if (!_if_not_exists) {
-                return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+                return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
             }
-
-            return void_result_message();
+            return make_ready_future<>();
         }).handle_exception_type([](const auth::unsupported_authentication_option& e) {
-            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+            return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
         });
     });
 }
@@ -271,8 +268,8 @@ alter_role_statement::execute(service::storage_proxy&, service::query_state& sta
     });
 }
 
-future<result_message_ptr>
-alter_role_statement::execute(service::storage_proxy&, service::query_state& state, const query_options&, cql3::query_result_consumer&) const {
+future<>
+alter_role_statement::execute(service::storage_proxy&, service::query_state& state, const query_options&, cql3::query_result_consumer& result_consumer) const {
     auth::role_config_update update;
     update.is_superuser = _options.is_superuser;
     update.can_login = _options.can_login;
@@ -283,12 +280,10 @@ alter_role_statement::execute(service::storage_proxy&, service::query_state& sta
             [this, &state](const auth::role_config_update& update, const auth::authentication_options& authen_options) {
         auto& as = *state.get_client_state().get_auth_service();
 
-        return auth::alter_role(as, _role, update, authen_options).then([] {
-            return void_result_message();
-        }).handle_exception_type([](const auth::nonexistant_role& e) {
-            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+        return auth::alter_role(as, _role, update, authen_options).handle_exception_type([](const auth::nonexistant_role& e) {
+            return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
         }).handle_exception_type([](const auth::unsupported_authentication_option& e) {
-            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+            return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
         });
     });
 }
@@ -350,18 +345,15 @@ drop_role_statement::execute(service::storage_proxy&, service::query_state& stat
     });
 }
 
-future<result_message_ptr>
-drop_role_statement::execute(service::storage_proxy&, service::query_state& state, const query_options&, cql3::query_result_consumer&) const {
+future<>
+drop_role_statement::execute(service::storage_proxy&, service::query_state& state, const query_options&, cql3::query_result_consumer& result_consumer) const {
     auto& as = *state.get_client_state().get_auth_service();
 
-    return auth::drop_role(as, _role).then([] {
-        return void_result_message();
-    }).handle_exception_type([this](const auth::nonexistant_role& e) {
+    return auth::drop_role(as, _role).handle_exception_type([this](const auth::nonexistant_role& e) {
         if (!_if_exists) {
-            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+            return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
         }
-
-        return void_result_message();
+        return make_ready_future<>();
     });
 }
 
@@ -500,8 +492,8 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
     });
 }
 
-future<result_message_ptr>
-list_roles_statement::execute(service::storage_proxy&, service::query_state& state, const query_options&, cql3::query_result_consumer&) const {
+future<>
+list_roles_statement::execute(service::storage_proxy&, service::query_state& state, const query_options&, cql3::query_result_consumer& result_consumer) const {
     static const sstring virtual_table_name("roles");
 
     static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
@@ -521,15 +513,15 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
                     make_column_spec("login", boolean_type),
                     make_column_spec("options", custom_options_type)});
 
-    static const auto make_results = [](
+    static const auto make_results = [&result_consumer](
             const auth::role_manager& rm,
             const auth::authenticator& a,
-            auth::role_set&& roles) -> future<result_message_ptr> {
+            auth::role_set&& roles) -> future<> {
         auto results = std::make_unique<result_set>(metadata);
 
         if (roles.empty()) {
-            return make_ready_future<result_message_ptr>(
-                ::make_shared<result_message::rows>(result(std::move(results))));
+            result_consumer.set_result(result(std::move(results)));
+            return make_ready_future<>();
         }
 
         std::vector<sstring> sorted_roles(roles.cbegin(), roles.cend());
@@ -538,7 +530,7 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
         return do_with(
                 std::move(sorted_roles),
                 std::move(results),
-                [&rm, &a](const std::vector<sstring>& sorted_roles, std::unique_ptr<result_set>& results) {
+                [&rm, &a, &result_consumer](const std::vector<sstring>& sorted_roles, std::unique_ptr<result_set>& results) {
             return do_for_each(sorted_roles, [&results, &rm, &a](const sstring& role) {
                 return when_all_succeed(
                         rm.can_login(role),
@@ -559,8 +551,8 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
                                                     std::make_move_iterator(os.begin()),
                                                     std::make_move_iterator(os.end())))));
                 });
-            }).then([&results] {
-                return make_ready_future<result_message_ptr>(::make_shared<result_message::rows>(result(std::move(results))));
+            }).then([&results, &result_consumer] {
+                result_consumer.set_result(result(std::move(results)));
             });
         });
     };
@@ -595,7 +587,7 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
             return make_results(rm, a, std::move(roles));
         });
     }).handle_exception_type([](const auth::nonexistant_role& e) {
-        return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+        return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
     });
 }
 
@@ -627,14 +619,13 @@ grant_role_statement::execute(service::storage_proxy&, service::query_state& sta
     });
 }
 
-future<result_message_ptr>
-grant_role_statement::execute(service::storage_proxy&, service::query_state& state, const query_options&, cql3::query_result_consumer&) const {
+future<>
+grant_role_statement::execute(service::storage_proxy&, service::query_state& state, const query_options&, cql3::query_result_consumer& result_consumer) const {
     auto& as = *state.get_client_state().get_auth_service();
 
-    return as.underlying_role_manager().grant(_grantee, _role).then([] {
-        return void_result_message();
-    }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+    return as.underlying_role_manager().grant(_grantee, _role)
+    .handle_exception_type([](const auth::roles_argument_exception& e) {
+        return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
     });
 }
 
@@ -668,17 +659,15 @@ future<result_message_ptr> revoke_role_statement::execute(
     });
 }
 
-future<result_message_ptr> revoke_role_statement::execute(
+future<> revoke_role_statement::execute(
         service::storage_proxy&,
         service::query_state& state,
         const query_options&,
-        cql3::query_result_consumer&) const {
+        cql3::query_result_consumer& result_consumer) const {
     auto& rm = state.get_client_state().get_auth_service()->underlying_role_manager();
 
-    return rm.revoke(_revokee, _role).then([] {
-        return void_result_message();
-    }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+    return rm.revoke(_revokee, _role).handle_exception_type([](const auth::roles_argument_exception& e) {
+        return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
     });
 }
 

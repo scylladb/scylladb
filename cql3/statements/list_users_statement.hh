@@ -58,7 +58,7 @@ public:
                     , service::query_state&
                     , const query_options&) const override;
 
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
 };
 

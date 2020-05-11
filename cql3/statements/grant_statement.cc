@@ -62,17 +62,16 @@ cql3::statements::grant_statement::execute(service::storage_proxy& proxy, servic
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-cql3::statements::grant_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer&) const {
+future<>
+cql3::statements::grant_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const {
     auto& auth_service = *state.get_client_state().get_auth_service();
 
-    return auth::grant_permissions(auth_service, _role_name, _permissions, _resource).then([] {
-        return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
-    }).handle_exception_type([](const auth::nonexistant_role& e) {
-        return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
+    return auth::grant_permissions(auth_service, _role_name, _permissions, _resource)
+    .handle_exception_type([](const auth::nonexistant_role& e) {
+        return make_exception_future<>(
                 exceptions::invalid_request_exception(e.what()));
     }).handle_exception_type([](const auth::unsupported_authorization_operation& e) {
-        return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
+        return make_exception_future<>(
                 exceptions::invalid_request_exception(e.what()));
     });
 }

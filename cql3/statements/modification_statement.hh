@@ -211,7 +211,7 @@ public:
     build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
             const column_set& mask, bool is_applied,
             const update_parameters::prefetch_data& rows);
-    static seastar::shared_ptr<cql_transport::messages::result_message> build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
+    static void build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
             const column_set& columns,
             bool is_applied,
             const update_parameters::prefetch_data& rows,
@@ -269,7 +269,7 @@ public:
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
     do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options, cql3::query_result_consumer& result_consumer) const;
     friend class modification_statement_executor;
     friend class modification_statement_executor_consumer;
@@ -284,7 +284,7 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const override;
 
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
 
 private:
@@ -293,7 +293,7 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options, cql3::query_result_consumer& result_consumer) const;
 
 public:

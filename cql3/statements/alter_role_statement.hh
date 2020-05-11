@@ -70,7 +70,7 @@ public:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(service::storage_proxy&, service::query_state&, const query_options&) const override;
-    virtual future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute(service::storage_proxy&, service::query_state&, const query_options&, cql3::query_result_consumer& result_consumer) const override;
 };
 

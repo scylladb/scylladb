@@ -154,7 +154,7 @@ public:
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
             service::storage_proxy& storage, service::query_state& state, const query_options& options) const override;
 
-    future<shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
 
 private:
@@ -164,7 +164,7 @@ private:
             service::storage_proxy& storage,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
-    future<shared_ptr<cql_transport::messages::result_message>> do_execute(
+    future<> do_execute(
             service::storage_proxy& storage,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now,
@@ -182,7 +182,7 @@ private:
             service::storage_proxy& storage,
             const query_options& options,
             service::query_state& state) const;
-    future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
+    future<> execute_with_conditions(
             service::storage_proxy& proxy,
             const query_options& options,
             service::query_state& qs,

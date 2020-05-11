@@ -66,7 +66,7 @@ private:
 
     future<::shared_ptr<messages::result_message>>
     execute0(service::storage_proxy& proxy, service::query_state& state, const query_options& options, bool) const;
-    future<::shared_ptr<messages::result_message>>
+    future<>
     execute0(service::storage_proxy& proxy, service::query_state& state, const query_options& options, bool is_local_only, cql3::query_result_consumer& result_consumer) const;
 protected:
     explicit schema_altering_statement(timeout_config_selector timeout_selector = &timeout_config::other_timeout);
@@ -96,7 +96,7 @@ protected:
     virtual future<::shared_ptr<messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const override;
 
-    future<::shared_ptr<messages::result_message>>
+    future<>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
 };
 

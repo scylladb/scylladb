@@ -260,7 +260,7 @@ struct batch_statement_executor {
     static do_execute_type get() { return &batch_statement::do_execute; }
 };
 struct batch_statement_executor_consumer {
-    typedef future<shared_ptr<cql_transport::messages::result_message>>(batch_statement::*do_execute_consume_type)(
+    typedef future<>(batch_statement::*do_execute_consume_type)(
         service::storage_proxy&,
         service::query_state&,
         const query_options&,
@@ -279,7 +279,7 @@ static thread_local inheriting_concrete_execution_stage<
         api::timestamp_type> batch_stage{"cql3_batch", batch_statement_executor::get()};
 
 static thread_local inheriting_concrete_execution_stage<
-        future<shared_ptr<cql_transport::messages::result_message>>,
+        future<>,
         const batch_statement*,
         service::storage_proxy&,
         service::query_state&,
@@ -294,7 +294,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
                        seastar::cref(options), false, options.get_timestamp(state));
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
+future<> batch_statement::execute(
         service::storage_proxy& storage, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const {
     return batch_stage_consumer(this, seastar::ref(storage), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state), seastar::ref(result_consumer));
@@ -331,7 +331,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     });
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
+future<> batch_statement::do_execute(
         service::storage_proxy& storage,
         service::query_state& query_state, const query_options& options,
         bool local, api::timestamp_type now,
@@ -347,7 +347,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     if (_has_conditions) {
         ++_stats.cas_batches;
         _stats.statements_in_cas_batches += _statements.size();
-        return execute_with_conditions(storage, options, query_state);
+        return execute_with_conditions(storage, options, query_state, result_consumer);
     }
 
     ++_stats.batches;
@@ -357,9 +357,6 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     return get_mutations(storage, options, timeout, local, now, query_state).then([this, &storage, &options, timeout, tr_state = query_state.get_trace_state(),
                                                                                                                                permit = query_state.get_permit()] (std::vector<mutation> ms) mutable {
         return execute_without_conditions(storage, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
-    }).then([] {
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                make_shared<cql_transport::messages::result_message::void_message>());
     });
 }
 
@@ -455,11 +452,11 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     });
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
+future<> batch_statement::execute_with_conditions(
         service::storage_proxy& proxy,
         const query_options& options,
         service::query_state& qs,
-        cql3::query_result_consumer& result_consumer) const {   
+        cql3::query_result_consumer& result_consumer) const {
 
     auto cl_for_learn = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
@@ -501,8 +498,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     auto shard = service::storage_proxy::cas_shard(*_statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
     if (shard != this_shard_id()) {
         proxy.get_stats().replica_cross_shard_ops++;
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
+        result_consumer.move_to_shard(shard);
     }
 
     return proxy.cas(schema, request, request->read_command(), request->key(),

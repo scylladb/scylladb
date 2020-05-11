@@ -119,8 +119,8 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer&) const {
+future<>
+cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const {
     static const sstring virtual_table_name("users");
 
     static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
@@ -136,7 +136,7 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
                 make_column_spec("name", utf8_type),
                 make_column_spec("super", boolean_type)});
 
-    static const auto make_results = [](const auth::service& as, std::unordered_set<sstring>&& roles) {
+    static const auto make_results = [&result_consumer](const auth::service& as, std::unordered_set<sstring>&& roles) {
         using cql_transport::messages::result_message;
 
         auto results = std::make_unique<result_set>(metadata);
@@ -147,7 +147,7 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
         return do_with(
                 std::move(sorted_roles),
                 std::move(results),
-                [&as](const std::vector<sstring>& sorted_roles, std::unique_ptr<result_set>& results) {
+                [&as, &result_consumer](const std::vector<sstring>& sorted_roles, std::unique_ptr<result_set>& results) {
             return do_for_each(sorted_roles, [&as, &results](const sstring& role) {
                 return when_all_succeed(
                         as.has_superuser(role),
@@ -157,9 +157,8 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
                         results->add_column_value(boolean_type->decompose(super));
                     }
                 });
-            }).then([&results] {
-                return make_ready_future<::shared_ptr<result_message>>(::make_shared<result_message::rows>(
-                        result(std::move(results))));
+            }).then([&results, &result_consumer] {
+                result_consumer.set_result(result(std::move(results)));
             });
         });
     };
