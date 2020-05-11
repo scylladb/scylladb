@@ -141,7 +141,6 @@ public:
 public:
     using response = cql_transport::response;
 private:
-    class fmt_visitor;
     friend class connection;
     class connection : public boost::intrusive::list_base_hook<> {
         cql_server& _server;
