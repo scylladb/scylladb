@@ -416,28 +416,6 @@ private:
             });
         });
     };
-
-    template <typename ResultMsgType, typename KeyGenerator, typename IdGetter>
-    ::shared_ptr<cql_transport::messages::result_message::prepared>
-    get_stored_prepared_statement_one(
-            const std::string_view& query_string,
-            const sstring& keyspace,
-            KeyGenerator&& key_gen,
-            IdGetter&& id_getter) {
-        auto cache_key = key_gen(query_string, keyspace);
-        auto it = _prepared_cache.find(cache_key);
-        if (it == _prepared_cache.end()) {
-            return ::shared_ptr<cql_transport::messages::result_message::prepared>();
-        }
-
-        return ::make_shared<ResultMsgType>(id_getter(cache_key), *it);
-    }
-
-    ::shared_ptr<cql_transport::messages::result_message::prepared>
-    get_stored_prepared_statement(
-            const std::string_view& query_string,
-            const sstring& keyspace,
-            bool for_thrift);
 };
 
 class query_processor::migration_subscriber : public service::migration_listener {

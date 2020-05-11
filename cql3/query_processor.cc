@@ -573,27 +573,6 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
     }
 }
 
-::shared_ptr<cql_transport::messages::result_message::prepared>
-query_processor::get_stored_prepared_statement(
-        const std::string_view& query_string,
-        const sstring& keyspace,
-        bool for_thrift) {
-    using namespace cql_transport::messages;
-    if (for_thrift) {
-        return get_stored_prepared_statement_one<result_message::prepared::thrift>(
-                query_string,
-                keyspace,
-                compute_thrift_id,
-                prepared_cache_key_type::thrift_id);
-    } else {
-        return get_stored_prepared_statement_one<result_message::prepared::cql>(
-                query_string,
-                keyspace,
-                compute_id,
-                prepared_cache_key_type::cql_id);
-    }
-}
-
 static std::string hash_target(std::string_view query_string, std::string_view keyspace) {
     std::string ret(keyspace);
     ret += query_string;
