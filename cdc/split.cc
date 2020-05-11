@@ -30,23 +30,16 @@ struct atomic_column_update {
     atomic_cell cell;
 };
 
-// see the comment inside `clustered_row_insert` for motivation for separating
-// nonatomic deletions from nonatomic updates
-struct nonatomic_column_deletion {
-    column_id id;
-    tombstone t;
-};
-
 struct nonatomic_column_update {
     column_id id;
+    tombstone t; // optional
     utils::chunked_vector<std::pair<bytes, atomic_cell>> cells;
 };
 
 struct static_row_update {
     gc_clock::duration ttl;
     std::vector<atomic_column_update> atomic_entries;
-    std::vector<nonatomic_column_deletion> nonatomic_deletions;
-    std::vector<nonatomic_column_update> nonatomic_updates;
+    std::vector<nonatomic_column_update> nonatomic_entries;
 };
 
 struct clustered_row_insert {
@@ -54,19 +47,14 @@ struct clustered_row_insert {
     clustering_key key;
     row_marker marker;
     std::vector<atomic_column_update> atomic_entries;
-    std::vector<nonatomic_column_deletion> nonatomic_deletions;
-    // INSERTs can't express updates of individual cells inside a non-atomic
-    // (without deleting the entire field first), so no `nonatomic_updates` field
-    // overwriting a nonatomic column inside an INSERT will be split into two changes:
-    // one with a nonatomic deletion, and one with a nonatomic update
+    std::vector<nonatomic_column_update> nonatomic_entries;
 };
 
 struct clustered_row_update {
     gc_clock::duration ttl;
     clustering_key key;
     std::vector<atomic_column_update> atomic_entries;
-    std::vector<nonatomic_column_deletion> nonatomic_deletions;
-    std::vector<nonatomic_column_update> nonatomic_updates;
+    std::vector<nonatomic_column_update> nonatomic_entries;
 };
 
 struct clustered_row_deletion {
@@ -95,8 +83,7 @@ using set_of_changes = std::map<api::timestamp_type, batch>;
 
 struct row_update {
     std::vector<atomic_column_update> atomic_entries;
-    std::vector<nonatomic_column_deletion> nonatomic_deletions;
-    std::vector<nonatomic_column_update> nonatomic_updates;
+    std::vector<nonatomic_column_update> nonatomic_entries;
 };
 
 static
@@ -122,7 +109,7 @@ extract_row_updates(const row& r, column_kind ckind, const schema& schema) {
                         v.timestamp(),
                         v.is_live_and_has_ttl() ? v.ttl() : gc_clock::duration(0)
                     );
-                auto& updates = result[timestamp_and_ttl].nonatomic_updates;
+                auto& updates = result[timestamp_and_ttl].nonatomic_entries;
                 if (updates.empty() || updates.back().id != id) {
                     updates.push_back({id, {}});
                 }
@@ -130,8 +117,12 @@ extract_row_updates(const row& r, column_kind ckind, const schema& schema) {
             }
 
             if (desc.tomb) {
-                auto timestamp_and_ttl = std::pair(desc.tomb.timestamp, gc_clock::duration(0));
-                result[timestamp_and_ttl].nonatomic_deletions.push_back({id, desc.tomb});
+                auto timestamp_and_ttl = std::pair(desc.tomb.timestamp + 1, gc_clock::duration(0));
+                auto& updates = result[timestamp_and_ttl].nonatomic_entries;
+                if (updates.empty() || updates.back().id != id) {
+                    updates.push_back({id, {}});
+                }
+                updates.back().t = std::move(desc.tomb);
             }
         });
     });
@@ -148,8 +139,7 @@ set_of_changes extract_changes(const mutation& base_mutation, const schema& base
         res[timestamp].static_updates.push_back({
                 ttl,
                 std::move(up.atomic_entries),
-                std::move(up.nonatomic_deletions),
-                std::move(up.nonatomic_updates)
+                std::move(up.nonatomic_entries)
             });
     }
 
@@ -173,6 +163,9 @@ set_of_changes extract_changes(const mutation& base_mutation, const schema& base
         };
 
         for (auto& [k, up]: cr_updates) {
+            // It is important that changes in the resulting `set_of_changes` are listed
+            // in increasing TTL order. The reason is explained in a comment in cdc/log.cc,
+            // search for "#6070".
             auto [timestamp, ttl] = k;
 
             if (is_insert(timestamp, ttl)) {
@@ -181,25 +174,70 @@ set_of_changes extract_changes(const mutation& base_mutation, const schema& base
                         cr.key(),
                         marker,
                         std::move(up.atomic_entries),
-                        std::move(up.nonatomic_deletions)
+                        {}
                     });
-                if (!up.nonatomic_updates.empty()) {
-                    // nonatomic updates cannot be expressed with an INSERT.
-                    res[timestamp].clustered_updates.push_back({
-                            ttl,
-                            cr.key(),
-                            {},
-                            {},
-                            std::move(up.nonatomic_updates)
-                        });
+
+                auto& cr_insert = res[timestamp].clustered_inserts.back();
+                bool clustered_update_exists = false;
+                for (auto& nonatomic_up: up.nonatomic_entries) {
+                    // Updating a collection column with an INSERT statement implies inserting a tombstone.
+                    //
+                    // For example, suppose that we have:
+                    //     CREATE TABLE t (a int primary key, b map<int, int>);
+                    // Then the following statement:
+                    //     INSERT INTO t (a, b) VALUES (0, {0:0}) USING TIMESTAMP T;
+                    // creates a tombstone in column b with timestamp T-1.
+                    // It also creates a cell (0, 0) with timestamp T.
+                    //
+                    // There is no way to create just the cell using an INSERT statement.
+                    // This can only be done using an UPDATE, as follows:
+                    //     UPDATE t USING TIMESTAMP T SET b = b + {0:0} WHERE a = 0;
+                    // note that this is different  than
+                    //     UPDATE t USING TIMESTAMP T SET b = {0:0} WHERE a = 0;
+                    // which also creates a tombstone with timestamp T-1.
+                    //
+                    // It follows that:
+                    // - if `nonatomic_up` has a tombstone, it can be made merged with our `cr_insert`,
+                    //   which represents an INSERT change.
+                    // - but if `nonatomic_up` only has cells, we must create a separate UPDATE change
+                    //   for the cells alone.
+                    if (nonatomic_up.t) {
+                        cr_insert.nonatomic_entries.push_back(std::move(nonatomic_up));
+                    } else {
+                        if (!clustered_update_exists) {
+                            res[timestamp].clustered_updates.push_back({
+                                ttl,
+                                cr.key(),
+                                {},
+                                {}
+                            });
+
+                            // Multiple iterations of this `for` loop (for different collection columns)
+                            // might want to put their `nonatomic_up`s into an UPDATE change;
+                            // but we don't want to create a separate change for each of them, reusing one instead.
+                            //
+                            // Example:
+                            // CREATE TABLE t (a int primary key, b map<int, int>, c map <int, int>) with cdc = {'enabled':true};
+                            // insert into t (a, b, c) values (0, {1:1}, {2:2}) USING TTL 5;
+                            //
+                            // this should create 3 delta rows:
+                            // 1. one for the row marker (indicating an INSERT), with TTL 5
+                            // 2. one for the b and c tombstones, without TTL (cdc$ttl = null)
+                            // 3. one for the b and c cells, with TTL 5
+                            // This logic takes care that b cells and c cells are put into a single change (3. above).
+                            clustered_update_exists = true;
+                        }
+
+                        auto& cr_update = res[timestamp].clustered_updates.back();
+                        cr_update.nonatomic_entries.push_back(std::move(nonatomic_up));
+                    }
                 }
             } else {
                 res[timestamp].clustered_updates.push_back({
                         ttl,
                         cr.key(),
                         std::move(up.atomic_entries),
-                        std::move(up.nonatomic_deletions),
-                        std::move(up.nonatomic_updates)
+                        std::move(up.nonatomic_entries)
                     });
             }
         }
@@ -271,7 +309,7 @@ bool should_split(const mutation& base_mutation, const schema& base_schema) {
             }
 
             if (desc.tomb) {
-                if (check_or_set(desc.tomb.timestamp, gc_clock::duration(0))) {
+                if (check_or_set(desc.tomb.timestamp + 1, gc_clock::duration(0))) {
                     should_split = true;
                     return;
                 }
@@ -326,7 +364,7 @@ bool should_split(const mutation& base_mutation, const schema& base_schema) {
                 }
 
                 if (mview.tomb) {
-                    if (check_or_set(mview.tomb.timestamp, gc_clock::duration(0))) {
+                    if (check_or_set(mview.tomb.timestamp + 1, gc_clock::duration(0))) {
                         should_split = true;
                         return;
                     }
@@ -392,13 +430,9 @@ void for_each_change(const mutation& base_mutation, const schema_ptr& base_schem
                 auto& cdef = base_schema->column_at(column_kind::static_column, atomic_update.id);
                 m.set_static_cell(cdef, std::move(atomic_update.cell));
             }
-            for (auto& nonatomic_delete : sr_update.nonatomic_deletions) {
-                auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_delete.id);
-                m.set_static_cell(cdef, collection_mutation_description{nonatomic_delete.t, {}}.serialize(*cdef.type));
-            }
-            for (auto& nonatomic_update : sr_update.nonatomic_updates) {
+            for (auto& nonatomic_update : sr_update.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
-                m.set_static_cell(cdef, collection_mutation_description{{}, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
+                m.set_static_cell(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
             f(std::move(m), change_ts, tuuid, batch_no);
         }
@@ -411,9 +445,9 @@ void for_each_change(const mutation& base_mutation, const schema_ptr& base_schem
                 auto& cdef = base_schema->column_at(column_kind::regular_column, atomic_update.id);
                 row.cells().apply(cdef, std::move(atomic_update.cell));
             }
-            for (auto& nonatomic_delete : cr_insert.nonatomic_deletions) {
-                auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_delete.id);
-                row.cells().apply(cdef, collection_mutation_description{nonatomic_delete.t, {}}.serialize(*cdef.type));
+            for (auto& nonatomic_update : cr_insert.nonatomic_entries) {
+                auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
+                row.cells().apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
             row.apply(cr_insert.marker);
 
@@ -428,13 +462,9 @@ void for_each_change(const mutation& base_mutation, const schema_ptr& base_schem
                 auto& cdef = base_schema->column_at(column_kind::regular_column, atomic_update.id);
                 row.apply(cdef, std::move(atomic_update.cell));
             }
-            for (auto& nonatomic_delete : cr_update.nonatomic_deletions) {
-                auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_delete.id);
-                row.apply(cdef, collection_mutation_description{nonatomic_delete.t, {}}.serialize(*cdef.type));
-            }
-            for (auto& nonatomic_update : cr_update.nonatomic_updates) {
+            for (auto& nonatomic_update : cr_update.nonatomic_entries) {
                 auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
-                row.apply(cdef, collection_mutation_description{{}, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
+                row.apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
 
             f(std::move(m), change_ts, tuuid, batch_no);

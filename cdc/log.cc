@@ -556,6 +556,12 @@ api::timestamp_type find_timestamp(const schema& s, const mutation& m) {
                     [&] (collection_mutation_view_description mview) {
                 t = mview.tomb.timestamp;
                 if (t != api::missing_timestamp) {
+                    // A collection tombstone with timestamp T can be created with:
+                    // UPDATE ks.t USING TIMESTAMP T + 1 SET X = null WHERE ...
+                    // where X is a non-atomic column.
+                    // This is, among others, the reason why we show it in the CDC log
+                    // with cdc$time using timestamp T + 1 instead of T.
+                    t += 1;
                     return stop_iteration::yes;
                 }
 
@@ -751,17 +757,79 @@ private:
     const column_definition& _op_col;
     const column_definition& _ttl_col;
     ttl_opt _cdc_ttl_opt;
+
     /**
-     * #6070
-     * When mutation splitting was added, non-atomic column assignments were broken
-     * into two invocation of transform. This means the second (actual data assignment)
-     * does not know about the tombstone in first one -> postimage is created as if 
-     * we were _adding_ to the collection, not replacing it. 
+     * #6070, #6084
+     * Non-atomic column assignments which use a TTL are broken into two invocations
+     * of `transform`, such as in the following example:
+     * CREATE TABLE t (a int PRIMARY KEY, b map<int, int>) WITH cdc = {'enabled':true};
+     * UPDATE t USING TTL 5 SET b = {0:0} WHERE a = 0;
+     *
+     * The above UPDATE creates a tombstone and a (0, 0) cell; because tombstones don't have the notion
+     * of a TTL, we split the UPDATE into two separate changes (represented as two separate delta rows in the log,
+     * resulting in two invocations of `transform`): one change for the deletion with no TTL,
+     * and one change for adding cells with TTL = 5.
+     *
+     * In other words, we use the fact that
+     * UPDATE t USING TTL 5 SET b = {0:0} WHERE a = 0;
+     * is equivalent to
+     * BEGIN UNLOGGED BATCH
+     *  UPDATE t SET b = null WHERE a = 0;
+     *  UPDATE t USING TTL 5 SET b = b + {0:0} WHERE a = 0;
+     * APPLY BATCH;
+     * (the mutations are the same in both cases),
+     * and perform a separate `transform` call for each statement in the batch.
+     *
+     * An assignment also happens when an INSERT statement is used as follows:
+     * INSERT INTO t (a, b) VALUES (0, {0:0}) USING TTL 5;
      * 
-     * Not pretty, but to handle this we use the knowledge that we always get 
-     * invoked in timestamp order -> tombstone first, then assign.
-     * So we simply keep track of non-atomic columns deleted across calls 
-     * and filter out preimage data post this.
+     * This will be split into three separate changes (three invocations of `transform`):
+     * 1. One with TTL = 5 for the row marker (introduces by the INSERT), indicating that a row was inserted.
+     * 2. One without a TTL for the tombstone, indicating that the collection was cleared.
+     * 3. One with TTL = 5 for the addition of cell (0, 0), indicating that the collection
+     *    was extended by a new key/value.
+     *
+     * Why do we need three changes and not two, like in the UPDATE case?
+     * The tombstone needs to be a separate change because it doesn't have a TTL,
+     * so only the row marker change could potentially be merged with the cell change (1 and 3 above).
+     * However, we cannot do that: the row marker change is of INSERT type (cdc$operation == cdc::operation::insert),
+     * but there is no way to create a statement that
+     * - has a row marker,
+     * - adds cells to a collection,
+     * - but *doesn't* add a tombstone for this collection.
+     * INSERT statements that modify collections *always* add tombstones.
+     *
+     * Merging the row marker with the cell addition would result in such an impossible statement.
+     *
+     * Instead, we observe that
+     * INSERT INTO t (a, b) VALUES (0, {0:0}) USING TTL 5;
+     * is equivalent to
+     * BEGIN UNLOGGED BATCH
+     *  INSERT INTO t (a) VALUES (0) USING TTL 5;
+     *  UPDATE t SET b = null WHERE a = 0;
+     *  UPDATE t USING TTL 5 SET b = b + {0:0} WHERE a = 0;
+     * APPLY BATCH;
+     * and perform a separate `transform` call for each statement in the batch.
+     *
+     * Unfortunately, due to splitting, the cell addition call (b + b {0:0}) does not know about the tombstone.
+     * If it was performed independently from the tombstone call, it would create a wrong post-image:
+     * the post-image would look as if the previous cells still existed.
+     * For example, suppose that b was equal to {1:1} before the above statement was performed.
+     * Then the final post-image for b for above statement/batch would be {0:0, 1:1}, when instead it should be {0:0}.
+     *
+     * To handle this we use the fact that
+     * 1. changes without a TTL are treated as if TTL = 0,
+     * 2. `transform` is invoked in order of increasing TTLs,
+     * and we maintain state between `transform` invocations (`_non_atomic_column_deletes`).
+     *
+     * Thus, the tombstone call will happen *before* the cell addition call,
+     * so the cell addition call will know that there previously was a tombstone
+     * and create a correct post-image.
+     *
+     * Furthermore, `transform` calls for INSERT changes (i.e. with a row marker)
+     * happen before `transform` calls for UPDATE changes, so in the case of an INSERT
+     * which modifies a collection column as above, the row marker call will happen first;
+     * its post-image will still show {1:1} for the collection column. Good.
      */
     std::unordered_set<const column_definition*> _non_atomic_column_deletes;
 
