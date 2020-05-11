@@ -143,8 +143,6 @@ public:
 private:
     class fmt_visitor;
     friend class connection;
-    friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
-            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, bool skip_metadata);
     class connection : public boost::intrusive::list_base_hook<> {
         cql_server& _server;
         socket_address _server_addr;
