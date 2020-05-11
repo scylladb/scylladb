@@ -916,7 +916,7 @@ int main(int ac, char** av) {
             }
 
             db.invoke_on_all([&proxy] (database& db) {
-                db.get_compaction_manager().start();
+                db.get_compaction_manager().enable();
             }).get();
 
             // If the same sstable is shared by several shards, it cannot be

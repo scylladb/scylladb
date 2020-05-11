@@ -466,7 +466,7 @@ public:
             });
 
             db.invoke_on_all([] (database& db) {
-                db.get_compaction_manager().start();
+                db.get_compaction_manager().enable();
             }).get();
 
             auto stop_ms_fd_gossiper = defer([] {

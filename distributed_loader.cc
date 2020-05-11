@@ -397,7 +397,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
         return seastar::async([&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] () mutable {
             global_column_family_ptr cf(db, ks_name, cf_name);
 
-            if (cf->get_compaction_manager().stopped()) {
+            if (!cf->get_compaction_manager().enabled()) {
                 return;
             }
             // fast path to detect that this column family doesn't need reshard.

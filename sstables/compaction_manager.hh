@@ -67,8 +67,20 @@ private:
     // compaction manager may have N fibers to allow parallel compaction per shard.
     std::list<lw_shared_ptr<task>> _tasks;
 
-    // Used to assert that compaction_manager was explicitly stopped, if started.
-    bool _stopped = true;
+    // Possible states in which the compaction manager can be found.
+    //
+    // none: started, but not yet enabled. Once the compaction manager moves out of "none", it can
+    //       never legally move back
+    // stopped: stop() was called. The compaction_manager will never be enabled or disabled again
+    //          and can no longer be used (although it is possible to still grab metrics, stats,
+    //          etc)
+    // enabled: accepting compactions
+    // disabled: not accepting compactions
+    //
+    // Moving the compaction manager to and from enabled and disable states is legal, as many times
+    // as necessary.
+    enum class state { none, stopped, disabled, enabled };
+    state _state = state::none;
 
     stats _stats;
     seastar::metrics::metric_groups _metrics;
@@ -157,13 +169,16 @@ public:
 
     void register_metrics();
 
-    // Start compaction manager.
-    void start();
+    // enable/disable compaction manager.
+    void enable();
+    void disable();
 
     // Stop all fibers. Ongoing compactions will be waited.
     future<> stop();
 
-    bool stopped() const { return _stopped; }
+    // FIXME: should not be public. It's not anyone's business if we are enabled.
+    // distributed_loader.cc uses for resharding, remove this when the new resharding series lands.
+    bool enabled() const { return _state == state::enabled; }
 
     // Submit a column family to be compacted.
     void submit(column_family* cf);

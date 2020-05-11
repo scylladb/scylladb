@@ -1044,7 +1044,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     auto cm = make_lw_shared<compaction_manager>();
-    cm->start();
+    cm->enable();
     auto stop_cm = defer([&cm] {
         cm->stop().get();
     });
@@ -5291,7 +5291,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         auto tmp = tmpdir();
 
         auto cm = make_lw_shared<compaction_manager>();
-        cm->start();
+        cm->enable();
 
         column_family::config cfg = column_family_test_config();
         cfg.datadir = tmp.path().string();
@@ -5703,7 +5703,8 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         cell_locker_stats cl_stats;
         cache_tracker tracker;
 
-        compaction_manager cm; cm.start();
+        compaction_manager cm;
+        cm.enable();
 
         auto s = schema_builder(some_keyspace, some_column_family)
                 .with_column("id", utf8_type, column_kind::partition_key)

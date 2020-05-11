@@ -1751,7 +1751,6 @@ future<> database::stop_large_data_handler() {
 future<>
 database::stop() {
     assert(!_large_data_handler->running());
-    assert(_compaction_manager->stopped());
 
     // try to ensure that CL has done disk flushing
     future<> maybe_shutdown_commitlog = _commitlog != nullptr ? _commitlog->shutdown() : make_ready_future<>();

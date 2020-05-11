@@ -86,7 +86,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
 
         db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata)).get();
         db.invoke_on_all([] (database& db) {
-            db.get_compaction_manager().start();
+            db.get_compaction_manager().enable();
         }).get();
 
         auto stop_db = defer([&] { db.stop().get(); });
