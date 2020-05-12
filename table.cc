@@ -682,6 +682,13 @@ inline void table::add_sstable_to_backlog_tracker(compaction_backlog_tracker& tr
     }
 }
 
+inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
+    // Shared sstables belong to resharding's own backlog tracker.
+    if (!sstable->is_shared()) {
+        tracker.remove_sstable(std::move(sstable));
+    }
+}
+
 void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsigned>& shards_for_the_sstable) {
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared(*_sstables);
@@ -1255,10 +1262,11 @@ future<> table::replace_ancestors_needed_rewrite(std::unordered_set<uint64_t> an
     }
     return rebuild_sstable_list_with_deletion_sem(new_sstables, old_sstables).then([this, new_sstables, old_sstables] {
         for (auto& sst : new_sstables) {
-            _compaction_strategy.get_backlog_tracker().add_sstable(sst);
+            add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
         }
+
         for (auto& sst : old_sstables) {
-            _compaction_strategy.get_backlog_tracker().remove_sstable(sst);
+            remove_sstable_from_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
             _sstables_need_rewrite.erase(sst->generation());
         }
     });
@@ -1929,7 +1937,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             rebuild_statistics();
 
             return parallel_for_each(p->remove, [this](sstables::shared_sstable s) {
-                _compaction_strategy.get_backlog_tracker().remove_sstable(s);
+                remove_sstable_from_backlog_tracker(_compaction_strategy.get_backlog_tracker(), s);
                 return sstables::delete_atomically({s});
             }).then([p] {
                 return make_ready_future<db::replay_position>(p->rp);
@@ -2492,7 +2500,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
                 return sst->move_to_new_dir(dir(), sst->generation(), false).then_wrapped([this, sst, &dirs_to_sync] (future<> f) {
                     if (!f.failed()) {
                         _sstables_staging.erase(sst->generation());
-                        _compaction_strategy.get_backlog_tracker().add_sstable(sst);
+                        add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
                         return make_ready_future<>();
                     } else {
                         auto ep = f.get_exception();
