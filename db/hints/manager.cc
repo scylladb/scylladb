@@ -728,7 +728,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
 }
 
 void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
-    state.set(send_state::segment_replay_failed);
+    segment_replay_failed = true;
     if (!first_failed_rp || rp < *first_failed_rp) {
         first_failed_rp = rp;
     }
@@ -745,13 +745,13 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
             auto&& [buf, rp] = buf_rp;
             // Check that we can still send the next hint. Don't try to send it if the destination host
             // is DOWN or if we have already failed to send some of the previous hints.
-            if (!draining() && ctx_ptr->state.contains(send_state::segment_replay_failed)) {
+            if (!draining() && ctx_ptr->segment_replay_failed) {
                 return make_ready_future<>();
             }
 
             // Break early if stop() was called or the destination node went down.
             if (!can_send()) {
-                ctx_ptr->state.set(send_state::segment_replay_failed);
+                ctx_ptr->segment_replay_failed = true;
                 return make_ready_future<>();
             }
 
@@ -761,24 +761,24 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
         }, _last_not_complete_rp.pos, &_db.extensions()).get();
     } catch (db::commitlog::segment_error& ex) {
         manager_logger.error("{}: {}. Dropping...", fname, ex.what());
-        ctx_ptr->state.remove(send_state::segment_replay_failed);
+        ctx_ptr->segment_replay_failed = false;
         ++this->shard_stats().corrupted_files;
     } catch (...) {
         manager_logger.trace("sending of {} failed: {}", fname, std::current_exception());
-        ctx_ptr->state.set(send_state::segment_replay_failed);
+        ctx_ptr->segment_replay_failed = true;
     }
 
     // wait till all background hints sending is complete
     ctx_ptr->file_send_gate.close().get();
 
     // If we are draining ignore failures and drop the segment even if we failed to send it.
-    if (draining() && ctx_ptr->state.contains(send_state::segment_replay_failed)) {
+    if (draining() && ctx_ptr->segment_replay_failed) {
         manager_logger.trace("send_one_file(): we are draining so we are going to delete the segment anyway");
-        ctx_ptr->state.remove(send_state::segment_replay_failed);
+        ctx_ptr->segment_replay_failed = false;
     }
 
     // update the next iteration replay position if needed
-    if (ctx_ptr->state.contains(send_state::segment_replay_failed)) {
+    if (ctx_ptr->segment_replay_failed) {
         // If some hints failed to be sent, first_failed_rp will tell the position of first such hint.
         // If there was an error thrown by read_log_file function itself, we will retry sending from
         // the last entry that was successfully read from commitlog (last_attempted_rp).

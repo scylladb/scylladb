@@ -96,13 +96,6 @@ public:
                 state::ep_state_left_the_ring,
                 state::draining>>;
 
-            enum class send_state {
-                segment_replay_failed,  // current segment sending failed
-            };
-
-            using send_state_set = enum_set<super_enum<send_state,
-                send_state::segment_replay_failed>>;
-
             struct send_one_file_ctx {
                 send_one_file_ctx(std::unordered_map<table_schema_version, column_mapping>& last_schema_ver_to_column_mapping)
                     : schema_ver_to_column_mapping(last_schema_ver_to_column_mapping)
@@ -111,7 +104,7 @@ public:
                 seastar::gate file_send_gate;
                 std::optional<db::replay_position> first_failed_rp;
                 std::optional<db::replay_position> last_attempted_rp;
-                send_state_set state;
+                bool segment_replay_failed = false;
 
                 void on_hint_send_failure(db::replay_position rp) noexcept;
             };
