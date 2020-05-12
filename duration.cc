@@ -273,7 +273,7 @@ std::optional<cql_duration> parse_duration_standard_format(std::string_view s) {
     //
 
     static const auto pattern =
-            std::regex(u8"(\\d+)(y|Y|mo|MO|mO|Mo|w|W|d|D|h|H|s|S|ms|MS|mS|Ms|us|US|uS|Us|µs|µS|ns|NS|nS|Ns|m|M)");
+            std::regex("(\\d+)(y|Y|mo|MO|mO|Mo|w|W|d|D|h|H|s|S|ms|MS|mS|Ms|us|US|uS|Us|µs|µS|ns|NS|nS|Ns|m|M)");
 
     auto iter = s.cbegin();
     std::cmatch match;
@@ -291,7 +291,7 @@ std::optional<cql_duration> parse_duration_standard_format(std::string_view s) {
             auto view = std::string_view(symbol);
             view.remove_suffix(1);
 
-            if (view == u8"µ") {
+            if (view == reinterpret_cast<const char*>(u8"µ")) {
                 b.add_parsed_count(match, 1, microsecond);
                 continue;
             }
