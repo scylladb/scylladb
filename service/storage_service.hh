@@ -731,6 +731,15 @@ public:
     future<> take_snapshot(sstring tag, std::vector<sstring> keyspace_names);
 
     /**
+     * Takes the snapshot of multiple tables. A snapshot name must be specified.
+     *
+     * @param ks_name the keyspace which holds the specified column family
+     * @param tables a vector of tables names to snapshot
+     * @param tag the tag given to the snapshot; may not be null or empty
+     */
+    future<> take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag);
+
+    /**
      * Takes the snapshot of a specific column family. A snapshot name must be specified.
      *
      * @param keyspaceName the keyspace which holds the specified column family

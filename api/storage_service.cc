@@ -1009,12 +1009,12 @@ void set_snapshot(http_context& ctx, routes& r) {
 
     ss::take_snapshot.set(r, [](std::unique_ptr<request> req) {
         auto tag = req->get_query_param("tag");
-        auto column_family = req->get_query_param("cf");
+        auto column_families = split(req->get_query_param("cf"), ",");
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
 
         auto resp = make_ready_future<>();
-        if (column_family.empty()) {
+        if (column_families.empty()) {
             resp = service::get_local_storage_service().take_snapshot(tag, keynames);
         } else {
             if (keynames.empty()) {
@@ -1023,7 +1023,7 @@ void set_snapshot(http_context& ctx, routes& r) {
             if (keynames.size() > 1) {
                 throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
             }
-            resp = service::get_local_storage_service().take_column_family_snapshot(keynames[0], column_family, tag);
+            resp = service::get_local_storage_service().take_column_family_snapshot(keynames[0], column_families, tag);
         }
         return resp.then([] {
             return make_ready_future<json::json_return_type>(json_void());
