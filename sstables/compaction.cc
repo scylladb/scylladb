@@ -408,15 +408,21 @@ protected:
     bool _contains_multi_fragment_runs = false;
     mutation_source_metadata _ms_metadata = {};
     garbage_collected_sstable_writer::data _gc_sstable_writer_data;
+    replacer_fn _replacer;
+    std::optional<compaction_weight_registration> _weight_registration;
+    utils::UUID _run_identifier;
 protected:
-    compaction(column_family& cf, creator_fn creator, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level)
+    compaction(column_family& cf, compaction_descriptor descriptor)
         : _cf(cf)
-        , _sstable_creator(std::move(creator))
+        , _sstable_creator(std::move(descriptor.creator))
         , _schema(cf.schema())
-        , _sstables(std::move(sstables))
-        , _max_sstable_size(max_sstable_size)
-        , _sstable_level(sstable_level)
+        , _sstables(std::move(descriptor.sstables))
+        , _max_sstable_size(descriptor.max_sstable_bytes)
+        , _sstable_level(descriptor.level)
         , _gc_sstable_writer_data(*this)
+        , _replacer(std::move(descriptor.replacer))
+        , _weight_registration(std::move(descriptor.weight_registration))
+        , _run_identifier(descriptor.run_identifier)
     {
         _info->cf = &cf;
         for (auto& sst : _sstables) {
@@ -698,27 +704,21 @@ void garbage_collected_sstable_writer::data::finish_sstable_writer() {
 }
 
 class regular_compaction : public compaction {
-    replacer_fn _replacer;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
     // store a clone of sstable set for column family, which needs to be alive for incremental selector.
     sstable_set _set;
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
     std::optional<sstable_set::incremental_selector> _selector;
     // sstable being currently written.
-    std::optional<compaction_weight_registration> _weight_registration;
     mutable compaction_read_monitor_generator _monitor_generator;
     std::deque<compaction_write_monitor> _active_write_monitors = {};
-    utils::UUID _run_identifier;
 public:
     regular_compaction(column_family& cf, compaction_descriptor descriptor)
-        : compaction(cf, std::move(descriptor.creator), std::move(descriptor.sstables), descriptor.max_sstable_bytes, descriptor.level)
-        , _replacer(std::move(descriptor.replacer))
+        : compaction(cf, std::move(descriptor))
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
         , _set(cf.get_sstable_set())
         , _selector(_set.make_incremental_selector())
-        , _weight_registration(std::move(descriptor.weight_registration))
         , _monitor_generator(_cf.get_compaction_manager(), _cf)
-        , _run_identifier(descriptor.run_identifier)
     {
         _info->run_identifier = _run_identifier;
     }
@@ -1188,7 +1188,7 @@ private:
     }
 public:
     resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor)
-        : compaction(cf, std::move(descriptor.creator), std::move(descriptor.sstables), descriptor.max_sstable_bytes, descriptor.level)
+        : compaction(cf, std::move(descriptor))
         , _output_sstables(smp::count)
         , _resharding_backlog_tracker(std::make_unique<resharding_backlog_tracker>())
         , _estimation_per_shard(smp::count)
