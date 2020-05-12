@@ -3229,7 +3229,12 @@ public:
             auto it = boost::range::find_if(v, [] (auto&& ver) {
                     return bool(ver.par);
             });
-            auto m = boost::accumulate(v, mutation(schema, it->par->mut().key()), [this, schema] (mutation& m, const version& ver) {
+#if __cplusplus <= 201703L
+            using mutation_ref = mutation&;
+#else
+            using mutation_ref = mutation&&;
+#endif
+            auto m = boost::accumulate(v, mutation(schema, it->par->mut().key()), [this, schema] (mutation_ref m, const version& ver) {
                 if (ver.par) {
                     mutation_application_stats app_stats;
                     m.partition().apply(*schema, ver.par->mut().partition(), *schema, app_stats);
