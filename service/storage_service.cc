@@ -2610,7 +2610,7 @@ future<> storage_service::drain() {
 
             // Interrupt on going compaction and shutdown to prevent further compaction
             ss.db().invoke_on_all([] (auto& db) {
-                return db.get_compaction_manager().stop();
+                return db.get_compaction_manager().drain();
             }).get();
 
             ss.set_mode(mode::DRAINING, "flushing column families", false);

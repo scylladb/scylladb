@@ -161,6 +161,8 @@ private:
     using get_candidates_func = std::function<std::vector<sstables::shared_sstable>(const column_family&)>;
 
     future<> rewrite_sstables(column_family* cf, sstables::compaction_options options, get_candidates_func);
+
+    future<> stop_ongoing_compactions(sstring reason);
 public:
     compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory);
     compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, uint64_t shares);
@@ -175,6 +177,11 @@ public:
 
     // Stop all fibers. Ongoing compactions will be waited.
     future<> stop();
+
+    // cancels all running compactions and moves the compaction manager into disabled state.
+    // The compaction manager is still alive after drain but it will not accept new compactions
+    // unless it is moved back to enabled state.
+    future<> drain();
 
     // FIXME: should not be public. It's not anyone's business if we are enabled.
     // distributed_loader.cc uses for resharding, remove this when the new resharding series lands.
