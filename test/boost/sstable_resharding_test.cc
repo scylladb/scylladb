@@ -81,7 +81,7 @@ void run_sstable_resharding_test() {
     auto filter_fname = sstables::test(sst).filename(component_type::Filter);
     uint64_t bloom_filter_size_before = file_size(filter_fname).get0();
 
-    auto descriptor = sstables::compaction_descriptor({sst}, 0, std::numeric_limits<uint64_t>::max());
+    auto descriptor = sstables::compaction_descriptor({sst}, default_priority_class(), 0, std::numeric_limits<uint64_t>::max());
     descriptor.options = sstables::compaction_options::make_reshard();
     descriptor.creator = [&env, &cf, &tmp, version] (shard_id shard) mutable {
         // we need generation calculated by instance of cf at requested shard,

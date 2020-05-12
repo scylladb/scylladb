@@ -411,6 +411,7 @@ protected:
     replacer_fn _replacer;
     std::optional<compaction_weight_registration> _weight_registration;
     utils::UUID _run_identifier;
+    ::io_priority_class _io_priority;
 protected:
     compaction(column_family& cf, compaction_descriptor descriptor)
         : _cf(cf)
@@ -423,6 +424,7 @@ protected:
         , _replacer(std::move(descriptor.replacer))
         , _weight_registration(std::move(descriptor.weight_registration))
         , _run_identifier(descriptor.run_identifier)
+        , _io_priority(descriptor.io_priority)
     {
         _info->cf = &cf;
         for (auto& sst : _sstables) {
@@ -685,7 +687,7 @@ void garbage_collected_sstable_writer::data::maybe_create_new_sstable_writer() {
     if (!_writer) {
         _sst = _c->_sstable_creator(this_shard_id());
 
-        auto&& priority = service::get_local_compaction_priority();
+        auto&& priority = _c->_io_priority;
         _active_write_monitors.emplace_back(_sst, _c->_cf, _c->maximum_timestamp(), _c->_sstable_level);
         sstable_writer_config cfg = _c->_cf.get_sstables_manager().configure_writer();
         cfg.run_identifier = _run_identifier;
@@ -729,7 +731,7 @@ public:
                 _compacting,
                 query::full_partition_range,
                 _schema->full_slice(),
-                service::get_local_compaction_priority(),
+                _io_priority,
                 tracing::trace_state_ptr(),
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
@@ -772,12 +774,11 @@ public:
         setup_new_sstable(sst);
 
         _active_write_monitors.emplace_back(sst, _cf, maximum_timestamp(), _sstable_level);
-        auto&& priority = service::get_local_compaction_priority();
         sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
         cfg.max_sstable_size = _max_sstable_size;
         cfg.monitor = &_active_write_monitors.back();
         cfg.run_identifier = _run_identifier;
-        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), priority), sst};
+        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
     }
 
     virtual void stop_sstable_writer(compaction_writer* writer) override {
@@ -1225,7 +1226,7 @@ public:
                 _compacting,
                 query::full_partition_range,
                 _schema->full_slice(),
-                service::get_local_compaction_priority(),
+                _io_priority,
                 nullptr,
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no);
@@ -1257,8 +1258,7 @@ public:
         cfg.max_sstable_size = _max_sstable_size;
         // sstables generated for a given shard will share the same run identifier.
         cfg.run_identifier = _run_identifiers.at(shard);
-        auto&& priority = service::get_local_compaction_priority();
-        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), priority, shard), sst};
+        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard), sst};
     }
 
     void on_new_partition() override {}

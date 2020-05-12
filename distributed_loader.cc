@@ -413,7 +413,8 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                 dblog.debug("{} resharding jobs for {}.{}", jobs.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
 
                 return invoke_all_resharding_jobs(cf, directory, std::move(jobs), [directory, &cf] (auto sstables, auto level, auto max_sstable_bytes) {
-                    sstables::compaction_descriptor descriptor(sstables, level, max_sstable_bytes);
+                    // FIXME: run it in maintenance priority.
+                    sstables::compaction_descriptor descriptor(sstables, service::get_local_compaction_priority(), level, max_sstable_bytes);
                     descriptor.options = sstables::compaction_options::make_reshard();
                     descriptor.creator = [&cf, directory] (shard_id shard) mutable {
                         // we need generation calculated by instance of cf at requested shard,

@@ -28,6 +28,7 @@
 #include "compaction_weight_registration.hh"
 #include "utils/UUID.hh"
 #include "dht/i_partitioner.hh"
+#include "service/priority_manager.hh"
 #include <seastar/core/thread.hh>
 #include <functional>
 
@@ -124,12 +125,14 @@ namespace sstables {
         creator_fn creator;
         replacer_fn replacer;
 
+        ::io_priority_class io_priority = default_priority_class();
         compaction_descriptor() = default;
 
         static constexpr int default_level = 0;
         static constexpr uint64_t default_max_sstable_bytes = std::numeric_limits<uint64_t>::max();
 
-        explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level = default_level,
+        explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, ::io_priority_class io_priority,
+                                       int level = default_level,
                                        uint64_t max_sstable_bytes = default_max_sstable_bytes,
                                        utils::UUID run_identifier = utils::make_random_uuid(),
                                        compaction_options options = compaction_options::make_regular())
@@ -138,6 +141,7 @@ namespace sstables {
             , max_sstable_bytes(max_sstable_bytes)
             , run_identifier(run_identifier)
             , options(options)
+            , io_priority(io_priority)
         {}
     };
 

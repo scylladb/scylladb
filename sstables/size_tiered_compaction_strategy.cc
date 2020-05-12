@@ -145,13 +145,13 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting));
+        return sstables::compaction_descriptor(std::move(most_interesting), service::get_local_compaction_priority());
     }
 
     // If we are not enforcing min_threshold explicitly, try any pair of SStables in the same tier.
     if (!cfs.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting));
+        return sstables::compaction_descriptor(std::move(most_interesting), service::get_local_compaction_priority());
     }
 
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
@@ -171,7 +171,7 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
         auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
             return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
         });
-        return sstables::compaction_descriptor({ *it });
+        return sstables::compaction_descriptor({ *it }, service::get_local_compaction_priority());
     }
     return sstables::compaction_descriptor();
 }
