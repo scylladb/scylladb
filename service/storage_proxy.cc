@@ -2179,9 +2179,9 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const dht::token &
     std::vector<gms::inet_address> pending_endpoints = _token_metadata.pending_endpoints_for(token, ks_name);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
-        auto itend = boost::range::remove_if(natural_endpoints, std::not1(std::cref(db::is_local)));
+        auto itend = boost::range::remove_if(natural_endpoints, std::not_fn(std::cref(db::is_local)));
         natural_endpoints.erase(itend, natural_endpoints.end());
-        itend = boost::range::remove_if(pending_endpoints, std::not1(std::cref(db::is_local)));
+        itend = boost::range::remove_if(pending_endpoints, std::not_fn(std::cref(db::is_local)));
         pending_endpoints.erase(itend, pending_endpoints.end());
     }
 
@@ -3605,7 +3605,7 @@ public:
                         if (std::abs(delta) <= write_timeout) {
                             exec->_proxy->get_stats().global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
-                            auto i = boost::range::remove_if(exec->_targets, std::not1(std::cref(db::is_local)));
+                            auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(db::is_local)));
                             exec->_targets.erase(i, exec->_targets.end());
                         }
                     }
