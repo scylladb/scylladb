@@ -1638,9 +1638,7 @@ private:
         TUPLE     = 0x0031,
     };
 
-    using type_id_to_type_type = boost::bimap<
-        boost::bimaps::unordered_set_of<type_id>,
-        boost::bimaps::unordered_set_of<data_type>>;
+    using type_id_to_type_type = std::unordered_map<data_type, type_id>;
 
     static thread_local const type_id_to_type_type type_id_to_type;
 public:
@@ -1652,8 +1650,8 @@ public:
             type = timestamp_type;
         }
 
-        auto i = type_id_to_type.right.find(type);
-        if (i != type_id_to_type.right.end()) {
+        auto i = type_id_to_type.find(type);
+        if (i != type_id_to_type.end()) {
             r.write_short(static_cast<std::underlying_type<type_id>::type>(i->second));
             return;
         }
@@ -1706,27 +1704,28 @@ public:
     }
 };
 
-thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type = boost::assign::list_of<type_id_to_type_type::relation>
-    (type_id::ASCII     , ascii_type)
-    (type_id::BIGINT    , long_type)
-    (type_id::BLOB      , bytes_type)
-    (type_id::BOOLEAN   , boolean_type)
-    (type_id::COUNTER   , counter_type)
-    (type_id::DECIMAL   , decimal_type)
-    (type_id::DOUBLE    , double_type)
-    (type_id::FLOAT     , float_type)
-    (type_id::INT       , int32_type)
-    (type_id::TINYINT   , byte_type)
-    (type_id::DURATION  , duration_type)
-    (type_id::SMALLINT  , short_type)
-    (type_id::TIMESTAMP , timestamp_type)
-    (type_id::UUID      , uuid_type)
-    (type_id::VARCHAR   , utf8_type)
-    (type_id::VARINT    , varint_type)
-    (type_id::TIMEUUID  , timeuuid_type)
-    (type_id::DATE      , simple_date_type)
-    (type_id::TIME      , time_type)
-    (type_id::INET      , inet_addr_type);
+thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type {
+    { ascii_type, type_id::ASCII },
+    { long_type, type_id::BIGINT },
+    { bytes_type, type_id::BLOB },
+    { boolean_type, type_id::BOOLEAN },
+    { counter_type, type_id::COUNTER },
+    { decimal_type, type_id::DECIMAL },
+    { double_type, type_id::DOUBLE },
+    { float_type, type_id::FLOAT },
+    { int32_type, type_id::INT },
+    { byte_type, type_id::TINYINT },
+    { duration_type, type_id::DURATION },
+    { short_type, type_id::SMALLINT },
+    { timestamp_type, type_id::TIMESTAMP },
+    { uuid_type, type_id::UUID },
+    { utf8_type, type_id::VARCHAR },
+    { varint_type, type_id::VARINT },
+    { timeuuid_type, type_id::TIMEUUID },
+    { simple_date_type, type_id::DATE },
+    { time_type, type_id::TIME },
+    { inet_addr_type, type_id::INET },
+};
 
 void cql_server::response::write(const cql3::metadata& m, bool no_metadata) {
     auto flags = m.flags();
