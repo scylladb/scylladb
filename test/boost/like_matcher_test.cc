@@ -438,13 +438,13 @@ BOOST_AUTO_TEST_CASE(test_dollar) {
 BOOST_AUTO_TEST_CASE(test_reset) {
     auto m = matcher(u8"alpha");
     BOOST_TEST(matches(m, u8"alpha"));
-    m.reset(bytes(u8"omega"));
+    m.reset(bytes(reinterpret_cast<const char*>(u8"omega")));
     BOOST_TEST(!matches(m, u8"alpha"));
     BOOST_TEST(matches(m, u8"omega"));
-    m.reset(bytes(u8"omega"));
+    m.reset(bytes(reinterpret_cast<const char*>(u8"omega")));
     BOOST_TEST(!matches(m, u8"alpha"));
     BOOST_TEST(matches(m, u8"omega"));
-    m.reset(bytes(u8"alpha"));
+    m.reset(bytes(reinterpret_cast<const char*>(u8"alpha")));
     BOOST_TEST(matches(m, u8"alpha"));
     BOOST_TEST(!matches(m, u8"omega"));
 }
