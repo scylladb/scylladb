@@ -725,6 +725,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 manager_logger.debug("send_hints(): {} at {}: {}", fname, rp, e.what());
                 ++this->shard_stats().discarded;
             }
+            ctx_ptr->rps_set.erase(rp);
             return make_ready_future<>();
         }).finally([units = std::move(units), ctx_ptr] {});
     }).handle_exception([this, ctx_ptr] (auto eptr) {
