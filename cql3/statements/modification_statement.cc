@@ -266,7 +266,7 @@ dht::partition_range_vector
 modification_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const {
     auto keys = _restrictions->get_partition_key_restrictions()->bounds_ranges(options);
     for (auto const& k : keys) {
-        validation::validate_cql_key(s, *k.start()->value().key());
+        validation::validate_cql_key(*s, *k.start()->value().key());
     }
     return keys;
 }
