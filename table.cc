@@ -1259,19 +1259,21 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
 future<> table::replace_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors, std::vector<sstables::shared_sstable> new_sstables) {
     std::vector<sstables::shared_sstable> old_sstables;
 
-    for (auto& sst : new_sstables) {
-        _compaction_strategy.get_backlog_tracker().add_sstable(sst);
-    }
-
     for (auto& ancestor : ancestors) {
         auto it = _sstables_need_rewrite.find(ancestor);
         if (it != _sstables_need_rewrite.end()) {
             old_sstables.push_back(it->second);
-            _compaction_strategy.get_backlog_tracker().remove_sstable(it->second);
-            _sstables_need_rewrite.erase(it);
         }
     }
-    return rebuild_sstable_list_with_deletion_sem(std::move(new_sstables), std::move(old_sstables));
+    return rebuild_sstable_list_with_deletion_sem(new_sstables, old_sstables).then([this, new_sstables, old_sstables] {
+        for (auto& sst : new_sstables) {
+            _compaction_strategy.get_backlog_tracker().add_sstable(sst);
+        }
+        for (auto& sst : old_sstables) {
+            _compaction_strategy.get_backlog_tracker().remove_sstable(sst);
+            _sstables_need_rewrite.erase(sst->generation());
+        }
+    });
 }
 
 future<> table::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors) {
