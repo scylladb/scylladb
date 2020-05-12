@@ -272,9 +272,9 @@ private:
      * This overload is meant for secondary sessions.
      */
     void begin() {
-        std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
+        std::atomic_signal_fence(std::memory_order_seq_cst);
         _start = elapsed_clock::now();
-        std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
+        std::atomic_signal_fence(std::memory_order_seq_cst);
         set_state(state::foreground);
     }
 
@@ -583,9 +583,9 @@ void trace_state::trace(const char* fmt, A&&... a) noexcept {
 
 inline elapsed_clock::duration trace_state::elapsed() {
     using namespace std::chrono;
-    std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
+    std::atomic_signal_fence(std::memory_order_seq_cst);
     elapsed_clock::duration elapsed = elapsed_clock::now() - _start;
-    std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
+    std::atomic_signal_fence(std::memory_order_seq_cst);
 
     return elapsed;
 }
