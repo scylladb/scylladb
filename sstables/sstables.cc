@@ -2526,6 +2526,13 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     });
 }
 
+bool sstable::is_shared() const {
+    if (_shards.empty()) {
+        on_internal_error(sstlog, format("Shards weren't computed for SSTable: {}", get_filename()));
+    }
+    return _shards.size() > 1;
+}
+
 uint64_t sstable::data_size() const {
     if (has_component(component_type::CompressionInfo)) {
         return _components->compression.uncompressed_file_length();

@@ -562,7 +562,6 @@ struct sst_factory {
 
     sstables::shared_sstable operator()() {
         auto sst = env.make_sstable(s, path, gen, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
-        sst->set_unshared();
         //sst->set_sstable_level(level);
         sst->get_metadata_collector().sstable_level(level);
 

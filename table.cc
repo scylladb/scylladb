@@ -627,9 +627,6 @@ table::open_sstable(sstables::foreign_sstable_open_info info, sstring dir, int64
         tlogger.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
         return make_ready_future<sstables::shared_sstable>();
     }
-    if (!belongs_to_other_shard(info.owners)) {
-        sst->set_unshared();
-    }
     return sst->load(std::move(info)).then([this, sst] () mutable {
         if (schema()->is_counter() && !sst->has_scylla_component()) {
             auto error = "Reading non-Scylla SSTables containing counters is not supported.";
@@ -822,8 +819,6 @@ table::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
         return with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
             auto newtab = make_sstable();
 
-            newtab->set_unshared();
-
             tlogger.debug("Flushing to {}", newtab->get_filename());
 
             // This is somewhat similar to the main memtable flush, but with important differences.
@@ -880,8 +875,6 @@ future<> table::seal_active_streaming_memtable_big(streaming_memtable_big& smb, 
         return with_gate(smb.flush_in_progress, [this, old, &smb, permit = std::move(permit)] () mutable {
             return with_lock(_sstables_lock.for_read(), [this, old, &smb, permit = std::move(permit)] () mutable {
                 auto newtab = make_sstable();
-
-                newtab->set_unshared();
 
                 auto fp = permit.release_sstable_write_permit();
                 auto monitor = std::make_unique<database_sstable_write_monitor>(std::move(fp), newtab, _compaction_manager, _compaction_strategy, old->get_max_timestamp());
@@ -968,7 +961,6 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
   return with_scheduling_group(_config.memtable_scheduling_group, [this, old = std::move(old), permit = std::move(permit)] () mutable {
     auto newtab = make_sstable();
 
-    newtab->set_unshared();
     tlogger.debug("Flushing to {}", newtab->get_filename());
     // Note that due to our sharded architecture, it is possible that
     // in the face of a value change some shards will backup sstables
@@ -1286,7 +1278,6 @@ table::compact_sstables(sstables::compaction_descriptor descriptor) {
     return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor)] () mutable {
         descriptor.creator = [this] (shard_id dummy) {
                 auto sst = make_sstable();
-                sst->set_unshared();
                 return sst;
         };
         descriptor.replacer = [this, release_exhausted = descriptor.release_exhausted] (sstables::compaction_completion_desc desc) {

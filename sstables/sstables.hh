@@ -309,13 +309,7 @@ public:
     }
 
     // Returns true iff this sstable contains data which belongs to many shards.
-    bool is_shared() const {
-        return _shared;
-    }
-
-    void set_unshared() {
-        _shared = false;
-    }
+    bool is_shared() const;
 
     // Returns uncompressed size of data component.
     uint64_t data_size() const;
@@ -471,7 +465,6 @@ private:
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     column_translation _column_translation;
-    bool _shared = true;  // across shards; safe default
     bool _open = false;
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.

@@ -26,11 +26,18 @@
 
 using namespace sstables;
 
-static schema_ptr get_schema() {
-    auto builder = schema_builder("tests", "sstable_resharding_test")
+static schema_builder get_schema_builder() {
+    return schema_builder("tests", "sstable_resharding_test")
         .with_column("id", utf8_type, column_kind::partition_key)
         .with_column("value", int32_type);
-    return builder.build();
+}
+
+static schema_ptr get_schema() {
+    return get_schema_builder().build();
+}
+
+static schema_ptr get_schema(unsigned shard_count, unsigned sharding_ignore_msb_bits) {
+    return get_schema_builder().with_sharder(shard_count, sharding_ignore_msb_bits).build();
 }
 
 void run_sstable_resharding_test() {
@@ -161,4 +168,67 @@ SEASTAR_THREAD_TEST_CASE(sstable_resharding_strategy_tests) {
             BOOST_REQUIRE(descriptors.size() == expected_jobs);
         }
     }
+}
+
+SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
+    return test_env::do_with_async([] (test_env& env) {
+      for (const auto version : all_sstable_versions) {
+        storage_service_for_tests ssft;
+        cell_locker_stats cl_stats;
+
+        auto tmp = tmpdir();
+        auto cfg = std::make_unique<db::config>();
+
+        auto get_mutation = [] (const schema_ptr& s, sstring key_to_write, auto value) {
+            auto key = partition_key::from_exploded(*s, {to_bytes(key_to_write)});
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(value)), api::timestamp_type(0));
+            return m;
+        };
+        auto gen = make_lw_shared<unsigned>(1);
+
+        // created sstable owned only by this shard
+        {
+            auto s = get_schema();
+            auto sst_gen = [&env, s, &tmp, gen, version]() mutable {
+                return env.make_sstable(s, tmp.path().string(), (*gen)++, version, big);
+            };
+
+            auto tokens = token_generation_for_shard(smp::count * 10, this_shard_id(), cfg->murmur3_partitioner_ignore_msb_bits());
+            std::vector<mutation> muts;
+            for (auto& t : tokens) {
+                muts.push_back(get_mutation(s, t.first, 0));
+            }
+
+            auto sst = make_sstable_containing(sst_gen, muts);
+            BOOST_REQUIRE(!sst->is_shared());
+        }
+
+        // create sstable owned by all shards
+        // created unshared sstable
+        {
+            auto single_sharded_s = get_schema(1, cfg->murmur3_partitioner_ignore_msb_bits());
+            auto sst_gen = [&env, single_sharded_s, &tmp, gen, version]() mutable {
+                return env.make_sstable(single_sharded_s, tmp.path().string(), (*gen)++, version, big);
+            };
+
+            auto tokens = token_generation_for_shard(10, this_shard_id(), cfg->murmur3_partitioner_ignore_msb_bits());
+            std::vector<mutation> muts;
+            for (shard_id shard : boost::irange(0u, smp::count)) {
+                auto tokens = token_generation_for_shard(10, shard, cfg->murmur3_partitioner_ignore_msb_bits());
+                for (auto& t : tokens) {
+                    muts.push_back(get_mutation(single_sharded_s, t.first, shard));
+                }
+            }
+
+            auto sst = make_sstable_containing(sst_gen, muts);
+            BOOST_REQUIRE(!sst->is_shared());
+
+            auto all_shards_s = get_schema(smp::count, cfg->murmur3_partitioner_ignore_msb_bits());
+            sst = env.reusable_sst(all_shards_s, tmp.path().string(), sst->generation(), version).get0();
+            BOOST_REQUIRE(smp::count == 1 || sst->is_shared());
+            BOOST_REQUIRE(sst->get_shards_for_this_sstable().size() == smp::count);
+        }
+      }
+    });
 }
