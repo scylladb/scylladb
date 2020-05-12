@@ -73,7 +73,9 @@ public:
         return counter_id(utils::make_random_uuid());
     }
 };
-static_assert(std::is_pod<counter_id>::value, "counter_id should be a POD type");
+static_assert(
+        std::is_standard_layout_v<counter_id> && std::is_trivial_v<counter_id>,
+        "counter_id should be a POD type");
 
 std::ostream& operator<<(std::ostream& os, const counter_id& id);
 
