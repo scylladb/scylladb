@@ -1007,12 +1007,16 @@ storage_service::is_local_dc(const inet_address& targetHost) const {
 std::unordered_map<dht::token_range, std::vector<inet_address>>
 storage_service::get_range_to_address_map(const sstring& keyspace,
         const std::vector<token>& sorted_tokens) const {
+    sstring ks = keyspace;
     // some people just want to get a visual representation of things. Allow null and set it to the first
     // non-system keyspace.
-    if (keyspace == "" && _db.local().get_non_system_keyspaces().empty()) {
-        throw std::runtime_error("No keyspace provided and no non system kespace exist");
+    if (keyspace == "") {
+        auto keyspaces = _db.local().get_non_system_keyspaces();
+        if (keyspaces.empty()) {
+            throw std::runtime_error("No keyspace provided and no non system kespace exist");
+        }
+        ks = keyspaces[0];
     }
-    const sstring& ks = (keyspace == "") ? _db.local().get_non_system_keyspaces()[0] : keyspace;
     return construct_range_to_endpoint_map(ks, get_all_ranges(sorted_tokens));
 }
 
