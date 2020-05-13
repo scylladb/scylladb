@@ -5568,8 +5568,6 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         cfg.enable_commitlog = false;
         cfg.enable_cache = true;
         cfg.enable_incremental_backups = false;
-            reader_concurrency_semaphore sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{});
-            cfg.read_concurrency_semaphore = &sem;
         auto tracker = make_lw_shared<cache_tracker>();
         auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
         cf->mark_ready_for_writes();
@@ -5678,8 +5676,6 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
         cfg.enable_commitlog = false;
         cfg.enable_cache = false;
         cfg.enable_incremental_backups = false;
-            reader_concurrency_semaphore sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{});
-            cfg.read_concurrency_semaphore = &sem;
         auto tracker = make_lw_shared<cache_tracker>();
         auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
         cf->mark_ready_for_writes();

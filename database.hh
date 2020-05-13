@@ -376,7 +376,6 @@ public:
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
-        reader_concurrency_semaphore* read_concurrency_semaphore;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         ::cf_stats* cf_stats = nullptr;
         seastar::scheduling_group memtable_scheduling_group;
@@ -390,7 +389,6 @@ public:
         db::timeout_semaphore* view_update_concurrency_semaphore;
         size_t view_update_concurrency_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
-        utils::updateable_value<uint64_t> max_memory_for_unlimited_query;
     };
     struct no_commitlog {};
 
@@ -1024,10 +1022,6 @@ public:
             dht::token base_token,
             flat_mutation_reader&&);
 
-    reader_concurrency_semaphore& read_concurrency_semaphore() {
-        return *_config.read_concurrency_semaphore;
-    }
-
     reader_concurrency_semaphore& streaming_read_concurrency_semaphore() {
         return *_config.streaming_read_concurrency_semaphore;
     }
@@ -1198,7 +1192,6 @@ public:
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
-        reader_concurrency_semaphore* read_concurrency_semaphore;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         ::cf_stats* cf_stats = nullptr;
         seastar::scheduling_group memtable_scheduling_group;
@@ -1653,6 +1646,8 @@ public:
     bool supports_infinite_bound_range_deletions() {
         return _supports_infinite_bound_range_deletions;
     }
+
+    query_class_config make_query_class_config();
 };
 
 future<> start_large_data_handler(sharded<database>& db);

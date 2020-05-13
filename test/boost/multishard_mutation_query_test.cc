@@ -1021,7 +1021,7 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
 
         const auto& partitions = pop_desc.partitions;
         smp::invoke_on_all([cfg, db = &env.db(), gs = global_schema_ptr(pop_desc.schema), &partitions] {
-            auto& sem = db->local().find_column_family(gs.get()).read_concurrency_semaphore();
+            auto& sem = db->local().make_query_class_config().semaphore;
 
             auto resources = sem.available_resources();
             resources -= reader_concurrency_semaphore::resources{1, 0};

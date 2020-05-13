@@ -1910,8 +1910,6 @@ void make(database& db, bool durable, bool volatile_testing_only) {
             kscfg.enable_disk_writes = !volatile_testing_only;
             kscfg.enable_commitlog = !volatile_testing_only;
             kscfg.enable_cache = true;
-            // don't make system keyspace reads wait for user reads
-            kscfg.read_concurrency_semaphore = &db._system_read_concurrency_sem;
             // don't make system keyspace writes wait for user writes (if under pressure)
             kscfg.dirty_memory_manager = &db._system_dirty_memory_manager;
             keyspace _ks{ksm, std::move(kscfg)};

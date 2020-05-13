@@ -917,7 +917,6 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.compaction_enforce_min_threshold = _config.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = _config.dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
-    cfg.read_concurrency_semaphore = _config.read_concurrency_semaphore;
     cfg.streaming_read_concurrency_semaphore = _config.streaming_read_concurrency_semaphore;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
@@ -932,10 +931,8 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     // avoid self-reporting
     if (is_system_table(s)) {
         cfg.sstables_manager = &db.get_system_sstables_manager();
-        cfg.max_memory_for_unlimited_query = std::numeric_limits<uint64_t>::max();
     } else {
         cfg.sstables_manager = &db.get_user_sstables_manager();
-        cfg.max_memory_for_unlimited_query = db_config.max_memory_for_unlimited_query();
     }
 
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
@@ -1176,12 +1173,11 @@ future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, uint64_t max_result_size, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    query_class_config class_config{cf.read_concurrency_semaphore(), cf.get_config().max_memory_for_unlimited_query};
     query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
     return _data_query_stage(&cf,
             std::move(s),
             seastar::cref(cmd),
-            class_config,
+            make_query_class_config(),
             opts,
             seastar::cref(ranges),
             std::move(trace_state),
@@ -1205,7 +1201,6 @@ future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    query_class_config class_config{cf.read_concurrency_semaphore(), cf.get_config().max_memory_for_unlimited_query};
     query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
     return _mutation_query_stage(std::move(s),
             cf.as_mutation_source(),
@@ -1215,7 +1210,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             cmd.partition_limit,
             cmd.timestamp,
             timeout,
-            class_config,
+            make_query_class_config(),
             std::move(accounter),
             std::move(trace_state),
             std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
@@ -1275,6 +1270,19 @@ void database::register_connection_drop_notifier(netw::messaging_service& ms) {
             cf->drop_hit_rate(ep);
         }
     });
+}
+
+query_class_config database::make_query_class_config() {
+    // Everything running in the statement group is considered a user query
+    if (current_scheduling_group() == _dbcfg.statement_scheduling_group) {
+        return query_class_config{_read_concurrency_sem, _cfg.max_memory_for_unlimited_query()};
+    // Reads done on behalf of view update generation run in the streaming group
+    } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
+        return query_class_config{_streaming_concurrency_sem, std::numeric_limits<uint64_t>::max()};
+    // Everything else is considered a system query
+    } else {
+        return query_class_config{_system_read_concurrency_sem, std::numeric_limits<uint64_t>::max()};
+    }
 }
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
@@ -1635,7 +1643,6 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.compaction_enforce_min_threshold = _cfg.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
-    cfg.read_concurrency_semaphore = &_read_concurrency_sem;
     cfg.streaming_read_concurrency_semaphore = &_streaming_concurrency_sem;
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
