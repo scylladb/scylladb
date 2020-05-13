@@ -400,4 +400,13 @@ public:
     }
 
     bool empty() const noexcept { return _tree.empty(); }
+
+    static size_t estimated_object_memory_size_in_allocator(allocation_strategy& allocator, const T* obj) noexcept {
+        /*
+         * The T-s are merged together in array, so getting any run-time
+         * value of a pointer would be wrong. So here's some guessing of
+         * how much memory would this thing occupy in memory
+         */
+        return sizeof(typename outer_tree::data);
+    }
 };

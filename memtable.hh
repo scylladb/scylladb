@@ -32,11 +32,11 @@
 #include "db/commitlog/replay_position.hh"
 #include "db/commitlog/rp_set.hh"
 #include "utils/extremum_tracking.hh"
-#include "utils/logalloc.hh"
 #include "partition_version.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_cleaner.hh"
 #include "sstables/types.hh"
+#include "utils/double-decker.hh"
 
 class frozen_mutation;
 
@@ -44,11 +44,22 @@ class frozen_mutation;
 namespace bi = boost::intrusive;
 
 class memtable_entry {
-    bi::set_member_hook<> _link;
     schema_ptr _schema;
     dht::decorated_key _key;
     partition_entry _pe;
+    struct {
+        bool _head : 1;
+        bool _tail : 1;
+        bool _train : 1;
+    } _flags{};
 public:
+    bool is_head() const noexcept { return _flags._head; }
+    void set_head(bool v) noexcept { _flags._head = v; }
+    bool is_tail() const noexcept { return _flags._tail; }
+    void set_tail(bool v) noexcept { _flags._tail = v; }
+    bool with_train() const noexcept { return _flags._train; }
+    void set_train(bool v) noexcept { _flags._train = v; }
+
     friend class memtable;
 
     memtable_entry(schema_ptr s, dht::decorated_key key, mutation_partition p)
@@ -77,8 +88,10 @@ public:
         return _key.key().external_memory_usage();
     }
 
+    size_t object_memory_size(allocation_strategy& allocator);
+
     size_t size_in_allocator_without_rows(allocation_strategy& allocator) {
-        return allocator.object_memory_size_in_allocator(this) + external_memory_usage_without_rows();
+        return object_memory_size(allocator) + external_memory_usage_without_rows();
     }
 
     size_t size_in_allocator(allocation_strategy& allocator) {
@@ -88,34 +101,6 @@ public:
         }
         return size;
     }
-
-    struct compare {
-        dht::decorated_key::less_comparator _c;
-
-        compare(schema_ptr s)
-            : _c(std::move(s))
-        {}
-
-        bool operator()(const dht::decorated_key& k1, const memtable_entry& k2) const {
-            return _c(k1, k2._key);
-        }
-
-        bool operator()(const memtable_entry& k1, const memtable_entry& k2) const {
-            return _c(k1._key, k2._key);
-        }
-
-        bool operator()(const memtable_entry& k1, const dht::decorated_key& k2) const {
-            return _c(k1._key, k2);
-        }
-
-        bool operator()(const memtable_entry& k1, const dht::ring_position& k2) const {
-            return _c(k1._key, k2);
-        }
-
-        bool operator()(const dht::ring_position& k1, const memtable_entry& k2) const {
-            return _c(k1, k2._key);
-        }
-    };
 
     friend dht::ring_position_view ring_position_view_to_compare(const memtable_entry& mt) { return mt._key; }
     friend std::ostream& operator<<(std::ostream&, const memtable_entry&);
@@ -127,9 +112,9 @@ struct table_stats;
 // Managed by lw_shared_ptr<>.
 class memtable final : public enable_lw_shared_from_this<memtable>, private logalloc::region {
 public:
-    using partitions_type = bi::set<memtable_entry,
-        bi::member_hook<memtable_entry, bi::set_member_hook<>, &memtable_entry::_link>,
-        bi::compare<memtable_entry::compare>>;
+    using partitions_type = double_decker<int64_t, memtable_entry,
+                            dht::raw_token_less_comparator, dht::ring_position_comparator,
+                            16, bplus::key_search::linear>;
 private:
     dirty_memory_manager& _dirty_mgr;
     mutation_cleaner _cleaner;

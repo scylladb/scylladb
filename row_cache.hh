@@ -31,7 +31,6 @@
 
 #include "mutation_reader.hh"
 #include "mutation_partition.hh"
-#include "utils/logalloc.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
 #include "partition_version.hh"

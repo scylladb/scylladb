@@ -899,7 +899,7 @@ void row_cache::invalidate_sync(memtable& m) noexcept {
         bool blow_cache = false;
         // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
         // with_linearized_managed_bytes(), but invalidate() does.
-        m.partitions.clear_and_dispose([this, &m, deleter = current_deleter<memtable_entry>(), &blow_cache] (memtable_entry* entry) noexcept {
+        m.partitions.clear_and_dispose([this, &m, &blow_cache] (memtable_entry* entry) noexcept {
             with_linearized_managed_bytes([&] () noexcept {
                 try {
                     invalidate_locked(entry->key());
@@ -907,7 +907,6 @@ void row_cache::invalidate_sync(memtable& m) noexcept {
                     blow_cache = true;
                 }
                 m.evict_entry(*entry, _tracker.memtable_cleaner());
-                deleter(entry);
             });
         });
         if (blow_cache) {
@@ -984,10 +983,9 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                             _update_section(_tracker.region(), [&] {
                               with_linearized_managed_bytes([&] {
                                 auto i = m.partitions.begin();
-                                memtable_entry& mem_e = *i;
-                                m.partitions.erase(i);
-                                m.evict_entry(mem_e, _tracker.memtable_cleaner());
-                                current_allocator().destroy(&mem_e);
+                                i.erase_and_dispose(dht::raw_token_less_comparator{}, [&] (memtable_entry* e) noexcept {
+                                    m.evict_entry(*e, _tracker.memtable_cleaner());
+                                });
                               });
                             });
                             ++partition_count;
