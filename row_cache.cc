@@ -900,14 +900,14 @@ void row_cache::invalidate_sync(memtable& m) noexcept {
         bool blow_cache = false;
         // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
         // with_linearized_managed_bytes(), but invalidate() does.
-        m.partitions.clear_and_dispose([this, deleter = current_deleter<memtable_entry>(), &blow_cache] (memtable_entry* entry) {
+        m.partitions.clear_and_dispose([this, &m, deleter = current_deleter<memtable_entry>(), &blow_cache] (memtable_entry* entry) {
             with_linearized_managed_bytes([&] () noexcept {
                 try {
                     invalidate_locked(entry->key());
                 } catch (...) {
                     blow_cache = true;
                 }
-                entry->partition().evict(_tracker.memtable_cleaner());
+                m.evict_entry(*entry, _tracker.memtable_cleaner());
                 deleter(entry);
             });
         });
@@ -986,7 +986,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                                 auto i = m.partitions.begin();
                                 memtable_entry& mem_e = *i;
                                 m.partitions.erase(i);
-                                mem_e.partition().evict(_tracker.memtable_cleaner());
+                                m.evict_entry(mem_e, _tracker.memtable_cleaner());
                                 current_allocator().destroy(&mem_e);
                               });
                             });

@@ -137,11 +137,16 @@ uint64_t memtable::dirty_size() const {
     return occupancy().total_space();
 }
 
+void memtable::evict_entry(memtable_entry& e, mutation_cleaner& cleaner) noexcept {
+    e.partition().evict(cleaner);
+    nr_partitions--;
+}
+
 void memtable::clear() noexcept {
     auto dirty_before = dirty_size();
     with_allocator(allocator(), [this] {
         partitions.clear_and_dispose([this] (memtable_entry* e) {
-            e->partition().evict(_cleaner);
+            evict_entry(*e, _cleaner);
             current_deleter<memtable_entry>()(e);
         });
     });
@@ -154,6 +159,7 @@ future<> memtable::clear_gently() noexcept {
             auto& alloc = allocator();
 
             auto p = std::move(partitions);
+            nr_partitions = 0;
             while (!p.empty()) {
                 auto dirty_before = dirty_size();
                 with_allocator(alloc, [&] () noexcept {
@@ -210,6 +216,7 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
         memtable_entry* entry = current_allocator().construct<memtable_entry>(
             _schema, dht::decorated_key(key), mutation_partition(_schema));
         partitions.insert_before(i, *entry);
+        ++nr_partitions;
         ++_table_stats.memtable_partition_insertions;
         return entry->partition();
     } else {
@@ -757,10 +764,6 @@ mutation_source memtable::as_data_source() {
             mutation_reader::forwarding fwd_mr) {
         return mt->make_flat_reader(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
-}
-
-size_t memtable::partition_count() const {
-    return partitions.size();
 }
 
 memtable_entry::memtable_entry(memtable_entry&& o) noexcept

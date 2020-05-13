@@ -138,6 +138,7 @@ private:
     logalloc::allocating_section _read_section;
     logalloc::allocating_section _allocating_section;
     partitions_type partitions;
+    size_t nr_partitions = 0;
     db::replay_position _replay_position;
     db::rp_set _rp_set;
     // mutation source to which reads fall-back after mark_flushed()
@@ -204,6 +205,7 @@ public:
     void apply(const mutation& m, db::rp_handle&& = {});
     // The mutation is upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& = {});
+    void evict_entry(memtable_entry& e, mutation_cleaner& cleaner) noexcept;
 
     static memtable& from_region(logalloc::region& r) {
         return static_cast<memtable&>(r);
@@ -237,7 +239,7 @@ public:
         return _memtable_list;
     }
 
-    size_t partition_count() const;
+    size_t partition_count() const { return nr_partitions; }
     logalloc::occupancy_stats occupancy() const;
 
     // Creates a reader of data in this memtable for given partition range.
