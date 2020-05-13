@@ -429,6 +429,12 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             os.getenv("ASAN_OPTIONS"),
         ]
         try:
+            log.write("=== TEST.PY STARTING TEST #{} ===\n".format(test.id).encode(encoding="UTF-8"))
+            log.write("export UBSAN_OPTIONS='{}'\n".format(":".join(filter(None, UBSAN_OPTIONS))).encode(encoding="UTF-8"))
+            log.write("export ASAN_OPTIONS='{}'\n".format(":".join(filter(None, ASAN_OPTIONS))).encode(encoding="UTF-8"))
+            log.write("{} {}\n".format(test.path, " ".join(test.args)).encode(encoding="UTF-8"))
+            log.write("=== TEST.PY TEST OUTPUT ===\n".format(test.id).encode(encoding="UTF-8"))
+            log.flush();
             process = await asyncio.create_subprocess_exec(
                 test.path,
                 *test.args,
