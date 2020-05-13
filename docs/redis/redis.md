@@ -362,3 +362,26 @@ we split the key set into 5 different Scylla table. The shared commands
 should operate on these tables in parallel. For instance, DEL command,
 which allows user to remove any key in Redis database, should delete the
 given key from 5 different Scylla tables.
+
+## 6 API Reference
+
+### Commands
+
+The Redis API in Scylla supports the following subset of the Redis commands.
+
+| Command | Description |
+| ------- | ----------- |
+| **Connection** | |
+| `ECHO message` | Echo a `message` back to the client. The server returns `message´ as a response. |
+| `PING [message]` | Check connection liveness or measure reponse time. The server returns `PONG` as a response. |
+| `SELECT index` | Select logical database database for the current connection. |
+| **Keys** | |
+| `DEL key [key ...]` | Delete `key` from the database. |
+| `EXISTS key [key..]` | Check if `key` exists in the database. |
+| `TTL key` | Get the time to live (TTL) for `key`. |
+| **String data type** | |
+| `GET key` | Get the value for a `key`. |
+| `SET key value [EX seconds\|PX milliseconds] [NX\|XX] [KEEPTTL]` | Set the value of `key`. |
+| `SETEX key seconds value` | Set the value and the expiration of `key`. |
+| **Server** | |
+| `LOLWUT [VERSION version]` | Return Redis version. |
