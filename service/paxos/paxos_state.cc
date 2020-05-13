@@ -53,77 +53,77 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
     return utils::get_local_injector().inject("paxos_prepare_timeout", timeout, [&cmd, &key, ballot, tr_state, schema, only_digest, da, timeout] {
-    dht::token token = dht::get_token(*schema, key);
-    utils::latency_counter lc;
-    lc.start();
-    return with_locked_key(token, timeout, [&cmd, token, &key, ballot, tr_state, schema, only_digest, da, timeout] () mutable {
-        // When preparing, we need to use the same time as "now" (that's the time we use to decide if something
-        // is expired or not) across nodes, otherwise we may have a window where a Most Recent Decision shows up
-        // on some replica and not others during a new proposal (in storage_proxy::begin_and_repair_paxos()), and no
-        // amount of re-submit will fix this (because the node on which the commit has expired will have a
-        // tombstone that hides any re-submit). See CASSANDRA-12043 for details.
-        auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
+        dht::token token = dht::get_token(*schema, key);
+        utils::latency_counter lc;
+        lc.start();
+        return with_locked_key(token, timeout, [&cmd, token, &key, ballot, tr_state, schema, only_digest, da, timeout] () mutable {
+            // When preparing, we need to use the same time as "now" (that's the time we use to decide if something
+            // is expired or not) across nodes, otherwise we may have a window where a Most Recent Decision shows up
+            // on some replica and not others during a new proposal (in storage_proxy::begin_and_repair_paxos()), and no
+            // amount of re-submit will fix this (because the node on which the commit has expired will have a
+            // tombstone that hides any re-submit). See CASSANDRA-12043 for details.
+            auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
 
-        auto f = db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
-        return f.then([&cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
-            // If received ballot is newer that the one we already accepted it has to be accepted as well,
-            // but we will return the previously accepted proposal so that the new coordinator will use it instead of
-            // its own.
-            if (ballot.timestamp() > state._promised_ballot.timestamp()) {
-                logger.debug("Promising ballot {}", ballot);
-                tracing::trace(tr_state, "Promising ballot {}", ballot);
-                if (utils::get_local_injector().enter("paxos_error_before_save_promise")) {
-                    return make_exception_future<prepare_response>(utils::injected_error("injected_error_before_save_promise"));
-                }
-                auto f1 = futurize_invoke(db::system_keyspace::save_paxos_promise, *schema, std::ref(key), ballot, timeout);
-                auto f2 = futurize_invoke([&] {
-                    return do_with(dht::partition_range_vector({dht::partition_range::make_singular({token, key})}),
-                            [tr_state, schema, &cmd, only_digest, da, timeout] (const dht::partition_range_vector& prv) {
-                        return get_local_storage_proxy().get_db().local().query(schema, cmd,
-                                {only_digest ? query::result_request::only_digest : query::result_request::result_and_digest, da},
-                                prv, tr_state, query::result_memory_limiter::maximum_result_size, timeout);
+            auto f = db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
+            return f.then([&cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
+                // If received ballot is newer that the one we already accepted it has to be accepted as well,
+                // but we will return the previously accepted proposal so that the new coordinator will use it instead of
+                // its own.
+                if (ballot.timestamp() > state._promised_ballot.timestamp()) {
+                    logger.debug("Promising ballot {}", ballot);
+                    tracing::trace(tr_state, "Promising ballot {}", ballot);
+                    if (utils::get_local_injector().enter("paxos_error_before_save_promise")) {
+                        return make_exception_future<prepare_response>(utils::injected_error("injected_error_before_save_promise"));
+                    }
+                    auto f1 = futurize_invoke(db::system_keyspace::save_paxos_promise, *schema, std::ref(key), ballot, timeout);
+                    auto f2 = futurize_invoke([&] {
+                        return do_with(dht::partition_range_vector({dht::partition_range::make_singular({token, key})}),
+                                [tr_state, schema, &cmd, only_digest, da, timeout] (const dht::partition_range_vector& prv) {
+                            return get_local_storage_proxy().get_db().local().query(schema, cmd,
+                                    {only_digest ? query::result_request::only_digest : query::result_request::result_and_digest, da},
+                                    prv, tr_state, query::result_memory_limiter::maximum_result_size, timeout);
+                        });
                     });
-                });
-                return when_all(std::move(f1), std::move(f2)).then([state = std::move(state), only_digest] (auto t) {
-                    if (utils::get_local_injector().enter("paxos_error_after_save_promise")) {
-                        return make_exception_future<prepare_response>(utils::injected_error("injected_error_after_save_promise"));
-                    }
-                    auto&& f1 = std::get<0>(t);
-                    auto&& f2 = std::get<1>(t);
-                    if (f1.failed()) {
-                        // Failed to save promise. Nothing we can do but throw.
-                        return make_exception_future<prepare_response>(f1.get_exception());
-                    }
-                    std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>> data_or_digest;
-                    // Silently ignore any errors querying the current value as the caller is prepared to fall back
-                    // on querying it by itself in case it's missing in the response.
-                    if (!f2.failed()) {
-                        auto&& [result, hit_rate] = f2.get0();
-                        if (only_digest) {
-                            data_or_digest = *result->digest();
-                        } else {
-                            data_or_digest = std::move(make_foreign(std::move(result)));
+                    return when_all(std::move(f1), std::move(f2)).then([state = std::move(state), only_digest] (auto t) {
+                        if (utils::get_local_injector().enter("paxos_error_after_save_promise")) {
+                            return make_exception_future<prepare_response>(utils::injected_error("injected_error_after_save_promise"));
                         }
-                    }
-                    return make_ready_future<prepare_response>(prepare_response(promise(std::move(state._accepted_proposal),
-                                    std::move(state._most_recent_commit), std::move(data_or_digest))));
-                });
-            } else {
-                logger.debug("Promise rejected; {} is not sufficiently newer than {}", ballot, state._promised_ballot);
-                tracing::trace(tr_state, "Promise rejected; {} is not sufficiently newer than {}", ballot, state._promised_ballot);
-                // Return the currently promised ballot (rather than, e.g., the ballot of the last
-                // accepted proposal) so the coordinator can make sure it uses a newer ballot next
-                // time (#5667).
-                return make_ready_future<prepare_response>(prepare_response(std::move(state._promised_ballot)));
+                        auto&& f1 = std::get<0>(t);
+                        auto&& f2 = std::get<1>(t);
+                        if (f1.failed()) {
+                            // Failed to save promise. Nothing we can do but throw.
+                            return make_exception_future<prepare_response>(f1.get_exception());
+                        }
+                        std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>> data_or_digest;
+                        // Silently ignore any errors querying the current value as the caller is prepared to fall back
+                        // on querying it by itself in case it's missing in the response.
+                        if (!f2.failed()) {
+                            auto&& [result, hit_rate] = f2.get0();
+                            if (only_digest) {
+                                data_or_digest = *result->digest();
+                            } else {
+                                data_or_digest = std::move(make_foreign(std::move(result)));
+                            }
+                        }
+                        return make_ready_future<prepare_response>(prepare_response(promise(std::move(state._accepted_proposal),
+                                        std::move(state._most_recent_commit), std::move(data_or_digest))));
+                    });
+                } else {
+                    logger.debug("Promise rejected; {} is not sufficiently newer than {}", ballot, state._promised_ballot);
+                    tracing::trace(tr_state, "Promise rejected; {} is not sufficiently newer than {}", ballot, state._promised_ballot);
+                    // Return the currently promised ballot (rather than, e.g., the ballot of the last
+                    // accepted proposal) so the coordinator can make sure it uses a newer ballot next
+                    // time (#5667).
+                    return make_ready_future<prepare_response>(prepare_response(std::move(state._promised_ballot)));
+                }
+            });
+        }).finally([schema, lc] () mutable {
+            auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
+            stats.cas_prepare.mark(lc.stop().latency());
+            if (lc.is_start()) {
+                stats.estimated_cas_prepare.add(lc.latency(), stats.cas_prepare.hist.count);
             }
         });
-    }).finally([schema, lc] () mutable {
-        auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
-        stats.cas_prepare.mark(lc.stop().latency());
-        if (lc.is_start()) {
-            stats.estimated_cas_prepare.add(lc.latency(), stats.cas_prepare.hist.count);
-        }
-    });
     });
 }
 
@@ -131,13 +131,12 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
         clock_type::time_point timeout) {
     return utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout,
             [token = std::move(token), &proposal, schema, tr_state, timeout] {
-    utils::latency_counter lc;
-    lc.start();
-
-    return with_locked_key(token, timeout, [&proposal, schema, tr_state, timeout] () mutable {
-        auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
-        auto f = db::system_keyspace::load_paxos_state(proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout);
-        return f.then([&proposal, tr_state, schema, timeout] (paxos_state state) {
+        utils::latency_counter lc;
+        lc.start();
+        return with_locked_key(token, timeout, [&proposal, schema, tr_state, timeout] () mutable {
+            auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
+            auto f = db::system_keyspace::load_paxos_state(proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout);
+            return f.then([&proposal, tr_state, schema, timeout] (paxos_state state) {
                 // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
                 // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
                 if (proposal.ballot == state._promised_ballot || proposal.ballot.timestamp() > state._promised_ballot.timestamp()) {
@@ -159,14 +158,14 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
                     tracing::trace(tr_state, "Rejecting proposal for {} because in_progress is now {}", proposal, state._promised_ballot);
                     return make_ready_future<bool>(false);
                 }
+            });
+        }).finally([schema, lc] () mutable {
+            auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
+            stats.cas_accept.mark(lc.stop().latency());
+            if (lc.is_start()) {
+                stats.estimated_cas_accept.add(lc.latency(), stats.cas_accept.hist.count);
+            }
         });
-    }).finally([schema, lc] () mutable {
-        auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
-        stats.cas_accept.mark(lc.stop().latency());
-        if (lc.is_start()) {
-            stats.estimated_cas_accept.add(lc.latency(), stats.cas_accept.hist.count);
-        }
-    });
     });
 }
 
