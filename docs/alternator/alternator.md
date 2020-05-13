@@ -108,12 +108,15 @@ implemented, with the following limitations:
   Writes are done in LOCAL_QURUM and reads in LOCAL_ONE (eventual consistency)
   or LOCAL_QUORUM (strong consistency).
 ### Global Tables
-* Currently, *all* Alternator tables are created as "Global Tables", i.e., can
-  be accessed from all of Scylla's DCs.
-* We do not yet support the DynamoDB API calls to make some of the tables
-  global and others local to a particular DC: CreateGlobalTable,
-  UpdateGlobalTable, DescribeGlobalTable, ListGlobalTables,
-  UpdateGlobalTableSettings, DescribeGlobalTableSettings, and UpdateTable.
+* Currently, *all* Alternator tables are created as "global" tables and can
+  be accessed from all the DCs existing at the time of the table's creation.
+  If a DC is added after a table is created, the table won't be visible from
+  the new DC and changing that requires a CQL "ALTER TABLE" statement to
+  modify the table's replication strategy.
+* We do not yet support the DynamoDB API calls that control which table is
+  visible from what DC: CreateGlobalTable, UpdateGlobalTable,
+  DescribeGlobalTable, ListGlobalTables, UpdateGlobalTableSettings,
+  DescribeGlobalTableSettings, and UpdateTable.
 ### Backup and Restore
 * On-demand backup: the DynamoDB APIs are not yet supported: CreateBackup,
   DescribeBackup, DeleteBackup, ListBackups, RestoreTableFromBackup.
