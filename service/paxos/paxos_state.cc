@@ -52,6 +52,7 @@ void paxos_state::key_lock_map::release_semaphore_for_key(const dht::token& key)
 future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
+    return utils::get_local_injector().inject("paxos_prepare_timeout", timeout, [&cmd, &key, ballot, tr_state, schema, only_digest, da, timeout] {
     dht::token token = dht::get_token(*schema, key);
     utils::latency_counter lc;
     lc.start();
@@ -63,15 +64,17 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
         // tombstone that hides any re-submit). See CASSANDRA-12043 for details.
         auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
 
-        return utils::get_local_injector().inject("paxos_state_prepare_timeout", timeout).then([&key, schema, now_in_sec, timeout] {
-            return db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
-        }).then([&cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
+        auto f = db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
+        return f.then([&cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
             // If received ballot is newer that the one we already accepted it has to be accepted as well,
             // but we will return the previously accepted proposal so that the new coordinator will use it instead of
             // its own.
             if (ballot.timestamp() > state._promised_ballot.timestamp()) {
                 logger.debug("Promising ballot {}", ballot);
                 tracing::trace(tr_state, "Promising ballot {}", ballot);
+                if (utils::get_local_injector().is_enabled("paxos_error_before_save_promise")) {
+                    return make_exception_future<prepare_response>(utils::injected_error("injected_error_before_save_promise"));
+                }
                 auto f1 = futurize_invoke(db::system_keyspace::save_paxos_promise, *schema, std::ref(key), ballot, timeout);
                 auto f2 = futurize_invoke([&] {
                     return do_with(dht::partition_range_vector({dht::partition_range::make_singular({token, key})}),
@@ -82,6 +85,9 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
                     });
                 });
                 return when_all(std::move(f1), std::move(f2)).then([state = std::move(state), only_digest] (auto t) {
+                    if (utils::get_local_injector().is_enabled("paxos_error_after_save_promise")) {
+                        return make_exception_future<prepare_response>(utils::injected_error("injected_error_after_save_promise"));
+                    }
                     auto&& f1 = std::get<0>(t);
                     auto&& f2 = std::get<1>(t);
                     if (f1.failed()) {
@@ -118,10 +124,13 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
             stats.estimated_cas_prepare.add(lc.latency(), stats.cas_prepare.hist.count);
         }
     });
+    });
 }
 
 future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
+    return utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout,
+            [token = std::move(token), &proposal, schema, tr_state, timeout] {
     utils::latency_counter lc;
     lc.start();
 
@@ -129,22 +138,27 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
         auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
         auto f = db::system_keyspace::load_paxos_state(proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout);
         return f.then([&proposal, tr_state, schema, timeout] (paxos_state state) {
-            return utils::get_local_injector().inject("paxos_state_accept_timeout", timeout).then(
-                    [&proposal, state = std::move(state), tr_state, schema, timeout] {
                 // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
                 // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
                 if (proposal.ballot == state._promised_ballot || proposal.ballot.timestamp() > state._promised_ballot.timestamp()) {
                     logger.debug("Accepting proposal {}", proposal);
                     tracing::trace(tr_state, "Accepting proposal {}", proposal);
+
+                    if (utils::get_local_injector().is_enabled("paxos_error_before_save_proposal")) {
+                        return make_exception_future<bool>(utils::injected_error("injected_error_before_save_proposal"));
+                    }
+
                     return db::system_keyspace::save_paxos_proposal(*schema, proposal, timeout).then([] {
-                            return true;
+                        if (utils::get_local_injector().is_enabled("paxos_error_after_save_proposal")) {
+                            return make_exception_future<bool>(utils::injected_error("injected_error_after_save_proposal"));
+                        }
+                        return make_ready_future<bool>(true);
                     });
                 } else {
                     logger.debug("Rejecting proposal for {} because in_progress is now {}", proposal, state._promised_ballot);
                     tracing::trace(tr_state, "Rejecting proposal for {} because in_progress is now {}", proposal, state._promised_ballot);
                     return make_ready_future<bool>(false);
                 }
-            });
         });
     }).finally([schema, lc] () mutable {
         auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
@@ -153,10 +167,15 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
             stats.estimated_cas_accept.add(lc.latency(), stats.cas_accept.hist.count);
         }
     });
+    });
 }
 
 future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
+    if (utils::get_local_injector().is_enabled("paxos_error_before_learn")) {
+        return make_exception_future<>(utils::injected_error("injected_error_before_save_promise"));
+    }
+
     utils::latency_counter lc;
     lc.start();
 
@@ -189,7 +208,9 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
         return f.then([&decision, schema, timeout] {
             // We don't need to lock the partition key if there is no gap between loading paxos
             // state and saving it, and here we're just blindly updating.
-            return db::system_keyspace::save_paxos_decision(*schema, decision, timeout);
+            return utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout, [&decision, schema, timeout] {
+                return db::system_keyspace::save_paxos_decision(*schema, decision, timeout);
+            });
         });
     }).finally([schema, lc] () mutable {
         auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
