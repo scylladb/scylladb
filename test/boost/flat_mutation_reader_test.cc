@@ -39,6 +39,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/log.hh"
+#include "test/lib/reader_permit.hh"
 
 struct mock_consumer {
     struct result {
@@ -441,14 +442,14 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
         // Generator ranges are single pass, so we need a new range each time they are used.
         auto run_test = [&] (auto make_empty_ranges, auto make_single_ranges, auto make_multiple_ranges) {
             testlog.info("empty ranges");
-            assert_that(make_flat_multi_range_reader(s.schema(), source, make_empty_ranges(), s.schema()->full_slice()))
+            assert_that(make_flat_multi_range_reader(s.schema(), tests::make_permit(), source, make_empty_ranges(), s.schema()->full_slice()))
                     .produces_end_of_stream()
                     .fast_forward_to(fft_range)
                     .produces(ms[9])
                     .produces_end_of_stream();
 
             testlog.info("single range");
-            assert_that(make_flat_multi_range_reader(s.schema(), source, make_single_ranges(), s.schema()->full_slice()))
+            assert_that(make_flat_multi_range_reader(s.schema(), tests::make_permit(), source, make_single_ranges(), s.schema()->full_slice()))
                     .produces(ms[1])
                     .produces(ms[2])
                     .produces_end_of_stream()
@@ -457,7 +458,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                     .produces_end_of_stream();
 
             testlog.info("read full partitions and fast forward");
-            assert_that(make_flat_multi_range_reader(s.schema(), source, make_multiple_ranges(), s.schema()->full_slice()))
+            assert_that(make_flat_multi_range_reader(s.schema(), tests::make_permit(), source, make_multiple_ranges(), s.schema()->full_slice()))
                     .produces(ms[1])
                     .produces(ms[2])
                     .produces(ms[4])
@@ -467,7 +468,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                     .produces_end_of_stream();
 
             testlog.info("read, skip partitions and fast forward");
-            assert_that(make_flat_multi_range_reader(s.schema(), source, make_multiple_ranges(), s.schema()->full_slice()))
+            assert_that(make_flat_multi_range_reader(s.schema(), tests::make_permit(), source, make_multiple_ranges(), s.schema()->full_slice()))
                     .produces_partition_start(keys[1])
                     .next_partition()
                     .produces_partition_start(keys[2])

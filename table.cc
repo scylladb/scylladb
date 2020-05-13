@@ -510,7 +510,7 @@ table::make_streaming_reader(schema_ptr s,
         return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
     });
 
-    return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
+    return make_flat_multi_range_reader(s, no_reader_permit(), std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
 }
 
 flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range,

@@ -2057,7 +2057,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
                 std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();
-    return make_flat_multi_range_reader(std::move(schema), std::move(ms), std::move(range_generator), std::move(full_slice),
+    return make_flat_multi_range_reader(std::move(schema), no_reader_permit(), std::move(ms), std::move(range_generator), std::move(full_slice),
             service::get_local_streaming_read_priority(), {}, mutation_reader::forwarding::no);
 }
 
