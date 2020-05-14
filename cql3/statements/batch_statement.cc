@@ -160,7 +160,7 @@ void batch_statement::validate()
                 || (boost::distance(_statements
                         | boost::adaptors::transformed([] (auto&& s) { return s.statement->column_family(); })
                         | boost::adaptors::uniqued) != 1))) {
-        throw exceptions::invalid_request_exception("Batch with conditions cannot span multiple tables");
+        throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple tables");
     }
     std::optional<bool> raw_counter;
     for (auto& s : _statements) {
