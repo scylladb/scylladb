@@ -2399,7 +2399,8 @@ future<> sstable::seal_sstable(bool backup)
     return seal_sstable().then([this, backup] {
         if (backup) {
             auto dir = get_dir() + "/backups/";
-            return sstable_touch_directory_io_check(dir).then([this, dir = std::move(dir)] () mutable {
+            auto fut = sstable_touch_directory_io_check(dir);
+            return fut.then([this, dir = std::move(dir)] () mutable {
                 return create_links(std::move(dir));
             });
         }
@@ -2550,7 +2551,8 @@ future<> sstable::touch_temp_dir() {
     }
     auto temp_dir = get_temp_dir();
     sstlog.debug("Touching temp_dir={}", temp_dir);
-    return sstable_touch_directory_io_check(temp_dir).then([this, temp_dir = std::move(temp_dir)] () mutable {
+    auto fut = sstable_touch_directory_io_check(temp_dir);
+    return fut.then([this, temp_dir = std::move(temp_dir)] () mutable {
         _temp_dir = std::move(temp_dir);
     });
 }
@@ -3234,7 +3236,8 @@ future<>
 sstable::unlink()
 {
     auto name = toc_filename();
-    auto remove_fut = remove_by_toc_name(name).then_wrapped([name = std::move(name)] (future<> f) {
+    auto fut = remove_by_toc_name(name);
+    auto remove_fut = fut.then_wrapped([name = std::move(name)] (future<> f) {
         if (f.failed()) {
             // Log and ignore the failure since there is nothing much we can do about it at this point.
             // a. Compaction will retry deleting the sstable in the next pass, and
@@ -3247,8 +3250,8 @@ sstable::unlink()
     });
 
     name = get_filename();
-    auto update_large_data_fut = get_large_data_handler().maybe_delete_large_data_entries(*get_schema(), name, data_size())
-            .then_wrapped([name = std::move(name)] (future<> f) {
+    fut = get_large_data_handler().maybe_delete_large_data_entries(*get_schema(), name, data_size());
+    auto update_large_data_fut = fut.then_wrapped([name = std::move(name)] (future<> f) {
         if (f.failed()) {
             // Just log and ignore failures to delete large data entries.
             // They are not critical to the operation of the database.
