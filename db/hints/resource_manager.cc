@@ -35,10 +35,8 @@ namespace hints {
 static logging::logger resource_manager_logger("hints_resource_manager");
 
 future<dev_t> get_device_id(const fs::path& path) {
-    return open_directory(path.native()).then([](file f) {
-        return f.stat().then([f = std::move(f)](struct stat st) {
-            return st.st_dev;
-        });
+    return file_stat(path.native()).then([] (struct stat_data sd) {
+        return sd.device_id;
     });
 }
 
