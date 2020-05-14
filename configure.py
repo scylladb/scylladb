@@ -894,6 +894,7 @@ scylla_tests_generic_dependencies = [
     'test/lib/cql_test_env.cc',
     'test/lib/test_services.cc',
     'test/lib/log.cc',
+    'test/lib/reader_permit.cc',
 ]
 
 scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependencies + [
