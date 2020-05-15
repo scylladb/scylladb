@@ -1938,22 +1938,17 @@ static future<> repair_get_row_diff_with_rpc_stream_handler(
                             current_set_diff,
                             std::move(hash_cmd_opt)).handle_exception([sink, &error] (std::exception_ptr ep) mutable {
                         error = true;
-                        return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::error, repair_row_on_wire()}).then([sink] ()  mutable {
-                            return sink.close();
-                        }).then([sink] {
+                        return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::error, repair_row_on_wire()}).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                         });
                     });
                 } else {
-                    if (error) {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    }
-                    return sink.close().then([sink] {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    });
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
             });
         });
+    }).finally([sink] () mutable {
+        return sink.close().finally([sink] { });
     });
 }
 
@@ -1979,22 +1974,17 @@ static future<> repair_put_row_diff_with_rpc_stream_handler(
                             current_rows,
                             std::move(row_opt)).handle_exception([sink, &error] (std::exception_ptr ep) mutable {
                         error = true;
-                        return sink(repair_stream_cmd::error).then([sink] ()  mutable {
-                            return sink.close();
-                        }).then([sink] {
+                        return sink(repair_stream_cmd::error).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                         });
                     });
                 } else {
-                    if (error) {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    }
-                    return sink.close().then([sink] {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    });
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
             });
         });
+    }).finally([sink] () mutable {
+        return sink.close().finally([sink] { });
     });
 }
 
@@ -2019,22 +2009,17 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
                             error,
                             std::move(status_opt)).handle_exception([sink, &error] (std::exception_ptr ep) mutable {
                         error = true;
-                        return sink(repair_hash_with_cmd{repair_stream_cmd::error, repair_hash()}).then([sink] ()  mutable {
-                            return sink.close();
-                        }).then([sink] {
+                        return sink(repair_hash_with_cmd{repair_stream_cmd::error, repair_hash()}).then([] () {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                         });
                     });
                 } else {
-                    if (error) {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    }
-                    return sink.close().then([sink] {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    });
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
             });
         });
+    }).finally([sink] () mutable {
+        return sink.close().finally([sink] { });
     });
 }
 
