@@ -15,3 +15,6 @@
 [submodule "zstd"]
 	path = zstd
 	url = ../zstd
+[submodule "avro"]
+	path = avro
+	url = https://github.com/apache/avro.git
