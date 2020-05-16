@@ -916,6 +916,8 @@ SEASTAR_TEST_CASE(test_simple_type_compatibility) {
     test_case tests[] = {
         { vc, bytes_type, int32_type },
         { nc, int32_type, bytes_type },
+        { vc, varint_type, byte_type },
+        { vc, varint_type, short_type },
         { vc, varint_type, int32_type },
         { vc, varint_type, long_type },
         { nc, int32_type, varint_type },

@@ -2562,7 +2562,9 @@ static bool is_value_compatible_with_internal(const abstract_type& t, const abst
         }
         bool operator()(const varint_type_impl& t) {
             return other == t || int32_type->is_value_compatible_with(other) ||
-                   long_type->is_value_compatible_with(other);
+                   long_type->is_value_compatible_with(other) ||
+                   short_type->is_value_compatible_with(other) ||
+                   byte_type->is_value_compatible_with(other);
         }
         bool operator()(const user_type_impl& t) { return is_value_compatible_with_internal_aux(t, other); }
         bool operator()(const tuple_type_impl& t) {
