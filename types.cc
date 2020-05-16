@@ -783,6 +783,45 @@ bool abstract_type::is_byte_order_equal() const { return visit(*this, is_byte_or
 static bool
 check_compatibility(const tuple_type_impl &t, const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const);
 
+static
+bool
+is_fixed_size_int_type(const abstract_type& t) {
+    using k = abstract_type::kind;
+    switch (t.get_kind()) {
+    case k::byte:
+    case k::short_kind:
+    case k::int32:
+    case k::long_kind:
+        return true;
+    case k::ascii:
+    case k::boolean:
+    case k::bytes:
+    case k::counter:
+    case k::date:
+    case k::decimal:
+    case k::double_kind:
+    case k::duration:
+    case k::empty:
+    case k::float_kind:
+    case k::inet:
+    case k::list:
+    case k::map:
+    case k::reversed:
+    case k::set:
+    case k::simple_date:
+    case k::time:
+    case k::timestamp:
+    case k::timeuuid:
+    case k::tuple:
+    case k::user:
+    case k::utf8:
+    case k::uuid:
+    case k::varint:
+        return false;
+    }
+    __builtin_unreachable();
+}
+
 bool abstract_type::is_compatible_with(const abstract_type& previous) const {
     if (this == &previous) {
         return true;
@@ -835,6 +874,9 @@ bool abstract_type::is_compatible_with(const abstract_type& previous) const {
             return check_compatibility(t, previous, &abstract_type::is_compatible_with);
         }
         bool operator()(const collection_type_impl& t) { return is_compatible_with_aux(t, previous); }
+        bool operator()(const varint_type_impl& t) {
+            return is_fixed_size_int_type(previous);
+        }
         bool operator()(const abstract_type& t) { return false; }
     };
 
