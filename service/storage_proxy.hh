@@ -92,6 +92,10 @@ namespace cdc {
     class cdc_service;    
 }
 
+namespace cdc::kafka {
+    class kafka_upload_service;
+}
+
 namespace service {
 
 class abstract_write_response_handler;
@@ -297,6 +301,7 @@ private:
 
     cdc::cdc_service* _cdc = nullptr;
     cdc_stats _cdc_stats;
+    cdc::kafka::kafka_upload_service* _kafka_upload_service = nullptr;
 private:
     future<> uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
@@ -438,6 +443,13 @@ public:
     }
     cdc::cdc_service* get_cdc_service() const {
         return _cdc;
+    }
+
+    void set_kafka_upload_service(cdc::kafka::kafka_upload_service* upload_service) {
+        _kafka_upload_service = upload_service;
+    }
+    cdc::kafka::kafka_upload_service* get_kafka_upload_service() const {
+        return _kafka_upload_service;
     }
 
     view_update_handlers_list& get_view_update_handlers_list() {
