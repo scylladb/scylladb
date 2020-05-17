@@ -72,7 +72,7 @@ multi-datacenters and how Scylla integrates with third-party applications.
 Build a Docker image with:
 
 ```
-cd dist/docker
+cd dist/docker/redhat
 docker build -t <image-name> .
 ```
 
