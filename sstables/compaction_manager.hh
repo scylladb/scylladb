@@ -29,6 +29,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/core/abort_source.hh>
 #include "log.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include <vector>
@@ -67,8 +68,22 @@ private:
     // compaction manager may have N fibers to allow parallel compaction per shard.
     std::list<lw_shared_ptr<task>> _tasks;
 
-    // Used to assert that compaction_manager was explicitly stopped, if started.
-    bool _stopped = true;
+    // Possible states in which the compaction manager can be found.
+    //
+    // none: started, but not yet enabled. Once the compaction manager moves out of "none", it can
+    //       never legally move back
+    // stopped: stop() was called. The compaction_manager will never be enabled or disabled again
+    //          and can no longer be used (although it is possible to still grab metrics, stats,
+    //          etc)
+    // enabled: accepting compactions
+    // disabled: not accepting compactions
+    //
+    // Moving the compaction manager to and from enabled and disable states is legal, as many times
+    // as necessary.
+    enum class state { none, stopped, disabled, enabled };
+    state _state = state::none;
+
+    std::optional<future<>> _stop_future;
 
     stats _stats;
     seastar::metrics::metric_groups _metrics;
@@ -149,21 +164,35 @@ private:
     using get_candidates_func = std::function<std::vector<sstables::shared_sstable>(const column_family&)>;
 
     future<> rewrite_sstables(column_family* cf, sstables::compaction_options options, get_candidates_func);
+
+    future<> stop_ongoing_compactions(sstring reason);
+    optimized_optional<abort_source::subscription> _early_abort_subscription;
 public:
-    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory);
-    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, uint64_t shares);
+    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, abort_source& as);
+    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, uint64_t shares, abort_source& as);
     compaction_manager();
     ~compaction_manager();
 
     void register_metrics();
 
-    // Start compaction manager.
-    void start();
+    // enable/disable compaction manager.
+    void enable();
+    void disable();
 
-    // Stop all fibers. Ongoing compactions will be waited.
+    // Stop all fibers. Ongoing compactions will be waited. Should only be called
+    // once, from main teardown path.
     future<> stop();
 
-    bool stopped() const { return _stopped; }
+    // cancels all running compactions and moves the compaction manager into disabled state.
+    // The compaction manager is still alive after drain but it will not accept new compactions
+    // unless it is moved back to enabled state.
+    future<> drain();
+
+    // FIXME: should not be public. It's not anyone's business if we are enabled.
+    // distributed_loader.cc uses for resharding, remove this when the new resharding series lands.
+    bool enabled() const { return _state == state::enabled; }
+    // Stop all fibers, without waiting. Safe to be called multiple times.
+    void do_stop();
 
     // Submit a column family to be compacted.
     void submit(column_family* cf);

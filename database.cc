@@ -113,11 +113,11 @@ make_flush_controller(const db::config& cfg, seastar::scheduling_group sg, const
 
 inline
 std::unique_ptr<compaction_manager>
-make_compaction_manager(const db::config& cfg, database_config& dbcfg) {
+make_compaction_manager(const db::config& cfg, database_config& dbcfg, abort_source& as) {
     if (cfg.compaction_static_shares() > 0) {
-        return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory, cfg.compaction_static_shares());
+        return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory, cfg.compaction_static_shares(), as);
     }
-    return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory);
+    return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory, as);
 }
 
 lw_shared_ptr<keyspace_metadata>
@@ -161,7 +161,7 @@ void keyspace::remove_user_type(const user_type ut) {
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 
-database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::token_metadata& tm)
+database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::token_metadata& tm, abort_source& as)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
@@ -198,7 +198,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _mutation_query_stage()
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
-    , _compaction_manager(make_compaction_manager(_cfg, dbcfg))
+    , _compaction_manager(make_compaction_manager(_cfg, dbcfg, as))
     , _enable_incremental_backups(cfg.incremental_backups())
     , _querier_cache(_read_concurrency_sem, dbcfg.available_memory * 0.04)
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
@@ -1751,7 +1751,6 @@ future<> database::stop_large_data_handler() {
 future<>
 database::stop() {
     assert(!_large_data_handler->running());
-    assert(_compaction_manager->stopped());
 
     // try to ensure that CL has done disk flushing
     future<> maybe_shutdown_commitlog = _commitlog != nullptr ? _commitlog->shutdown() : make_ready_future<>();
