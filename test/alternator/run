@@ -96,6 +96,11 @@ SCYLLA_PROCESS=$!
 setup_authentication() {
     python3 -c 'from cassandra.cluster import Cluster; Cluster(["'$SCYLLA_IP'"]).connect().execute("INSERT INTO system_auth.roles (role, salted_hash) VALUES ('\''alternator'\'', '\''secret_pass'\'')")'
 }
+# Test that Alternator is serving. Alternator starts after CQL, so we use
+# check_alternator() to verify that both are up.
+check_alternator() {
+    python3 -c 'import requests; requests.get("'$alternator_url'/")'
+}
 echo "Scylla is: $SCYLLA."
 echo -n "Booting Scylla..."
 ok=
@@ -109,6 +114,12 @@ do
         summary="Error: Scylla failed to boot after $SECONDS seconds."
         break
     fi
+    case "`check_alternator 2>&1`" in
+    *"Connection refused"*)
+        # This may indicate that Scylla is still booting, or that it failed
+        # to boot and exited. Try again (and check again if Scylla exited).
+        continue;;
+    esac
     err=`setup_authentication 2>&1` && ok=yes && break
     case "$err" in
     *NoHostAvailable:*)
