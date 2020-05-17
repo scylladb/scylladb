@@ -5134,7 +5134,7 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
                                                    tracing::trace_state_ptr trace_state,
                                                    uint64_t max_size,
                                                    storage_proxy::clock_type::time_point timeout) {
-    return do_with(cmd, std::move(prs), [=, s = std::move(s), trace_state = std::move(trace_state)] (lw_shared_ptr<query::read_command>& cmd,
+    return do_with(cmd, std::move(prs), [this, max_size, timeout, s = std::move(s), trace_state = std::move(trace_state)] (lw_shared_ptr<query::read_command>& cmd,
                 const dht::partition_range_vector& prs) mutable {
         return query_mutations_on_all_shards(_db, std::move(s), *cmd, prs, std::move(trace_state), max_size, timeout).then([] (std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> t) {
             return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(std::move(t));
