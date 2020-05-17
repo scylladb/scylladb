@@ -26,20 +26,18 @@ To listen only on a specific interface, pass also an "`alternator-address`"
 option.
 
 DynamoDB clients usually specify a single "endpoint" address, e.g.,
-`dynamodb.us-east-1.amazonaws.com`, and a DNS server hosted on that address
-distributes the connections to many different backend nodes. Alternator
-does not yet provide such a DNS server, so you should either supply your
-own (having it return one of the live Scylla nodes at random, with a TTL
-of a few seconds), or you should use a different mechanism to distribute
-different DynamoDB requests to different Scylla nodes, to balance the load.
+`dynamodb.us-east-1.amazonaws.com`, and a DNS server and/or load balancers
+distribute the connections to many different backend nodes. Alternator
+does not provide such a load-balancing setup, so you set one up - having
+it forward each request to one of the live Scylla nodes at random.
 
-Alternator tables are stored as Scylla tables in the "alternator" keyspace.
-This keyspace is initialized when the first Alternator table is created
-(with a CreateTable request). The replication factor (RF) for this keyspace
-and all Alternator tables is chosen at that point, depending on the size of
-the cluster: RF=3 is used on clusters with three or more live nodes, and
-RF=1 is used for smaller clusters. Such smaller clusters are, of course,
-only recommended for tests because of the risk of data loss.
+Alternator tables are stored as Scylla tables, each in a separate keyspace.
+Each keyspace is initialized when the corresponding Alternator table is
+created (with a CreateTable request). The replication factor (RF) for this
+keyspace is chosen at that point, depending on the size of the cluster:
+RF=3 is used on clusters with three or more nodes, and RF=1 is used for
+smaller clusters. Such smaller clusters are, of course, only recommended
+for tests because of the risk of data loss.
 
 ## Current compatibility with DynamoDB
 
@@ -248,7 +246,7 @@ and "strong consistency". These two modes are implemented using Scylla's CL
 consistency level, then strongly-consistent reads are done with
 LOCAL_QUORUM, while eventually-consistent reads are with just LOCAL_ONE.
 
-Each table in Alternator is stored as a Scylla table in the "alternator"
+Each table in Alternator is stored as a Scylla table in a separate
 keyspace. The DynamoDB key columns (hash and sort key) have known types,
 and become partition and clustering key columns of the Scylla table.
 All other attributes may be different for each row, so are stored in one
