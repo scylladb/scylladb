@@ -410,7 +410,12 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
         auto window_minutes = seconds_to_minutes(window_seconds);
         b.set_compaction_strategy_options({
                 {"compaction_window_unit", "MINUTES"},
-                {"compaction_window_size", std::to_string(window_minutes)}
+                {"compaction_window_size", std::to_string(window_minutes)},
+                // A new SSTable will become fully expired every
+                // `window_seconds` seconds so we shouldn't check for expired
+                // sstables too often.
+                {"expired_sstable_check_frequency_seconds",
+                        std::to_string(std::max(1, window_seconds / 2))},
         });
     }
     b.with_column(log_meta_column_name_bytes("stream_id"), bytes_type, column_kind::partition_key);
