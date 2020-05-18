@@ -873,21 +873,19 @@ future<> sstable::read_toc() {
         return make_ready_future<>();
     }
 
-    auto file_path = filename(component_type::TOC);
+    sstlog.debug("Reading TOC file {}", filename(component_type::TOC));
 
-    sstlog.debug("Reading TOC file {} ", file_path);
-
-    return new_sstable_component_file(_read_error_handler, component_type::TOC, open_flags::ro).then([this, file_path] (file f) {
+    return new_sstable_component_file(_read_error_handler, component_type::TOC, open_flags::ro).then([this] (file f) {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
         auto buf = bufptr.get();
 
         auto fut = f.dma_read(0, buf, 4096);
-        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr), file_path] (size_t size) mutable {
+        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
             // This file is supposed to be very small. Theoretically we should check its size,
             // but if we so much as read a whole page from it, there is definitely something fishy
             // going on - and this simplifies the code.
             if (size >= 4096) {
-                throw malformed_sstable_exception("SSTable too big: " + to_sstring(size) + " bytes", file_path);
+                throw malformed_sstable_exception("SSTable TOC too big: " + to_sstring(size) + " bytes", filename(component_type::TOC));
             }
 
             std::string_view buf(bufptr.get(), size);
@@ -904,20 +902,20 @@ future<> sstable::read_toc() {
                     _recognized_components.insert(reverse_map(c, sstable_version_constants::get_component_map(_version)));
                 } catch (std::out_of_range& oor) {
                     _unrecognized_components.push_back(c);
-                    sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, file_path);
+                    sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, filename(component_type::TOC));
                 }
             }
             if (!_recognized_components.size()) {
-                throw malformed_sstable_exception("Empty TOC", file_path);
+                throw malformed_sstable_exception("Empty TOC", filename(component_type::TOC));
             }
             return f.close().finally([f] {});
         });
-    }).then_wrapped([file_path] (future<> f) {
+    }).then_wrapped([this] (future<> f) {
         try {
             f.get();
         } catch (std::system_error& e) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                throw malformed_sstable_exception(file_path + ": file not found");
+                throw malformed_sstable_exception(filename(component_type::TOC) + ": file not found");
             }
             throw;
         }
