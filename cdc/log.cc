@@ -352,11 +352,22 @@ static bool is_log_name(const std::string_view& table_name) {
 }
 
 bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name) {
-    if (!is_log_name(table_name)) {
+    auto base_schema = get_base_table(service::get_local_storage_proxy().get_db().local(), ks_name, table_name);
+    if (!base_schema) {
         return false;
     }
-    const auto base_schema = local_db.find_schema(ks_name, base_name(table_name));
     return base_schema->cdc_options().enabled();
+}
+
+schema_ptr get_base_table(const database& db, const schema& s) {
+    return get_base_table(db, s.ks_name(), s.cf_name());
+}
+
+schema_ptr get_base_table(const database& db, sstring_view ks_name,std::string_view table_name) {
+    if (!is_log_name(table_name)) {
+        return nullptr;
+    }
+    return db.find_schema(sstring(ks_name), base_name(table_name));
 }
 
 seastar::sstring base_name(std::string_view log_name) {
