@@ -65,7 +65,6 @@ public:
     static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir);
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring cf_name);
 
-    static void reshard(distributed<database>& db, sstring ks_name, sstring cf_name);
     static future<> open_sstable(distributed<database>& db, sstables::entry_descriptor comps,
         std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func,
         const io_priority_class& pc = default_priority_class());

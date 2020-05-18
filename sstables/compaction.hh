@@ -50,13 +50,6 @@ namespace sstables {
         friend std::ostream& operator<<(std::ostream&, pretty_printed_throughput);
     };
 
-    struct resharding_descriptor {
-        std::vector<sstables::shared_sstable> sstables;
-        uint64_t max_sstable_bytes;
-        shard_id reshard_at;
-        uint32_t level;
-    };
-
     static inline sstring compaction_name(compaction_type type) {
         switch (type) {
         case compaction_type::Compaction:

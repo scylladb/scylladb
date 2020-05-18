@@ -390,34 +390,6 @@ public:
     }
 };
 
-// Resharding doesn't really belong into any strategy, because it is not worried about laying out
-// SSTables according to any strategy-specific criteria.  So we will just make it proportional to
-// the amount of data we still have to reshard.
-//
-// Although at first it may seem like we could improve this by tracking the ongoing reshard as well
-// and reducing the backlog as we compact, that is not really true. Resharding is not really
-// expected to get rid of data and it is usually just splitting data among shards. Whichever backlog
-// we get rid of by tracking the compaction will come back as a big spike as we add this SSTable
-// back to their rightful shard owners.
-//
-// So because the data is supposed to be constant, we will just add the total amount of data as the
-// backlog.
-class resharding_backlog_tracker final : public compaction_backlog_tracker::impl {
-    uint64_t _total_bytes = 0;
-public:
-    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
-        return _total_bytes;
-    }
-
-    virtual void add_sstable(sstables::shared_sstable sst)  override {
-        _total_bytes += sst->data_size();
-    }
-
-    virtual void remove_sstable(sstables::shared_sstable sst)  override {
-        _total_bytes -= sst->data_size();
-    }
-};
-
 class compaction {
 protected:
     column_family& _cf;
@@ -1247,7 +1219,6 @@ flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_co
 
 class resharding_compaction final : public compaction {
     shard_id _shard; // shard of current sstable writer
-    compaction_backlog_tracker _resharding_backlog_tracker;
 
     // Partition count estimation for a shard S:
     //
@@ -1277,14 +1248,10 @@ private:
 public:
     resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor)
         : compaction(cf, std::move(descriptor))
-        , _resharding_backlog_tracker(std::make_unique<resharding_backlog_tracker>())
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
     {
-        cf.get_compaction_manager().register_backlog_tracker(_resharding_backlog_tracker);
         for (auto& sst : _sstables) {
-            _resharding_backlog_tracker.add_sstable(sst);
-
             const auto& shards = sst->get_shards_for_this_sstable();
             auto size = sst->bytes_on_disk();
             auto estimated_partitions = sst->get_estimated_key_count();
@@ -1299,11 +1266,7 @@ public:
         _info->type = compaction_type::Reshard;
     }
 
-    ~resharding_compaction() {
-        for (auto& s : _sstables) {
-            _resharding_backlog_tracker.remove_sstable(s);
-        }
-    }
+    ~resharding_compaction() { }
 
     // Use reader that makes sure no non-local mutation will not be filtered out.
     flat_mutation_reader make_sstable_reader() const override {
@@ -1346,6 +1309,7 @@ public:
 
         sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
         cfg.max_sstable_size = _max_sstable_size;
+        cfg.monitor = &default_write_monitor();
         // sstables generated for a given shard will share the same run identifier.
         cfg.run_identifier = _run_identifiers.at(shard);
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard), sst};

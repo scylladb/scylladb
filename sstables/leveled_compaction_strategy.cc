@@ -76,39 +76,6 @@ compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(colu
                                  sst->get_sstable_level(), _max_sstable_size_in_mb*1024*1024);
 }
 
-std::vector<resharding_descriptor> leveled_compaction_strategy::get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates) {
-    leveled_manifest manifest = leveled_manifest::create(cf, candidates, _max_sstable_size_in_mb, _stcs_options);
-
-    std::vector<resharding_descriptor> descriptors;
-    shard_id target_shard = 0;
-    auto get_shard = [&target_shard] { return target_shard++ % smp::count; };
-
-    // Basically, we'll iterate through all levels, and for each, we'll sort the
-    // sstables by first key because there's a need to reshard together adjacent
-    // sstables.
-    // The shard at which the job will run is chosen in a round-robin fashion.
-    for (auto level = 0U; level <= manifest.get_level_count(); level++) {
-        uint64_t max_sstable_size = !level ? std::numeric_limits<uint64_t>::max() : (_max_sstable_size_in_mb*1024*1024);
-        auto& sstables = manifest.get_level(level);
-        boost::sort(sstables, [] (auto& i, auto& j) {
-            return i->compare_by_first_key(*j) < 0;
-        });
-
-        resharding_descriptor current_descriptor = resharding_descriptor{{}, max_sstable_size, get_shard(), level};
-
-        for (auto it = sstables.begin(); it != sstables.end(); it++) {
-            current_descriptor.sstables.push_back(*it);
-
-            auto next = std::next(it);
-            if (current_descriptor.sstables.size() == smp::count || next == sstables.end()) {
-                descriptors.push_back(std::move(current_descriptor));
-                current_descriptor = resharding_descriptor{{}, max_sstable_size, get_shard(), level};
-            }
-        }
-    }
-    return descriptors;
-}
-
 void leveled_compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
     if (removed.empty() || added.empty()) {
         return;

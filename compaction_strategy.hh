@@ -63,8 +63,6 @@ public:
 
     compaction_descriptor get_major_compaction_job(column_family& cf, std::vector<shared_sstable> candidates);
 
-    std::vector<resharding_descriptor> get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates);
-
     // Some strategies may look at the compacted and resulting sstables to
     // get some useful information for subsequent compactions.
     void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);

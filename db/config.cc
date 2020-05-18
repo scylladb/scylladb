@@ -724,6 +724,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "especially when multiple clustering key columns have IN restrictions. Increasing this value can result in server instability.")
     , max_memory_for_unlimited_query(this, "max_memory_for_unlimited_query", liveness::LiveUpdate, value_status::Used, size_t(1) << 20,
             "Maximum amount of memory a query, whose memory consumption is not naturally limited, is allowed to consume, e.g. non-paged and reverse queries.")
+    , initial_sstable_loading_concurrency(this, "initial_sstable_loading_concurrency", value_status::Used, 4u,
+            "Maximum amount of sstables to load in parallel during initialization. A higher number can lead to more memory consumption. You should not need to touch this")
     , enable_3_1_0_compatibility_mode(this, "enable_3_1_0_compatibility_mode", value_status::Used, false,
         "Set to true if the cluster was initially installed from 3.1.0. If it was upgraded from an earlier version,"
         " or installed from a later version, leave this set to false. This adjusts the communication protocol to"
