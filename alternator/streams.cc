@@ -31,6 +31,9 @@
 #include "cdc/generation.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "utils/UUID_gen.hh"
+#include "cql3/selection/selection.hh"
+#include "cql3/result_set.hh"
+#include "cql3/type_json.hh"
 
 #include "executor.hh"
 #include "tags_extension.hh"
@@ -608,6 +611,246 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     rjson::set(ret, "ShardIterator", iter);
 
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+}
+
+struct event_id {
+    cdc::stream_id stream;
+    utils::UUID timestamp;
+
+    static const auto marker = 'E';
+
+    event_id(cdc::stream_id s, utils::UUID ts)
+        : stream(s)
+        , timestamp(ts)
+    {}
+    
+    friend std::ostream& operator<<(std::ostream& os, const event_id& id) {
+        boost::io::ios_flags_saver fs(os);
+        return os << marker << std::hex << id.stream.to_bytes()
+            << ':' << id.timestamp
+            ;
+    }
+};
+}
+
+template<typename ValueType>
+struct rapidjson::internal::TypeHelper<ValueType, alternator::event_id>
+    : public from_string_helper<ValueType, alternator::event_id>
+{};
+
+namespace alternator {
+    
+future<executor::request_return_type> executor::get_records(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+    _stats.api_operations.get_records++;
+    auto start_time = std::chrono::steady_clock::now();
+
+    auto iter = rjson::get<shard_iterator>(request, "ShardIterator");
+    auto limit = rjson::get_opt<size_t>(request, "Limit").value_or(1000);
+
+    if (limit < 1) {
+        throw validation_exception("Limit must be 1 or more");
+    }
+
+    auto& db = _proxy.get_db().local();
+    schema_ptr schema, base;
+    try {
+        auto& log_table = db.find_column_family(iter.shard.table);
+        schema = log_table.schema();
+        base = cdc::get_base_table(db, *schema);
+    } catch (...) {        
+    }
+
+    if (!schema || !base || !is_alternator_keyspace(schema->ks_name())) {
+        throw resource_not_found_exception(boost::lexical_cast<std::string>(iter.shard.table));
+    }
+
+    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
+
+    db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
+    partition_key pk = iter.shard.id.to_partition_key(*schema);
+
+    dht::partition_range_vector partition_ranges{ dht::partition_range::make_singular(dht::decorate_key(*schema, pk)) };
+
+    auto high_ts = db_clock::now() - confidence_interval(db);
+    auto high_uuid = utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count());    
+    auto lo = clustering_key_prefix::from_exploded(*schema, { iter.threshold.serialize() });
+    auto hi = clustering_key_prefix::from_exploded(*schema, { high_uuid.serialize() });
+
+    std::vector<query::clustering_range> bounds;
+    using bound = typename query::clustering_range::bound;
+    bounds.push_back(query::clustering_range::make(bound(lo), bound(hi, false)));
+
+    static const bytes timestamp_column_name = cdc::log_meta_column_name_bytes("time");
+    static const bytes op_column_name = cdc::log_meta_column_name_bytes("operation");
+
+    auto key_names = boost::copy_range<std::unordered_set<std::string>>(
+        boost::range::join(std::move(base->partition_key_columns()), std::move(base->clustering_key_columns()))
+        | boost::adaptors::transformed([&] (const column_definition& cdef) { return cdef.name_as_text(); })
+    );
+    // Include all base table columns as values (in case pre or post is enabled).
+    // This will include attributes not stored in the frozen map column
+    auto attr_names = boost::copy_range<std::unordered_set<std::string>>(base->regular_columns()
+        // this will include the :attrs column, which we will also force evaluating. 
+        // But not having this set empty forces out any cdc columns from actual result 
+        | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.name_as_text(); })
+    );
+
+    std::vector<const column_definition*> columns;
+    columns.reserve(schema->all_columns().size());
+
+    auto pks = schema->partition_key_columns();
+    auto cks = schema->clustering_key_columns();
+
+    std::transform(pks.begin(), pks.end(), std::back_inserter(columns), [](auto& c) { return &c; });
+    std::transform(cks.begin(), cks.end(), std::back_inserter(columns), [](auto& c) { return &c; });
+
+    auto regular_columns = boost::copy_range<query::column_id_vector>(schema->regular_columns() 
+        | boost::adaptors::filtered([](const column_definition& cdef) { return cdef.name() == op_column_name || !cdc::is_cdc_metacolumn_name(cdef.name_as_text()); })
+        | boost::adaptors::transformed([&] (const column_definition& cdef) { columns.emplace_back(&cdef); return cdef.id; })
+    );
+
+    stream_view_type type = cdc_options_to_steam_view_type(base->cdc_options());
+
+    auto selection = cql3::selection::selection::for_columns(schema, std::move(columns));
+    auto partition_slice = query::partition_slice(
+        std::move(bounds)
+        , {}, std::move(regular_columns), selection->get_query_options());
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, limit * 4);
+
+    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
+            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {       
+        cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
+        query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
+
+        auto result_set = builder.build();
+        auto records = rjson::empty_array();
+
+        auto& metadata = result_set->get_metadata();
+
+        auto op_index = std::distance(metadata.get_names().begin(), 
+            std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [](const lw_shared_ptr<cql3::column_specification>& cdef) {
+                return cdef->name->name() == op_column_name;
+            })
+        );
+        auto ts_index = std::distance(metadata.get_names().begin(), 
+            std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [](const lw_shared_ptr<cql3::column_specification>& cdef) {
+                return cdef->name->name() == timestamp_column_name;
+            })
+        );
+
+        std::optional<utils::UUID> timestamp;
+        auto dynamodb = rjson::empty_object();
+        auto record = rjson::empty_object();
+
+        using op_utype = std::underlying_type_t<cdc::operation>;
+
+        auto maybe_add_record = [&] {
+            if (!dynamodb.ObjectEmpty()) {
+                rjson::set(record, "dynamodb", std::move(dynamodb));
+                dynamodb = rjson::empty_object();
+            }
+            if (!record.ObjectEmpty()) {
+                // TODO: awsRegion?
+                rjson::set(record, "eventID", event_id(iter.shard.id, *timestamp));
+                rjson::set(record, "eventSource", "scylladb:alternator");
+                rjson::push_back(records, std::move(record));
+                record = rjson::empty_object();
+                --limit;
+            }
+        };
+
+        for (auto& row : result_set->rows()) {
+            auto op = static_cast<cdc::operation>(value_cast<op_utype>(data_type_for<op_utype>()->deserialize(*row[op_index])));
+            auto ts = value_cast<utils::UUID>(data_type_for<utils::UUID>()->deserialize(*row[ts_index]));
+
+            if (timestamp && timestamp != ts) {
+                maybe_add_record();
+                if (limit == 0) {
+                    break;
+                }
+            }
+
+            timestamp = ts;
+
+            if (!dynamodb.HasMember("Keys")) {
+                auto keys = rjson::empty_object();
+                describe_single_item(*selection, row, key_names, keys);
+                rjson::set(dynamodb, "Keys", std::move(keys));
+                rjson::set(dynamodb, "ApproximateCreationDateTime", utils::UUID_gen::unix_timestamp_in_sec(ts).count());
+                rjson::set(dynamodb, "SequenceNumber", ts);
+                rjson::set(dynamodb, "StreamViewType", type);
+                //TODO: SizeInBytes
+            }
+
+            /**
+             * We merge rows with same timestamp into a single event.
+             * This is pretty much needed, because a CDC row typically
+             * encodes ~half the info of an alternator write. 
+             * 
+             * A big, big downside to how alternator records are written
+             * (i.e. CQL), is that the distinction between INSERT and UPDATE
+             * is somewhat lost/unmappable to actual eventName. 
+             * A write (currently) always looks like an insert+modify
+             * regardless whether we wrote existing record or not. 
+             * 
+             * Maybe RMW ops could be done slightly differently so 
+             * we can distinguish them here...
+             * 
+             * For now, all writes will become MODIFY.
+             * 
+             * Note: we do not check the current pre/post
+             * flags on CDC log, instead we use data to 
+             * drive what is returned. This is (afaict)
+             * consistent with dynamo streams
+             */
+            switch (op) {
+            case cdc::operation::pre_image:
+            case cdc::operation::post_image:
+            {
+                auto item = rjson::empty_object();
+                describe_single_item(*selection, row, attr_names, item, true);
+                rjson::set(dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
+                break;
+            }
+            case cdc::operation::update:
+                rjson::set(record, "eventName", "MODIFY");
+                break;
+            case cdc::operation::insert:
+                rjson::set(record, "eventName", "INSERT");
+                break;
+            default:
+                rjson::set(record, "eventName", "REMOVE");
+                break;
+            }
+        }
+        if (limit > 0 && timestamp) {
+            maybe_add_record();
+        }
+
+        if (records.Size() != 0) {
+            auto ret = rjson::empty_object();
+            rjson::set(ret, "Records", std::move(records));
+            shard_iterator next_iter(iter.shard, *timestamp);
+            rjson::set(ret, "NextShardIterator", next_iter);
+            _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
+             return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+        }
+
+        // ugh. figure out if we are and end-of-shard
+        return cdc::get_local_streams_timestamp().then([this, iter, high_ts, start_time](db_clock::time_point ts) {
+            auto ret = rjson::empty_object();
+            auto& shard = iter.shard;            
+
+            if (shard.time < ts && ts < high_ts) {
+                rjson::set(ret, "NextShardIterator", "");
+            } else {
+                shard_iterator next_iter(iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count()));
+                rjson::set(ret, "NextShardIterator", iter);
+            }
+            _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
+            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+        });
+    });
 }
 
 

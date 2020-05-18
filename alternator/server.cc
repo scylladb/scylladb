@@ -398,6 +398,9 @@ server::server(executor& exec)
         {"GetShardIterator", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.get_shard_iterator(client_state, std::move(permit), std::move(json_request));
         }},
+        {"GetRecords", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.get_records(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        }},
     } {
 }
 
