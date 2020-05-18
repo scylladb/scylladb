@@ -78,6 +78,7 @@ stats::stats() : api_operations{} {
             OPERATION_LATENCY(delete_item_latency, "DeleteItem")
             OPERATION_LATENCY(update_item_latency, "UpdateItem")
             OPERATION(list_streams, "ListStreams")
+            OPERATION(describe_stream, "DescribeStream")
     });
     _metrics.add_group("alternator", {
             seastar::metrics::make_total_operations("unsupported_operations", unsupported_operations,
