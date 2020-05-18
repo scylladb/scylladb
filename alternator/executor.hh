@@ -94,6 +94,7 @@ public:
     future<request_return_type> list_streams(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> describe_stream(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> get_shard_iterator(client_state& client_state, service_permit permit, rjson::value request);
+    future<request_return_type> get_records(client_state& client_state, service_permit permit, rjson::value request);
 
     future<> start();
     future<> stop() { return make_ready_future<>(); }

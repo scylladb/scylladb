@@ -80,6 +80,7 @@ stats::stats() : api_operations{} {
             OPERATION(list_streams, "ListStreams")
             OPERATION(describe_stream, "DescribeStream")
             OPERATION(get_shard_iterator, "GetShardIterator")
+            OPERATION(get_records, "GetRecords")
     });
     _metrics.add_group("alternator", {
             seastar::metrics::make_total_operations("unsupported_operations", unsupported_operations,

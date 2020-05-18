@@ -546,5 +546,10 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
 
+future<executor::request_return_type> executor::get_records(client_state& client_state, service_permit permit, rjson::value request) {
+    auto ret = rjson::empty_object();
+    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+}
+
 
 }

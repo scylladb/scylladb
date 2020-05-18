@@ -77,6 +77,7 @@ public:
         uint64_t list_streams = 0;
         uint64_t describe_stream = 0;
         uint64_t get_shard_iterator = 0;
+        uint64_t get_records = 0;
 
         utils::estimated_histogram put_item_latency;
         utils::estimated_histogram get_item_latency;
