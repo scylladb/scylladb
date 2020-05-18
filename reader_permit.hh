@@ -73,21 +73,19 @@ class reader_permit {
 public:
     class resource_units {
         reader_concurrency_semaphore* _semaphore = nullptr;
-        size_t _memory = 0;
+        reader_resources _resources;
 
         friend class reader_permit;
     private:
-        resource_units(reader_concurrency_semaphore* semaphore, ssize_t memory) noexcept;
+        resource_units() = default;
+        resource_units(reader_concurrency_semaphore& semaphore, reader_resources res) noexcept;
     public:
         resource_units(const resource_units&) = delete;
         resource_units(resource_units&&) noexcept;
         ~resource_units();
         resource_units& operator=(const resource_units&) = delete;
         resource_units& operator=(resource_units&&) noexcept;
-        void reset(size_t memory = 0);
-        operator size_t() const {
-            return _memory;
-        }
+        void reset(reader_resources res = {});
     };
 
 private:

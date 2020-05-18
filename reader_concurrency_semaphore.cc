@@ -33,16 +33,13 @@ reader_permit::impl::~impl() {
     semaphore.signal(base_cost);
 }
 
-reader_permit::resource_units::resource_units(reader_concurrency_semaphore* semaphore, ssize_t memory) noexcept
-        : _semaphore(semaphore), _memory(memory) {
-    if (_semaphore && _memory) {
-        _semaphore->consume_memory(_memory);
-    }
+reader_permit::resource_units::resource_units(reader_concurrency_semaphore& semaphore, reader_resources res) noexcept
+        : _semaphore(&semaphore), _resources(res) {
 }
 
 reader_permit::resource_units::resource_units(resource_units&& o) noexcept
     : _semaphore(std::exchange(o._semaphore, nullptr))
-    , _memory(std::exchange(o._memory, 0)) {
+    , _resources(std::exchange(o._resources, {})) {
 }
 
 reader_permit::resource_units::~resource_units() {
@@ -55,16 +52,16 @@ reader_permit::resource_units& reader_permit::resource_units::operator=(resource
     }
     reset();
     _semaphore = std::exchange(o._semaphore, nullptr);
-    _memory = std::exchange(o._memory, 0);
+    _resources = std::exchange(o._resources, {});
     return *this;
 }
 
-void reader_permit::resource_units::reset(size_t memory) {
+void reader_permit::resource_units::reset(reader_resources res) {
     if (_semaphore) {
-        _semaphore->consume_memory(memory);
-        _semaphore->signal_memory(_memory);
+        _semaphore->consume(res);
+        _semaphore->signal(_resources);
     }
-    _memory = memory;
+    _resources = res;
 }
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost)
@@ -72,7 +69,12 @@ reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, reader_res
 }
 
 reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
-    return resource_units(_impl ? &_impl->semaphore : nullptr, memory);
+    if (!_impl) {
+        return resource_units();
+    }
+    const auto res = reader_resources{0, ssize_t(memory)};
+    _impl->semaphore.consume(res);
+    return resource_units(_impl->semaphore, res);
 }
 
 void reader_permit::release() {
