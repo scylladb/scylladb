@@ -180,5 +180,255 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
 
+struct shard_id {
+    utils::UUID table;
+    db_clock::time_point time;
+    cdc::stream_id id;
+
+    shard_id(utils::UUID tab, db_clock::time_point t, cdc::stream_id i)
+        : table(tab)
+        , time(t)
+        , id(i)
+    {}
+    shard_id(const sstring&);
+
+    friend std::ostream& operator<<(std::ostream& os, const shard_id& id) {
+        return os << id.table << std::hex
+            << ':' << id.time.time_since_epoch().count()
+            << ':' << id.id.first()
+            << ':' << id.id.second()
+            ;
+    }
+};
+
+shard_id::shard_id(const sstring& s) {
+    auto i = s.find(':');
+    auto j = s.find(':', i + 1);
+    auto k = s.find(':', j + 1);
+
+    if (i == sstring::npos || j == sstring::npos || k == sstring::npos) {
+        throw api_error("Invalid Stream Id", sstring(s));
+    }
+
+    table = utils::UUID(s.substr(0, i));
+    time = db_clock::time_point(db_clock::duration(std::stoull(s.substr(i + 1, j), nullptr, 16)));
+    id = cdc::stream_id(std::stoull(s.substr(j + 1, k), nullptr, 16), std::stoull(s.substr(k + 1), nullptr, 16));
+}
+}
+
+template<typename ValueType>
+struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_id>
+    : public from_string_helper<ValueType, alternator::shard_id>
+{};
+
+namespace alternator {
+
+enum class stream_view_type {
+    KEYS_ONLY,
+    NEW_IMAGE,
+    OLD_IMAGE,
+    NEW_AND_OLD_IMAGES,
+};
+
+std::ostream& operator<<(std::ostream& os, stream_view_type type) {
+    switch (type) {
+        case stream_view_type::KEYS_ONLY: os << "KEYS_ONLY"; break;
+        case stream_view_type::NEW_IMAGE: os << "NEW_IMAGE"; break;
+        case stream_view_type::OLD_IMAGE: os << "OLD_IMAGE"; break;
+        case stream_view_type::NEW_AND_OLD_IMAGES: os << "NEW_AND_OLD_IMAGES"; break;
+        default: throw std::invalid_argument(std::to_string(int(type)));
+    }
+    return os;
+}
+std::istream& operator>>(std::istream& is, stream_view_type& type) {
+    sstring s;
+    is >> s;
+    if (s == "KEYS_ONLY") {
+        type = stream_view_type::KEYS_ONLY;
+    } else if (s == "NEW_IMAGE") {
+        type = stream_view_type::NEW_IMAGE;
+    } else if (s == "OLD_IMAGE") {
+        type = stream_view_type::OLD_IMAGE;
+    } else if (s == "NEW_AND_OLD_IMAGES") {
+        type = stream_view_type::NEW_AND_OLD_IMAGES;
+    } else {
+        throw std::invalid_argument(s);
+    }
+    return is;
+}
+}
+
+template<typename ValueType>
+struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_view_type>
+    : public from_string_helper<ValueType, alternator::stream_view_type>
+{};
+
+namespace alternator {
+
+using namespace std::chrono_literals;
+using namespace std::string_literals;
+
+// the time window we enforce in querying cdc log entries.
+// idea is that write timestamp variations within cluster 
+// will be within this frame, and a timestamp limit set 
+// to maximum now() - confidence_interval will get all records 
+// up until that limit, regardless of late writes.
+static constexpr auto confidence_interval = 30s;
+
+/**
+ * This implementation of CDC stream to dynamo shard mapping
+ * is simply a 1:1 mapping, id=shard. Simple, and fairly easy
+ * to do ranged queries later.
+ * 
+ * Downside is that we get a _lot_ of shards. And with actual
+ * generations, we'll get hubba-hubba loads of them. 
+ * 
+ * Improvement ideas: 
+ * 1.) Prune expired streams that cannot have records (check ttls)
+ * 2.) Group cdc streams into N per shards (by token range)
+ * 
+ * The latter however makes it impossible to do a simple 
+ * range query with limit (we need to do staggered querying, because
+ * of how GetRecords work).
+ * The results of a select from cdc log on more than one cdc stream,
+ * where timestamp < T will typically look like: 
+ * 
+ * <shard 0> <ts0> ...
+ * ....
+ * <shard 0> <tsN> ...
+ * <shard 1> <ts0p> ...
+ * ...
+ * <shard 1> <tsNp> ...
+ *
+ * Where tsN < timestamp and tsNp < timestamp, but range [ts0-tsN] and [ts0p-tsNp]
+ * overlap. 
+ * 
+ * Now, if we have limit=X, we might end on a row inside shard 0.
+ * For our next query, we would in the simple case just say "timestamp > ts3 and timestamp < T",
+ * but of course this would then miss rows in shard 1 and above. 
+ * 
+ * However if we instead set the conditions to 
+ * 
+ *   "(token(stream_id) = token(shard 0) and timestamp > ts3 and timestamp < T)
+ *      or (token(stream_id) > token(shard 0) and timestamp < T)"
+ * 
+ * we can get the correct data. Question is however how well this will perform, if at 
+ * all.
+ * 
+ * For now, go simple, but maybe consider if this latter approach would work
+ * and perform. 
+ * 
+ */
+
+future<executor::request_return_type> executor::describe_stream(client_state& client_state, service_permit permit, rjson::value request) {
+    _stats.api_operations.describe_stream++;
+
+    auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
+    auto shard_start = rjson::get_opt<shard_id>(request, "ExclusiveStartShardId");
+    auto limit = rjson::get_opt<int>(request, "Limit").value_or(100); // according to spec
+    auto ret = rjson::empty_object();
+    auto stream_desc = rjson::empty_object();
+
+    auto& db = _proxy.get_db().local();
+    auto& cf = db.find_column_family(stream_arn);
+    auto bs = cdc::get_base_table(_proxy.get_db().local(), *cf.schema());
+    auto& opts = bs->cdc_options();
+
+    rjson::set(stream_desc, "StreamStatus", rjson::from_string(opts.enabled() ? "ENABLED"s : "DISABLED"s));
+
+    stream_view_type type = stream_view_type::KEYS_ONLY;
+
+    if (opts.preimage() && opts.postimage()) {
+        type = stream_view_type::NEW_AND_OLD_IMAGES;
+    } else if (opts.preimage()) {
+        type = stream_view_type::OLD_IMAGE;
+    } else if (opts.postimage()) {
+        type = stream_view_type::NEW_IMAGE;
+    }
+
+    rjson::set(stream_desc, "StreamArn", stream_arn);
+    rjson::set(stream_desc, "StreamViewType", type);
+    rjson::set(stream_desc, "TableName", rjson::from_string(table_name(*bs)));
+
+    describe_key_schema(stream_desc, *bs);
+
+    // TODO: label
+    // TODO: creation time
+
+    if (!opts.enabled()) {
+        rjson::set(ret, "StreamDescription", std::move(stream_desc));
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    }
+
+    try {
+        auto& tm = _proxy.get_token_metadata();
+        // cannot really "resume" query, must iterate all data. because we cannot query neither "time" (pk) > something,
+        // or on expired...
+        // TODO: maybe add secondary index to topology table to enable this?
+        return _sdks.cdc_get_topology_descriptions({ tm.count_normal_token_owners() }).then([this, stream_arn, shard_start, limit, ret = std::move(ret), stream_desc = std::move(stream_desc)](std::vector<cdc::topology_description_version> topology) mutable {
+            auto i = topology.begin();
+            auto e = topology.end();
+            auto prev = e;
+            auto threshold = db_clock::now() - confidence_interval;
+            auto shards = rjson::empty_array();
+
+            for (; limit > 0 && i != e; prev = i, ++i) {
+                for (auto& entry : i->entries()) {
+                    for (auto& id : entry.streams) {
+                        if (shard_start && shard_start->id != id) {
+                            continue;
+                        }
+
+                        shard_start = std::nullopt;
+
+                        auto shard = rjson::empty_object();
+
+                        if (prev != e) {
+                            auto token = dht::token::from_int64(id.first());
+                            auto pentries = prev->entries();
+                            auto pentry = std::lower_bound(pentries.begin(), pentries.end(), token, [](const cdc::token_range_description& d, const dht::token& t) {
+                                return d.token_range_end < t;
+                            });
+                            auto& ids = pentry->streams;
+                            auto pid = std::lower_bound(ids.rbegin(), ids.rend(), token,  [](const cdc::stream_id& id, const dht::token& t) {
+                                return t < dht::token::from_int64(id.first());
+                            });
+
+                            if (pid != ids.rend()) {
+                                rjson::set(shard, "ParentShardId", shard_id(stream_arn, prev->timestamp(), *pid));
+                            }
+                        }
+
+                        rjson::set(shard, "ShardId", shard_id(stream_arn, i->timestamp(), id));
+
+                        auto range = rjson::empty_object();
+                        rjson::set(range, "StartingSequenceNumber", utils::UUID_gen::min_time_UUID(i->timestamp().time_since_epoch().count()));
+                        if (i->expired() && *i->expired() < threshold) {
+                            rjson::set(range, "EndingSequenceNumber", utils::UUID_gen::max_time_UUID((*i->expired() + confidence_interval).time_since_epoch().count()));
+                        }
+
+                        rjson::set(shard, "SequenceNumberRange", std::move(range));
+                        rjson::push_back(shards, std::move(shard));
+                        if (--limit == 0) {
+                            break;
+                        }
+                    }
+                    if (limit == 0) {
+                        break;
+                    }
+                }
+            }
+
+
+            rjson::set(stream_desc, "Shards", std::move(shards));
+            rjson::set(ret, "StreamDescription", std::move(stream_desc));
+            
+            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+        });
+    } catch (no_such_column_family&) {
+        std::throw_with_nested(api_error("InvalidParameterValue", stream_arn.to_sstring()));
+    }
+}
+
 
 }

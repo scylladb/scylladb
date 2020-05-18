@@ -396,6 +396,9 @@ server::server(executor& exec)
         {"ListStreams", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.list_streams(client_state, std::move(permit), std::move(json_request));
         }},
+        {"DescribeStream", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.describe_stream(client_state, std::move(permit), std::move(json_request));
+        }},
     } {
 }
 
