@@ -147,6 +147,8 @@ class TestSuite(ABC):
                 continue
             t = os.path.join(self.name, shortname)
             patterns = options.name if options.name else [t]
+            if options.skip_pattern and options.skip_pattern in t:
+                continue
             for p in patterns:
                 if p in t:
                     for i in range(options.repeat):
@@ -532,6 +534,9 @@ def parse_cmd_line():
     parser.add_argument('--save-log-on-success', "-s", default=False,
                         dest="save_log_on_success", action="store_true",
                         help="Save test log output on success.")
+    parser.add_argument('--skip', default="",
+                        dest="skip_pattern", action="store",
+                        help="Skip tests which match the provided pattern")
     args = parser.parse_args()
 
     if not sys.stdout.isatty():
