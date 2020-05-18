@@ -1198,7 +1198,7 @@ rmw_operation::returnvalues rmw_operation::parse_returnvalues(const rjson::value
 
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
     : _request(std::move(request))
-    , _schema(get_table(proxy, _request))
+    , _schema(executor::get_table(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _returnvalues(parse_returnvalues(_request))
 {
