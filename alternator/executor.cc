@@ -75,22 +75,19 @@ static const column_definition& attrs_column(const schema& schema) {
     return *cdef;
 }
 
-struct make_jsonable : public json::jsonable {
-    rjson::value _value;
-public:
-    explicit make_jsonable(rjson::value&& value) : _value(std::move(value)) {}
-    virtual std::string to_json() const override {
-        return rjson::print(_value);
-    }
-};
-struct json_string : public json::jsonable {
-    std::string _value;
-public:
-    explicit json_string(std::string&& value) : _value(std::move(value)) {}
-    virtual std::string to_json() const override {
-        return _value;
-    }
-};
+make_jsonable::make_jsonable(rjson::value&& value)
+    : _value(std::move(value))
+{}
+std::string make_jsonable::to_json() const {
+    return rjson::print(_value);
+}
+
+json_string::json_string(std::string&& value)
+    : _value(std::move(value))
+{}
+std::string json_string::to_json() const {
+    return _value;
+}
 
 static void supplement_table_info(rjson::value& descr, const schema& schema) {
     rjson::set(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
@@ -159,15 +156,22 @@ static std::string lsi_name(const std::string& table_name, const std::string& in
  *  and api_error in case the table name is missing or not a string, or
  *  doesn't pass validate_table_name().
  */
-static std::string get_table_name(const rjson::value& request) {
-    const rjson::value& table_name_value = rjson::get(request, "TableName");
-    if (!table_name_value.IsString()) {
+std::optional<std::string> executor::get_table_name(const rjson::value& request, bool required) {
+    const rjson::value* table_name_value = rjson::find(request, "TableName");
+    if (!table_name_value && !required) {
+        return std::nullopt;
+    }
+    if (!table_name_value || !table_name_value->IsString()) {
         throw api_error("ValidationException",
                 "Missing or non-string TableName field in request");
     }
-    std::string table_name = table_name_value.GetString();
+    std::string table_name = table_name_value->GetString();
     validate_table_name(table_name);
     return table_name;
+}
+
+std::string executor::get_table_name(const rjson::value& request) {
+    return *get_table_name(request, true);
 }
 
 /** Extract table schema from a request.
@@ -177,13 +181,16 @@ static std::string get_table_name(const rjson::value& request) {
  *  name is missing, invalid or the table doesn't exist. If everything is
  *  successful, it returns the table's schema.
  */
-static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request) {
-    std::string table_name = get_table_name(request);
+schema_ptr executor::get_table(service::storage_proxy& proxy, const rjson::value& request, bool required) {
+    auto table_name = get_table_name(request, required);
+    if (!table_name) {
+        return nullptr;
+    }
     try {
-        return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(table_name), table_name);
+        return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(*table_name), *table_name);
     } catch(no_such_column_family&) {
         throw api_error("ResourceNotFoundException",
-                format("Requested resource not found: Table: {} not found", table_name));
+                format("Requested resource not found: Table: {} not found", *table_name));
     }
 }
 
@@ -214,7 +221,7 @@ enum class table_or_view_type { base, lsi, gsi };
 static std::pair<schema_ptr, table_or_view_type>
 get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     table_or_view_type type = table_or_view_type::base;
-    std::string table_name = get_table_name(request);
+    std::string table_name = executor::get_table_name(request);
 
     auto [is_internal_table, internal_ks_name, internal_table_name] = try_get_internal_table(table_name);
     if (is_internal_table) {
@@ -313,22 +320,25 @@ static std::optional<int> get_int_attribute(const rjson::value& value, std::stri
 // attributes of the the given schema as being either HASH or RANGE keys.
 // Additionally, adds to a given map mappings between the key attribute
 // names and their type (as a DynamoDB type string).
-static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>& attribute_types) {
+void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>* attribute_types) {
     rjson::value key_schema = rjson::empty_array();
     for (const column_definition& cdef : schema.partition_key_columns()) {
         rjson::value key = rjson::empty_object();
         rjson::set(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
         rjson::set(key, "KeyType", "HASH");
         rjson::push_back(key_schema, std::move(key));
-        attribute_types[cdef.name_as_text()] = type_to_string(cdef.type);
-
+        if (attribute_types) {
+            (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
+        }
     }
     for (const column_definition& cdef : schema.clustering_key_columns()) {
         rjson::value key = rjson::empty_object();
         rjson::set(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
         rjson::set(key, "KeyType", "RANGE");
         rjson::push_back(key_schema, std::move(key));
-        attribute_types[cdef.name_as_text()] = type_to_string(cdef.type);
+        if (attribute_types) {
+            (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
+        }
         // FIXME: this "break" can avoid listing some clustering key columns
         // we added for GSIs just because they existed in the base table -
         // but not in all cases. We still have issue #5320. See also
@@ -339,8 +349,24 @@ static void describe_key_schema(rjson::value& parent, const schema& schema, std:
 
 }
 
+void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>& attribute_types) {
+    describe_key_schema(parent, schema, &attribute_types);
+}
+
 static rjson::value generate_arn_for_table(const schema& schema) {
     return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", schema.ks_name(), schema.cf_name()));
+}
+
+bool executor::is_alternator_keyspace(const sstring& ks_name) {
+    return ks_name.find(KEYSPACE_NAME_PREFIX) == 0;
+}
+
+sstring executor::table_name(const schema& s) {
+    return s.cf_name();
+}
+
+sstring executor::make_keyspace_name(const sstring& table_name) {
+    return sstring(KEYSPACE_NAME_PREFIX) + table_name;
 }
 
 future<executor::request_return_type> executor::describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {

@@ -37,6 +37,21 @@
 
 namespace alternator {
 
+class rmw_operation;
+
+struct make_jsonable : public json::jsonable {
+    rjson::value _value;
+public:
+    explicit make_jsonable(rjson::value&& value);
+    std::string to_json() const override;
+};
+struct json_string : public json::jsonable {
+    std::string _value;
+public:
+    explicit json_string(std::string&& value);
+    std::string to_json() const override;
+};
+
 class executor : public peering_sharded_service<executor> {
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
@@ -78,6 +93,18 @@ public:
     future<> create_keyspace(std::string_view keyspace_name);
 
     static tracing::trace_state_ptr maybe_trace_query(client_state& client_state, sstring_view op, sstring_view query);
+
+    static sstring table_name(const schema&);
+    static std::string get_table_name(const rjson::value& request);
+private:
+    friend class rmw_operation;
+
+    static bool is_alternator_keyspace(const sstring& ks_name);
+    static sstring make_keyspace_name(const sstring& table_name);
+    static std::optional<std::string> get_table_name(const rjson::value& request, bool required);
+    static schema_ptr get_table(service::storage_proxy&, const rjson::value& request, bool required = true);
+    static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
+    static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);
 };
 
 }
