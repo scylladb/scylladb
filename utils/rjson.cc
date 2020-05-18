@@ -127,6 +127,21 @@ std::string print(const rjson::value& value) {
     return std::string(buffer.GetString());
 }
 
+rjson::malformed_value::malformed_value(std::string_view name, const rjson::value& value)
+    : malformed_value(name, print(value))
+{}
+
+rjson::malformed_value::malformed_value(std::string_view name, std::string_view value)
+    : error(format("Malformed value {} : {}", name, value))
+{}
+
+rjson::missing_value::missing_value(std::string_view name) 
+    // TODO: using old message here, but as pointed out. 
+    // "parameter" is not really a JSON concept. It is a value
+    // missing according to (implicit) schema. 
+    : error(format("JSON parameter {} not found", name))
+{}
+
 rjson::value copy(const rjson::value& value) {
     return rjson::value(value, the_allocator);
 }
@@ -171,20 +186,18 @@ rjson::value& get(rjson::value& value, std::string_view name) {
     // Luckily, the variant taking a GenericValue doesn't share this bug,
     // and we can create a string GenericValue without copying the string.
     auto member_it = value.FindMember(rjson::value(name.data(), name.size()));
-    if (member_it != value.MemberEnd())
+    if (member_it != value.MemberEnd()) {
         return member_it->value;
-    else {
-        throw rjson::error(format("JSON parameter {} not found", name));
     }
+    throw missing_value(name);
 }
 
 const rjson::value& get(const rjson::value& value, std::string_view name) {
     auto member_it = value.FindMember(rjson::value(name.data(), name.size()));
-    if (member_it != value.MemberEnd())
+    if (member_it != value.MemberEnd()) {
         return member_it->value;
-    else {
-        throw rjson::error(format("JSON parameter {} not found", name));
     }
+    throw missing_value(name);
 }
 
 rjson::value from_string(const std::string& str) {
