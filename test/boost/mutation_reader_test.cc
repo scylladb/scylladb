@@ -636,7 +636,7 @@ SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_test) {
         sstable_mutation_readers.emplace_back(
             sst->as_mutation_source().make_reader(
                 s.schema(),
-                no_reader_permit(),
+                tests::make_permit(),
                 query::full_partition_range,
                 s.schema()->full_slice(),
                 seastar::default_priority_class(),
@@ -650,7 +650,7 @@ SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_test) {
 
     auto incremental_reader = make_local_shard_sstable_reader(
             s.schema(),
-            no_reader_permit(),
+            tests::make_permit(),
             sstable_set,
             query::full_partition_range,
             s.schema()->full_slice(),
@@ -1382,7 +1382,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
             }
             mutation_source ds = create_sstable(env, s, muts)->as_mutation_source();
             readers.push_back(ds.make_reader(s,
-                no_reader_permit(),
+                tests::make_permit(),
                 dht::partition_range::make({keys[0]}, {keys[0]}),
                 s->full_slice(), default_priority_class(), nullptr,
                 streamed_mutation::forwarding::yes,
@@ -1457,8 +1457,8 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
 
         {
             auto slice = partition_slice_builder(*s).with_range(range).build();
-            readers.push_back(ds1.make_reader(s, no_reader_permit(), query::full_partition_range, slice));
-            readers.push_back(ds2.make_reader(s, no_reader_permit(), query::full_partition_range, slice));
+            readers.push_back(ds1.make_reader(s, tests::make_permit(), query::full_partition_range, slice));
+            readers.push_back(ds2.make_reader(s, tests::make_permit(), query::full_partition_range, slice));
 
             auto rd = make_combined_reader(s, std::move(readers),
                 streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
@@ -1480,9 +1480,9 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
         // Check fast_forward_to()
         {
 
-            readers.push_back(ds1.make_reader(s, no_reader_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
+            readers.push_back(ds1.make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
                 nullptr, streamed_mutation::forwarding::yes));
-            readers.push_back(ds2.make_reader(s, no_reader_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
+            readers.push_back(ds2.make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
                 nullptr, streamed_mutation::forwarding::yes));
 
             auto rd = make_combined_reader(s, std::move(readers),
@@ -2294,7 +2294,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
             auto& table = db->local().find_column_family(schema);
             auto reader = table.as_mutation_source().make_reader(
                     schema,
-                    no_reader_permit(),
+                    tests::make_permit(),
                     range,
                     slice,
                     service::get_local_sstable_query_read_priority(),
@@ -2495,7 +2495,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) mutable {
             auto& table = db->local().find_column_family(s);
-            return table.as_mutation_source().make_reader(std::move(s), no_reader_permit(), range, slice, pc, std::move(trace_state),
+            return table.as_mutation_source().make_reader(std::move(s), tests::make_permit(), range, slice, pc, std::move(trace_state),
                     streamed_mutation::forwarding::no, fwd_mr);
         };
         auto reference_reader = make_filtering_reader(

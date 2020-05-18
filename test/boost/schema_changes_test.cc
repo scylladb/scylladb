@@ -74,14 +74,14 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
             }
 
             auto mr = assert_that(created_with_base_schema->as_mutation_source()
-                        .make_reader(changed, no_reader_permit(), dht::partition_range::make_open_ended_both_sides(), changed->full_slice()));
+                        .make_reader(changed, tests::make_permit(), dht::partition_range::make_open_ended_both_sides(), changed->full_slice()));
             for (auto& m : changed_mutations) {
                 mr.produces(m);
             }
             mr.produces_end_of_stream();
 
             mr = assert_that(created_with_changed_schema->as_mutation_source()
-                    .make_reader(changed, no_reader_permit(), dht::partition_range::make_open_ended_both_sides(), changed->full_slice()));
+                    .make_reader(changed, tests::make_permit(), dht::partition_range::make_open_ended_both_sides(), changed->full_slice()));
             for (auto& m : changed_mutations) {
                 mr.produces(m);
             }

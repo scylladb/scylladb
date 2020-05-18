@@ -57,7 +57,7 @@ SEASTAR_THREAD_TEST_CASE(nonexistent_key) {
     env.reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([] (auto sstp) {
         return do_with(make_dkey(uncompressed_schema(), "invalid_key"), [sstp] (auto& key) {
             auto s = uncompressed_schema();
-            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, no_reader_permit(), key));
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, tests::make_permit(), key));
             return (*rd)(db::no_timeout).then([sstp, s, &key, rd] (auto mutation) {
                 BOOST_REQUIRE(!mutation);
                 return make_ready_future<>();
@@ -70,7 +70,7 @@ future<> test_no_clustered(sstables::test_env& env, bytes&& key, std::unordered_
     return env.reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
         return do_with(make_dkey(uncompressed_schema(), std::move(k)), [sstp, map = std::move(map)] (auto& key) {
             auto s = uncompressed_schema();
-            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, no_reader_permit(), key));
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, tests::make_permit(), key));
             return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, &key, rd, map = std::move(map)] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
@@ -145,7 +145,7 @@ future<mutation> generate_clustered(sstables::test_env& env, bytes&& key) {
     return env.reusable_sst(complex_schema(), "test/resource/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
         return do_with(make_dkey(complex_schema(), std::move(k)), [sstp] (auto& key) {
             auto s = complex_schema();
-            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, no_reader_permit(), key));
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, tests::make_permit(), key));
             return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, &key, rd] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 return std::move(*mutation);
@@ -345,7 +345,7 @@ future<> test_range_reads(sstables::test_env& env, const dht::token& min, const 
         auto stop = make_lw_shared<bool>(false);
         return do_with(dht::partition_range::make(dht::ring_position::starting_at(min),
                                                               dht::ring_position::ending_at(max)), [&, sstp, s] (auto& pr) {
-            auto mutations = make_lw_shared<flat_mutation_reader>(sstp->read_range_rows_flat(s, no_reader_permit(), pr));
+            auto mutations = make_lw_shared<flat_mutation_reader>(sstp->read_range_rows_flat(s, tests::make_permit(), pr));
             return do_until([stop] { return *stop; },
                 // Note: The data in the following lambda, including
                 // "mutations", continues to live until after the last
@@ -427,7 +427,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
                 sstables::sstable::format_types::big);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         sst->load().get();
-        auto mr = sst->read_rows_flat(s, no_reader_permit());
+        auto mr = sst->read_rows_flat(s, tests::make_permit());
         auto mut = read_mutation_from_flat_mutation_reader(mr, db::no_timeout).get0();
         BOOST_REQUIRE(bool(mut));
         auto& rts = mut->partition().row_tombstones();
@@ -448,7 +448,7 @@ SEASTAR_THREAD_TEST_CASE(compact_storage_sparse_read) {
     env.reusable_sst(compact_sparse_schema(), "test/resource/sstables/compact_sparse", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_sparse_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_sparse_schema();
-            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, no_reader_permit(), key));
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, tests::make_permit(), key));
             return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, &key, rd] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
@@ -467,7 +467,7 @@ SEASTAR_THREAD_TEST_CASE(compact_storage_simple_dense_read) {
     env.reusable_sst(compact_simple_dense_schema(), "test/resource/sstables/compact_simple_dense", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_simple_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_simple_dense_schema();
-            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, no_reader_permit(), key));
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, tests::make_permit(), key));
             return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, &key, rd] (auto mutation) {
                 auto& mp = mutation->partition();
 
@@ -488,7 +488,7 @@ SEASTAR_THREAD_TEST_CASE(compact_storage_dense_read) {
     env.reusable_sst(compact_dense_schema(), "test/resource/sstables/compact_dense", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_dense_schema();
-            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, no_reader_permit(), key));
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, tests::make_permit(), key));
             return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, &key, rd] (auto mutation) {
                 auto& mp = mutation->partition();
 
@@ -512,7 +512,7 @@ SEASTAR_THREAD_TEST_CASE(broken_ranges_collection) {
     sstables::test_env env;
     env.reusable_sst(peers_schema(), "test/resource/sstables/broken_ranges", 2).then([] (auto sstp) {
         auto s = peers_schema();
-        auto reader = make_lw_shared<flat_mutation_reader>(sstp->as_mutation_source().make_reader(s, no_reader_permit(), query::full_partition_range));
+        auto reader = make_lw_shared<flat_mutation_reader>(sstp->as_mutation_source().make_reader(s, tests::make_permit(), query::full_partition_range));
         return repeat([s, reader] {
             return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([s, reader] (mutation_opt mut) {
                 auto key_equal = [s, &mut] (sstring ip) {
@@ -580,7 +580,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     ka_sst(tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 1).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
-        return do_with(sstp->read_rows_flat(s, no_reader_permit()), [sstp, s] (auto& reader) {
+        return do_with(sstp->read_rows_flat(s, tests::make_permit()), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
                 return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([s] (mutation_opt mut) {
                     if (!mut) {
@@ -644,7 +644,7 @@ SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     ka_sst(tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 4).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
-        return do_with(sstp->read_rows_flat(s, no_reader_permit()), [sstp, s] (auto& reader) {
+        return do_with(sstp->read_rows_flat(s, tests::make_permit()), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
                 return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([s] (mutation_opt mut) {
                     if (!mut) {
@@ -722,7 +722,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
     auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     ka_sst(tombstone_overlap_schema2(), "test/resource/sstables/tombstone_overlap", 3).then([] (auto sstp) {
         auto s = tombstone_overlap_schema2();
-        return do_with(sstp->read_rows_flat(s, no_reader_permit()), [sstp, s] (auto& reader) {
+        return do_with(sstp->read_rows_flat(s, tests::make_permit()), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
                 return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([s] (mutation_opt mut) {
                     if (!mut) {
@@ -802,7 +802,7 @@ static schema_ptr buffer_overflow_schema() {
 SEASTAR_THREAD_TEST_CASE(buffer_overflow) {
     auto s = buffer_overflow_schema();
     auto sstp = ka_sst(s, "test/resource/sstables/buffer_overflow", 5).get0();
-    auto r = sstp->read_rows_flat(s, no_reader_permit());
+    auto r = sstp->read_rows_flat(s, tests::make_permit());
     auto pk1 = partition_key::from_exploded(*s, { int32_type->decompose(4) });
     auto dk1 = dht::decorate_key(*s, pk1);
     auto pk2 = partition_key::from_exploded(*s, { int32_type->decompose(3) });
@@ -862,7 +862,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
                                 sstables::sstable::format_types::big);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         sst->load().get();
-        auto mr = sst->read_rows_flat(s, no_reader_permit());
+        auto mr = sst->read_rows_flat(s, tests::make_permit());
         auto mut = read_mutation_from_flat_mutation_reader(mr, db::no_timeout).get0();
         BOOST_REQUIRE(bool(mut));
       }
@@ -901,7 +901,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             dht::decorated_key dk(dht::decorate_key(*s, k));
             auto hk = sstables::sstable::make_hashed_key(*s, dk.key());
             sst->load().get();
-            auto mr = sst->read_rows_flat(s, no_reader_permit());
+            auto mr = sst->read_rows_flat(s, tests::make_permit());
             auto res =  sst->has_partition_key(hk, dk).get0();
             BOOST_REQUIRE(bool(res));
 
@@ -914,7 +914,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
 }
 
 static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
-    return std::make_unique<index_reader>(sst, no_reader_permit(), default_priority_class(), tracing::trace_state_ptr());
+    return std::make_unique<index_reader>(sst, tests::make_permit(), default_priority_class(), tracing::trace_state_ptr());
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
@@ -1025,7 +1025,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
 
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck1})).build();
-            assert_that(sst->as_mutation_source().make_reader(s, no_reader_permit(), dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit(), dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1085,7 +1085,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
 
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck1})).build();
-            assert_that(sst->as_mutation_source().make_reader(s, no_reader_permit(), dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit(), dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1138,7 +1138,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
 
             {
                 auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck})).build();
-                assert_that(sst->as_mutation_source().make_reader(s, no_reader_permit(), dht::partition_range::make_singular(dk), slice))
+                assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit(), dht::partition_range::make_singular(dk), slice))
                         .produces(m)
                         .produces_end_of_stream();
             }
@@ -1183,7 +1183,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
 
         {
             auto slice = partition_slice_builder(*s).build();
-            assert_that(sst->as_mutation_source().make_reader(s, no_reader_permit(), dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit(), dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1265,7 +1265,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
 
         {
             auto slice = partition_slice_builder(*s).build();
-            assert_that(sst->as_mutation_source().make_reader(s, no_reader_permit(), dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit(), dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1317,7 +1317,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
             mt2->make_flat_reader(s, tests::make_permit())), 1, s, test_sstables_manager.configure_writer(), encoding_stats{}).get();
         sst->load().get();
 
-        assert_that(sst->as_mutation_source().make_reader(s))
+        assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit()))
             .produces(m1 + m2)
             .produces_end_of_stream();
       }
@@ -1358,7 +1358,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             auto before = index_accesses();
 
             {
-                assert_that(ms.make_reader(s))
+                assert_that(ms.make_reader(s, tests::make_permit()))
                     .produces(m1)
                     .produces(m2)
                     .produces_end_of_stream();
@@ -1508,7 +1508,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
 
     auto t0 = std::chrono::steady_clock::now();
     auto large_allocs_before = memory::stats().large_allocations();
-    auto sst_reader = sst->as_mutation_source().make_reader(s, no_reader_permit(), pr);
+    auto sst_reader = sst->as_mutation_source().make_reader(s, tests::make_permit(), pr);
     mutation actual = *read_mutation_from_flat_mutation_reader(sst_reader, db::no_timeout).get0();
     auto large_allocs_after = memory::stats().large_allocations();
     auto duration = std::chrono::steady_clock::now() - t0;
@@ -1664,7 +1664,7 @@ SEASTAR_THREAD_TEST_CASE(test_counter_header_size) {
         sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, test_sstables_manager.configure_writer(), mt->get_encoding_stats()).get();
         sst->load().get();
 
-        assert_that(sst->as_mutation_source().make_reader(s))
+        assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit()))
             .produces(m)
             .produces_end_of_stream();
     }
@@ -1703,7 +1703,7 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
                 cfg.correctly_serialize_static_compact_in_mc = correctly_serialize;
                 auto ms = make_sstable_mutation_source(env, s, dir.path().string(), muts, cfg, version);
 
-                assert_that(ms.make_reader(s))
+                assert_that(ms.make_reader(s, tests::make_permit()))
                     .produces(muts[0])
                     .produces(muts[1])
                     .produces_end_of_stream();

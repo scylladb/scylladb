@@ -268,7 +268,7 @@ public:
     flat_mutation_reader
     make_reader(
         schema_ptr s,
-        reader_permit permit = no_reader_permit(),
+        reader_permit permit,
         partition_range range = query::full_partition_range) const
     {
         auto& full_slice = s->full_slice();

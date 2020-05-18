@@ -94,7 +94,7 @@ public:
         return sstables::test(_sst).read_indexes();
     }
     flat_mutation_reader read_rows_flat() {
-        return _sst->read_rows_flat(_sst->_schema, no_reader_permit());
+        return _sst->read_rows_flat(_sst->_schema, tests::make_permit());
     }
 
     const stats_metadata& get_stats_metadata() const {
@@ -110,7 +110,7 @@ public:
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor()) {
         return _sst->read_range_rows_flat(_sst->_schema,
-                                          no_reader_permit(),
+                                          tests::make_permit(),
                                           range,
                                           slice,
                                           pc,
@@ -3011,7 +3011,7 @@ static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s
     sstables::compact_sstables(std::move(desc), *cf).get();
 
     auto compacted_sst = open_sstable(env, s, tmp.path().string(), new_generation);
-    return compacted_sst->as_mutation_source().make_reader(s, no_reader_permit(), query::full_partition_range, s->full_slice());
+    return compacted_sst->as_mutation_source().make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice());
 }
 
 SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
@@ -4553,7 +4553,7 @@ static sstring get_read_index_test_path(sstring table_name) {
 }
 
 static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
-    return std::make_unique<index_reader>(sst, no_reader_permit(), default_priority_class(), tracing::trace_state_ptr());
+    return std::make_unique<index_reader>(sst, tests::make_permit(), default_priority_class(), tracing::trace_state_ptr());
 }
 
 shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name, int64_t gen = 1) {
@@ -5107,7 +5107,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
         sst->load().get();
 
         BOOST_REQUIRE_EXCEPTION(
-            assert_that(sst->read_rows_flat(read_schema, no_reader_permit()))
+            assert_that(sst->read_rows_flat(read_schema, tests::make_permit()))
                 .produces_partition_start(dk)
                 .produces_row(to_ck(0), {{val2_cdef, int32_type->decompose(int32_t(200))}})
                 .produces_row(to_ck(1), {{val2_cdef, int32_type->decompose(int32_t(201))}})

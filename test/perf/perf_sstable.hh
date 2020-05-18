@@ -204,7 +204,7 @@ public:
     }
 
     future<double> read_sequential_partitions(int idx) {
-        return do_with(_sst[0]->read_rows_flat(s, no_reader_permit()), [this] (flat_mutation_reader& r) {
+        return do_with(_sst[0]->read_rows_flat(s, tests::make_permit()), [this] (flat_mutation_reader& r) {
             auto start = perf_sstable_test_env::now();
             auto total = make_lw_shared<size_t>(0);
             auto done = make_lw_shared<bool>(false);

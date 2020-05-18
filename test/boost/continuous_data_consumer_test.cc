@@ -24,6 +24,7 @@
 
 #include "bytes.hh"
 #include "utils/buffer_input_stream.hh"
+#include "test/lib/reader_permit.hh"
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/core/iostream.hh>
@@ -61,7 +62,7 @@ class test_consumer final : public data_consumer::continuous_data_consumer<test_
 
 public:
     test_consumer(uint64_t tested_value)
-        : continuous_data_consumer(no_reader_permit(), prepare_stream(tested_value), 0, calculate_length(tested_value))
+        : continuous_data_consumer(tests::make_permit(), prepare_stream(tested_value), 0, calculate_length(tested_value))
         , _tested_value(tested_value)
     { }
 
