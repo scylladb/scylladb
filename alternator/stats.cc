@@ -79,6 +79,7 @@ stats::stats() : api_operations{} {
             OPERATION_LATENCY(update_item_latency, "UpdateItem")
             OPERATION(list_streams, "ListStreams")
             OPERATION(describe_stream, "DescribeStream")
+            OPERATION(get_shard_iterator, "GetShardIterator")
     });
     _metrics.add_group("alternator", {
             seastar::metrics::make_total_operations("unsupported_operations", unsupported_operations,
