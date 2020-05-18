@@ -96,7 +96,7 @@ begin batch
     insert into two (a, b) values (1, 1)
 apply batch;
 {
-	"message" : "exceptions::invalid_request_exception (Batch with conditions cannot span multiple tables)",
+	"message" : "exceptions::invalid_request_exception (BATCH with conditions cannot span multiple tables)",
 	"status" : "error"
 }
 drop table two;

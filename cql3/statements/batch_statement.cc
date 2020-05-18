@@ -68,6 +68,7 @@ batch_statement::batch_statement(int bound_terms, type type_,
     , _has_conditions(boost::algorithm::any_of(_statements, [] (auto&& s) { return s.statement->has_conditions(); }))
     , _stats(stats)
 {
+    validate();
     if (has_conditions()) {
         // A batch can be created not only by raw::batch_statement::prepare, but also by
         // cql_server::connection::process_batch, which doesn't call any methods of
@@ -160,7 +161,7 @@ void batch_statement::validate()
                 || (boost::distance(_statements
                         | boost::adaptors::transformed([] (auto&& s) { return s.statement->column_family(); })
                         | boost::adaptors::uniqued) != 1))) {
-        throw exceptions::invalid_request_exception("Batch with conditions cannot span multiple tables");
+        throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple tables");
     }
     std::optional<bool> raw_counter;
     for (auto& s : _statements) {
@@ -448,7 +449,6 @@ batch_statement::prepare(database& db, cql_stats& stats) {
     prep_attrs->collect_marker_specification(bound_names);
 
     cql3::statements::batch_statement batch_statement_(bound_names.size(), _type, std::move(statements), std::move(prep_attrs), stats);
-    batch_statement_.validate();
 
     std::vector<uint16_t> partition_key_bind_indices;
     if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
