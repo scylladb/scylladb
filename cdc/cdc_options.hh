@@ -44,6 +44,11 @@ public:
     bool postimage() const { return _postimage; }
     int ttl() const { return _ttl; }
 
+    void enabled(bool b) { _enabled = b; }
+    void preimage(bool b) { _preimage = b; }
+    void postimage(bool b) { _postimage = b; }
+    void ttl(int v) { _ttl = v; }
+
     bool operator==(const options& o) const;
     bool operator!=(const options& o) const;
 };
