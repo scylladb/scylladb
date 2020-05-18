@@ -194,6 +194,10 @@ public:
         _raw._extensions = std::move(exts);
         return *this;
     }
+    schema_builder& add_extension(const sstring& name, ::shared_ptr<schema_extension> ext) {
+        _raw._extensions[name] = std::move(ext);
+        return *this;
+    }
     const schema::extensions_map& get_extensions() const {
         return _raw._extensions;
     }
@@ -275,6 +279,8 @@ public:
     schema_builder& without_index(const sstring& name);
     schema_builder& without_indexes();
 
+    schema_builder& with_cdc_options(const cdc::options&);
+    
     default_names get_default_names() const {
         return default_names(_raw);
     }

@@ -33,6 +33,7 @@ public:
     static constexpr auto NAME = "cdc";
 
     cdc_extension() = default;
+    cdc_extension(const options& opts) : _cdc_options(opts) {}
     explicit cdc_extension(std::map<sstring, sstring> tags) : _cdc_options(std::move(tags)) {}
     explicit cdc_extension(const bytes& b) : _cdc_options(cdc_extension::deserialize(b)) {}
     explicit cdc_extension(const sstring& s) {
