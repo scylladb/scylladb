@@ -935,6 +935,7 @@ struct foreign_sstable_open_info {
     uint64_t generation;
     sstable::version_types version;
     sstable::format_types format;
+    uint64_t uncompressed_data_size;
 };
 
 // can only be used locally
