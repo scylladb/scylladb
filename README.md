@@ -67,7 +67,7 @@ The courses are free, self-paced and include hands-on examples. They cover a var
 administration, architecture, basic NoSQL concepts, using drivers for application development, Scylla setup, failover, compactions, 
 multi-datacenters and how Scylla integrates with third-party applications.
 
-## Building Fedora-based Docker image
+## Building a CentOS-based Docker image
 
 Build a Docker image with:
 
@@ -75,6 +75,11 @@ Build a Docker image with:
 cd dist/docker/redhat
 docker build -t <image-name> .
 ```
+
+This build is based on executables downloaded from downloads.scylladb.com,
+**not** on the executables built in this source directory. See further
+instructions in dist/docker/redhat/README.md to build a docker image from
+your own executables.
 
 Run the image with:
 
