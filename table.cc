@@ -384,11 +384,7 @@ table::make_sstable_reader(schema_ptr s,
         }
     }();
 
-    if (permit) {
-        return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
-    } else {
-        return ms.make_reader(std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
-    }
+    return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
 // Exposed for testing, not performance critical.

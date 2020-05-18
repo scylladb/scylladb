@@ -31,7 +31,7 @@ reader_permit::resource_units::resource_units(reader_concurrency_semaphore& sema
 }
 
 reader_permit::resource_units::resource_units(resource_units&& o) noexcept
-    : _semaphore(std::exchange(o._semaphore, nullptr))
+    : _semaphore(o._semaphore)
     , _resources(std::exchange(o._resources, {})) {
 }
 
@@ -44,7 +44,7 @@ reader_permit::resource_units& reader_permit::resource_units::operator=(resource
         return *this;
     }
     reset();
-    _semaphore = std::exchange(o._semaphore, nullptr);
+    _semaphore = o._semaphore;
     _resources = std::exchange(o._resources, {});
     return *this;
 }
@@ -55,8 +55,8 @@ void reader_permit::resource_units::add(resource_units&& o) {
 }
 
 void reader_permit::resource_units::reset(reader_resources res) {
-    if (_semaphore) {
-        _semaphore->consume(res);
+    _semaphore->consume(res);
+    if (_resources) {
         _semaphore->signal(_resources);
     }
     _resources = res;
@@ -67,31 +67,16 @@ reader_permit::reader_permit(reader_concurrency_semaphore& semaphore)
 }
 
 future<reader_permit::resource_units> reader_permit::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
-    if (!_semaphore) {
-        return make_ready_future<resource_units>(resource_units());
-    }
     return _semaphore->do_wait_admission(memory, timeout);
 }
 
 reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
-    if (!_semaphore) {
-        return resource_units();
-    }
-    const auto res = reader_resources{0, ssize_t(memory)};
-    _semaphore->consume(res);
-    return resource_units(*_semaphore, res);
+    return consume_resources(reader_resources{0, ssize_t(memory)});
 }
 
 reader_permit::resource_units reader_permit::consume_resources(reader_resources res) {
-    if (!_semaphore) {
-        return resource_units();
-    }
     _semaphore->consume(res);
     return resource_units(*_semaphore, res);
-}
-
-reader_permit no_reader_permit() {
-    return reader_permit{};
 }
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
@@ -264,10 +249,7 @@ public:
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
         return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([this, units = _permit.consume_memory(range_size)] (temporary_buffer<uint8_t> buf) {
-            if (_permit) {
-                buf = make_tracked_temporary_buffer(std::move(buf), _permit);
-            }
-            return make_ready_future<temporary_buffer<uint8_t>>(std::move(buf));
+            return make_ready_future<temporary_buffer<uint8_t>>(make_tracked_temporary_buffer(std::move(buf), _permit));
         });
     }
 };

@@ -70,18 +70,16 @@ class reader_concurrency_semaphore;
 /// `resource_units` RAII object that should be held onto while the respective
 /// resources are in use.
 class reader_permit {
-    friend reader_permit no_reader_permit();
     friend class reader_concurrency_semaphore;
 
 public:
     class resource_units {
-        reader_concurrency_semaphore* _semaphore = nullptr;
+        reader_concurrency_semaphore* _semaphore;
         reader_resources _resources;
 
         friend class reader_permit;
         friend class reader_concurrency_semaphore;
     private:
-        resource_units() = default;
         resource_units(reader_concurrency_semaphore& semaphore, reader_resources res) noexcept;
     public:
         resource_units(const resource_units&) = delete;
@@ -97,20 +95,15 @@ private:
     reader_concurrency_semaphore* _semaphore;
 
 private:
-    reader_permit() = default;
-
     explicit reader_permit(reader_concurrency_semaphore& semaphore);
 
 public:
     bool operator==(const reader_permit& o) const {
         return _semaphore == o._semaphore;
     }
-    operator bool() const {
-        return bool(_semaphore);
-    }
 
-    reader_concurrency_semaphore* semaphore() {
-        return _semaphore;
+    reader_concurrency_semaphore& semaphore() {
+        return *_semaphore;
     }
 
     future<resource_units> wait_admission(size_t memory, db::timeout_clock::time_point timeout);
@@ -121,8 +114,6 @@ public:
 
     void release();
 };
-
-reader_permit no_reader_permit();
 
 template <typename Char>
 temporary_buffer<Char> make_tracked_temporary_buffer(temporary_buffer<Char> buf, reader_permit& permit) {

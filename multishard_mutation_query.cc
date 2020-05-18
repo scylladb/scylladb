@@ -240,7 +240,7 @@ public:
     virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
-        return *_readers[this_shard_id()].rparts->permit.semaphore();
+        return _readers[this_shard_id()].rparts->permit.semaphore();
     }
 
     future<> lookup_readers();
@@ -349,7 +349,7 @@ future<> read_context::stop() {
             if (_readers[shard].state == reader_state::saving) {
                 // Move to the background.
                 (void)_db.invoke_on(shard, [rm = std::move(_readers[shard])] (database& db) mutable {
-                    rm.rparts->permit.semaphore()->unregister_inactive_read(std::move(*rm.handle));
+                    rm.rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
                 });
             }
         }
@@ -448,7 +448,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
     return _db.invoke_on(shard, [this, shard, query_uuid = _cmd.query_uuid, query_ranges = _ranges, rm = std::exchange(_readers[shard], {}),
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
         try {
-            flat_mutation_reader_opt reader = try_resume(*rm.rparts->permit.semaphore(), std::move(*rm.handle));
+            flat_mutation_reader_opt reader = try_resume(rm.rparts->permit.semaphore(), std::move(*rm.handle));
 
             if (!reader) {
                 return;
