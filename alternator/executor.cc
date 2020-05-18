@@ -1269,7 +1269,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         stats& stats) {
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
-            throw api_error("ValidationException", "Read-modify-write operations not supported");
+            throw api_error("ValidationException", "Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
         }
         stats.reads_before_write++;
         if (_write_isolation == write_isolation::UNSAFE_RMW) {
