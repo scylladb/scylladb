@@ -74,6 +74,7 @@ public:
         uint64_t update_item = 0;
         uint64_t update_table = 0;
         uint64_t update_time_to_live = 0;
+        uint64_t list_streams = 0;
 
         utils::estimated_histogram put_item_latency;
         utils::estimated_histogram get_item_latency;
