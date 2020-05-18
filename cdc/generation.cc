@@ -76,6 +76,10 @@ bool stream_id::operator==(const stream_id& o) const {
     return _value == o._value;
 }
 
+bool stream_id::operator!=(const stream_id& o) const {
+    return !(*this == o);
+}
+
 bool stream_id::operator<(const stream_id& o) const {
     return _value < o._value;
 }
@@ -122,6 +126,14 @@ bool topology_description::operator==(const topology_description& o) const {
 const std::vector<token_range_description>& topology_description::entries() const {
     return _entries;
 }
+
+topology_description_version::topology_description_version(std::vector<token_range_description> entries
+    , db_clock::time_point timestamp
+    , std::optional<db_clock::time_point> expired)
+    : topology_description(std::move(entries))
+    , _timestamp(timestamp)
+    , _expired(expired)
+{}
 
 static stream_id create_stream_id(dht::token t) {
     static thread_local std::mt19937_64 rand_gen(std::random_device().operator()());
