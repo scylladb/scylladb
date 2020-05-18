@@ -140,6 +140,7 @@ public:
 
 
 
+    static void add_stream_options(const rjson::value& stream_spec, schema_builder&);
 };
 
 }

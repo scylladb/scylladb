@@ -698,7 +698,7 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
 // are fixed, this issue will automatically get fixed as well.
 static future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
     schema_builder builder(schema);
-    builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>(std::move(tags_map))}});
+    builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(std::move(tags_map)));
     return mm.announce_column_family_update(builder.build(), false, std::vector<view_ptr>(), false);
 }
 
@@ -932,18 +932,10 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     if (rjson::find(request, "SSESpecification")) {
         return make_ready_future<request_return_type>(api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported."));
     }
-    // We don't yet support streams (CDC), but a StreamSpecification asking
-    // *not* to use streams should be accepted:
+
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
-        rjson::value* stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
-        if (!stream_enabled || !stream_enabled->IsBool()) {
-            return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification needs boolean StreamEnabled"));
-        }
-        if (stream_enabled->GetBool()) {
-            // TODO: support streams
-            return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported."));
-        }
+        add_stream_options(*stream_specification, builder);
     }
 
     // Parse the "Tags" parameter early, so we can avoid creating the table
@@ -954,7 +946,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     }
 
-    builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
+    builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>());
     schema_ptr schema = builder.build();
     auto where_clause_it = where_clauses.begin();
     for (auto& view_builder : view_builders) {
@@ -968,7 +960,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         }
         const bool include_all_columns = true;
         view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
-        view_builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
+        view_builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>());
         ++where_clause_it;
     }
 

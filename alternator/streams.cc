@@ -34,6 +34,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
 #include "cql3/type_json.hh"
+#include "schema_builder.hh"
 
 #include "executor.hh"
 #include "tags_extension.hh"
@@ -853,5 +854,36 @@ future<executor::request_return_type> executor::get_records(client_state& client
     });
 }
 
+void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder) {
+    auto stream_enabled = rjson::find(stream_specification, "StreamEnabled");
+    if (!stream_enabled || !stream_enabled->IsBool()) {
+        throw validation_exception("StreamSpecification needs boolean StreamEnabled");
+    }
+
+    if (stream_enabled->GetBool()) {
+        cdc::options opts;
+        opts.enabled(true);
+        auto type = rjson::get_opt<stream_view_type>(stream_specification, "StreamViewType").value_or(stream_view_type::KEYS_ONLY);
+        switch (type) {
+            default: 
+                break;
+            case stream_view_type::NEW_AND_OLD_IMAGES: 
+                opts.postimage(true);
+                opts.preimage(true);
+                break;
+            case stream_view_type::OLD_IMAGE: 
+                opts.preimage(true);
+                break;
+            case stream_view_type::NEW_IMAGE: 
+                opts.postimage(true);
+                break;
+        }
+        builder.with_cdc_options(opts);
+    } else {
+        cdc::options opts;
+        opts.enabled(false);
+        builder.with_cdc_options(opts);
+    }
+}
 
 }
