@@ -129,6 +129,9 @@ enum class operation : int8_t {
 };
 
 bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name);
+schema_ptr get_base_table(const database&, const sstring& ks_name, const std::string_view& table_name);
+schema_ptr get_base_table(const database&, const schema&);
+
 seastar::sstring log_name(const seastar::sstring& table_name);
 seastar::sstring log_data_column_name(std::string_view column_name);
 seastar::sstring log_meta_column_name(std::string_view column_name);
