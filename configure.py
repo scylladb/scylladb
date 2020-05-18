@@ -854,6 +854,7 @@ alternator = [
        'alternator/conditions.cc',
        'alternator/auth.cc',
        'alternator/error.cc',
+       'alternator/streams.cc',
 ]
 
 redis = [
