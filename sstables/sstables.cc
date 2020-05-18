@@ -1287,7 +1287,7 @@ future<> sstable::read_summary(const io_priority_class& pc) {
     });
 }
 
-future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) {
+future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) noexcept {
     return new_sstable_component_file(_read_error_handler, type, flags, opts);
 }
 

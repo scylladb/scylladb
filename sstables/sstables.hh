@@ -547,7 +547,7 @@ private:
 public:
     const bool has_component(component_type f) const;
 private:
-    future<file> open_file(component_type, open_flags, file_open_options = {});
+    future<file> open_file(component_type, open_flags, file_open_options = {}) noexcept;
 
     template <component_type Type, typename T>
     future<> read_simple(T& comp, const io_priority_class& pc);
