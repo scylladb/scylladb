@@ -470,5 +470,145 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     });
 }
 
+enum class shard_iterator_type {
+    AT_SEQUENCE_NUMBER,
+    AFTER_SEQUENCE_NUMBER,
+    TRIM_HORIZON,
+    LATEST,
+};
+
+std::ostream& operator<<(std::ostream& os, shard_iterator_type type) {
+    switch (type) {
+        case shard_iterator_type::AT_SEQUENCE_NUMBER: os << "AT_SEQUENCE_NUMBER"; break;
+        case shard_iterator_type::AFTER_SEQUENCE_NUMBER: os << "AFTER_SEQUENCE_NUMBER"; break;
+        case shard_iterator_type::TRIM_HORIZON: os << "TRIM_HORIZON"; break;
+        case shard_iterator_type::LATEST: os << "LATEST"; break;
+        default: throw std::logic_error(std::to_string(int(type)));
+    }
+    return os;
+}
+std::istream& operator>>(std::istream& is, shard_iterator_type& type) {
+    sstring s;
+    is >> s;
+    if (s == "AT_SEQUENCE_NUMBER") {
+        type = shard_iterator_type::AT_SEQUENCE_NUMBER;
+    } else if (s == "AFTER_SEQUENCE_NUMBER") {
+        type = shard_iterator_type::AFTER_SEQUENCE_NUMBER;
+    } else if (s == "TRIM_HORIZON") {
+        type = shard_iterator_type::TRIM_HORIZON;
+    } else if (s == "LATEST") {
+        type = shard_iterator_type::LATEST;
+    } else {
+        throw std::invalid_argument(s);
+    }
+    return is;
+}
+
+struct shard_iterator {    
+    static auto constexpr marker = 'I';
+
+    shard_id shard;
+    utils::UUID threshold;
+
+    shard_iterator(shard_id i, utils::UUID th)
+        : shard(i)
+        , threshold(th)
+    {}
+    shard_iterator(utils::UUID arn, db_clock::time_point ts, cdc::stream_id i, utils::UUID th)
+        : shard(arn, ts, i)
+        , threshold(th)
+    {}
+    shard_iterator(const sstring&);
+
+    friend std::ostream& operator<<(std::ostream& os, const shard_iterator& id) {
+        boost::io::ios_flags_saver fs(os);
+        return os << marker << std::hex << id.threshold
+            << ':' << id.shard
+            ;
+    }
+private:
+    shard_iterator(const sstring&, size_t);
+};
+
+shard_iterator::shard_iterator(const sstring& s) 
+    : shard_iterator(s, s.find(':'))
+{}
+
+shard_iterator::shard_iterator(const sstring& s, size_t i)
+    : shard(s.substr(i + 1))
+    , threshold(s.substr(1, i))
+{
+    if (s.at(0) != marker || i == sstring::npos) {
+        throw std::invalid_argument(s);
+    }
+}
+}
+
+template<typename ValueType>
+struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_iterator>
+    : public from_string_helper<ValueType, alternator::shard_iterator>
+{};
+
+template<typename ValueType>
+struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_iterator_type>
+    : public from_string_helper<ValueType, alternator::shard_iterator_type>
+{};
+
+namespace alternator {
+
+future<executor::request_return_type> executor::get_shard_iterator(client_state& client_state, service_permit permit, rjson::value request) {
+    _stats.api_operations.get_shard_iterator++;
+
+    auto type = rjson::get<shard_iterator_type>(request, "ShardIteratorType");
+    auto seq_num = rjson::get_opt<utils::UUID>(request, "SequenceNumber");
+    
+    if (type < shard_iterator_type::TRIM_HORIZON && !seq_num) {
+        throw validation_exception("Missing required parameter \"SequenceNumber\"");
+    }
+    if (type >= shard_iterator_type::TRIM_HORIZON && seq_num) {
+        throw validation_exception("Iterator of this type should not have sequence number");
+    }
+
+    auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
+    auto& db = _proxy.get_db().local();
+    
+    schema_ptr schema = nullptr;
+    std::optional<shard_id> sid;
+
+    try {
+        auto& cf = db.find_column_family(stream_arn);
+        schema = cf.schema();
+        sid = rjson::get<shard_id>(request, "ShardId");
+    } catch (...) {
+    }
+    if (!schema || !cdc::get_base_table(db, *schema) || !is_alternator_keyspace(schema->ks_name()) || sid->table != schema->id()) {
+        throw resource_not_found_exception("Invalid StreamArn");
+    }
+
+    utils::UUID threshold;
+
+    switch (type) {
+        case shard_iterator_type::AT_SEQUENCE_NUMBER:
+            threshold = *seq_num;
+            break;
+        case shard_iterator_type::AFTER_SEQUENCE_NUMBER:
+            threshold = utils::UUID_gen::max_time_UUID(utils::UUID_gen::unix_timestamp(*seq_num));
+            break;
+        case shard_iterator_type::TRIM_HORIZON:
+            threshold = utils::UUID{};
+            break;
+        case shard_iterator_type::LATEST:
+            threshold = utils::UUID_gen::min_time_UUID((db_clock::now() - confidence_interval(db)).time_since_epoch().count());
+            break;
+    }
+
+    shard_iterator iter(*sid, threshold);
+
+    auto ret = rjson::empty_object();
+    rjson::set(ret, "ShardIterator", iter);
+
+    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+}
+
 
 }
