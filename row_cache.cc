@@ -524,12 +524,14 @@ public:
         , _read_context(ctx)
     {}
 
-    future<flat_mutation_reader_opt, mutation_fragment_opt > operator()(db::timeout_clock::time_point timeout) {
+    using read_result = std::tuple<flat_mutation_reader_opt, mutation_fragment_opt>;
+
+    future<read_result> operator()(db::timeout_clock::time_point timeout) {
         return _reader.move_to_next_partition(timeout).then([this] (auto&& mfopt) mutable {
             {
                 if (!mfopt) {
                     this->handle_end_of_stream();
-                    return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(std::nullopt, std::nullopt);
+                    return make_ready_future<read_result>(read_result(std::nullopt, std::nullopt));
                 }
                 _cache.on_partition_miss();
                 const partition_start& ps = mfopt->as_partition_start();
@@ -541,14 +543,14 @@ public:
                                                                _reader.creation_phase(),
                                                                this->can_set_continuity() ? &*_last_key : nullptr);
                         _last_key = row_cache::previous_entry_pointer(key);
-                        return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(
-                            e.read(_cache, _read_context, _reader.creation_phase()), std::nullopt);
+                        return make_ready_future<read_result>(
+                                read_result(e.read(_cache, _read_context, _reader.creation_phase()), std::nullopt));
                     });
                 } else {
                     _cache._tracker.on_mispopulate();
                     _last_key = row_cache::previous_entry_pointer(key);
-                    return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(
-                        read_directly_from_underlying(_read_context), std::move(mfopt));
+                    return make_ready_future<read_result>(
+                            read_result(read_directly_from_underlying(_read_context), std::move(mfopt)));
                 }
             }
         });
@@ -650,7 +652,8 @@ private:
     }
 
     future<flat_mutation_reader_opt> read_from_secondary(db::timeout_clock::time_point timeout) {
-        return _secondary_reader(timeout).then([this, timeout] (flat_mutation_reader_opt fropt, mutation_fragment_opt ps) {
+        return _secondary_reader(timeout).then([this, timeout] (range_populating_reader::read_result&& res) {
+            auto&& [fropt, ps] = res;
             if (fropt) {
                 if (ps) {
                     push_mutation_fragment(std::move(*ps));
