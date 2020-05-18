@@ -80,6 +80,10 @@ public:
                      resf.get();
                  } catch (api_error &ae) {
                      ret = ae;
+                 } catch (rjson::invalid_parameter& ivp) {
+                     ret = api_error("InvalidParameterValue", ivp.what());
+                 } catch (rjson::missing_parameter& mp) {
+                     ret = api_error("MissingParameter", mp.what());
                  } catch (rjson::error & re) {
                      ret = api_error("ValidationException", re.what());
                  } catch (...) {

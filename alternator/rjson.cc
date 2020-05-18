@@ -128,6 +128,14 @@ std::string print(const rjson::value& value) {
     return std::string(buffer.GetString());
 }
 
+rjson::invalid_parameter::invalid_parameter(std::string_view name, const rjson::value& value)
+    : error(format("Invalid JSON parameter {} : {}", name, print(value)))
+{}
+
+rjson::missing_parameter::missing_parameter(std::string_view name) 
+    : error(format("JSON parameter {} not found", name))
+{}
+
 rjson::value copy(const rjson::value& value) {
     return rjson::value(value, the_allocator);
 }
@@ -158,20 +166,18 @@ rjson::value& get(rjson::value& value, std::string_view name) {
     // Luckily, the variant taking a GenericValue doesn't share this bug,
     // and we can create a string GenericValue without copying the string.
     auto member_it = value.FindMember(rjson::value(name.data(), name.size()));
-    if (member_it != value.MemberEnd())
+    if (member_it != value.MemberEnd()) {
         return member_it->value;
-    else {
-        throw rjson::error(format("JSON parameter {} not found", name));
     }
+    throw missing_parameter(name);
 }
 
 const rjson::value& get(const rjson::value& value, std::string_view name) {
     auto member_it = value.FindMember(rjson::value(name.data(), name.size()));
-    if (member_it != value.MemberEnd())
+    if (member_it != value.MemberEnd()) {
         return member_it->value;
-    else {
-        throw rjson::error(format("JSON parameter {} not found", name));
     }
+    throw missing_parameter(name);
 }
 
 rjson::value from_string(const std::string& str) {

@@ -80,6 +80,15 @@ using string_buffer = rapidjson::GenericStringBuffer<encoding>;
 using writer = rapidjson::Writer<string_buffer, encoding>;
 using type = rapidjson::Type;
 
+class invalid_parameter : public error {
+public:
+    invalid_parameter(std::string_view name, const rjson::value& value);
+};
+class missing_parameter : public error {
+public:
+    missing_parameter(std::string_view name);
+};
+
 // Returns an object representing JSON's null
 inline rjson::value null_value() {
     return rjson::value(rapidjson::kNullType);
