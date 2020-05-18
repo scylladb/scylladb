@@ -25,7 +25,7 @@
 
 namespace rjson {
 
-static allocator the_allocator;
+allocator the_allocator;
 
 /*
  * This wrapper class adds nested level checks to rapidjson's handlers.
