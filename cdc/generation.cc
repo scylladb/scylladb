@@ -76,6 +76,10 @@ bool stream_id::operator==(const stream_id& o) const {
     return _value == o._value;
 }
 
+bool stream_id::operator!=(const stream_id& o) const {
+    return !(*this == o);
+}
+
 bool stream_id::operator<(const stream_id& o) const {
     return _value < o._value;
 }

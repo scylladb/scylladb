@@ -69,6 +69,7 @@ public:
     stream_id(bytes);
     bool is_set() const;
     bool operator==(const stream_id&) const;
+    bool operator!=(const stream_id&) const;
     bool operator<(const stream_id&) const;
 
     int64_t first() const;
@@ -111,6 +112,31 @@ public:
     bool operator==(const topology_description&) const;
 
     const std::vector<token_range_description>& entries() const;
+};
+
+/**
+ * The set of streams for a single topology version/generation
+ * I.e. the stream ids at a given time. 
+ */ 
+class streams_version {
+    std::vector<stream_id> _streams;
+    db_clock::time_point _timestamp;
+    std::optional<db_clock::time_point> _expired;
+public:
+    streams_version(std::vector<stream_id> streams, db_clock::time_point ts, std::optional<db_clock::time_point> expired)
+        : _streams(std::move(streams))
+        , _timestamp(ts)
+        , _expired(std::move(expired))
+    {}
+    const db_clock::time_point& timestamp() const {
+        return _timestamp;
+    }
+    const std::optional<db_clock::time_point>& expired() const {
+        return _expired;
+    }
+    const std::vector<stream_id>& streams() const {
+        return _streams;
+    }
 };
 
 /* Should be called when we're restarting and we noticed that we didn't save any streams timestamp in our local tables,
