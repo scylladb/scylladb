@@ -80,6 +80,8 @@ using string_buffer = rapidjson::GenericStringBuffer<encoding>;
 using writer = rapidjson::Writer<string_buffer, encoding>;
 using type = rapidjson::Type;
 
+extern allocator the_allocator;
+
 class invalid_parameter : public error {
 public:
     invalid_parameter(std::string_view name, const rjson::value& value);
@@ -146,6 +148,11 @@ const rjson::value* find(const rjson::value& value, std::string_view name);
 rjson::value& get(rjson::value& value, std::string_view name);
 const rjson::value& get(const rjson::value& value, std::string_view name);
 
+template<typename T>
+T get(rjson::value& value, std::string_view name) {
+    return get(value, name).Get<T>();
+}
+
 // Sets a member in given JSON object by moving the member - allocates the name.
 // Throws if base is not a JSON object.
 void set_with_string_name(rjson::value& base, const std::string& name, rjson::value&& member);
@@ -161,6 +168,14 @@ void set_with_string_name(rjson::value& base, std::string_view name, rjson::stri
 // NOTICE: name liveness must be ensured to be at least as long as base's.
 // Throws if base is not a JSON object.
 void set(rjson::value& base, rjson::string_ref_type name, rjson::value&& member);
+
+template<typename T>
+std::enable_if_t<!std::is_constructible_v<string_ref_type, T>> 
+set(rjson::value& base, rjson::string_ref_type name, T&& member) {
+    rjson::value v;
+    v.Set(std::forward<T>(member), the_allocator);
+    set(base, std::move(name), std::move(v));
+}
 
 // Sets a string member in given JSON object by assigning its reference.
 // NOTICE: name liveness must be ensured to be at least as long as base's.
@@ -178,6 +193,16 @@ bool remove_member(rjson::value& value, std::string_view name);
 struct single_value_comp {
     bool operator()(const rjson::value& r1, const rjson::value& r2) const;
 };
+
+template<typename T>
+std::optional<T> get_opt(const rjson::value& value, std::string_view name) {
+    auto* v = find(value, name);
+    try {
+        return v ? std::optional<T>(v->Get<T>()) : std::nullopt;
+    } catch (...) {
+        throw invalid_parameter(name, *v);
+    }
+}
 
 } // end namespace rjson
 
