@@ -55,7 +55,7 @@ struct reader_resources {
     }
 
     explicit operator bool() const {
-        return count >= 0 && memory >= 0;
+        return count > 0 || memory > 0;
     }
 };
 
