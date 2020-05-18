@@ -891,17 +891,10 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     // *not* to use streams should be accepted:
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
-        rjson::value* stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
-        if (!stream_enabled || !stream_enabled->IsBool()) {
-            return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification needs boolean StreamEnabled"));
-        }
-        if (stream_enabled->GetBool()) {
-            // TODO: support streams
-            return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported."));
-        }
+        add_stream_options(*stream_specification, builder);
     }
 
-    builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
+    builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>());
     schema_ptr schema = builder.build();
     auto where_clause_it = where_clauses.begin();
     for (auto& view_builder : view_builders) {
@@ -918,7 +911,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         }
         const bool include_all_columns = true;
         view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
-        view_builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
+        view_builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>());
         ++where_clause_it;
     }
 

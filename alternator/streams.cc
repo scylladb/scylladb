@@ -30,6 +30,7 @@
 #include "cdc/generation.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "utils/UUID_gen.hh"
+#include "schema_builder.hh"
 
 #include "executor.hh"
 #include "tags_extension.hh"
@@ -551,5 +552,32 @@ future<executor::request_return_type> executor::get_records(client_state& client
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
 
+void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder) {
+    auto stream_enabled = rjson::find(stream_specification, "StreamEnabled");
+    if (!stream_enabled || !stream_enabled->IsBool()) {
+        return throw api_error("ValidationException", "StreamSpecification needs boolean StreamEnabled");
+    }
+
+    if (stream_enabled->GetBool()) {
+        cdc::options opts;
+        opts.enabled(true);
+        auto type = rjson::get_opt<stream_view_type>(stream_specification, "StreamViewType").value_or(stream_view_type::KEYS_ONLY);
+        switch (type) {
+            default: 
+                break;
+            case stream_view_type::NEW_AND_OLD_IMAGES: 
+                opts.postimage(true);
+                opts.preimage(true);
+                break;
+            case stream_view_type::OLD_IMAGE: 
+                opts.preimage(true);
+                break;
+            case stream_view_type::NEW_IMAGE: 
+                opts.preimage(true);
+                break;
+        }
+        builder.with_cdc_options(opts);
+    }
+}
 
 }

@@ -114,6 +114,7 @@ private:
     static schema_ptr get_table(service::storage_proxy&, const rjson::value& request, bool required = true);
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);
+    static void add_stream_options(const rjson::value& stream_spec, schema_builder&);
 };
 
 }
