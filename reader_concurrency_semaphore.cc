@@ -56,6 +56,11 @@ reader_permit::resource_units& reader_permit::resource_units::operator=(resource
     return *this;
 }
 
+void reader_permit::resource_units::add(resource_units&& o) {
+    assert(_semaphore == o._semaphore);
+    _resources += std::exchange(o._resources, {});
+}
+
 void reader_permit::resource_units::reset(reader_resources res) {
     if (_semaphore) {
         _semaphore->consume(res);

@@ -97,6 +97,7 @@ public:
         ~resource_units();
         resource_units& operator=(const resource_units&) = delete;
         resource_units& operator=(resource_units&&) noexcept;
+        void add(resource_units&& o);
         void reset(reader_resources res = {});
     };
 
