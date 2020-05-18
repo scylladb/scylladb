@@ -71,19 +71,19 @@ class reader_permit {
     friend reader_permit no_reader_permit();
 
 public:
-    class memory_units {
+    class resource_units {
         reader_concurrency_semaphore* _semaphore = nullptr;
         size_t _memory = 0;
 
         friend class reader_permit;
     private:
-        memory_units(reader_concurrency_semaphore* semaphore, ssize_t memory) noexcept;
+        resource_units(reader_concurrency_semaphore* semaphore, ssize_t memory) noexcept;
     public:
-        memory_units(const memory_units&) = delete;
-        memory_units(memory_units&&) noexcept;
-        ~memory_units();
-        memory_units& operator=(const memory_units&) = delete;
-        memory_units& operator=(memory_units&&) noexcept;
+        resource_units(const resource_units&) = delete;
+        resource_units(resource_units&&) noexcept;
+        ~resource_units();
+        resource_units& operator=(const resource_units&) = delete;
+        resource_units& operator=(resource_units&&) noexcept;
         void reset(size_t memory = 0);
         operator size_t() const {
             return _memory;
@@ -106,7 +106,7 @@ public:
         return bool(_impl);
     }
 
-    memory_units get_memory_units(size_t memory = 0);
+    resource_units consume_memory(size_t memory = 0);
     void release();
 };
 
@@ -115,7 +115,7 @@ reader_permit no_reader_permit();
 template <typename Char>
 temporary_buffer<Char> make_tracked_temporary_buffer(temporary_buffer<Char> buf, reader_permit& permit) {
     return temporary_buffer<Char>(buf.get_write(), buf.size(),
-            make_deleter(buf.release(), [units = permit.get_memory_units(buf.size())] () mutable { units.reset(); }));
+            make_deleter(buf.release(), [units = permit.consume_memory(buf.size())] () mutable { units.reset(); }));
 }
 
 file make_tracked_file(file f, reader_permit p);

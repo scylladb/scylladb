@@ -33,23 +33,23 @@ reader_permit::impl::~impl() {
     semaphore.signal(base_cost);
 }
 
-reader_permit::memory_units::memory_units(reader_concurrency_semaphore* semaphore, ssize_t memory) noexcept
+reader_permit::resource_units::resource_units(reader_concurrency_semaphore* semaphore, ssize_t memory) noexcept
         : _semaphore(semaphore), _memory(memory) {
     if (_semaphore && _memory) {
         _semaphore->consume_memory(_memory);
     }
 }
 
-reader_permit::memory_units::memory_units(memory_units&& o) noexcept
+reader_permit::resource_units::resource_units(resource_units&& o) noexcept
     : _semaphore(std::exchange(o._semaphore, nullptr))
     , _memory(std::exchange(o._memory, 0)) {
 }
 
-reader_permit::memory_units::~memory_units() {
+reader_permit::resource_units::~resource_units() {
     reset();
 }
 
-reader_permit::memory_units& reader_permit::memory_units::operator=(memory_units&& o) noexcept {
+reader_permit::resource_units& reader_permit::resource_units::operator=(resource_units&& o) noexcept {
     if (&o == this) {
         return *this;
     }
@@ -59,7 +59,7 @@ reader_permit::memory_units& reader_permit::memory_units::operator=(memory_units
     return *this;
 }
 
-void reader_permit::memory_units::reset(size_t memory) {
+void reader_permit::resource_units::reset(size_t memory) {
     if (_semaphore) {
         _semaphore->consume_memory(memory);
         _semaphore->signal_memory(_memory);
@@ -71,8 +71,8 @@ reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, reader_res
     : _impl(make_lw_shared<reader_permit::impl>(semaphore, base_cost)) {
 }
 
-reader_permit::memory_units reader_permit::get_memory_units(size_t memory) {
-    return memory_units(_impl ? &_impl->semaphore : nullptr, memory);
+reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
+    return resource_units(_impl ? &_impl->semaphore : nullptr, memory);
 }
 
 void reader_permit::release() {
@@ -244,7 +244,7 @@ public:
     }
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
-        return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([this, units = _permit.get_memory_units(range_size)] (temporary_buffer<uint8_t> buf) {
+        return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([this, units = _permit.consume_memory(range_size)] (temporary_buffer<uint8_t> buf) {
             if (_permit) {
                 buf = make_tracked_temporary_buffer(std::move(buf), _permit);
             }
