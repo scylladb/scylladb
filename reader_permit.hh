@@ -70,14 +70,6 @@ class reader_concurrency_semaphore;
 /// `resource_units` RAII object that should be held onto while the respective
 /// resources are in use.
 class reader_permit {
-    struct impl {
-        reader_concurrency_semaphore& semaphore;
-        reader_resources base_cost;
-
-        impl(reader_concurrency_semaphore& semaphore, reader_resources base_cost);
-        ~impl();
-    };
-
     friend reader_permit no_reader_permit();
     friend class reader_concurrency_semaphore;
 
@@ -102,22 +94,24 @@ public:
     };
 
 private:
-    lw_shared_ptr<impl> _impl;
+    reader_concurrency_semaphore* _semaphore;
 
 private:
     reader_permit() = default;
 
-    reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost);
+    explicit reader_permit(reader_concurrency_semaphore& semaphore);
 
 public:
     bool operator==(const reader_permit& o) const {
-        return _impl == o._impl;
+        return _semaphore == o._semaphore;
     }
     operator bool() const {
-        return bool(_impl);
+        return bool(_semaphore);
     }
 
-    reader_concurrency_semaphore* semaphore();
+    reader_concurrency_semaphore* semaphore() {
+        return _semaphore;
+    }
 
     future<resource_units> wait_admission(size_t memory, db::timeout_clock::time_point timeout);
 

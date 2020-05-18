@@ -26,13 +26,6 @@
 #include "utils/exceptions.hh"
 
 
-reader_permit::impl::impl(reader_concurrency_semaphore& semaphore, reader_resources base_cost) : semaphore(semaphore), base_cost(base_cost) {
-}
-
-reader_permit::impl::~impl() {
-    semaphore.signal(base_cost);
-}
-
 reader_permit::resource_units::resource_units(reader_concurrency_semaphore& semaphore, reader_resources res) noexcept
         : _semaphore(&semaphore), _resources(res) {
 }
@@ -69,41 +62,32 @@ void reader_permit::resource_units::reset(reader_resources res) {
     _resources = res;
 }
 
-reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost)
-    : _impl(make_lw_shared<reader_permit::impl>(semaphore, base_cost)) {
-}
-
-reader_concurrency_semaphore* reader_permit::semaphore() {
-    return _impl ? &_impl->semaphore : nullptr;
+reader_permit::reader_permit(reader_concurrency_semaphore& semaphore)
+    : _semaphore(&semaphore) {
 }
 
 future<reader_permit::resource_units> reader_permit::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
-    if (!_impl) {
+    if (!_semaphore) {
         return make_ready_future<resource_units>(resource_units());
     }
-    return _impl->semaphore.do_wait_admission(memory, timeout);
+    return _semaphore->do_wait_admission(memory, timeout);
 }
 
 reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
-    if (!_impl) {
+    if (!_semaphore) {
         return resource_units();
     }
     const auto res = reader_resources{0, ssize_t(memory)};
-    _impl->semaphore.consume(res);
-    return resource_units(_impl->semaphore, res);
+    _semaphore->consume(res);
+    return resource_units(*_semaphore, res);
 }
 
 reader_permit::resource_units reader_permit::consume_resources(reader_resources res) {
-    if (!_impl) {
+    if (!_semaphore) {
         return resource_units();
     }
-    _impl->semaphore.consume(res);
-    return resource_units(_impl->semaphore, res);
-}
-
-void reader_permit::release() {
-    _impl->semaphore.signal(_impl->base_cost);
-    _impl->base_cost = {};
+    _semaphore->consume(res);
+    return resource_units(*_semaphore, res);
 }
 
 reader_permit no_reader_permit() {
@@ -198,20 +182,8 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
     return fut;
 }
 
-future<reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
-    return do_wait_admission(memory, timeout).then([this] (reader_permit::resource_units res) {
-        auto underlying_res = std::exchange(res._resources, {});
-        return reader_permit(*this, underlying_res);
-    });
-}
-
-reader_permit reader_concurrency_semaphore::consume_resources(resources r) {
-    _resources -= r;
-    return reader_permit(*this, r);
-}
-
 reader_permit reader_concurrency_semaphore::make_permit() {
-    return reader_permit(*this, {});
+    return reader_permit(*this);
 }
 
 void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
