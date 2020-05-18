@@ -371,4 +371,31 @@ system_distributed_keyspace::cdc_desc_exists(
     });
 }
 
+future<std::vector<cdc::topology_description_version>> 
+system_distributed_keyspace::cdc_get_topology_descriptions(context ctx) {
+    return _qp.execute_internal(
+            format("SELECT * FROM {}.{}", NAME, CDC_TOPOLOGY_DESCRIPTION),
+            quorum_if_many(ctx.num_token_owners),
+            internal_distributed_timeout_config,
+            {},
+            false
+    ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        std::vector<cdc::topology_description_version> result;
+
+        for (auto& row : *cql_result) {
+            std::vector<cdc::token_range_description> entries;
+            auto entries_val = value_cast<list_type_impl::native_type>(
+                    cdc_generation_description_type->deserialize(cql_result->one().get_view("description")));
+            for (const auto& e_val: entries_val) {
+                entries.push_back(get_token_range_description_from_value(e_val));
+            }
+
+            result.emplace_back(std::move(entries), row.get_as<db_clock::time_point>("time"), row.get_opt<db_clock::time_point>("expired"));
+        }
+
+        return result;
+    });
+}
+
+
 }

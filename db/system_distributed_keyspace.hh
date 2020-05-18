@@ -38,6 +38,7 @@ class query_processor;
 namespace cdc {
     class stream_id;
     class topology_description;
+    class topology_description_version;
 } // namespace cdc
 
 namespace db {
@@ -80,6 +81,8 @@ public:
     future<> create_cdc_desc(db_clock::time_point streams_ts, const std::vector<cdc::stream_id>&, context);
     future<> expire_cdc_desc(db_clock::time_point streams_ts, db_clock::time_point expiration_time, context);
     future<bool> cdc_desc_exists(db_clock::time_point streams_ts, context);
+
+    future<std::vector<cdc::topology_description_version>> cdc_get_topology_descriptions(context);
 };
 
 }
