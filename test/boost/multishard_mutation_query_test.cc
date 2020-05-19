@@ -104,11 +104,10 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
     for (const auto& pkey : pkeys) {
         const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey] (database& db) {
             return async([s = gs.get(), &pkey, &db] () mutable {
-                auto accounter = db.get_result_memory_limiter().new_mutation_read(std::numeric_limits<size_t>::max()).get0();
                 const auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), query::max_rows);
                 const auto range = dht::partition_range::make_singular(pkey);
                 return make_foreign(std::make_unique<reconcilable_result>(
-                    std::get<0>(db.query_mutations(std::move(s), cmd, range, std::move(accounter), nullptr, db::no_timeout).get0())));
+                    std::get<0>(db.query_mutations(std::move(s), cmd, range, std::numeric_limits<size_t>::max(), nullptr, db::no_timeout).get0())));
             });
         }).get0();
 

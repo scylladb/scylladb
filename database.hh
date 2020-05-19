@@ -1465,7 +1465,7 @@ public:
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
                                                                   uint64_t max_result_size, db::timeout_clock::time_point timeout);
     future<std::tuple<reconcilable_result, cache_temperature>> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
-                                                query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state,
+                                                size_t max_result_size, tracing::trace_state_ptr trace_state,
                                                 db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.

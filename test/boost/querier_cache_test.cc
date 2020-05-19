@@ -672,7 +672,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         db.query_mutations(s,
                 cmd1,
                 query::full_partition_range,
-                db.get_result_memory_limiter().new_mutation_read(1024 * 1024).get0(),
+                1024 * 1024,
                 nullptr,
                 db::no_timeout).get();
 
@@ -706,7 +706,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         db.query_mutations(s,
                 cmd2,
                 query::full_partition_range,
-                db.get_result_memory_limiter().new_mutation_read(1024 * 1024).get0(),
+                1024 * 1024,
                 nullptr,
                 db::no_timeout).get();
 
@@ -723,7 +723,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         db.query_mutations(s,
                 cmd2,
                 query::full_partition_range,
-                db.get_result_memory_limiter().new_mutation_read(1024 * 1024 * 1024 * 1024).get0(),
+                1024 * 1024 * 1024 * 1024,
                 nullptr,
                 db::no_timeout).get();
         return make_ready_future<>();
