@@ -31,6 +31,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/remove.hh"
+#include "sstables/sstable_directory.hh"
 #include "service/priority_manager.hh"
 #include "auth/common.hh"
 #include "tracing/trace_keyspace_helper.hh"
@@ -264,7 +265,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::
               }
               descriptors.emplace(comps.generation, std::move(comps));
               return make_ready_future<>();
-        }, &column_family::manifest_json_filter).get();
+        }, &sstables::manifest_json_filter).get();
 
         flushed.reserve(descriptors.size());
         for (auto& [generation, comps] : descriptors) {
@@ -743,7 +744,7 @@ future<> distributed_loader::do_populate_column_family(distributed<database>& db
             futures.push_back(std::move(f));
 
             return make_ready_future<>();
-        }, &column_family::manifest_json_filter).then([&futures] {
+        }, &sstables::manifest_json_filter).then([&futures] {
             return execute_futures(futures);
         }).then([verifier, sstdir, ks = std::move(ks), cf = std::move(cf)] {
             return do_for_each(*verifier, [sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), verifier] (auto v) {

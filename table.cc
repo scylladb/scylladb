@@ -35,6 +35,7 @@
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
 #include "sstables/compaction_manager.hh"
+#include "sstables/sstable_directory.hh"
 #include "db/system_keyspace.hh"
 #include "db/query_context.hh"
 #include "query-result-writer.hh"
@@ -1062,7 +1063,7 @@ table::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
             }
             return make_exception_future<>(std::runtime_error("Loading SSTables from the main SSTable directory is unsafe and no longer supported."
                    " You will find a directory called upload/ inside the table directory that can be used to load new SSTables into the system"));
-        }, &manifest_json_filter).then([&work] {
+        }, &sstables::manifest_json_filter).then([&work] {
             return make_ready_future<std::vector<sstables::entry_descriptor>>();
         });
     });
@@ -1463,15 +1464,6 @@ lw_shared_ptr<const sstable_list> table::get_sstables_including_compacted_undele
 
 const std::vector<sstables::shared_sstable>& table::compacted_undeleted_sstables() const {
     return _sstables_compacted_but_not_deleted;
-}
-
-inline bool table::manifest_json_filter(const fs::path&, const directory_entry& entry) {
-    // Filter out directories. If type of the entry is unknown - check its name.
-    if (entry.type.value_or(directory_entry_type::regular) != directory_entry_type::directory && (entry.name == "manifest.json" || entry.name == "schema.cql")) {
-        return false;
-    }
-
-    return true;
 }
 
 lw_shared_ptr<memtable_list>

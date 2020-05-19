@@ -1085,9 +1085,6 @@ private:
     // that the incoming memtables will be coalesced together.
     future<> seal_active_streaming_memtable_immediate(flush_permit&&);
 
-    // filter manifest.json files out
-    static bool manifest_json_filter(const fs::path&, const directory_entry& entry);
-
     void check_valid_rp(const db::replay_position&) const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
