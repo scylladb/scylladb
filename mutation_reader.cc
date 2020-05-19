@@ -757,10 +757,11 @@ public:
         }, timeout);
     }
     virtual size_t buffer_size() const override {
+        auto buffer_size = flat_mutation_reader::impl::buffer_size();
         if (auto* state = std::get_if<admitted_state>(&_state)) {
-            return state->reader.buffer_size();
+            buffer_size += state->reader.buffer_size();
         }
-        return 0;
+        return buffer_size;
     }
 };
 
