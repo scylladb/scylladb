@@ -826,8 +826,8 @@ api = ['api/api.cc',
        'api/system.cc',
        'api/config.cc',
        'api/api-doc/config.json',
-        'api/error_injection.cc',
-        'api/api-doc/error_injection.json',
+       'api/error_injection.cc',
+       'api/api-doc/error_injection.json',
        ]
 
 alternator = [
