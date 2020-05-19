@@ -591,41 +591,56 @@ def test_update_item_add(test_table_s):
             AttributeUpdates={'a': {'Action': 'ADD', 'Value': value}})
         assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': value}
 
-# DynamoDB Does not allow empty strings, empty byte arrays, or empty sets.
+# DynamoDB Does not allow empty sets.
 # Trying to ask UpdateItem to PUT one of these in an attribute should be
 # forbidden. Empty lists and maps *are* allowed.
 def test_update_item_empty_attribute(test_table_s):
     p = random_string()
-    # Empty string, byte array and set are *not* allowed
-    with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_s.update_item(Key={'p': p},
-            AttributeUpdates={'a': {'Action': 'PUT', 'Value': ''}})
-    with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_s.update_item(Key={'p': p},
-            AttributeUpdates={'b': {'Action': 'PUT', 'Value': bytearray('', 'utf-8')}})
+    # Empty sets are *not* allowed
     with pytest.raises(ClientError, match='ValidationException.*empty'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'c': {'Action': 'PUT', 'Value': set([])}})
     assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
-    # But empty lists and maps *are* allowed:
+    # But empty lists, maps, strings and binary blobs *are* allowed:
     test_table_s.update_item(Key={'p': p},
         AttributeUpdates={'d': {'Action': 'PUT', 'Value': []}})
     test_table_s.update_item(Key={'p': p},
         AttributeUpdates={'e': {'Action': 'PUT', 'Value': {}}})
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'd': [], 'e': {}}
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'f': {'Action': 'PUT', 'Value': ''}})
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'g': {'Action': 'PUT', 'Value': b''}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'd': [], 'e': {}, 'f': '', 'g': b''}
 
-# Same as the above test (that we cannot create empty strings, blobs or
-# sets), but using PutItem
+# Test that empty strings are not accepted for keys
+def test_update_item_empty_key(test_table_s, test_table_b, test_table_ss, test_table_sb):
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_s.update_item(Key={'p': ''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_b.update_item(Key={'p': b''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_ss.update_item(Key={'p': 'abc', 'c': ''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_sb.update_item(Key={'p': 'abc', 'c': b''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+
+# Same as the above test (that we cannot create empty sets), but using PutItem
 def test_put_item_empty_attribute(test_table_s):
     p = random_string()
-    # Empty string, byte array and set are *not* allowed
-    with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_s.put_item(Item={'p': p, 'a': ''})
-    with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_s.put_item(Item={'p': p, 'a': bytearray('', 'utf-8')})
+    # Empty sets are *not* allowed
     with pytest.raises(ClientError, match='ValidationException.*empty'):
         test_table_s.put_item(Item={'p': p, 'a': set([])})
     assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
-    # But empty lists and maps *are* allowed:
-    test_table_s.put_item(Item={'p': p, 'a': [], 'b': {}})
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': [], 'b': {}}
+    # But empty lists, maps, strings and binary blobs *are* allowed:
+    test_table_s.put_item(Item={'p': p, 'a': [], 'b': {}, 'c': '', 'd': b''})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': [], 'b': {}, 'c': '', 'd': b''}
+
+# Test that empty strings are not accepted for keys
+def test_put_item_empty_key(test_table_s, test_table_b, test_table_ss, test_table_sb):
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_s.put_item(Item={'p': '', 'v': 'something'})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_b.put_item(Item={'p': b'', 'v': 'something'})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_ss.put_item(Item={'p': 'abc', 'c': '', 'v': 'something'})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_sb.put_item(Item={'p': 'abc', 'c': b'', 'v': 'something'})

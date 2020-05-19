@@ -159,6 +159,12 @@ def test_gsi_strong_consistency(test_table_gsi_1):
     with pytest.raises(ClientError, match='ValidationException.*Consistent'):
         full_scan(test_table_gsi_1, IndexName='hello', ConsistentRead=True)
 
+# Test that setting an indexed string column to an empty string is illegal,
+# since keys cannot contain empty strings
+def test_gsi_empty_value(test_table_gsi_2):
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_2.put_item(Item={'p': random_string(), 'x': ''})
+
 # Verify that a GSI is correctly listed in describe_table
 @pytest.mark.xfail(reason="DescribeTable provides index names only, no size or item count")
 def test_gsi_describe(test_table_gsi_1):

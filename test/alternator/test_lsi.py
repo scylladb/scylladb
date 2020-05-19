@@ -212,6 +212,12 @@ def test_lsi_4(test_table_lsi_4):
             KeyConditions={'p': {'AttributeValueList': [i5], 'ComparisonOperator': 'EQ'},
                            column: {'AttributeValueList': [i5], 'ComparisonOperator': 'EQ'}})
 
+# Test that setting an indexed string column to an empty string is illegal,
+# since keys cannot contain empty strings
+def test_lsi_empty_value(test_table_lsi_1):
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_lsi_1.put_item(Item={'p': random_string(), 'c': random_string(), 'b': ''})
+
 def test_lsi_describe(test_table_lsi_4):
     desc = test_table_lsi_4.meta.client.describe_table(TableName=test_table_lsi_4.name)
     assert 'Table' in desc

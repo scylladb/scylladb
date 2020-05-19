@@ -871,7 +871,7 @@ def test_nested_attribute_update_bad_path_array(test_table_s):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[0] = :val1',
             ExpressionAttributeValues={':val1': 7})
 
-# DynamoDB Does not allow empty strings, empty byte arrays, or empty sets.
+# DynamoDB Does not allow empty sets.
 # Trying to ask UpdateItem to put one of these in an attribute should be
 # forbidden. Empty lists and maps *are* allowed.
 # Note that in test_item.py::test_update_item_empty_attribute we checked
@@ -879,16 +879,15 @@ def test_nested_attribute_update_bad_path_array(test_table_s):
 # UpdateExpression syntax.
 def test_update_expression_empty_attribute(test_table_s):
     p = random_string()
-    # Empty string, byte array and set are *not* allowed
-    for v in ['', bytearray('', 'utf-8'), set()]:
-        with pytest.raises(ClientError, match='ValidationException.*empty'):
-            test_table_s.update_item(Key={'p': p},
-                UpdateExpression='SET a = :v',
-                ExpressionAttributeValues={':v': v})
+    # Empty sets are *not* allowed
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET a = :v',
+            ExpressionAttributeValues={':v': set()})
     assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
-    # But empty lists and maps *are* allowed:
+    # But empty lists, maps, strings and binary blobs *are* allowed:
     test_table_s.update_item(Key={'p': p},
-        UpdateExpression='SET d = :v1, e = :v2',
-        ExpressionAttributeValues={':v1': [], ':v2': {}})
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'd': [], 'e': {}}
+        UpdateExpression='SET d = :v1, e = :v2, f = :v3, g = :v4',
+        ExpressionAttributeValues={':v1': [], ':v2': {}, ':v3': '', ':v4': b''})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'd': [], 'e': {}, 'f': '', 'g': b''}
 #
