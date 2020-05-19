@@ -186,6 +186,11 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
                 format("Type mismatch: expected type {} for key column {}, got type {}",
                         type_to_string(column.type), column.name_as_text(), it->name.GetString()));
     }
+    std::string_view value_view = rjson::to_string_view(it->value);
+    if (value_view.empty()) {
+        throw api_error("ValidationException",
+                format("The AttributeValue for a key attribute cannot contain an empty string value. Key: {}", column.name_as_text()));
+    }
     if (column.type == bytes_type) {
         return base64_decode(it->value);
     } else {
