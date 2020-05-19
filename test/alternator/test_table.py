@@ -253,13 +253,13 @@ def test_table_streams_off(dynamodb):
     # Unfortunately, boto3 doesn't allow us to pass StreamSpecification=None.
     # This is what we had in issue #5796.
 
-@pytest.mark.xfail(reason="streams not yet implemented")
 def test_table_streams_on(dynamodb):
-    table = create_test_table(dynamodb,
-        StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'OLD_IMAGE'},
-        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
-        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]);
-    table.delete();
+    for type in [ 'OLD_IMAGE', 'NEW_IMAGE', 'KEYS_ONLY', 'NEW_AND_OLD_IMAGES']:
+        table = create_test_table(dynamodb,
+            StreamSpecification={'StreamEnabled': True, 'StreamViewType': type},
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]);
+        table.delete();
 
 # Our first implementation had a special column name called "attrs" where
 # we stored a map for all non-key columns. If the user tried to name one
