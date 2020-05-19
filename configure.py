@@ -166,9 +166,27 @@ def maybe_static(flag, libs):
     return libs
 
 
-class Thrift(object):
-    def __init__(self, source, service):
+class Source(object):
+    def __init__(self, source, hh_prefix, cc_prefix):
         self.source = source
+        self.hh_prefix = hh_prefix
+        self.cc_prefix = cc_prefix
+
+    def headers(self, gen_dir):
+        return [x for x in self.generated(gen_dir) if x.endswith(self.hh_prefix)]
+
+    def sources(self, gen_dir):
+        return [x for x in self.generated(gen_dir) if x.endswith(self.cc_prefix)]
+
+    def objects(self, gen_dir):
+        return [x.replace(self.cc_prefix, '.o') for x in self.sources(gen_dir)]
+
+    def endswith(self, end):
+        return self.source.endswith(end)
+
+class Thrift(Source):
+    def __init__(self, source, service):
+        Source.__init__(self, source, '.h', '.cpp')
         self.service = service
 
     def generated(self, gen_dir):
@@ -179,19 +197,6 @@ class Thrift(object):
                   for ext in ['.cpp', '.h']]
         return [os.path.join(gen_dir, file) for file in files]
 
-    def headers(self, gen_dir):
-        return [x for x in self.generated(gen_dir) if x.endswith('.h')]
-
-    def sources(self, gen_dir):
-        return [x for x in self.generated(gen_dir) if x.endswith('.cpp')]
-
-    def objects(self, gen_dir):
-        return [x.replace('.cpp', '.o') for x in self.sources(gen_dir)]
-
-    def endswith(self, end):
-        return self.source.endswith(end)
-
-
 def default_target_arch():
     if platform.machine() in ['i386', 'i686', 'x86_64']:
         return 'westmere'   # support PCLMUL
@@ -201,28 +206,15 @@ def default_target_arch():
         return ''
 
 
-class Antlr3Grammar(object):
+class Antlr3Grammar(Source):
     def __init__(self, source):
-        self.source = source
+        Source.__init__(self, source, '.hpp', '.cpp')
 
     def generated(self, gen_dir):
         basename = os.path.splitext(self.source)[0]
         files = [basename + ext
                  for ext in ['Lexer.cpp', 'Lexer.hpp', 'Parser.cpp', 'Parser.hpp']]
         return [os.path.join(gen_dir, file) for file in files]
-
-    def headers(self, gen_dir):
-        return [x for x in self.generated(gen_dir) if x.endswith('.hpp')]
-
-    def sources(self, gen_dir):
-        return [x for x in self.generated(gen_dir) if x.endswith('.cpp')]
-
-    def objects(self, gen_dir):
-        return [x.replace('.cpp', '.o') for x in self.sources(gen_dir)]
-
-    def endswith(self, end):
-        return self.source.endswith(end)
-
 
 def find_headers(repodir, excluded_dirs):
     walker = os.walk(repodir)
