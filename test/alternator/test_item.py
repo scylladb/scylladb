@@ -612,6 +612,17 @@ def test_update_item_empty_attribute(test_table_s):
         AttributeUpdates={'g': {'Action': 'PUT', 'Value': b''}})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'd': [], 'e': {}, 'f': '', 'g': b''}
 
+# Test that empty strings are not accepted for keys
+def test_update_item_empty_key(test_table_s, test_table_b, test_table_ss, test_table_sb):
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_s.update_item(Key={'p': ''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_b.update_item(Key={'p': b''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_ss.update_item(Key={'p': 'abc', 'c': ''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_sb.update_item(Key={'p': 'abc', 'c': b''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+
 # Same as the above test (that we cannot create empty sets), but using PutItem
 def test_put_item_empty_attribute(test_table_s):
     p = random_string()
@@ -622,3 +633,14 @@ def test_put_item_empty_attribute(test_table_s):
     # But empty lists, maps, strings and binary blobs *are* allowed:
     test_table_s.put_item(Item={'p': p, 'a': [], 'b': {}, 'c': '', 'd': b''})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': [], 'b': {}, 'c': '', 'd': b''}
+
+# Test that empty strings are not accepted for keys
+def test_put_item_empty_key(test_table_s, test_table_b, test_table_ss, test_table_sb):
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_s.put_item(Item={'p': '', 'v': 'something'})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_b.put_item(Item={'p': b'', 'v': 'something'})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_ss.put_item(Item={'p': 'abc', 'c': '', 'v': 'something'})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_sb.put_item(Item={'p': 'abc', 'c': b'', 'v': 'something'})
