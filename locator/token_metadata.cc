@@ -1975,9 +1975,7 @@ void topology::add_endpoint(const inet_address& ep)
         if (current->second.dc == dc && current->second.rack == rack) {
             return;
         }
-
-        _dc_racks[current->second.dc][current->second.rack].erase(ep);
-        _dc_endpoints[current->second.dc].erase(ep);
+        remove_endpoint(ep);
     }
 
     _dc_endpoints[dc].insert(ep);
@@ -2002,7 +2000,14 @@ void topology::remove_endpoint(inet_address ep)
     }
 
     _dc_endpoints[cur_dc_rack->second.dc].erase(ep);
-    _dc_racks[cur_dc_rack->second.dc][cur_dc_rack->second.rack].erase(ep);
+
+    auto& racks = _dc_racks[cur_dc_rack->second.dc];
+    auto& eps = racks[cur_dc_rack->second.rack];
+    eps.erase(ep);
+    if (eps.empty()) {
+        racks.erase(cur_dc_rack->second.rack);
+    }
+
     _current_locations.erase(cur_dc_rack);
 }
 
