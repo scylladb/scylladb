@@ -994,9 +994,6 @@ static void validate_value(const rjson::value& v, const char* caller) {
         if (!it->value.IsString()) {
             throw api_error("ValidationException", format("{}: improperly formatted value '{}'", caller, v));
         }
-        if (it->value.GetStringLength() == 0) {
-            throw api_error("ValidationException", format("{}: empty string not allowed", caller));
-        }
     } else if (type != "N" && type != "L" && type != "M" && type != "BOOL" && type != "NULL") {
         // TODO: can do more sanity checks on the content of the above types.
         throw api_error("ValidationException", format("{}: unknown type {} for value {}", caller, type, v));
