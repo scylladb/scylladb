@@ -34,11 +34,13 @@ thrift_controller::thrift_controller(distributed<database>& db, sharded<auth::se
 }
 
 future<> thrift_controller::start_server() {
-    if (!_ops_sem.try_wait()) {
-        throw std::runtime_error(format("Thrift server is stopping, try again later"));
-    }
+    return smp::submit_to(0, [this] {
+        if (!_ops_sem.try_wait()) {
+            throw std::runtime_error(format("Thrift server is stopping, try again later"));
+        }
 
-    return do_start_server().finally([this] { _ops_sem.signal(); });
+        return do_start_server().finally([this] { _ops_sem.signal(); });
+    });
 }
 
 future<> thrift_controller::do_start_server() {
@@ -72,18 +74,27 @@ future<> thrift_controller::do_start_server() {
 }
 
 future<> thrift_controller::stop() {
+    assert(this_shard_id() == 0);
+
+    if (_stopped) {
+        return make_ready_future<>();
+    }
+
     return _ops_sem.wait().then([this] {
+        _stopped = true;
         _ops_sem.broken();
         return do_stop_server();
     });
 }
 
 future<> thrift_controller::stop_server() {
-    if (!_ops_sem.try_wait()) {
-        throw std::runtime_error(format("Thrift server is starting, try again later"));
-    }
+    return smp::submit_to(0, [this] {
+        if (!_ops_sem.try_wait()) {
+            throw std::runtime_error(format("Thrift server is starting, try again later"));
+        }
 
-    return do_stop_server().finally([this] { _ops_sem.signal(); });
+        return do_stop_server().finally([this] { _ops_sem.signal(); });
+    });
 }
 
 future<> thrift_controller::do_stop_server() {
@@ -97,3 +108,8 @@ future<> thrift_controller::do_stop_server() {
     });
 }
 
+future<bool> thrift_controller::is_server_running() {
+    return smp::submit_to(0, [this] {
+        return make_ready_future<bool>(bool(_server));
+    });
+}

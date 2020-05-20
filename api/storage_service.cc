@@ -42,6 +42,7 @@
 #include "database.hh"
 #include "db/extensions.hh"
 #include "transport/controller.hh"
+#include "thrift/controller.hh"
 
 namespace api {
 
@@ -130,20 +131,20 @@ void unset_transport_controller(http_context& ctx, routes& r) {
 }
 
 void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl) {
-    ss::stop_rpc_server.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().stop_rpc_server().then([] {
+    ss::stop_rpc_server.set(r, [&ctl](std::unique_ptr<request> req) {
+        return ctl.stop_server().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::start_rpc_server.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().start_rpc_server().then([] {
+    ss::start_rpc_server.set(r, [&ctl](std::unique_ptr<request> req) {
+        return ctl.start_server().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::is_rpc_server_running.set(r, [] (std::unique_ptr<request> req) {
-        return service::get_local_storage_service().is_rpc_server_running().then([] (bool running) {
+    ss::is_rpc_server_running.set(r, [&ctl] (std::unique_ptr<request> req) {
+        return ctl.is_server_running().then([] (bool running) {
             return make_ready_future<json::json_return_type>(running);
         });
     });

@@ -1108,9 +1108,13 @@ int main(int ac, char** av) {
 
             ::thrift_controller thrift_ctl(db, auth_service);
 
+            ss.register_client_shutdown_hook("rpc server", [&thrift_ctl] {
+                thrift_ctl.stop().get();
+            });
+
             if (cfg->start_rpc()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [] {
-                    return service::get_local_storage_service().start_rpc_server();
+                with_scheduling_group(dbcfg.statement_scheduling_group, [&thrift_ctl] {
+                    return thrift_ctl.start_server();
                 }).get();
             }
 

@@ -65,7 +65,6 @@
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
 #include "cdc/metadata.hh"
-#include "thrift/controller.hh" // TEMPORARY
 
 namespace cql_transport { class controller; }
 
@@ -144,7 +143,6 @@ private:
     // ever arise.
     bool _loading_new_sstables = false;
     friend class cql_transport::controller;
-    ::thrift_controller _thrift_server;
     sstring _operation_in_progress;
     bool _force_remove_completion = false;
     bool _ms_stopped = false;
@@ -310,13 +308,6 @@ public:
 
     // should only be called via JMX
     future<bool> is_gossip_running();
-
-    // should only be called via JMX
-    future<> start_rpc_server();
-
-    future<> stop_rpc_server();
-
-    future<bool> is_rpc_server_running();
 
     void register_client_shutdown_hook(std::string name, client_shutdown_hook hook) {
         _client_shutdown_hooks.push_back({std::move(name), std::move(hook)});

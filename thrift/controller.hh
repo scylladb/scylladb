@@ -34,6 +34,7 @@ namespace auth { class service; }
 class thrift_controller {
     std::unique_ptr<distributed<thrift_server>> _server;
     semaphore _ops_sem; /* protects start/stop operations on _server */
+    bool _stopped = false;
 
     distributed<database>& _db;
     sharded<auth::service>& _auth_service;
@@ -46,5 +47,5 @@ public:
     future<> start_server();
     future<> stop_server();
     future<> stop();
-    bool is_server_running() { return bool(_server); }
+    future<bool> is_server_running();
 };

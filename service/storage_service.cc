@@ -103,7 +103,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _gossiper(gossiper)
         , _auth_service(auth_service)
         , _mnotifier(mn)
-        , _thrift_server(db, auth_service)
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
@@ -2174,24 +2173,6 @@ future<int64_t> storage_service::true_snapshots_size() {
 
 static std::atomic<bool> isolated = { false };
 
-future<> storage_service::start_rpc_server() {
-    return run_with_api_lock(sstring("start_rpc_server"), [] (storage_service& ss) {
-        return ss._thrift_server.start_server();
-    });
-}
-
-future<> storage_service::stop_rpc_server() {
-    return run_with_api_lock(sstring("stop_rpc_server"), [] (storage_service& ss) {
-        return ss._thrift_server.stop_server();
-    });
-}
-
-future<bool> storage_service::is_rpc_server_running() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return ss._thrift_server.is_server_running();
-    });
-}
-
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
@@ -2861,7 +2842,6 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
 }
 
 void storage_service::shutdown_client_servers() {
-    _thrift_server.stop().get();
     for (auto& [name, hook] : _client_shutdown_hooks) {
         slogger.info("Shutting down {}", name);
         try {
