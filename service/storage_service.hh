@@ -65,6 +65,7 @@
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
 #include "cdc/metadata.hh"
+#include "transport/controller.hh" // TEMPORARY
 
 namespace db {
 class system_distributed_keyspace;
@@ -73,9 +74,6 @@ class view_update_generator;
 }
 }
 
-namespace cql_transport {
-    class cql_server;
-}
 class thrift_server;
 
 namespace dht {
@@ -106,27 +104,6 @@ using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 
 struct storage_service_config {
     size_t available_memory;
-};
-
-class cql_server_controller {
-    std::unique_ptr<distributed<cql_transport::cql_server>> _server;
-    semaphore _ops_sem; /* protects start/stop operations on _server */
-
-    distributed<database>& _db;
-    sharded<auth::service>& _auth_service;
-    sharded<service::migration_notifier>& _mnotifier;
-    gms::gossiper& _gossiper;
-
-    future<> set_cql_ready(bool ready);
-    future<> do_start_server();
-    future<> do_stop_server();
-
-public:
-    cql_server_controller(distributed<database>&, sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&);
-    future<> start_server();
-    future<> stop_server();
-    future<> stop();
-    bool is_server_running() { return bool(_server); }
 };
 
 /**
@@ -166,8 +143,8 @@ private:
     // It shouldn't be impossible to actively serialize two callers if the need
     // ever arise.
     bool _loading_new_sstables = false;
-    friend class cql_server_controller;
-    cql_server_controller _cql_server;
+    friend class cql_transport::controller;
+    cql_transport::controller _cql_server;
     std::unique_ptr<distributed<thrift_server>> _thrift_server;
     sstring _operation_in_progress;
     bool _force_remove_completion = false;

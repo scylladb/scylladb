@@ -120,14 +120,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
     commit_error.connect([this] { isolate_on_commit_error(); });
 }
 
-cql_server_controller::cql_server_controller(distributed<database>& db, sharded<auth::service>& auth, sharded<migration_notifier>& mn, gms::gossiper& gossiper)
-    : _ops_sem(1)
-    , _db(db)
-    , _auth_service(auth)
-    , _mnotifier(mn)
-    , _gossiper(gossiper) {
-}
-
 void storage_service::enable_all_features() {
     auto features = _feature_service.known_feature_set();
     _feature_service.enable(features);
@@ -2244,120 +2236,6 @@ future<> storage_service::start_native_transport() {
     });
 }
 
-future<> cql_server_controller::start_server() {
-    if (!_ops_sem.try_wait()) {
-        throw std::runtime_error(format("CQL server is stopping, try again later"));
-    }
-
-    return do_start_server().finally([this] { _ops_sem.signal(); });
-}
-
-future<> cql_server_controller::do_start_server() {
-    if (_server) {
-        return make_ready_future<>();
-    }
-
-    auto& ss = *this;
-
-        return seastar::async([&ss] {
-            ss._server = std::make_unique<distributed<cql_transport::cql_server>>();
-            auto cserver = &*ss._server;
-
-            auto& cfg = ss._db.local().get_config();
-            auto addr = cfg.rpc_address();
-            auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
-            auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-            auto ceo = cfg.client_encryption_options();
-            auto keepalive = cfg.rpc_keepalive();
-            cql_transport::cql_server_config cql_server_config;
-            cql_server_config.timeout_config = make_timeout_config(cfg);
-            cql_server_config.max_request_size = get_local_storage_service()._service_memory_total;
-            cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
-            cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
-            cql_server_config.sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits();
-            cql_server_config.partitioner_name = cfg.partitioner();
-            smp_service_group_config cql_server_smp_service_group_config;
-            cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
-            cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
-            seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
-            cserver->start(std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), std::ref(ss._mnotifier), cql_server_config).get();
-            struct listen_cfg {
-                socket_address addr;
-                std::shared_ptr<seastar::tls::credentials_builder> cred;
-            };
-
-            std::vector<listen_cfg> configs({ { socket_address{ip, cfg.native_transport_port()} }});
-
-            // main should have made sure values are clean and neatish
-            if (ceo.at("enabled") == "true") {
-                auto cred = std::make_shared<seastar::tls::credentials_builder>();
-
-                cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
-                cred->set_priority_string(db::config::default_tls_priority);
-
-                if (ceo.count("priority_string")) {
-                    cred->set_priority_string(ceo.at("priority_string"));
-                }
-                if (ceo.count("require_client_auth") && ceo.at("require_client_auth") == "true") {
-                    cred->set_client_auth(seastar::tls::client_auth::REQUIRE);
-                }
-
-                cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM).get();
-
-                if (ceo.count("truststore")) {
-                    cred->set_x509_trust_file(ceo.at("truststore"), seastar::tls::x509_crt_format::PEM).get();
-                }
-
-                slogger.info("Enabling encrypted CQL connections between client and server");
-
-                if (cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() != cfg.native_transport_port()) {
-                    configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, std::move(cred)});
-                } else {
-                    configs.back().cred = std::move(cred);
-                }
-            }
-
-            parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
-                return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, keepalive).then([cfg] {
-                    slogger.info("Starting listening for CQL clients on {} ({})"
-                            , cfg.addr, cfg.cred ? "encrypted" : "unencrypted"
-                    );
-                });
-            }).get();
-
-            ss.set_cql_ready(true).get();
-        });
-}
-
-future<> cql_server_controller::stop() {
-    return _ops_sem.wait().then([this] {
-        _ops_sem.broken();
-        return do_stop_server();
-    });
-}
-
-future<> cql_server_controller::stop_server() {
-    if (!_ops_sem.try_wait()) {
-        throw std::runtime_error(format("CQL server is starting, try again later"));
-    }
-
-    return do_stop_server().finally([this] { _ops_sem.signal(); });
-}
-
-future<> cql_server_controller::do_stop_server() {
-    return do_with(std::move(_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
-        if (cserver) {
-            // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return set_cql_ready(false).then([&cserver] {
-                return cserver->stop().then([] {
-                    slogger.info("CQL server stopped");
-                });
-            });
-        }
-        return make_ready_future<>();
-    });
-}
-
 future<> storage_service::stop_native_transport() {
     return run_with_api_lock(sstring("stop_native_transport"), [] (storage_service& ss) {
         return ss._cql_server.stop();
@@ -3407,10 +3285,6 @@ future<> init_storage_service(sharded<abort_source>& abort_source, distributed<d
 
 future<> deinit_storage_service() {
     return service::get_storage_service().stop();
-}
-
-future<> cql_server_controller::set_cql_ready(bool ready) {
-    return _gossiper.add_local_application_state(gms::application_state::RPC_READY, gms::versioned_value::cql_ready(ready));
 }
 
 void storage_service::notify_down(inet_address endpoint) {
