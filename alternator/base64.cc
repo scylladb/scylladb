@@ -77,7 +77,7 @@ std::string base64_encode(bytes_view in) {
     return ret;
 }
 
-bytes base64_decode(std::string_view in) {
+static std::string base64_decode_string(std::string_view in) {
     int i = 0;
     int8_t chunk4[4]; // chunk of input, each byte converted to 0..63;
     std::string ret;
@@ -104,9 +104,14 @@ bytes base64_decode(std::string_view in) {
         if (i==3)
             ret += ((chunk4[1] & 0xf) << 4) + ((chunk4[2] & 0x3c) >> 2);
     }
+    return ret;
+}
+
+bytes base64_decode(std::string_view in) {
     // FIXME: This copy is sad. The problem is we need back "bytes"
     // but "bytes" doesn't have efficient append and std::string.
     // To fix this we need to use bytes' "uninitialized" feature.
+    std::string ret = base64_decode_string(in);
     return bytes(ret.begin(), ret.end());
 }
 
