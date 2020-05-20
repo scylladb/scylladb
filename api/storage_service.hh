@@ -23,10 +23,12 @@
 
 #include "api.hh"
 
+namespace cql_transport { class controller; }
+
 namespace api {
 
 void set_storage_service(http_context& ctx, routes& r);
-void set_transport_controller(http_context& ctx, routes& r);
+void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl);
 void unset_transport_controller(http_context& ctx, routes& r);
 void set_rpc_controller(http_context& ctx, routes& r);
 void unset_rpc_controller(http_context& ctx, routes& r);

@@ -102,7 +102,7 @@ future<> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, s
     });
 }
 
-void set_transport_controller(http_context& ctx, routes& r) {
+void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
     ss::start_native_transport.set(r, [](std::unique_ptr<request> req) {
         return service::get_local_storage_service().start_native_transport().then([] {
             return make_ready_future<json::json_return_type>(json_void());

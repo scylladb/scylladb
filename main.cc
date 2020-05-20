@@ -73,6 +73,7 @@
 #include "distributed_loader.hh"
 #include "cql3/cql_config.hh"
 #include "connection_notifier.hh"
+#include "transport/controller.hh"
 
 #include "alternator/server.hh"
 #include "redis/service.hh"
@@ -1086,6 +1087,8 @@ int main(int ac, char** av) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
 
+            cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local());
+
             if (cfg->start_native_transport()) {
                 supervisor::notify("starting native transport");
                 with_scheduling_group(dbcfg.statement_scheduling_group, [] {
@@ -1093,7 +1096,8 @@ int main(int ac, char** av) {
                 }).get();
             }
 
-            api::set_transport_controller(ctx).get();
+
+            api::set_transport_controller(ctx, cql_server_ctl).get();
             auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {
                 api::unset_transport_controller(ctx).get();
             });
