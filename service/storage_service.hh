@@ -110,6 +110,7 @@ struct storage_service_config {
 
 class cql_server_controller {
     std::unique_ptr<distributed<cql_transport::cql_server>> _server;
+    semaphore _ops_sem; /* protects start/stop operations on _server */
 
     distributed<database>& _db;
     sharded<auth::service>& _auth_service;
@@ -117,11 +118,14 @@ class cql_server_controller {
     gms::gossiper& _gossiper;
 
     future<> set_cql_ready(bool ready);
+    future<> do_start_server();
+    future<> do_stop_server();
 
 public:
     cql_server_controller(distributed<database>&, sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&);
     future<> start_server();
     future<> stop_server();
+    future<> stop();
     bool is_server_running() { return bool(_server); }
 };
 
@@ -356,7 +360,6 @@ public:
     }
 private:
     future<> do_stop_rpc_server();
-    future<> do_stop_native_transport();
     future<> do_stop_ms();
     future<> do_stop_stream_manager();
     // Runs in thread context

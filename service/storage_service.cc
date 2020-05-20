@@ -121,7 +121,8 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
 }
 
 cql_server_controller::cql_server_controller(distributed<database>& db, sharded<auth::service>& auth, sharded<migration_notifier>& mn, gms::gossiper& gossiper)
-    : _db(db)
+    : _ops_sem(1)
+    , _db(db)
     , _auth_service(auth)
     , _mnotifier(mn)
     , _gossiper(gossiper) {
@@ -2239,15 +2240,19 @@ future<bool> storage_service::is_rpc_server_running() {
 
 future<> storage_service::start_native_transport() {
     return run_with_api_lock(sstring("start_native_transport"), [] (storage_service& ss) {
-        if (isolated.load()) {
-            return make_ready_future<>();
-        }
-
         return ss._cql_server.start_server();
     });
 }
 
 future<> cql_server_controller::start_server() {
+    if (!_ops_sem.try_wait()) {
+        throw std::runtime_error(format("CQL server is stopping, try again later"));
+    }
+
+    return do_start_server().finally([this] { _ops_sem.signal(); });
+}
+
+future<> cql_server_controller::do_start_server() {
     if (_server) {
         return make_ready_future<>();
     }
@@ -2324,11 +2329,22 @@ future<> cql_server_controller::start_server() {
         });
 }
 
-future<> storage_service::do_stop_native_transport() {
-    return _cql_server.stop_server();
+future<> cql_server_controller::stop() {
+    return _ops_sem.wait().then([this] {
+        _ops_sem.broken();
+        return do_stop_server();
+    });
 }
 
 future<> cql_server_controller::stop_server() {
+    if (!_ops_sem.try_wait()) {
+        throw std::runtime_error(format("CQL server is starting, try again later"));
+    }
+
+    return do_stop_server().finally([this] { _ops_sem.signal(); });
+}
+
+future<> cql_server_controller::do_stop_server() {
     return do_with(std::move(_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
         if (cserver) {
             // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
@@ -2344,7 +2360,7 @@ future<> cql_server_controller::stop_server() {
 
 future<> storage_service::stop_native_transport() {
     return run_with_api_lock(sstring("stop_native_transport"), [] (storage_service& ss) {
-        return ss.do_stop_native_transport();
+        return ss._cql_server.stop();
     });
 }
 
@@ -3024,7 +3040,7 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
 
 void storage_service::shutdown_client_servers() {
     do_stop_rpc_server().get();
-    do_stop_native_transport().get();
+    _cql_server.stop().get();
     for (auto& [name, hook] : _client_shutdown_hooks) {
         slogger.info("Shutting down {}", name);
         try {
