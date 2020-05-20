@@ -132,8 +132,6 @@ private:
         _resources.memory -= memory;
     }
 
-    void signal(const resources& r) noexcept;
-
     void signal_memory(size_t memory) noexcept {
         signal(resources(0, static_cast<ssize_t>(memory)));
     }
@@ -207,6 +205,12 @@ public:
     const resources available_resources() const {
         return _resources;
     }
+
+    void consume(resources r) {
+        _resources -= r;
+    }
+
+    void signal(const resources& r) noexcept;
 
     size_t waiters() const {
         return _wait_list.size();
