@@ -107,6 +107,19 @@ struct storage_service_config {
     size_t available_memory;
 };
 
+class thrift_controller {
+    std::unique_ptr<distributed<thrift_server>> _server;
+
+    distributed<database>& _db;
+    sharded<auth::service>& _auth_service;
+
+public:
+    thrift_controller(distributed<database>&, sharded<auth::service>&);
+    future<> start_server();
+    future<> stop_server();
+    bool is_server_running() { return bool(_server); }
+};
+
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -145,7 +158,7 @@ private:
     // ever arise.
     bool _loading_new_sstables = false;
     friend class cql_transport::controller;
-    std::unique_ptr<distributed<thrift_server>> _thrift_server;
+    thrift_controller _thrift_server;
     sstring _operation_in_progress;
     bool _force_remove_completion = false;
     bool _ms_stopped = false;

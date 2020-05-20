@@ -104,6 +104,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _gossiper(gossiper)
         , _auth_service(auth_service)
         , _mnotifier(mn)
+        , _thrift_server(db, auth_service)
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
@@ -117,6 +118,11 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
     commit_error.connect([this] { isolate_on_commit_error(); });
+}
+
+thrift_controller::thrift_controller(distributed<database>& db, sharded<auth::service>& auth)
+    : _db(db)
+    , _auth_service(auth) {
 }
 
 void storage_service::enable_all_features() {
@@ -2176,12 +2182,23 @@ static std::atomic<bool> isolated = { false };
 
 future<> storage_service::start_rpc_server() {
     return run_with_api_lock(sstring("start_rpc_server"), [] (storage_service& ss) {
-        if (ss._thrift_server || isolated.load()) {
+        if (isolated.load()) {
             return make_ready_future<>();
         }
 
-        ss._thrift_server = std::make_unique<distributed<thrift_server>>();
-        auto tserver = &*ss._thrift_server;
+        return ss._thrift_server.start_server();
+    });
+}
+
+future<> thrift_controller::start_server() {
+    if (_server) {
+        return make_ready_future<>();
+    }
+
+    auto& ss = *this;
+
+        ss._server = std::make_unique<distributed<thrift_server>>();
+        auto tserver = &*ss._server;
 
         auto& cfg = ss._db.local().get_config();
         auto port = cfg.rpc_port();
@@ -2203,11 +2220,14 @@ future<> storage_service::start_rpc_server() {
         }).then([addr, port] {
             slogger.info("Thrift server listening on {}:{} ...", addr, port);
         });
-    });
 }
 
 future<> storage_service::do_stop_rpc_server() {
-    return do_with(std::move(_thrift_server), [this] (std::unique_ptr<distributed<thrift_server>>& tserver) {
+    return _thrift_server.stop_server();
+}
+
+future<> thrift_controller::stop_server() {
+    return do_with(std::move(_server), [this] (std::unique_ptr<distributed<thrift_server>>& tserver) {
         if (tserver) {
             return tserver->stop().then([] {
                 slogger.info("Thrift server stopped");
@@ -2225,7 +2245,7 @@ future<> storage_service::stop_rpc_server() {
 
 future<bool> storage_service::is_rpc_server_running() {
     return run_with_no_api_lock([] (storage_service& ss) {
-        return bool(ss._thrift_server);
+        return ss._thrift_server.is_server_running();
     });
 }
 
