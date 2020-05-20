@@ -74,7 +74,6 @@
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
-#include "auth/common.hh"
 #include "distributed_loader.hh"
 #include "database.hh"
 #include <seastar/core/metrics.hh>
@@ -400,28 +399,6 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     }
 }
 
-static auth::permissions_cache_config permissions_cache_config_from_db_config(const db::config& dc) {
-    auth::permissions_cache_config c;
-    c.max_entries = dc.permissions_cache_max_entries();
-    c.validity_period = std::chrono::milliseconds(dc.permissions_validity_in_ms());
-    c.update_period = std::chrono::milliseconds(dc.permissions_update_interval_in_ms());
-
-    return c;
-}
-
-static auth::service_config auth_service_config_from_db_config(const db::config& dc) {
-    const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, dc.authorizer());
-    const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, dc.authenticator());
-    const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, dc.role_manager());
-
-    auth::service_config c;
-    c.authorizer_java_name = qualified_authorizer_name;
-    c.authenticator_java_name = qualified_authenticator_name;
-    c.role_manager_java_name = qualified_role_manager_name;
-
-    return c;
-}
-
 void storage_service::maybe_start_sys_dist_ks() {
     supervisor::notify("starting system distributed keyspace");
     _sys_dist_ks.start(std::ref(cql3::get_query_processor()), std::ref(service::get_migration_manager())).get();
@@ -654,17 +631,6 @@ void storage_service::join_token_ring(int delay) {
 
     // Retrieve the latest CDC generation seen in gossip (if any).
     scan_cdc_generations();
-
-    _auth_service.start(
-            permissions_cache_config_from_db_config(_db.local().get_config()),
-            std::ref(cql3::get_query_processor()),
-            std::ref(_mnotifier),
-            std::ref(service::get_migration_manager()),
-            auth_service_config_from_db_config(_db.local().get_config())).get();
-
-    _auth_service.invoke_on_all([] (auth::service& auth) {
-        return auth.start(service::get_local_migration_manager());
-    }).get();
 
     supervisor::notify("starting tracing");
     tracing::tracing::start_tracing().get();
@@ -1493,9 +1459,6 @@ future<> storage_service::stop_transport() {
 
             ss.do_stop_stream_manager().get();
             slogger.info("Stop transport: shutdown stream_manager done");
-
-            ss._auth_service.stop().get();
-            slogger.info("Stop transport: auth shutdown");
 
             slogger.info("Stop transport: done");
         });

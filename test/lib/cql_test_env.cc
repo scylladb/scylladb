@@ -41,6 +41,7 @@
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
 #include "auth/service.hh"
+#include "auth/common.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "schema_builder.hh"
@@ -56,7 +57,6 @@
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "service/storage_service.hh"
-#include "auth/service.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 
@@ -537,6 +537,25 @@ public:
             service::get_local_storage_service().init_messaging_service_part().get();
             service::get_local_storage_service().init_server(service::bind_messaging_port(false)).get();
             service::get_local_storage_service().join_cluster().get();
+
+            auth::permissions_cache_config perm_cache_config;
+            perm_cache_config.max_entries = cfg->permissions_cache_max_entries();
+            perm_cache_config.validity_period = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
+            perm_cache_config.update_period = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+
+            const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
+            const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
+            const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
+
+            auth::service_config auth_config;
+            auth_config.authorizer_java_name = qualified_authorizer_name;
+            auth_config.authenticator_java_name = qualified_authenticator_name;
+            auth_config.role_manager_java_name = qualified_role_manager_name;
+
+            auth_service.start(perm_cache_config, std::ref(qp), std::ref(mm_notif), std::ref(mm), auth_config).get();
+            auth_service.invoke_on_all([&mm] (auth::service& auth) {
+                return auth.start(mm.local());
+            }).get();
 
             auto deinit_storage_service_server = defer([&auth_service] {
                 gms::stop_gossiping().get();
