@@ -1094,11 +1094,17 @@ int main(int ac, char** av) {
                 cql_server_ctl.stop().get();
             });
 
+            std::any stop_cql;
             if (cfg->start_native_transport()) {
                 supervisor::notify("starting native transport");
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&cql_server_ctl] {
                     return cql_server_ctl.start_server();
                 }).get();
+
+                // FIXME -- this should be done via client hooks instead
+                stop_cql = ::make_shared(defer_verbose_shutdown("native transport", [&cql_server_ctl] {
+                    cql_server_ctl.stop().get();
+                }));
             }
 
             api::set_transport_controller(ctx, cql_server_ctl).get();
@@ -1112,10 +1118,16 @@ int main(int ac, char** av) {
                 thrift_ctl.stop().get();
             });
 
+            std::any stop_rpc;
             if (cfg->start_rpc()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [&thrift_ctl] {
                     return thrift_ctl.start_server();
                 }).get();
+
+                // FIXME -- this should be done via client hooks instead
+                stop_rpc = ::make_shared(defer_verbose_shutdown("rpc server", [&thrift_ctl] {
+                    thrift_ctl.stop().get();
+                }));
             }
 
             api::set_rpc_controller(ctx, thrift_ctl).get();
