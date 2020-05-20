@@ -2098,8 +2098,8 @@ rjson::value calculate_value(const parsed::value& v,
                         auto it2 = v2.MemberBegin();
                         if (it1->name == it2->name) {
                             if (it2->name == "S") {
-                                std::string_view val1(it1->value.GetString(), it1->value.GetStringLength());
-                                std::string_view val2(it2->value.GetString(), it2->value.GetStringLength());
+                                std::string_view val1 = rjson::to_string_view(it1->value);
+                                std::string_view val2 = rjson::to_string_view(it2->value);
                                 ret = val1.substr(0, val2.size()) == val2;
                             } else /* it2->name == "B" */ {
                                 ret = base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
