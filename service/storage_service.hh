@@ -109,14 +109,19 @@ struct storage_service_config {
 
 class thrift_controller {
     std::unique_ptr<distributed<thrift_server>> _server;
+    semaphore _ops_sem; /* protects start/stop operations on _server */
 
     distributed<database>& _db;
     sharded<auth::service>& _auth_service;
+
+    future<> do_start_server();
+    future<> do_stop_server();
 
 public:
     thrift_controller(distributed<database>&, sharded<auth::service>&);
     future<> start_server();
     future<> stop_server();
+    future<> stop();
     bool is_server_running() { return bool(_server); }
 };
 
@@ -343,7 +348,6 @@ public:
         }
     }
 private:
-    future<> do_stop_rpc_server();
     future<> do_stop_ms();
     future<> do_stop_stream_manager();
     // Runs in thread context

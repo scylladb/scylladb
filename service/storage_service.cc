@@ -121,7 +121,8 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
 }
 
 thrift_controller::thrift_controller(distributed<database>& db, sharded<auth::service>& auth)
-    : _db(db)
+    : _ops_sem(1)
+    , _db(db)
     , _auth_service(auth) {
 }
 
@@ -2182,15 +2183,19 @@ static std::atomic<bool> isolated = { false };
 
 future<> storage_service::start_rpc_server() {
     return run_with_api_lock(sstring("start_rpc_server"), [] (storage_service& ss) {
-        if (isolated.load()) {
-            return make_ready_future<>();
-        }
-
         return ss._thrift_server.start_server();
     });
 }
 
 future<> thrift_controller::start_server() {
+    if (!_ops_sem.try_wait()) {
+        throw std::runtime_error(format("Thrift server is stopping, try again later"));
+    }
+
+    return do_start_server().finally([this] { _ops_sem.signal(); });
+}
+
+future<> thrift_controller::do_start_server() {
     if (_server) {
         return make_ready_future<>();
     }
@@ -2222,11 +2227,22 @@ future<> thrift_controller::start_server() {
         });
 }
 
-future<> storage_service::do_stop_rpc_server() {
-    return _thrift_server.stop_server();
+future<> thrift_controller::stop() {
+    return _ops_sem.wait().then([this] {
+        _ops_sem.broken();
+        return do_stop_server();
+    });
 }
 
 future<> thrift_controller::stop_server() {
+    if (!_ops_sem.try_wait()) {
+        throw std::runtime_error(format("Thrift server is starting, try again later"));
+    }
+
+    return do_stop_server().finally([this] { _ops_sem.signal(); });
+}
+
+future<> thrift_controller::do_stop_server() {
     return do_with(std::move(_server), [this] (std::unique_ptr<distributed<thrift_server>>& tserver) {
         if (tserver) {
             return tserver->stop().then([] {
@@ -2239,7 +2255,7 @@ future<> thrift_controller::stop_server() {
 
 future<> storage_service::stop_rpc_server() {
     return run_with_api_lock(sstring("stop_rpc_server"), [] (storage_service& ss) {
-        return ss.do_stop_rpc_server();
+        return ss._thrift_server.stop_server();
     });
 }
 
@@ -2918,7 +2934,7 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
 }
 
 void storage_service::shutdown_client_servers() {
-    do_stop_rpc_server().get();
+    _thrift_server.stop().get();
     for (auto& [name, hook] : _client_shutdown_hooks) {
         slogger.info("Shutting down {}", name);
         try {
