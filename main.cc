@@ -1089,13 +1089,16 @@ int main(int ac, char** av) {
 
             cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local());
 
+            ss.register_client_shutdown_hook("native transport", [&cql_server_ctl] {
+                cql_server_ctl.stop().get();
+            });
+
             if (cfg->start_native_transport()) {
                 supervisor::notify("starting native transport");
-                with_scheduling_group(dbcfg.statement_scheduling_group, [] {
-                    return service::get_local_storage_service().start_native_transport();
+                with_scheduling_group(dbcfg.statement_scheduling_group, [&cql_server_ctl] {
+                    return cql_server_ctl.start_server();
                 }).get();
             }
-
 
             api::set_transport_controller(ctx, cql_server_ctl).get();
             auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {

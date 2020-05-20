@@ -65,7 +65,8 @@
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
 #include "cdc/metadata.hh"
-#include "transport/controller.hh" // TEMPORARY
+
+namespace cql_transport { class controller; }
 
 namespace db {
 class system_distributed_keyspace;
@@ -144,7 +145,6 @@ private:
     // ever arise.
     bool _loading_new_sstables = false;
     friend class cql_transport::controller;
-    cql_transport::controller _cql_server;
     std::unique_ptr<distributed<thrift_server>> _thrift_server;
     sstring _operation_in_progress;
     bool _force_remove_completion = false;
@@ -318,12 +318,6 @@ public:
     future<> stop_rpc_server();
 
     future<bool> is_rpc_server_running();
-
-    future<> start_native_transport();
-
-    future<> stop_native_transport();
-
-    future<bool> is_native_transport_running();
 
     void register_client_shutdown_hook(std::string name, client_shutdown_hook hook) {
         _client_shutdown_hooks.push_back({std::move(name), std::move(hook)});

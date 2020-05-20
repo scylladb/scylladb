@@ -104,7 +104,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _gossiper(gossiper)
         , _auth_service(auth_service)
         , _mnotifier(mn)
-        , _cql_server(db, auth_service, mn, gossiper)
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
@@ -2230,24 +2229,6 @@ future<bool> storage_service::is_rpc_server_running() {
     });
 }
 
-future<> storage_service::start_native_transport() {
-    return run_with_api_lock(sstring("start_native_transport"), [] (storage_service& ss) {
-        return ss._cql_server.start_server();
-    });
-}
-
-future<> storage_service::stop_native_transport() {
-    return run_with_api_lock(sstring("stop_native_transport"), [] (storage_service& ss) {
-        return ss._cql_server.stop();
-    });
-}
-
-future<bool> storage_service::is_native_transport_running() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return ss._cql_server.is_server_running();
-    });
-}
-
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
@@ -2918,7 +2899,6 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
 
 void storage_service::shutdown_client_servers() {
     do_stop_rpc_server().get();
-    _cql_server.stop().get();
     for (auto& [name, hook] : _client_shutdown_hooks) {
         slogger.info("Shutting down {}", name);
         try {

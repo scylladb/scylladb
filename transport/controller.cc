@@ -42,11 +42,13 @@ controller::controller(distributed<database>& db, sharded<auth::service>& auth, 
 }
 
 future<> controller::start_server() {
-    if (!_ops_sem.try_wait()) {
-        throw std::runtime_error(format("CQL server is stopping, try again later"));
-    }
+    return smp::submit_to(0, [this] {
+        if (!_ops_sem.try_wait()) {
+            throw std::runtime_error(format("CQL server is stopping, try again later"));
+        }
 
-    return do_start_server().finally([this] { _ops_sem.signal(); });
+        return do_start_server().finally([this] { _ops_sem.signal(); });
+    });
 }
 
 future<> controller::do_start_server() {
@@ -125,18 +127,27 @@ future<> controller::do_start_server() {
 }
 
 future<> controller::stop() {
+    assert(this_shard_id() == 0);
+
+    if (_stopped) {
+        return make_ready_future<>();
+    }
+
     return _ops_sem.wait().then([this] {
+        _stopped = true;
         _ops_sem.broken();
         return do_stop_server();
     });
 }
 
 future<> controller::stop_server() {
-    if (!_ops_sem.try_wait()) {
-        throw std::runtime_error(format("CQL server is starting, try again later"));
-    }
+    return smp::submit_to(0, [this] {
+        if (!_ops_sem.try_wait()) {
+            throw std::runtime_error(format("CQL server is starting, try again later"));
+        }
 
-    return do_stop_server().finally([this] { _ops_sem.signal(); });
+        return do_stop_server().finally([this] { _ops_sem.signal(); });
+    });
 }
 
 future<> controller::do_stop_server() {
@@ -150,6 +161,12 @@ future<> controller::do_stop_server() {
             });
         }
         return make_ready_future<>();
+    });
+}
+
+future<bool> controller::is_server_running() {
+    return smp::submit_to(0, [this] {
+        return make_ready_future<bool>(bool(_server));
     });
 }
 

@@ -41,6 +41,7 @@
 #include "sstables/sstables.hh"
 #include "database.hh"
 #include "db/extensions.hh"
+#include "transport/controller.hh"
 
 namespace api {
 
@@ -103,20 +104,20 @@ future<> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, s
 }
 
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
-    ss::start_native_transport.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().start_native_transport().then([] {
+    ss::start_native_transport.set(r, [&ctl](std::unique_ptr<request> req) {
+        return ctl.start_server().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::stop_native_transport.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().stop_native_transport().then([] {
+    ss::stop_native_transport.set(r, [&ctl](std::unique_ptr<request> req) {
+        return ctl.stop_server().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::is_native_transport_running.set(r, [] (std::unique_ptr<request> req) {
-        return service::get_local_storage_service().is_native_transport_running().then([] (bool running) {
+    ss::is_native_transport_running.set(r, [&ctl] (std::unique_ptr<request> req) {
+        return ctl.is_server_running().then([] (bool running) {
             return make_ready_future<json::json_return_type>(running);
         });
     });
