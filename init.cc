@@ -111,7 +111,7 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
     // Delay listening messaging_service until gossip message handlers are registered
     netw::messaging_service::memory_config mcfg = { std::max<size_t>(0.08 * available_memory, 1'000'000) };
     netw::messaging_service::scheduling_config scfg;
-    scfg.statement = scheduling_config.statement;
+    scfg.statement_tenants = { {scheduling_config.statement, "$user"}, {default_scheduling_group(), "$system"} };
     scfg.streaming = scheduling_config.streaming;
     scfg.gossip = scheduling_config.gossip;
     netw::get_messaging_service().start(listen, storage_port, ew, cw, tndw, ssl_storage_port, creds, mcfg, scfg, sltba).get();
