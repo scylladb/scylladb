@@ -108,6 +108,23 @@ struct storage_service_config {
     size_t available_memory;
 };
 
+class cql_server_controller {
+    std::unique_ptr<distributed<cql_transport::cql_server>> _server;
+
+    distributed<database>& _db;
+    sharded<auth::service>& _auth_service;
+    sharded<service::migration_notifier>& _mnotifier;
+    gms::gossiper& _gossiper;
+
+    future<> set_cql_ready(bool ready);
+
+public:
+    cql_server_controller(distributed<database>&, sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&);
+    future<> start_server();
+    future<> stop_server();
+    bool is_server_running() { return bool(_server); }
+};
+
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -145,7 +162,8 @@ private:
     // It shouldn't be impossible to actively serialize two callers if the need
     // ever arise.
     bool _loading_new_sstables = false;
-    std::unique_ptr<distributed<cql_transport::cql_server>> _cql_server;
+    friend class cql_server_controller;
+    cql_server_controller _cql_server;
     std::unique_ptr<distributed<thrift_server>> _thrift_server;
     sstring _operation_in_progress;
     bool _force_remove_completion = false;
@@ -900,7 +918,6 @@ public:
     utils::UUID get_local_id() const { return _local_host_id; }
 
 private:
-    future<> set_cql_ready(bool ready);
     void notify_down(inet_address endpoint);
     void notify_left(inet_address endpoint);
     void notify_up(inet_address endpoint);

@@ -104,6 +104,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _gossiper(gossiper)
         , _auth_service(auth_service)
         , _mnotifier(mn)
+        , _cql_server(db, auth_service, mn, gossiper)
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
@@ -117,6 +118,13 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
     commit_error.connect([this] { isolate_on_commit_error(); });
+}
+
+cql_server_controller::cql_server_controller(distributed<database>& db, sharded<auth::service>& auth, sharded<migration_notifier>& mn, gms::gossiper& gossiper)
+    : _db(db)
+    , _auth_service(auth)
+    , _mnotifier(mn)
+    , _gossiper(gossiper) {
 }
 
 void storage_service::enable_all_features() {
@@ -2231,12 +2239,24 @@ future<bool> storage_service::is_rpc_server_running() {
 
 future<> storage_service::start_native_transport() {
     return run_with_api_lock(sstring("start_native_transport"), [] (storage_service& ss) {
-        if (ss._cql_server || isolated.load()) {
+        if (isolated.load()) {
             return make_ready_future<>();
         }
+
+        return ss._cql_server.start_server();
+    });
+}
+
+future<> cql_server_controller::start_server() {
+    if (_server) {
+        return make_ready_future<>();
+    }
+
+    auto& ss = *this;
+
         return seastar::async([&ss] {
-            ss._cql_server = std::make_unique<distributed<cql_transport::cql_server>>();
-            auto cserver = &*ss._cql_server;
+            ss._server = std::make_unique<distributed<cql_transport::cql_server>>();
+            auto cserver = &*ss._server;
 
             auto& cfg = ss._db.local().get_config();
             auto addr = cfg.rpc_address();
@@ -2246,7 +2266,7 @@ future<> storage_service::start_native_transport() {
             auto keepalive = cfg.rpc_keepalive();
             cql_transport::cql_server_config cql_server_config;
             cql_server_config.timeout_config = make_timeout_config(cfg);
-            cql_server_config.max_request_size = ss._service_memory_total;
+            cql_server_config.max_request_size = get_local_storage_service()._service_memory_total;
             cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
             cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
             cql_server_config.sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits();
@@ -2302,11 +2322,14 @@ future<> storage_service::start_native_transport() {
 
             ss.set_cql_ready(true).get();
         });
-    });
 }
 
 future<> storage_service::do_stop_native_transport() {
-    return do_with(std::move(_cql_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
+    return _cql_server.stop_server();
+}
+
+future<> cql_server_controller::stop_server() {
+    return do_with(std::move(_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
         if (cserver) {
             // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
             return set_cql_ready(false).then([&cserver] {
@@ -2327,7 +2350,7 @@ future<> storage_service::stop_native_transport() {
 
 future<bool> storage_service::is_native_transport_running() {
     return run_with_no_api_lock([] (storage_service& ss) {
-        return bool(ss._cql_server);
+        return ss._cql_server.is_server_running();
     });
 }
 
@@ -3370,8 +3393,8 @@ future<> deinit_storage_service() {
     return service::get_storage_service().stop();
 }
 
-future<> storage_service::set_cql_ready(bool ready) {
-    return _gossiper.add_local_application_state(application_state::RPC_READY, versioned_value::cql_ready(ready));
+future<> cql_server_controller::set_cql_ready(bool ready) {
+    return _gossiper.add_local_application_state(gms::application_state::RPC_READY, gms::versioned_value::cql_ready(ready));
 }
 
 void storage_service::notify_down(inet_address endpoint) {
