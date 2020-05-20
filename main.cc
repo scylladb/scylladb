@@ -1082,6 +1082,10 @@ int main(int ac, char** av) {
             // Truncate `clients' CF - this table should not persist between server restarts.
             clear_clientlist().get();
 
+            db.invoke_on_all([] (database& db) {
+                db.revert_initial_system_read_concurrency_boost();
+            }).get();
+
             if (cfg->start_native_transport()) {
                 supervisor::notify("starting native transport");
                 with_scheduling_group(dbcfg.statement_scheduling_group, [] {

@@ -191,7 +191,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             max_memory_streaming_concurrent_reads(),
             "_streaming_concurrency_sem")
     , _system_read_concurrency_sem(
-            max_count_system_concurrent_reads,
+            // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
+            max_count_concurrent_reads,
             max_memory_system_concurrent_reads(),
             "_system_read_concurrency_sem")
     , _data_query_stage("data_query", &column_family::query)
@@ -1751,6 +1752,11 @@ future<> stop_database(sharded<database>& sdb) {
 
 future<> database::stop_large_data_handler() {
     return _large_data_handler->stop();
+}
+
+void database::revert_initial_system_read_concurrency_boost() {
+    _system_read_concurrency_sem.consume({database::max_count_concurrent_reads - database::max_count_system_concurrent_reads, 0});
+    dblog.debug("Reverted system read concurrency from initial {} to normal {}", database::max_count_concurrent_reads, database::max_count_system_concurrent_reads);
 }
 
 future<>

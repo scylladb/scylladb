@@ -1502,6 +1502,12 @@ public:
     sstring get_available_index_name(const sstring& ks_name, const sstring& cf_name,
                                      std::optional<sstring> index_name_root) const;
     schema_ptr find_indexed_table(const sstring& ks_name, const sstring& index_name) const;
+    /// Revert the system read concurrency to the normal value.
+    ///
+    /// When started the database uses a higher initial concurrency for system
+    /// reads, to speed up startup. After startup this should be reverted to
+    /// the normal concurrency.
+    void revert_initial_system_read_concurrency_boost();
     future<> stop();
     future<> close_tables(table_kind kind_to_close);
 
