@@ -65,6 +65,7 @@
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
 #include "cdc/metadata.hh"
+#include "thrift/controller.hh" // TEMPORARY
 
 namespace cql_transport { class controller; }
 
@@ -74,8 +75,6 @@ namespace view {
 class view_update_generator;
 }
 }
-
-class thrift_server;
 
 namespace dht {
 class boot_strapper;
@@ -105,24 +104,6 @@ using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 
 struct storage_service_config {
     size_t available_memory;
-};
-
-class thrift_controller {
-    std::unique_ptr<distributed<thrift_server>> _server;
-    semaphore _ops_sem; /* protects start/stop operations on _server */
-
-    distributed<database>& _db;
-    sharded<auth::service>& _auth_service;
-
-    future<> do_start_server();
-    future<> do_stop_server();
-
-public:
-    thrift_controller(distributed<database>&, sharded<auth::service>&);
-    future<> start_server();
-    future<> stop_server();
-    future<> stop();
-    bool is_server_running() { return bool(_server); }
 };
 
 /**
@@ -163,7 +144,7 @@ private:
     // ever arise.
     bool _loading_new_sstables = false;
     friend class cql_transport::controller;
-    thrift_controller _thrift_server;
+    ::thrift_controller _thrift_server;
     sstring _operation_in_progress;
     bool _force_remove_completion = false;
     bool _ms_stopped = false;

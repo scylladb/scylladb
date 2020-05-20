@@ -62,7 +62,6 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
 #include "service/load_broadcaster.hh"
-#include "thrift/server.hh"
 #include "transport/server.hh"
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
@@ -118,12 +117,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
     commit_error.connect([this] { isolate_on_commit_error(); });
-}
-
-thrift_controller::thrift_controller(distributed<database>& db, sharded<auth::service>& auth)
-    : _ops_sem(1)
-    , _db(db)
-    , _auth_service(auth) {
 }
 
 void storage_service::enable_all_features() {
@@ -2184,72 +2177,6 @@ static std::atomic<bool> isolated = { false };
 future<> storage_service::start_rpc_server() {
     return run_with_api_lock(sstring("start_rpc_server"), [] (storage_service& ss) {
         return ss._thrift_server.start_server();
-    });
-}
-
-future<> thrift_controller::start_server() {
-    if (!_ops_sem.try_wait()) {
-        throw std::runtime_error(format("Thrift server is stopping, try again later"));
-    }
-
-    return do_start_server().finally([this] { _ops_sem.signal(); });
-}
-
-future<> thrift_controller::do_start_server() {
-    if (_server) {
-        return make_ready_future<>();
-    }
-
-    auto& ss = *this;
-
-        ss._server = std::make_unique<distributed<thrift_server>>();
-        auto tserver = &*ss._server;
-
-        auto& cfg = ss._db.local().get_config();
-        auto port = cfg.rpc_port();
-        auto addr = cfg.rpc_address();
-        auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
-        auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-        auto keepalive = cfg.rpc_keepalive();
-        thrift_server_config tsc;
-        tsc.timeout_config = make_timeout_config(cfg);
-        tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
-        return gms::inet_address::lookup(addr, family, preferred).then([&ss, tserver, addr, port, keepalive, tsc] (gms::inet_address ip) {
-            return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), tsc).then([tserver, port, addr, ip, keepalive] {
-                // #293 - do not stop anything
-                //engine().at_exit([tserver] {
-                //    return tserver->stop();
-                //});
-                return tserver->invoke_on_all(&thrift_server::listen, socket_address{ip, port}, keepalive);
-            });
-        }).then([addr, port] {
-            slogger.info("Thrift server listening on {}:{} ...", addr, port);
-        });
-}
-
-future<> thrift_controller::stop() {
-    return _ops_sem.wait().then([this] {
-        _ops_sem.broken();
-        return do_stop_server();
-    });
-}
-
-future<> thrift_controller::stop_server() {
-    if (!_ops_sem.try_wait()) {
-        throw std::runtime_error(format("Thrift server is starting, try again later"));
-    }
-
-    return do_stop_server().finally([this] { _ops_sem.signal(); });
-}
-
-future<> thrift_controller::do_stop_server() {
-    return do_with(std::move(_server), [this] (std::unique_ptr<distributed<thrift_server>>& tserver) {
-        if (tserver) {
-            return tserver->stop().then([] {
-                slogger.info("Thrift server stopped");
-            });
-        }
-        return make_ready_future<>();
     });
 }
 
