@@ -26,6 +26,7 @@
 namespace service { class load_meter; }
 namespace locator { class token_metadata; }
 namespace cql_transport { class controller; }
+class thrift_controller;
 
 namespace api {
 
@@ -51,7 +52,7 @@ future<> set_server_snitch(http_context& ctx);
 future<> set_server_storage_service(http_context& ctx);
 future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl);
 future<> unset_transport_controller(http_context& ctx);
-future<> set_rpc_controller(http_context& ctx);
+future<> set_rpc_controller(http_context& ctx, thrift_controller& ctl);
 future<> unset_rpc_controller(http_context& ctx);
 future<> set_server_snapshot(http_context& ctx);
 future<> set_server_gossip(http_context& ctx);

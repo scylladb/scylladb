@@ -74,6 +74,7 @@
 #include "cql3/cql_config.hh"
 #include "connection_notifier.hh"
 #include "transport/controller.hh"
+#include "thrift/controller.hh"
 
 #include "alternator/server.hh"
 #include "redis/service.hh"
@@ -1105,13 +1106,15 @@ int main(int ac, char** av) {
                 api::unset_transport_controller(ctx).get();
             });
 
+            ::thrift_controller thrift_ctl(db, auth_service);
+
             if (cfg->start_rpc()) {
                 with_scheduling_group(dbcfg.statement_scheduling_group, [] {
                     return service::get_local_storage_service().start_rpc_server();
                 }).get();
             }
 
-            api::set_rpc_controller(ctx).get();
+            api::set_rpc_controller(ctx, thrift_ctl).get();
             auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
                 api::unset_rpc_controller(ctx).get();
             });
