@@ -109,3 +109,14 @@ bytes base64_decode(std::string_view in) {
     // To fix this we need to use bytes' "uninitialized" feature.
     return bytes(ret.begin(), ret.end());
 }
+
+static size_t base64_padding_len(std::string_view str) {
+    size_t padding = 0;
+    padding += (!str.empty() && str.back() == '=');
+    padding += (str.size() > 1 && *(str.end() - 2) == '=');
+    return padding;
+}
+
+size_t base64_decoded_len(std::string_view str) {
+    return str.size() / 4 * 3 - base64_padding_len(str);
+}

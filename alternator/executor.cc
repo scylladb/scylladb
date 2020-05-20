@@ -1913,12 +1913,10 @@ static rjson::value calculate_size(const rjson::value& v) {
         }
         ret = it->value.MemberCount();
     } else if (it->name == "B") {
-        // TODO (optimization): Calculate the length of a base64-encoded
-        // string directly, without decoding it first.
         if (!it->value.IsString()) {
             throw api_error("ValidationException", format("invalid byte string: {}", v));
         }
-        ret = base64_decode(it->value).size();
+        ret = base64_decoded_len(rjson::to_string_view(it->value));
     } else {
         rjson::value json_ret = rjson::empty_object();
         rjson::set(json_ret, "null", rjson::value(true));
