@@ -100,7 +100,10 @@ def test_too_large_request(dynamodb, test_table):
     # in alternator and DynamoDB. The former returns 413, the latter
     # a ClientError explaining that the element size was too large.
     with pytest.raises(BotoCoreError):
-        test_table.put_item(Item={'p': p, 'c': c, 'big': big})
+        try:
+            test_table.put_item(Item={'p': p, 'c': c, 'big': big})
+        except ClientError:
+            raise BotoCoreError()
 
 def test_incorrect_json(dynamodb, test_table):
     correct_req = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
