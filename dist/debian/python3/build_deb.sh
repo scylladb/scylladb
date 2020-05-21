@@ -85,7 +85,7 @@ fi
 if [ ! -f /usr/bin/fakeroot ]; then
     pkg_install fakeroot
 fi
-if [ ! -f /usr/bin/pystache ]; then
+if [ ! -f /usr/bin/pystache ] && [ ! -f /usr/local/bin/pystache ]; then
     if is_redhat_variant; then
         sudo yum install -y /usr/bin/pystache
     elif is_debian_variant; then
