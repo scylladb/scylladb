@@ -614,7 +614,7 @@ private:
         bool _is_counter = false;
         cf_type _type = cf_type::standard;
         int32_t _gc_grace_seconds = DEFAULT_GC_GRACE_SECONDS;
-        double _dc_local_read_repair_chance = 0.1;
+        double _dc_local_read_repair_chance = 0.0;
         double _read_repair_chance = 0.0;
         double _crc_check_chance = 1;
         int32_t _min_compaction_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
