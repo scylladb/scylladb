@@ -30,7 +30,7 @@ def get_signed_request(dynamodb, target, payload):
     # to unexpected changes
     class Request:
         url=dynamodb.meta.client._endpoint.host
-        headers={'X-Amz-Target': 'DynamoDB_20120810.' + target}
+        headers={'X-Amz-Target': 'DynamoDB_20120810.' + target, 'Content-Type': 'application/x-amz-json-1.0'}
         body=payload.encode(encoding='UTF-8')
         method='POST'
         context={}
