@@ -1,5 +1,9 @@
 #!/bin/bash
 
+if [[ -f ~/.config/scylladb/dbuild ]]; then
+    . ~/.config/scylladb/dbuild
+fi
+
 here="$(realpath $(dirname "$0"))"
 toplevel="$(realpath "$here/../..")"
 group_args=()
@@ -42,6 +46,17 @@ OPTIONS
        Run an interactive session.
 
    See \`docker help run' for available options.
+
+ENVIRONMENT
+
+    SCYLLADB_DBUILD this variable, which can be a string or a bash
+                    array, is prepended to the parmeters passed to
+                    docker. This can be used to mount the ccache
+                    directory (~/.ccache) and set up environment
+                    variables (e.g. CCACHE_PREFIX)
+
+    If the file ~/.config/scylladb/dbuild exists, it is sourced. This can
+    be used to set up the SCYLLADB_DBUILD environment variable.
 EOF
     exit 0
 }
@@ -115,6 +130,8 @@ mkdir -p "$MAVEN_LOCAL_REPO"
 is_podman="$(docker --help | grep -o podman)"
 
 docker_common_args=()
+
+docker_common_args+=("${SCYLLADB_DBUILD[@]}")
 
 if [ -z "$is_podman" ]; then
     docker_common_args+=(
