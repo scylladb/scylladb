@@ -299,7 +299,7 @@ public:
 
 // Less-comparator for lookups in the partition index.
 class index_comparator {
-    dht::ring_position_comparator _tri_cmp;
+    dht::ring_position_comparator_for_sstables _tri_cmp;
 public:
     index_comparator(const schema& s) : _tri_cmp(s) {}
 

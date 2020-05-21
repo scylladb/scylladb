@@ -330,6 +330,7 @@ public:
 class ring_position_view {
     friend int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
     friend class ring_position_comparator;
+    friend class ring_position_comparator_for_sstables;
     friend class ring_position_ext;
 
     // Order is lexicographical on (_token, _key) tuples, where _key part may be missing, and
@@ -570,7 +571,15 @@ int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_posit
 struct ring_position_comparator {
     const schema& s;
     ring_position_comparator(const schema& s_) : s(s_) {}
-    int operator()(ring_position_view, ring_position_view) const;
+
+    int operator()(ring_position_view lh, ring_position_view rh) const {
+        return ring_position_tri_compare(s, lh, rh);
+    }
+};
+
+struct ring_position_comparator_for_sstables {
+    const schema& s;
+    ring_position_comparator_for_sstables(const schema& s_) : s(s_) {}
     int operator()(ring_position_view, sstables::decorated_key_view) const;
     int operator()(sstables::decorated_key_view, ring_position_view) const;
 };
