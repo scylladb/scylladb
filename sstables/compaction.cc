@@ -478,6 +478,9 @@ public:
     compaction& operator=(const compaction&) = delete;
     compaction(const compaction&) = delete;
 
+    compaction(compaction&& other) = delete;
+    compaction& operator=(compaction&& other) = delete;
+
     virtual ~compaction() {
         if (_info) {
             _cf.get_compaction_manager().deregister_compaction(_info);
