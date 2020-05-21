@@ -1205,19 +1205,29 @@ void sstable::validate_max_local_deletion_time() {
     }
 }
 
-void sstable::set_clustering_components_ranges() {
+void sstable::set_position_range() {
     if (!_schema->clustering_key_size()) {
         return;
     }
-    auto& min_column_names = get_stats_metadata().min_column_names.elements;
-    auto& max_column_names = get_stats_metadata().max_column_names.elements;
 
-    auto s = std::min(min_column_names.size(), max_column_names.size());
-    _clustering_components_ranges.reserve(s);
-    for (auto i = 0U; i < s; i++) {
-        auto r = nonwrapping_range<bytes_view>({{ min_column_names[i].value, true }}, {{ max_column_names[i].value, true }});
-        _clustering_components_ranges.push_back(std::move(r));
+    auto& min_elements = get_stats_metadata().min_column_names.elements;
+    auto& max_elements = get_stats_metadata().max_column_names.elements;
+
+    if (min_elements.empty() && max_elements.empty()) {
+        return;
     }
+
+    auto pip = [] (const utils::chunked_vector<disk_string<uint16_t>>& column_names, bound_kind kind) {
+        std::vector<bytes> key_bytes;
+        key_bytes.reserve(column_names.size());
+        for (auto& value : column_names) {
+            key_bytes.emplace_back(bytes_view(value));
+        }
+        auto ckp = clustering_key_prefix(std::move(key_bytes));
+        return position_in_partition(position_in_partition::range_tag_t(), kind, std::move(ckp));
+    };
+
+    _position_range = position_range(pip(min_elements, bound_kind::incl_start), pip(max_elements, bound_kind::incl_end));
 }
 
 double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
@@ -1329,7 +1339,7 @@ future<> sstable::update_info_for_opened_data() {
         }
         return make_ready_future<>();
     }).then([this] {
-        this->set_clustering_components_ranges();
+        this->set_position_range();
         this->set_first_and_last_keys();
         _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(utils::make_random_uuid());
 
@@ -2228,7 +2238,7 @@ void sstable::update_stats_on_end_of_stream()
     }
 }
 
-bool sstable::may_contain_rows(const std::vector<std::vector<nonwrapping_range<bytes_view>>>& ranges) {
+bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {
     if (_version < sstables::sstable_version_types::md) {
         return true;
     }
@@ -2244,18 +2254,10 @@ bool sstable::may_contain_rows(const std::vector<std::vector<nonwrapping_range<b
         }
     }
 
-    auto clustering_components_size = _clustering_components_ranges.size();
-    if (!_schema->clustering_key_size() || !clustering_components_size) {
-        return true;
-    }
-
-    auto& clustering_key_types = _schema->clustering_key_type()->types();
-    return std::ranges::any_of(ranges, [this, clustering_components_size, &clustering_key_types] (const std::vector<nonwrapping_range<bytes_view>>& range) {
-        auto s = std::min(range.size(), clustering_components_size);
-        return std::ranges::all_of(boost::irange<unsigned>(0, s), [this, &clustering_key_types, &range] (unsigned i) {
-            auto& type = clustering_key_types[i];
-            return range[i].is_full() || range[i].overlaps(_clustering_components_ranges[i], type->as_tri_comparator());
-        });
+    return std::ranges::any_of(ranges, [this] (const query::clustering_range& range) {
+        return _position_range.overlaps(*_schema,
+            position_in_partition_view::for_range_start(range),
+            position_in_partition_view::for_range_end(range));
     });
 }
 
