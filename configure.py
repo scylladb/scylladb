@@ -1219,7 +1219,7 @@ def configure_seastar(build_dir, mode):
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
         '-DSeastar_CXX_FLAGS={}'.format((seastar_cflags + ' ' + modes[mode]['cxx_ld_flags']).replace(' ', ';')),
         '-DSeastar_LD_FLAGS={}'.format(seastar_ldflags),
-        '-DSeastar_CXX_DIALECT=gnu++17',
+        '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_STD_OPTIONAL_VARIANT_STRINGVIEW=ON',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
     ]
