@@ -128,8 +128,9 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
     sstables.erase(boost::remove_if(sstables, sstable_has_not_key), sstables.end());
 
     // no clustering filtering is applied if schema defines no clustering key or
-    // compaction strategy thinks it will not benefit from such an optimization.
-    if (!schema->clustering_key_size() || !cf.get_compaction_strategy().use_clustering_key_filter()) {
+    // compaction strategy thinks it will not benefit from such an optimization,
+    // or the partition_slice includes static columns.
+    if (!schema->clustering_key_size() || !cf.get_compaction_strategy().use_clustering_key_filter() || slice.static_columns.size()) {
         return sstables;
     }
 
