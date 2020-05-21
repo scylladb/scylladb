@@ -31,6 +31,8 @@
 
 namespace sstables {
 
+extern seastar::logger sstlog;
+
 class index_consumer {
     uint64_t max_quantity;
 public:
@@ -84,6 +86,23 @@ private:
         CONSUME_ENTRY,
     } _state = state::START;
 
+    friend std::ostream& operator<<(std::ostream& out, const state& s) {
+        switch (s) {
+        case state::START: return out <<  "START";
+        case state::KEY_SIZE: return out <<  "KEY_SIZE";
+        case state::KEY_BYTES: return out <<  "KEY_BYTES";
+        case state::POSITION: return out <<  "POSITION";
+        case state::PROMOTED_SIZE: return out <<  "PROMOTED_SIZE";
+        case state::PARTITION_HEADER_LENGTH_1: return out <<  "PARTITION_HEADER_LENGTH_1";
+        case state::PARTITION_HEADER_LENGTH_2: return out <<  "PARTITION_HEADER_LENGTH_2";
+        case state::LOCAL_DELETION_TIME: return out <<  "LOCAL_DELETION_TIME";
+        case state::MARKED_FOR_DELETE_AT: return out <<  "MARKED_FOR_DELETE_AT";
+        case state::NUM_PROMOTED_INDEX_BLOCKS: return out <<  "NUM_PROMOTED_INDEX_BLOCKS";
+        case state::CONSUME_ENTRY: return out <<  "CONSUME_ENTRY";
+        }
+        abort();
+    }
+
     temporary_buffer<char> _key;
     uint64_t _promoted_index_end;
     uint64_t _position;
@@ -123,31 +142,37 @@ public:
         switch (_state) {
         // START comes first, to make the handling of the 0-quantity case simpler
         case state::START:
+            sstlog.trace("{}: pos {} state {}", this, current_pos(), state::START);
             _state = state::KEY_SIZE;
             break;
         case state::KEY_SIZE:
+            sstlog.trace("{}: pos {} state {}", this, current_pos(), state::KEY_SIZE);
             _entry_offset = current_pos();
             if (this->read_16(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::KEY_BYTES;
                 break;
             }
         case state::KEY_BYTES:
+            sstlog.trace("{}: pos {} state {}", this, current_pos(), state::KEY_BYTES);
             if (this->read_bytes(data, this->_u16, _key) != continuous_data_consumer::read_status::ready) {
                 _state = state::POSITION;
                 break;
             }
         case state::POSITION:
+            sstlog.trace("{}: pos {} state {}", this, current_pos(), state::POSITION);
             if (read_vint_or_uint64(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::PROMOTED_SIZE;
                 break;
             }
         case state::PROMOTED_SIZE:
+            sstlog.trace("{}: pos {} state {}", this, current_pos(), state::PROMOTED_SIZE);
             _position = this->_u64;
             if (read_vint_or_uint32(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::PARTITION_HEADER_LENGTH_1;
                 break;
             }
         case state::PARTITION_HEADER_LENGTH_1: {
+            sstlog.trace("{}: pos {} state {}", this, current_pos(), state::PARTITION_HEADER_LENGTH_1);
             auto promoted_index_size_with_header = get_uint32();
             _promoted_index_end = current_pos() + promoted_index_size_with_header;
             if (promoted_index_size_with_header == 0) {
@@ -165,21 +190,25 @@ public:
             }
         }
         case state::PARTITION_HEADER_LENGTH_2:
+            sstlog.trace("{}: pos {} state {} {}", this, current_pos(), state::PARTITION_HEADER_LENGTH_2, this->_u64);
             _partition_header_length = this->_u64;
         state_LOCAL_DELETION_TIME:
         case state::LOCAL_DELETION_TIME:
+            sstlog.trace("{}: pos {} state {}", this, current_pos(), state::LOCAL_DELETION_TIME);
             _deletion_time.emplace();
             if (this->read_32(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::MARKED_FOR_DELETE_AT;
                 break;
             }
         case state::MARKED_FOR_DELETE_AT:
+            sstlog.trace("{}: pos {} state {}", this, current_pos(), state::MARKED_FOR_DELETE_AT);
             _deletion_time->local_deletion_time = this->_u32;
             if (this->read_64(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::NUM_PROMOTED_INDEX_BLOCKS;
                 break;
             }
         case state::NUM_PROMOTED_INDEX_BLOCKS:
+            sstlog.trace("{}: pos {} state {}", this, current_pos(), state::NUM_PROMOTED_INDEX_BLOCKS);
             _deletion_time->marked_for_delete_at = this->_u64;
             if (read_vint_or_uint32(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::CONSUME_ENTRY;
@@ -188,6 +217,7 @@ public:
         state_CONSUME_ENTRY:
         case state::CONSUME_ENTRY: {
             auto promoted_index_size = _promoted_index_end - current_pos();
+            sstlog.trace("{}: pos {} state {} size {}", this, current_pos(), state::CONSUME_ENTRY, promoted_index_size);
             if (_deletion_time) {
                 _num_pi_blocks = get_uint32();
             }
@@ -225,11 +255,13 @@ public:
                 data.trim_front(promoted_index_size);
             } else {
                 data.trim(0);
+                sstlog.trace("{}: skip {} pos {} state {}", this, promoted_index_size - data_size, current_pos(), _state);
                 return skip_bytes{promoted_index_size - data_size};
             }
         }
             break;
         }
+        sstlog.trace("{}: exit pos {} state {}", this, current_pos(), _state);
         return proceed::yes;
     }
 
