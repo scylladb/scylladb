@@ -42,6 +42,8 @@
 #include "database.hh"
 #include "db/extensions.hh"
 
+extern logging::logger apilog;
+
 namespace api {
 
 namespace ss = httpd::storage_service_json;
@@ -230,6 +232,11 @@ void set_storage_service(http_context& ctx, routes& r) {
         auto keyspace = validate_keyspace(ctx, req.param);
         return container_to_vec(service::get_local_storage_service().get_natural_endpoints(keyspace, req.get_query_param("cf"),
                 req.get_query_param("key")));
+    });
+
+    ss::cdc_streams_check_and_repair.set(r, [&ctx] (std::unique_ptr<request> req) {
+        // TODO(JS): regenerate streams
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
