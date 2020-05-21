@@ -185,6 +185,8 @@ private:
             to.elements.push_back(std::move(s));
         }
     }
+
+    void do_update_min_max_components(const schema& schema, const clustering_key_prefix& key);
 public:
     void add_key(bytes_view key) {
         long hashed = utils::murmur_hash::hash2_64(key, 0);
@@ -241,6 +243,12 @@ public:
 
     void update_has_legacy_counter_shards(bool has_legacy_counter_shards) {
         _has_legacy_counter_shards = _has_legacy_counter_shards || has_legacy_counter_shards;
+    }
+
+    void update_min_max_components(const schema& schema, const clustering_key_prefix& key) {
+        if (schema.clustering_key_size()) {
+            do_update_min_max_components(schema, key);
+        }
     }
 
     void update(column_stats&& stats) {

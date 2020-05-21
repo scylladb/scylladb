@@ -1259,10 +1259,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     flush_tmp_bufs();
 
     // Collect statistics
-    if (_schema.clustering_key_size()) {
-        column_name_helper::min_max_components(_schema, _sst.get_metadata_collector().min_column_names(),
-            _sst.get_metadata_collector().max_column_names(), clustered_row.key().components());
-    }
+    _sst.get_metadata_collector().update_min_max_components(_schema, clustered_row.key());
     collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key());
 }
 
@@ -1340,10 +1337,7 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
 
-    if (_schema.clustering_key_size()) {
-        column_name_helper::min_max_components(_schema, _sst.get_metadata_collector().min_column_names(),
-            _sst.get_metadata_collector().max_column_names(), marker.clustering.components());
-    }
+    _sst.get_metadata_collector().update_min_max_components(_schema, marker.clustering);
 }
 
 void writer::consume(rt_marker&& marker) {

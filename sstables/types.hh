@@ -28,7 +28,6 @@
 #include "tombstone.hh"
 #include "utils/streaming_histogram.hh"
 #include "utils/estimated_histogram.hh"
-#include "column_name_helper.hh"
 #include "sstables/key.hh"
 #include "db/commitlog/replay_position.hh"
 #include "version.hh"

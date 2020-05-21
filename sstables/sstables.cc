@@ -1737,10 +1737,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
     maybe_write_row_marker(out, schema, clustered_row.marker(), clustering_key);
     maybe_write_row_tombstone(out, clustering_key, clustered_row);
 
-    if (schema.clustering_key_size()) {
-        column_name_helper::min_max_components(schema, _collector.min_column_names(), _collector.max_column_names(),
-            clustered_row.key().components());
-    }
+    _collector.update_min_max_components(schema, clustered_row.key());
 
     // Write all cells of a partition's row.
     clustered_row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
