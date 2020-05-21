@@ -85,7 +85,7 @@ private:
     } _state = state::START;
 
     temporary_buffer<char> _key;
-    uint32_t _promoted_index_end;
+    uint64_t _promoted_index_end;
     uint64_t _position;
     uint64_t _partition_header_length = 0;
     std::optional<deletion_time> _deletion_time;
