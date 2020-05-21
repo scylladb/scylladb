@@ -2038,10 +2038,10 @@ const std::vector<view_ptr>& table::views() const {
     return _views;
 }
 
-std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutation& update) const {
+std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutation& update, gc_clock::time_point now) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
     return boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::filtered([&, this] (auto&& view) {
-        return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key());
+        return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key(), now);
     }));
 }
 
@@ -2070,13 +2070,15 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         std::vector<view_ptr>&& views,
         mutation&& m,
         flat_mutation_reader_opt existings,
-        tracing::trace_state_ptr tr_state) const {
+        tracing::trace_state_ptr tr_state,
+        gc_clock::time_point now) const {
     auto base_token = m.token();
     return db::view::generate_view_updates(
             base,
             std::move(views),
             flat_mutation_reader_from_mutations({std::move(m)}),
-            std::move(existings)).then([this, base_token = std::move(base_token), tr_state = std::move(tr_state)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+            std::move(existings),
+            now).then([this, base_token = std::move(base_token), tr_state = std::move(tr_state)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
             tracing::trace(tr_state, "Generated {} view update mutations", updates.size());
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates));
         return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, *_config.cf_stats, std::move(tr_state),
@@ -2179,13 +2181,15 @@ table::local_base_lock(
 future<> table::populate_views(
         std::vector<view_ptr> views,
         dht::token base_token,
-        flat_mutation_reader&& reader) {
+        flat_mutation_reader&& reader,
+        gc_clock::time_point now) {
     auto& schema = reader.schema();
     return db::view::generate_view_updates(
             schema,
             std::move(views),
             std::move(reader),
-            { }).then([base_token = std::move(base_token), this] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+            { },
+            now).then([base_token = std::move(base_token), this] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
         size_t update_size = memory_usage_of(updates);
         size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
         return seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for).then(
@@ -2539,14 +2543,15 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     }
     auto& base = schema();
     m.upgrade(base);
-    auto views = affected_views(base, m);
+    gc_clock::time_point now = gc_clock::now();
+    auto views = affected_views(base, m, now);
     if (views.empty()) {
         return make_ready_future<row_locker::lock_holder>();
     }
-    auto cr_ranges = db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
+    auto cr_ranges = db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views, now);
     if (cr_ranges.empty()) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
-        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }, std::move(tr_state)).then([] {
+        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }, std::move(tr_state), now).then([] {
                 // In this case we are not doing a read-before-write, just a
                 // write, so no lock is needed.
                 return make_ready_future<row_locker::lock_holder>();
@@ -2569,15 +2574,15 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.
     future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
-    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout, source = std::move(source), tr_state = std::move(tr_state), &io_priority] (row_locker::lock_holder lock) mutable {
+    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout, now, source = std::move(source), tr_state = std::move(tr_state), &io_priority] (row_locker::lock_holder lock) mutable {
       tracing::trace(tr_state, "View updates for {}.{} require read-before-write - base table reader is created", base->ks_name(), base->cf_name());
       return do_with(
         dht::partition_range::make_singular(m.decorated_key()),
         std::move(slice),
         std::move(m),
-        [base, views = std::move(views), lock = std::move(lock), this, timeout, source = std::move(source), &io_priority, tr_state = std::move(tr_state)] (auto& pk, auto& slice, auto& m) mutable {
+        [base, views = std::move(views), lock = std::move(lock), this, timeout, now, source = std::move(source), &io_priority, tr_state = std::move(tr_state)] (auto& pk, auto& slice, auto& m) mutable {
             auto reader = source.make_reader(base, no_reader_permit(), pk, slice, io_priority, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader), tr_state).then([base, tr_state = std::move(tr_state), lock = std::move(lock)] () mutable {
+            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader), tr_state, now).then([base, tr_state = std::move(tr_state), lock = std::move(lock)] () mutable {
                 tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
                 // return the local partition/row lock we have taken so it
                 // remains locked until the caller is done modifying this

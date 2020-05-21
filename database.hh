@@ -1017,7 +1017,8 @@ public:
     future<> populate_views(
             std::vector<view_ptr>,
             dht::token base_token,
-            flat_mutation_reader&&);
+            flat_mutation_reader&&,
+            gc_clock::time_point);
 
     reader_concurrency_semaphore& read_concurrency_semaphore() {
         return *_config.read_concurrency_semaphore;
@@ -1030,12 +1031,13 @@ public:
 private:
     future<row_locker::lock_holder> do_push_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout, mutation_source&& source,
             tracing::trace_state_ptr tr_state, const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const;
-    std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
+    std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update, gc_clock::time_point now) const;
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
             std::vector<view_ptr>&& views,
             mutation&& m,
             flat_mutation_reader_opt existings,
-            tracing::trace_state_ptr tr_state) const;
+            tracing::trace_state_ptr tr_state,
+            gc_clock::time_point now) const;
 
     mutable row_locker _row_locker;
     future<row_locker::lock_holder> local_base_lock(
