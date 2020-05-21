@@ -41,6 +41,7 @@
 #include "dht/i_partitioner.hh"
 #include <unordered_set>
 #include "database_fwd.hh"
+#include "streaming/stream_reason.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 
@@ -66,7 +67,7 @@ public:
         , _token_metadata(tmd) {
     }
 
-    future<> bootstrap();
+    future<> bootstrap(streaming::stream_reason reason);
 
     /**
      * if initialtoken was specified, use that (split on comma).

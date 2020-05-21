@@ -49,6 +49,7 @@ enum class stream_reason : uint8_t {
     removenode,
     rebuild,
     repair,
+    replace,
 };
 
 enum class stream_mutation_fragments_cmd : uint8_t {
