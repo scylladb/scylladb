@@ -49,10 +49,11 @@ namespace view {
  * @param base the base table schema.
  * @param view_info the view info.
  * @param key the partition key that is updated.
+ * @param time_point time of the operation (for handling liveness: TTL, tombstones, etc).
  * @return false if we can guarantee that inserting an update for specified key
  * won't affect the view in any way, true otherwise.
  */
-bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key);
+bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key, gc_clock::time_point now);
 
 /**
  * Whether the view might be affected by the provided update.
@@ -64,10 +65,11 @@ bool partition_key_matches(const schema& base, const view_info& view, const dht:
  * @param view_info the view info.
  * @param key the partition key that is updated.
  * @param update the base table update being applied.
+ * @param time_point time of the operation (for handling liveness: TTL, tombstones, etc).
  * @return false if we can guarantee that inserting update for key
  * won't affect the view in any way, true otherwise.
  */
-bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update);
+bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update, gc_clock::time_point now);
 
 /**
  * Whether a given base row matches the view filter (and thus if the view should have a corresponding entry).
@@ -88,19 +90,21 @@ bool may_be_affected_by(const schema& base, const view_info& view, const dht::de
  */
 bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_row& update, gc_clock::time_point now);
 
-bool clustering_prefix_matches(const schema& base, const partition_key& key, const clustering_key_prefix& ck);
+bool clustering_prefix_matches(const schema& base, const partition_key& key, const clustering_key_prefix& ck, gc_clock::time_point now);
 
 future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_ptr>&& views_to_update,
         flat_mutation_reader&& updates,
-        flat_mutation_reader_opt&& existings);
+        flat_mutation_reader_opt&& existings,
+        gc_clock::time_point now);
 
 query::clustering_row_ranges calculate_affected_clustering_ranges(
         const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,
-        const std::vector<view_ptr>& views);
+        const std::vector<view_ptr>& views,
+        gc_clock::time_point now);
 
 struct wait_for_all_updates_tag {};
 using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
