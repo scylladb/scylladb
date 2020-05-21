@@ -1772,14 +1772,12 @@ public:
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
     future<> push(mutation_fragment&& mf) {
+        push_and_maybe_notify(std::move(mf));
         if (!is_buffer_full()) {
-            push_and_maybe_notify(std::move(mf));
             return make_ready_future<>();
         }
         _not_full.emplace();
-        return _not_full->get_future().then([this, mf = std::move(mf)] () mutable {
-            push_and_maybe_notify(std::move(mf));
-        });
+        return _not_full->get_future();
     }
     void push_end_of_stream() {
         _end_of_stream = true;
