@@ -190,12 +190,7 @@ public:
         , _bootstrap_tokens(bootstrap_tokens)
         , _token_metadata(token_metadata)
         , _gossiper(gossiper)
-    {
-        if (_bootstrap_tokens.empty()) {
-            throw std::runtime_error(
-                    "cdc: bootstrap tokens is empty in generate_topology_description");
-        }
-    }
+    {}
 
     /*
      * Generate a set of CDC stream identifiers such that for each shard
@@ -257,8 +252,6 @@ db_clock::time_point make_new_cdc_generation(
         db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
         bool for_testing) {
-    assert(!bootstrap_tokens.empty());
-
     auto gen = topology_description_generator(cfg, bootstrap_tokens, tm, g).generate();
 
     // Begin the race.
