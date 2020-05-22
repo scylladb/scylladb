@@ -4994,6 +4994,20 @@ void storage_proxy::init_messaging_service() {
     ms.register_truncate([this](sstring ksname, sstring cfname) {
         return truncate_on_all_shards(std::move(ksname), std::move(cfname));
     });
+    ms.register_truncate_prepare([this] (sstring ksname, sstring cfname, bool wait_for_writes_and_reject_new) {
+        utils::UUID cf_id = _db.local().find_uuid(ksname, cfname);
+        // Only one truncate is allowed per table, so it is OK to coordinate truncations on a fixed shard
+        return container().invoke_on(0, [cf_id, wait_for_writes_and_reject_new] (storage_proxy& sp) {
+            return sp._truncate_manager.start_session_and_prepare(cf_id, wait_for_writes_and_reject_new);
+        });
+    });
+    ms.register_truncate_accept([this] (sstring ksname, sstring cfname) {
+        utils::UUID cf_id = _db.local().find_uuid(ksname, cfname);
+        // Only one truncate is allowed per table, so it is OK to coordinate truncations on a fixed shard
+        return container().invoke_on(0, [cf_id] (storage_proxy& sp) {
+            return sp._truncate_manager.actually_truncate(cf_id);
+        });
+    });
 
     ms.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
@@ -5114,6 +5128,8 @@ future<> storage_proxy::uninit_messaging_service() {
         ms.unregister_read_mutation_data(),
         ms.unregister_read_digest(),
         ms.unregister_truncate(),
+        ms.unregister_truncate_prepare(),
+        ms.unregister_truncate_accept(),
         ms.unregister_paxos_prepare(),
         ms.unregister_paxos_accept(),
         ms.unregister_paxos_learn(),
@@ -5226,6 +5242,88 @@ future<> storage_proxy::truncate_on_all_shards(sstring ksname, sstring cfname) {
     });
 }
 
+future<> truncate_session_manager::session::block_mutation_and_hint_traffic(bool wait_for_writes_and_reject_new) {
+    return get_storage_proxy().invoke_on_all([cf_id = _cf_id, wait_for_writes_and_reject_new] (storage_proxy& sp) {
+        auto f_hints_manager = make_ready_future<>();
+        if (sp._hints_manager) {
+            f_hints_manager = sp._hints_manager->block_hints_for_table_and_its_views(cf_id);
+        }
+
+        auto f_hints_for_views_manager = sp._hints_for_views_manager.block_hints_for_table_and_its_views(cf_id);
+
+        auto f_wait_for_writes_and_reject_new = make_ready_future<>();
+        if (wait_for_writes_and_reject_new) {
+            f_wait_for_writes_and_reject_new = sp._write_operation_admitters[cf_id].notify_start_truncation();
+        }
+        return with_timeout(db::timeout_clock::now() + get_truncation_timeout(),
+            when_all_succeed(std::move(f_hints_manager), std::move(f_hints_for_views_manager), std::move(f_wait_for_writes_and_reject_new)).discard_result()
+        );
+    });
+}
+
+future<> truncate_session_manager::session::unblock_mutation_and_hint_traffic() {
+    return get_storage_proxy().invoke_on_all([cf_id = _cf_id] (storage_proxy& sp) {
+        if (sp._hints_manager) {
+            sp._hints_manager->unblock_hints_for_table_and_its_views(cf_id);
+        }
+        sp._hints_for_views_manager.unblock_hints_for_table_and_its_views(cf_id);
+        if (auto it = sp._write_operation_admitters.find(cf_id); it != sp._write_operation_admitters.end()) {
+            it->second.notify_end_truncation();
+        }
+    });
+}
+
+future<> truncate_session_manager::session::actually_truncate() {
+    auto& sp = get_local_storage_proxy();
+    auto& cf = sp.get_db().local().find_column_family(_cf_id);
+    sstring ksname = cf.schema()->ks_name();
+    sstring cfname = cf.schema()->cf_name();
+    return sp.truncate_on_all_shards(std::move(ksname), std::move(cfname));
+}
+
+future<> truncate_session_manager::start_session_and_prepare(const utils::UUID& cf_id, bool wait_for_writes_and_reject_new) {
+    assert(this_shard_id() == 0);
+    return _session_manager.do_with_session(cf_id, [this, wait_for_writes_and_reject_new] (session_ref ref) {
+        const bool was_initialized = ref.is_initialized();
+        if (!was_initialized) {
+            ref.initialize_session_data(ref.get_key());
+        }
+        ref.dispose_after_timeout(get_truncation_timeout(), [] (session& sess) {
+            return sess.unblock_mutation_and_hint_traffic();
+        });
+        if (was_initialized) {
+            // No need to block anything - the table and views are already blocked.
+            // We only needed to reset the timeout.
+            return make_ready_future<>();
+        }
+        return ref.get_data()->block_mutation_and_hint_traffic(wait_for_writes_and_reject_new).handle_exception([this, ref] (std::exception_ptr ep) mutable {
+            return ref.get_data()->unblock_mutation_and_hint_traffic().then([ref, ep = std::move(ep)] () mutable {
+                ref.dispose_session_data();
+                return make_exception_future<>(std::move(ep));
+            });
+        });
+    });
+}
+
+future<> truncate_session_manager::actually_truncate(const utils::UUID& cf_id) {
+    assert(this_shard_id() == 0);
+    return _session_manager.do_with_session(cf_id, [this] (session_ref ref) {
+        if (!ref.is_initialized()) {
+            auto ep = std::make_exception_ptr(std::runtime_error("truncate session is invalid"));
+            return make_exception_future<>(exceptions::truncate_exception(std::move(ep)));
+        }
+        return ref.get_data()->actually_truncate().finally([ref] () mutable {
+            return ref.get_data()->unblock_mutation_and_hint_traffic().then([ref] () mutable {
+                ref.dispose_session_data();
+            });
+        });
+    });
+}
+
+std::chrono::milliseconds truncate_session_manager::get_truncation_timeout() {
+    return std::chrono::milliseconds(get_local_storage_proxy().get_db().local().get_config().truncate_request_timeout_in_ms());
+}
+
 utils::phased_barrier::operation storage_proxy::write_admitter::try_admit() {
     if (_truncation_in_progress) {
         throw std::runtime_error("Writing to the table is blocked due to an ongoing truncation");
@@ -5243,3 +5341,4 @@ void storage_proxy::write_admitter::notify_end_truncation() {
 }
 
 }
+                

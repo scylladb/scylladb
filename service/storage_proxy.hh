@@ -67,6 +67,7 @@
 #include "service/client_state.hh"
 #include "service/paxos/prepare_summary.hh"
 #include "cdc/stats.hh"
+#include "utils/expiring_session_manager.hh"
 
 
 namespace seastar::rpc {
@@ -156,6 +157,38 @@ public:
     // created by a foreign shard but no longer used by it.
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
             const query::partition_slice& slice, api::timestamp_type ts) = 0;
+};
+
+// Manages local truncation sessions
+class truncate_session_manager {
+private:
+    class session;
+    using session_ref = typename utils::expiring_session_manager<utils::UUID, session>::session_ref;
+
+private:
+    struct session {
+    private:
+        utils::UUID _cf_id;
+
+    public:
+        session(utils::UUID cf_id) : _cf_id(cf_id) {}
+        session(const session&) = delete;
+        session& operator=(const session&) = delete;
+
+        future<> block_mutation_and_hint_traffic(bool wait_for_writes_and_reject_new);
+        future<> unblock_mutation_and_hint_traffic();
+        future<> actually_truncate();
+    };
+
+private:
+    utils::expiring_session_manager<utils::UUID, session> _session_manager;
+
+private:
+    static std::chrono::milliseconds get_truncation_timeout();
+
+public:
+    future<> start_session_and_prepare(const utils::UUID& cf_id, bool wait_for_writes_and_reject_new);
+    future<> actually_truncate(const utils::UUID& cf_id);
 };
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
@@ -303,6 +336,7 @@ private:
     db::view::node_update_backlog& _max_view_update_backlog;
     std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
     std::unordered_map<utils::UUID, write_admitter> _write_operation_admitters;
+    truncate_session_manager _truncate_manager;
 
     //NOTICE(sarna): This opaque pointer is here just to avoid moving write handler class definitions from .cc to .hh. It's slow path.
     class view_update_handlers_list;
@@ -629,6 +663,7 @@ public:
     friend class shared_mutation;
     friend class hint_mutation;
     friend class cas_mutation;
+    friend class truncate_session_manager;
 };
 
 // A Paxos (AKA Compare And Swap, CAS) protocol involves multiple roundtrips between the coordinator
