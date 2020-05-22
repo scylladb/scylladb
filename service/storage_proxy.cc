@@ -379,6 +379,7 @@ protected:
     lw_shared_ptr<cdc::operation_result_tracker> _cdc_operation_result_tracker;
     timer<storage_proxy::clock_type> _expire_timer;
     service_permit _permit; // holds admission permit until operation completes
+    utils::phased_barrier::operation _op;
 
 protected:
     virtual bool waited_for(gms::inet_address from) = 0;
@@ -400,6 +401,7 @@ public:
         // or we may fail the consistency level guarantees (see #833, #8058)
         _total_block_for = db::block_for(ks, _cl) + pending_endpoints;
         ++_stats.writes;
+        _op = _proxy->_write_operation_admitters[_mutation_holder->schema()->id()].try_admit();
     }
     virtual ~abstract_write_response_handler() {
         --_stats.writes;
@@ -5222,6 +5224,22 @@ future<> storage_proxy::truncate_on_all_shards(sstring ksname, sstring cfname) {
             return sp.get_db().local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
         });
     });
+}
+
+utils::phased_barrier::operation storage_proxy::write_admitter::try_admit() {
+    if (_truncation_in_progress) {
+        throw std::runtime_error("Writing to the table is blocked due to an ongoing truncation");
+    }
+    return _write_barrier.start();
+}
+
+future<> storage_proxy::write_admitter::notify_start_truncation() {
+    _truncation_in_progress = true;
+    return _write_barrier.advance_and_await();
+}
+
+void storage_proxy::write_admitter::notify_end_truncation() {
+    _truncation_in_progress = false;
 }
 
 }

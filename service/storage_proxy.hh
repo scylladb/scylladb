@@ -246,6 +246,17 @@ public:
         bool has_dead_endpoints;
     };
 
+    struct write_admitter {
+    private:
+        bool _truncation_in_progress = false;
+        utils::phased_barrier _write_barrier;
+
+    public:
+        utils::phased_barrier::operation try_admit();
+        future<> notify_start_truncation();
+        void notify_end_truncation();
+    };
+
     const gms::feature_service& features() const { return _features; }
 
     const locator::token_metadata& get_token_metadata() const { return _token_metadata; }
@@ -291,6 +302,7 @@ private:
             lw_shared_ptr<cdc::operation_result_tracker>> _mutate_stage;
     db::view::node_update_backlog& _max_view_update_backlog;
     std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
+    std::unordered_map<utils::UUID, write_admitter> _write_operation_admitters;
 
     //NOTICE(sarna): This opaque pointer is here just to avoid moving write handler class definitions from .cc to .hh. It's slow path.
     class view_update_handlers_list;
