@@ -626,6 +626,19 @@ void storage_service::join_token_ring(int delay) {
         }
     }
 
+
+    if (!is_auto_bootstrap()) {
+        slogger.warn("auto_bootstrap set to \"off\". This causes UNDEFINED BEHAVIOR. YOU MAY LOSE DATA.");
+    }
+
+    if (!db::system_keyspace::bootstrap_complete() && _gossiper.get_seeds().count(get_broadcast_address())) {
+        slogger.warn("Bootstrapping node marked as seed (present in the seed list)."
+                     " This can only be done for the very first node in a new cluster."
+                     " If this is not the first node, YOU MAY LOSE DATA."
+                     " Bootstrapping new nodes into an existing cluster as seeds"
+                     " causes UNDEFINED BEHAVIOR. DO NOT EVER do that.");
+    }
+
     slogger.debug("Setting tokens to {}", _bootstrap_tokens);
     // This node must know about its chosen tokens before other nodes do
     // since they may start sending writes to this node after it gossips status = NORMAL.
