@@ -47,6 +47,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "transport/messages/result_message_base.hh"
+#include "column_specification.hh"
 
 #pragma once
 
