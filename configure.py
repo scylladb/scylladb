@@ -1226,7 +1226,6 @@ if args.target != '':
 seastar_ldflags = args.user_ldflags
 
 libdeflate_cflags = seastar_cflags
-zstd_cflags = seastar_cflags + ' -Wno-implicit-fallthrough'
 
 MODE_TO_CMAKE_BUILD_TYPE = {'release' : 'RelWithDebInfo', 'debug' : 'Debug', 'dev' : 'Dev', 'sanitize' : 'Sanitize' }
 
@@ -1291,29 +1290,13 @@ for mode in build_modes:
     modes[mode]['seastar_cflags'] = seastar_cflags
     modes[mode]['seastar_libs'] = seastar_libs
 
-# We need to use experimental features of the zstd library (to use our own allocators for the (de)compression context),
-# which are available only when the library is linked statically.
-def configure_zstd(build_dir, mode):
-    zstd_build_dir = os.path.join(build_dir, mode, 'zstd')
-
-    zstd_cmake_args = [
-        '-DCMAKE_BUILD_TYPE={}'.format(MODE_TO_CMAKE_BUILD_TYPE[mode]),
-        '-DCMAKE_C_COMPILER={}'.format(args.cc),
-        '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
-        '-DCMAKE_C_FLAGS={}'.format(zstd_cflags),
-        '-DZSTD_BUILD_PROGRAMS=OFF'
-    ]
-
-    zstd_cmd = ['cmake', '-G', 'Ninja', os.path.relpath('zstd/build/cmake', zstd_build_dir)] + zstd_cmake_args
-
-    print(zstd_cmd)
-    os.makedirs(zstd_build_dir, exist_ok=True)
-    subprocess.check_call(zstd_cmd, shell=False, cwd=zstd_build_dir)
-
 args.user_cflags += " " + pkg_config('jsoncpp', '--cflags')
 args.user_cflags += ' -march=' + args.target
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-llz4', '-lz', '-lsnappy', pkg_config('jsoncpp', '--libs'),
                  ' -lstdc++fs', ' -lcrypt', ' -lcryptopp', ' -lpthread',
+                 # Must link with static version of libzstd, since
+                 # experimental APIs that we use are only present there.
+                 maybe_static(True, '-lzstd'),
                  maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc'), ])
 
 pkgconfig_libs = [
@@ -1366,9 +1349,6 @@ if args.ragel_exec:
     ragel_exec = args.ragel_exec
 else:
     ragel_exec = "ragel"
-
-for mode in build_modes:
-    configure_zstd(outdir, mode)
 
 # configure.py may run automatically from an already-existing build.ninja.
 # If the user interrupts configure.py in the middle, we need build.ninja
@@ -1508,7 +1488,6 @@ with open(buildfile_tmp, 'w') as f:
             else:
                 objs.extend(['$builddir/' + mode + '/' + artifact for artifact in [
                     'libdeflate/libdeflate.a',
-                    'zstd/lib/libzstd.a',
                 ]])
                 objs.append('$builddir/' + mode + '/gen/utils/gz/crc_combine_table.o')
                 if binary in tests:
@@ -1662,10 +1641,6 @@ with open(buildfile_tmp, 'w') as f:
         f.write('  command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc} ../build/{mode}/libdeflate//libdeflate.a\n'.format(**locals()))
         f.write('build build/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
         f.write('  pool = submodule_pool\n')
-        f.write('build build/{mode}/zstd/lib/libzstd.a: ninja\n'.format(**locals()))
-        f.write('  pool = submodule_pool\n')
-        f.write('  subdir = build/{mode}/zstd\n'.format(**locals()))
-        f.write('  target = libzstd.a\n'.format(**locals()))
 
     mode = 'dev' if 'dev' in modes else modes[0]
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(mode, hh) for hh in headers])))
