@@ -42,6 +42,7 @@ debian_base_packages=(
     git
     pigz
     libunistring-dev
+    libzstd-dev
 )
 
 fedora_packages=(
@@ -91,6 +92,7 @@ fedora_packages=(
     lld
     xxhash-devel
     makeself
+    libzstd-static libzstd-devel
 )
 
 centos_packages=(
