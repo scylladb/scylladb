@@ -3078,16 +3078,17 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
             std::move(filtering_restrictions), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit));
 }
 
-static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, comparison_operator_type op, const rjson::value& attrs) {
+static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, const rjson::value& comp_definition, const rjson::value& attrs) {
+    auto op = get_comparison_operator(comp_definition);
+    if (op != comparison_operator_type::EQ) {
+        throw api_error("ValidationException", format("Hash key can only be restricted with equality operator (EQ). {} not supported.", comp_definition));
+    }
     if (attrs.Size() != 1) {
-        throw api_error("ValidationException", format("Only a single attribute is allowed for a hash key restriction: {}", attrs));
+        throw api_error("ValidationException", format("A single attribute is required for a hash key EQ restriction: {}", attrs));
     }
     bytes raw_value = get_key_from_typed_value(attrs[0], pk_cdef);
     partition_key pk = partition_key::from_singular(*schema, pk_cdef.type->deserialize(raw_value));
     auto decorated_key = dht::decorate_key(*schema, pk);
-    if (op != comparison_operator_type::EQ) {
-        throw api_error("ValidationException", format("Hash key {} can only be restricted with equality operator (EQ)"));
-    }
     return dht::partition_range(decorated_key);
 }
 
@@ -3102,7 +3103,8 @@ static query::clustering_range get_clustering_range_for_begins_with(bytes&& targ
     return query::clustering_range::make_starting_with(query::clustering_range::bound(ck));
 }
 
-static query::clustering_range calculate_ck_bound(schema_ptr schema, const column_definition& ck_cdef, comparison_operator_type op, const rjson::value& attrs) {
+static query::clustering_range calculate_ck_bound(schema_ptr schema, const column_definition& ck_cdef, const rjson::value& comp_definition, const rjson::value& attrs) {
+    auto op = get_comparison_operator(comp_definition);
     const size_t expected_attrs_size = (op == comparison_operator_type::BETWEEN) ? 2 : 1;
     if (attrs.Size() != expected_attrs_size) {
         throw api_error("ValidationException", format("{} arguments expected for a sort key restriction: {}", expected_attrs_size, attrs));
@@ -3137,7 +3139,7 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
         return get_clustering_range_for_begins_with(std::move(raw_value), ck, schema, ck_cdef.type);
     }
     default:
-        throw api_error("ValidationException", format("Unknown primary key bound passed: {}", int(op)));
+        throw api_error("ValidationException", format("Operator {} not supported for sort key", comp_definition));
     }
 }
 
@@ -3154,21 +3156,19 @@ calculate_bounds_conditions(schema_ptr schema, const rjson::value& conditions) {
         const rjson::value& comp_definition = rjson::get(condition, "ComparisonOperator");
         const rjson::value& attr_list = rjson::get(condition, "AttributeValueList");
 
-        auto op = get_comparison_operator(comp_definition);
-
         const column_definition& pk_cdef = schema->partition_key_columns().front();
         const column_definition* ck_cdef = schema->clustering_key_size() > 0 ? &schema->clustering_key_columns().front() : nullptr;
         if (sstring(key) == pk_cdef.name_as_text()) {
             if (!partition_ranges.empty()) {
                 throw api_error("ValidationException", "Currently only a single restriction per key is allowed");
             }
-            partition_ranges.push_back(calculate_pk_bound(schema, pk_cdef, op, attr_list));
+            partition_ranges.push_back(calculate_pk_bound(schema, pk_cdef, comp_definition, attr_list));
         }
         if (ck_cdef && sstring(key) == ck_cdef->name_as_text()) {
             if (!ck_bounds.empty()) {
                 throw api_error("ValidationException", "Currently only a single restriction per key is allowed");
             }
-            ck_bounds.push_back(calculate_ck_bound(schema, *ck_cdef, op, attr_list));
+            ck_bounds.push_back(calculate_ck_bound(schema, *ck_cdef, comp_definition, attr_list));
         }
     }
 
