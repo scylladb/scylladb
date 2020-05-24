@@ -166,9 +166,27 @@ def maybe_static(flag, libs):
     return libs
 
 
-class Thrift(object):
-    def __init__(self, source, service):
+class Source(object):
+    def __init__(self, source, hh_prefix, cc_prefix):
         self.source = source
+        self.hh_prefix = hh_prefix
+        self.cc_prefix = cc_prefix
+
+    def headers(self, gen_dir):
+        return [x for x in self.generated(gen_dir) if x.endswith(self.hh_prefix)]
+
+    def sources(self, gen_dir):
+        return [x for x in self.generated(gen_dir) if x.endswith(self.cc_prefix)]
+
+    def objects(self, gen_dir):
+        return [x.replace(self.cc_prefix, '.o') for x in self.sources(gen_dir)]
+
+    def endswith(self, end):
+        return self.source.endswith(end)
+
+class Thrift(Source):
+    def __init__(self, source, service):
+        Source.__init__(self, source, '.h', '.cpp')
         self.service = service
 
     def generated(self, gen_dir):
@@ -179,19 +197,6 @@ class Thrift(object):
                   for ext in ['.cpp', '.h']]
         return [os.path.join(gen_dir, file) for file in files]
 
-    def headers(self, gen_dir):
-        return [x for x in self.generated(gen_dir) if x.endswith('.h')]
-
-    def sources(self, gen_dir):
-        return [x for x in self.generated(gen_dir) if x.endswith('.cpp')]
-
-    def objects(self, gen_dir):
-        return [x.replace('.cpp', '.o') for x in self.sources(gen_dir)]
-
-    def endswith(self, end):
-        return self.source.endswith(end)
-
-
 def default_target_arch():
     if platform.machine() in ['i386', 'i686', 'x86_64']:
         return 'westmere'   # support PCLMUL
@@ -201,9 +206,9 @@ def default_target_arch():
         return ''
 
 
-class Antlr3Grammar(object):
+class Antlr3Grammar(Source):
     def __init__(self, source):
-        self.source = source
+        Source.__init__(self, source, '.hpp', '.cpp')
 
     def generated(self, gen_dir):
         basename = os.path.splitext(self.source)[0]
@@ -211,18 +216,12 @@ class Antlr3Grammar(object):
                  for ext in ['Lexer.cpp', 'Lexer.hpp', 'Parser.cpp', 'Parser.hpp']]
         return [os.path.join(gen_dir, file) for file in files]
 
-    def headers(self, gen_dir):
-        return [x for x in self.generated(gen_dir) if x.endswith('.hpp')]
+class Json2Code(Source):
+    def __init__(self, source):
+        Source.__init__(self, source, '.hh', '.cc')
 
-    def sources(self, gen_dir):
-        return [x for x in self.generated(gen_dir) if x.endswith('.cpp')]
-
-    def objects(self, gen_dir):
-        return [x.replace('.cpp', '.o') for x in self.sources(gen_dir)]
-
-    def endswith(self, end):
-        return self.source.endswith(end)
-
+    def generated(self, gen_dir):
+        return [os.path.join(gen_dir, self.source + '.hh'), os.path.join(gen_dir, self.source + '.cc')]
 
 def find_headers(repodir, excluded_dirs):
     walker = os.walk(repodir)
@@ -794,41 +793,41 @@ scylla_core = (['database.cc',
                )
 
 api = ['api/api.cc',
-       'api/api-doc/storage_service.json',
-       'api/api-doc/lsa.json',
+       Json2Code('api/api-doc/storage_service.json'),
+       Json2Code('api/api-doc/lsa.json'),
        'api/storage_service.cc',
-       'api/api-doc/commitlog.json',
+       Json2Code('api/api-doc/commitlog.json'),
        'api/commitlog.cc',
-       'api/api-doc/gossiper.json',
+       Json2Code('api/api-doc/gossiper.json'),
        'api/gossiper.cc',
-       'api/api-doc/failure_detector.json',
+       Json2Code('api/api-doc/failure_detector.json'),
        'api/failure_detector.cc',
-       'api/api-doc/column_family.json',
+       Json2Code('api/api-doc/column_family.json'),
        'api/column_family.cc',
        'api/messaging_service.cc',
-       'api/api-doc/messaging_service.json',
-       'api/api-doc/storage_proxy.json',
+       Json2Code('api/api-doc/messaging_service.json'),
+       Json2Code('api/api-doc/storage_proxy.json'),
        'api/storage_proxy.cc',
-       'api/api-doc/cache_service.json',
+       Json2Code('api/api-doc/cache_service.json'),
        'api/cache_service.cc',
-       'api/api-doc/collectd.json',
+       Json2Code('api/api-doc/collectd.json'),
        'api/collectd.cc',
-       'api/api-doc/endpoint_snitch_info.json',
+       Json2Code('api/api-doc/endpoint_snitch_info.json'),
        'api/endpoint_snitch.cc',
-       'api/api-doc/compaction_manager.json',
+       Json2Code('api/api-doc/compaction_manager.json'),
        'api/compaction_manager.cc',
-       'api/api-doc/hinted_handoff.json',
+       Json2Code('api/api-doc/hinted_handoff.json'),
        'api/hinted_handoff.cc',
-       'api/api-doc/utils.json',
+       Json2Code('api/api-doc/utils.json'),
        'api/lsa.cc',
-       'api/api-doc/stream_manager.json',
+       Json2Code('api/api-doc/stream_manager.json'),
        'api/stream_manager.cc',
-       'api/api-doc/system.json',
+       Json2Code('api/api-doc/system.json'),
        'api/system.cc',
        'api/config.cc',
-       'api/api-doc/config.json',
-        'api/error_injection.cc',
-        'api/api-doc/error_injection.json',
+       Json2Code('api/api-doc/config.json'),
+       'api/error_injection.cc',
+       Json2Code('api/api-doc/error_injection.json'),
        ]
 
 alternator = [
@@ -1374,7 +1373,7 @@ with open(buildfile_tmp, 'w') as f:
             command = echo -e $text > $out
             description = GEN $out
         rule swagger
-            command = {args.seastar_path}/scripts/seastar-json2code.py -f $in -o $out
+            command = {args.seastar_path}/scripts/seastar-json2code.py --create-cc -f $in -o $out
             description = SWAGGER $out
         rule serializer
             command = {python} ./idl-compiler.py --ns ser -f $in -o $out
@@ -1460,7 +1459,7 @@ with open(buildfile_tmp, 'w') as f:
             )
         )
         compiles = {}
-        swaggers = {}
+        swaggers = set()
         serializers = {}
         thrifts = set()
         ragels = {}
@@ -1481,6 +1480,8 @@ with open(buildfile_tmp, 'w') as f:
                     has_thrift = True
                     objs += dep.objects('$builddir/' + mode + '/gen')
                 if isinstance(dep, Antlr3Grammar):
+                    objs += dep.objects('$builddir/' + mode + '/gen')
+                if isinstance(dep, Json2Code):
                     objs += dep.objects('$builddir/' + mode + '/gen')
             if binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
@@ -1520,8 +1521,7 @@ with open(buildfile_tmp, 'w') as f:
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.idl.hh', '.dist.hh')
                     serializers[hh] = src
                 elif src.endswith('.json'):
-                    hh = '$builddir/' + mode + '/gen/' + src + '.hh'
-                    swaggers[hh] = src
+                    swaggers.add(src)
                 elif src.endswith('.rl'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
@@ -1563,12 +1563,14 @@ with open(buildfile_tmp, 'w') as f:
             )
         )
 
+        gen_dir = '$builddir/{}/gen'.format(mode)
         gen_headers = []
         for th in thrifts:
             gen_headers += th.headers('$builddir/{}/gen'.format(mode))
         for g in antlr3_grammars:
             gen_headers += g.headers('$builddir/{}/gen'.format(mode))
-        gen_headers += list(swaggers.keys())
+        for g in swaggers:
+            gen_headers += g.headers('$builddir/{}/gen'.format(mode))
         gen_headers += list(serializers.keys())
         gen_headers += list(ragels.keys())
         gen_headers_dep = ' '.join(gen_headers)
@@ -1578,9 +1580,13 @@ with open(buildfile_tmp, 'w') as f:
             f.write('build {}: cxx.{} {} || {} {}\n'.format(obj, mode, src, seastar_dep, gen_headers_dep))
             if src in extra_cxxflags:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[src], **modeval))
-        for hh in swaggers:
-            src = swaggers[hh]
-            f.write('build {}: swagger {} | {}/scripts/seastar-json2code.py\n'.format(hh, src, args.seastar_path))
+        for swagger in swaggers:
+            hh = swagger.headers(gen_dir)[0]
+            cc = swagger.sources(gen_dir)[0]
+            obj = swagger.objects(gen_dir)[0]
+            src = swagger.source
+            f.write('build {} | {} : swagger {} | {}/scripts/seastar-json2code.py\n'.format(hh, cc, src, args.seastar_path))
+            f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
         for hh in serializers:
             src = serializers[hh]
             f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
