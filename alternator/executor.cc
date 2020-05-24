@@ -3052,7 +3052,7 @@ static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_d
     if (attrs.Size() != 1) {
         throw api_error("ValidationException", format("Only a single attribute is allowed for a hash key restriction: {}", attrs));
     }
-    bytes raw_value = pk_cdef.type->from_string(attrs[0][type_to_string(pk_cdef.type)].GetString());
+    bytes raw_value = get_key_from_typed_value(attrs[0], pk_cdef);
     partition_key pk = partition_key::from_singular(*schema, pk_cdef.type->deserialize(raw_value));
     auto decorated_key = dht::decorate_key(*schema, pk);
     if (op != comparison_operator_type::EQ) {
@@ -3077,7 +3077,7 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
     if (attrs.Size() != expected_attrs_size) {
         throw api_error("ValidationException", format("{} arguments expected for a sort key restriction: {}", expected_attrs_size, attrs));
     }
-    bytes raw_value = ck_cdef.type->from_string(attrs[0][type_to_string(ck_cdef.type)].GetString());
+    bytes raw_value = get_key_from_typed_value(attrs[0], ck_cdef);
     clustering_key ck = clustering_key::from_single_value(*schema, raw_value);
     switch (op) {
     case comparison_operator_type::EQ:
@@ -3091,7 +3091,7 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
     case comparison_operator_type::GT:
         return query::clustering_range::make_starting_with(query::clustering_range::bound(ck, false));
     case comparison_operator_type::BETWEEN: {
-        bytes raw_upper_limit = ck_cdef.type->from_string(attrs[1][type_to_string(ck_cdef.type)].GetString());
+        bytes raw_upper_limit = get_key_from_typed_value(attrs[1], ck_cdef);
         clustering_key upper_limit = clustering_key::from_single_value(*schema, raw_upper_limit);
         return query::clustering_range::make(query::clustering_range::bound(ck), query::clustering_range::bound(upper_limit));
     }
@@ -3104,9 +3104,7 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
         if (!ck_cdef.type->is_compatible_with(*utf8_type)) {
             throw api_error("ValidationException", format("BEGINS_WITH operator cannot be applied to type {}", type_to_string(ck_cdef.type)));
         }
-        std::string raw_upper_limit_str = attrs[0][type_to_string(ck_cdef.type)].GetString();
-        bytes raw_upper_limit = ck_cdef.type->from_string(raw_upper_limit_str);
-        return get_clustering_range_for_begins_with(std::move(raw_upper_limit), ck, schema, ck_cdef.type);
+        return get_clustering_range_for_begins_with(std::move(raw_value), ck, schema, ck_cdef.type);
     }
     default:
         throw api_error("ValidationException", format("Unknown primary key bound passed: {}", int(op)));
