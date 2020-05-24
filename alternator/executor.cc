@@ -573,22 +573,59 @@ static bool validate_legal_tag_chars(std::string_view tag) {
     return std::all_of(tag.begin(), tag.end(), &is_legal_tag_char);
 }
 
+static const std::unordered_set<std::string_view> allowed_write_isolation_values = {
+    "f", "forbid", "forbid_rmw",
+    "a", "always", "always_use_lwt",
+    "o", "only_rmw_uses_lwt",
+    "u", "unsafe", "unsafe_rmw",
+};
+
 static void validate_tags(const std::map<sstring, sstring>& tags) {
-    static const std::unordered_set<std::string_view> allowed_values = {
-        "f", "forbid", "forbid_rmw",
-        "a", "always", "always_use_lwt",
-        "o", "only_rmw_uses_lwt",
-        "u", "unsafe", "unsafe_rmw",
-    };
     auto it = tags.find(rmw_operation::WRITE_ISOLATION_TAG_KEY);
     if (it != tags.end()) {
         std::string_view value = it->second;
-        elogger.warn("Allowed values count {} {}", value, allowed_values.count(value));
-        if (allowed_values.count(value) == 0) {
+        if (allowed_write_isolation_values.count(value) == 0) {
             throw api_error("ValidationException",
-                    format("Incorrect write isolation tag {}. Allowed values: {}", value, allowed_values));
+                    format("Incorrect write isolation tag {}. Allowed values: {}", value, allowed_write_isolation_values));
         }
     }
+}
+
+static rmw_operation::write_isolation parse_write_isolation(std::string_view value) {
+    if (!value.empty()) {
+        switch (value[0]) {
+        case 'f':
+            return rmw_operation::write_isolation::FORBID_RMW;
+        case 'a':
+            return rmw_operation::write_isolation::LWT_ALWAYS;
+        case 'o':
+            return rmw_operation::write_isolation::LWT_RMW_ONLY;
+        case 'u':
+            return rmw_operation::write_isolation::UNSAFE_RMW;
+        }
+    }
+    // Shouldn't happen as validate_tags() / set_default_write_isolation()
+    // verify allow only a closed set of values.
+    return rmw_operation::default_write_isolation;
+
+}
+// This default_write_isolation is always overwritten in main.cc, which calls
+// set_default_write_isolation().
+rmw_operation::write_isolation rmw_operation::default_write_isolation =
+        rmw_operation::write_isolation::LWT_ALWAYS;
+void rmw_operation::set_default_write_isolation(std::string_view value) {
+    if (value.empty()) {
+        throw std::runtime_error("When Alternator is enabled, write "
+                "isolation policy must be selected, using the "
+                "'--alternator-write-isolation' option. "
+                "See docs/alternator/alternator.md for instructions.");
+    }
+    if (allowed_write_isolation_values.count(value) == 0) {
+        throw std::runtime_error(format("Invalid --alternator-write-isolation "
+                "setting '{}'. Allowed values: {}.",
+                value, allowed_write_isolation_values));
+    }
+    default_write_isolation = parse_write_isolation(value);
 }
 
 // FIXME: Updating tags currently relies on updating schema, which may be subject
@@ -1208,22 +1245,9 @@ rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(sch
     const auto& tags = get_tags_of_table(schema);
     auto it = tags.find(WRITE_ISOLATION_TAG_KEY);
     if (it == tags.end() || it->second.empty()) {
-        // By default, fall back to always enforcing LWT
-        return write_isolation::LWT_ALWAYS;
+        return default_write_isolation;
     }
-    switch (it->second[0]) {
-    case 'f':
-        return write_isolation::FORBID_RMW;
-    case 'a':
-        return write_isolation::LWT_ALWAYS;
-    case 'o':
-        return write_isolation::LWT_RMW_ONLY;
-    case 'u':
-        return write_isolation::UNSAFE_RMW;
-    default:
-        // In case of an incorrect tag, fall back to the safest option: LWT_ALWAYS
-        return write_isolation::LWT_ALWAYS;
-    }
+    return parse_write_isolation(it->second);
 }
 
 // shard_for_execute() checks whether execute() must be called on a specific

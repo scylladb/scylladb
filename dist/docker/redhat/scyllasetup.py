@@ -16,6 +16,7 @@ class ScyllaSetup:
         self._broadcastRpcAddress = arguments.broadcastRpcAddress
         self._apiAddress = arguments.apiAddress
         self._alternatorPort = arguments.alternatorPort
+        self._alternatorWriteIsolation = arguments.alternatorWriteIsolation
         self._smp = arguments.smp
         self._memory = arguments.memory
         self._overprovisioned = arguments.overprovisioned
@@ -115,6 +116,9 @@ class ScyllaSetup:
         if self._alternatorPort is not None:
             args += ["--alternator-address %s" % self._alternatorAddress]
             args += ["--alternator-port %s" % self._alternatorPort]
+
+        if self._alternatorWriteIsolation is not None:
+            args += ["--alternator-write-isolation %s" % self._alternatorWriteIsolation]
 
         if self._authenticator is not None:
             args += ["--authenticator %s" % self._authenticator]

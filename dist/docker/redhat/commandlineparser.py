@@ -18,6 +18,7 @@ def parse():
     parser.add_argument('--api-address', default=None, dest='apiAddress')
     parser.add_argument('--alternator-address', default=None, dest='alternatorAddress', help="Alternator API address to listen to. Defaults to listen address.")
     parser.add_argument('--alternator-port', default=None, dest='alternatorPort', help="Alternator API port to listen to. Disabled by default.")
+    parser.add_argument('--alternator-write-isolation', default=None, dest='alternatorWriteIsolation', help="Alternator default write isolation policy.")
     parser.add_argument('--disable-version-check', default=False, action='store_true', dest='disable_housekeeping', help="Disable version check")
     parser.add_argument('--authenticator', default=None, dest='authenticator', help="Set authenticator class")
     parser.add_argument('--authorizer', default=None, dest='authorizer', help="Set authorizer class")

@@ -314,6 +314,8 @@ public:
     named_value<uint16_t> alternator_https_port;
     named_value<sstring> alternator_address;
     named_value<bool> alternator_enforce_authorization;
+    named_value<sstring> alternator_write_isolation;
+
     named_value<bool> abort_on_ebadf;
 
     named_value<uint16_t> redis_port;

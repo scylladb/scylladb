@@ -78,6 +78,7 @@
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "alternator/tags_extension.hh"
+#include "alternator/rmw_operation.hh"
 
 namespace fs = std::filesystem;
 
@@ -1081,6 +1082,7 @@ int main(int ac, char** av) {
             }
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
+                alternator::rmw_operation::set_default_write_isolation(cfg->alternator_write_isolation());
                 static sharded<alternator::executor> alternator_executor;
                 static sharded<alternator::server> alternator_server;
 
