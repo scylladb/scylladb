@@ -18,6 +18,11 @@ some of them getting confusing names, and often different names in Scylla's
 code, documentation and configuration. This document aims to clear up some
 of this confusion.
 
+The Wireshark tool can be used to inspect and understand the messages sent
+over many of the following protocols. This includes even Scylla's internal
+inter-node protocol - for instructions and examples check out the blog post:
+https://www.scylladb.com/2020/05/21/dissecting-scylla-packets-with-wireshark/
+
 # Internal communication
 
 All inter-node communiction - communication between the Scylla nodes
