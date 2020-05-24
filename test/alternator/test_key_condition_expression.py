@@ -16,8 +16,8 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 # Tests for the KeyConditionExpression parameter of the Query operation.
-# KeyConditionExpression is a newer version of the older "KeyCondition"
-# syntax. That older syntax is tested in test_query.py.
+# KeyConditionExpression is a newer version of the older "KeyConditions"
+# syntax. That older syntax is tested in test_query.py and test_key_conditions.py.
 
 import pytest
 from botocore.exceptions import ClientError, ParamValidationError
@@ -498,10 +498,9 @@ def test_key_condition_expression_bytes_begins(test_table_sb_with_sorted_partiti
     expected_items = [item for item in items if item['c'].startswith(bytearray('00', 'ascii'))]
     assert(got_items == expected_items)
 
-# Query and KeyConditionExpress works also on a table with just a partition
+# Query and KeyConditionExpression works also on a table with just a partition
 # key and no sort key, although obviously it isn't very useful (for such
 # tables, Query is just an elaborate way to do a GetItem).
-# would have been more efficient):
 def test_key_condition_expression_hash_only(test_table_s):
     p = random_string()
     item = {'p': p, 'val': 'hello'}

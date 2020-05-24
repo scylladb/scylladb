@@ -17,6 +17,10 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 # Tests for the Query operation
+# Some of the Query features are tested in separate files:
+#   * test_key_conditions.py: the KeyConditions paramter.
+#   * test_key_condition_expression.py: the KeyConditionExpression parameter.
+#   * test_filter_expression.py: the FilterExpression parameter.
 
 import random
 import pytest
@@ -25,81 +29,6 @@ from decimal import Decimal
 from util import random_string, random_bytes, full_query, multiset
 from boto3.dynamodb.conditions import Key, Attr
 
-# Test that scanning works fine with in-stock paginator
-def test_query_basic_restrictions(dynamodb, filled_test_table):
-    test_table, items = filled_test_table
-    paginator = dynamodb.meta.client.get_paginator('query')
-
-    # EQ
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
-            'p' : {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'}
-        }):
-        got_items += page['Items']
-    print(got_items)
-    assert multiset([item for item in items if item['p'] == 'long']) == multiset(got_items)
-
-    # LT
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
-            'p' : {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'},
-            'c' : {'AttributeValueList': ['12'], 'ComparisonOperator': 'LT'}
-        }):
-        got_items += page['Items']
-    print(got_items)
-    assert multiset([item for item in items if item['p'] == 'long' and item['c'] < '12']) == multiset(got_items)
-
-    # LE
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
-            'p' : {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'},
-            'c' : {'AttributeValueList': ['14'], 'ComparisonOperator': 'LE'}
-        }):
-        got_items += page['Items']
-    print(got_items)
-    assert multiset([item for item in items if item['p'] == 'long' and item['c'] <= '14']) == multiset(got_items)
-
-    # GT
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
-            'p' : {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'},
-            'c' : {'AttributeValueList': ['15'], 'ComparisonOperator': 'GT'}
-        }):
-        got_items += page['Items']
-    print(got_items)
-    assert multiset([item for item in items if item['p'] == 'long' and item['c'] > '15']) == multiset(got_items)
-
-    # GE
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
-            'p' : {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'},
-            'c' : {'AttributeValueList': ['14'], 'ComparisonOperator': 'GE'}
-        }):
-        got_items += page['Items']
-    print(got_items)
-    assert multiset([item for item in items if item['p'] == 'long' and item['c'] >= '14']) == multiset(got_items)
-
-    # BETWEEN
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
-            'p' : {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'},
-            'c' : {'AttributeValueList': ['155', '164'], 'ComparisonOperator': 'BETWEEN'}
-        }):
-        got_items += page['Items']
-    print(got_items)
-    assert multiset([item for item in items if item['p'] == 'long' and item['c'] >= '155' and item['c'] <= '164']) == multiset(got_items)
-
-    # BEGINS_WITH
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
-            'p' : {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'},
-            'c' : {'AttributeValueList': ['11'], 'ComparisonOperator': 'BEGINS_WITH'}
-        }):
-        print([item for item in items if item['p'] == 'long' and item['c'].startswith('11')])
-        got_items += page['Items']
-    print(got_items)
-    assert multiset([item for item in items if item['p'] == 'long' and item['c'].startswith('11')]) == multiset(got_items)
-
 def test_query_nonexistent_table(dynamodb):
     client = dynamodb.meta.client
     with pytest.raises(ClientError, match="ResourceNotFoundException"):
@@ -107,41 +36,6 @@ def test_query_nonexistent_table(dynamodb):
             'p' : {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'},
             'c' : {'AttributeValueList': ['11'], 'ComparisonOperator': 'BEGINS_WITH'}
         })
-
-def test_begins_with(dynamodb, test_table):
-    paginator = dynamodb.meta.client.get_paginator('query')
-    items = [{'p': 'unorthodox_chars', 'c': sort_key, 'str': 'a'} for sort_key in [u'ÿÿÿ', u'cÿbÿ', u'cÿbÿÿabg'] ]
-    with test_table.batch_writer() as batch:
-        for item in items:
-            batch.put_item(item)
-
-    # TODO(sarna): Once bytes type is supported, /xFF character should be tested
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
-            'p' : {'AttributeValueList': ['unorthodox_chars'], 'ComparisonOperator': 'EQ'},
-            'c' : {'AttributeValueList': [u'ÿÿ'], 'ComparisonOperator': 'BEGINS_WITH'}
-        }):
-        got_items += page['Items']
-    print(got_items)
-    assert sorted([d['c'] for d in got_items]) == sorted([d['c'] for d in items if d['c'].startswith(u'ÿÿ')])
-
-    got_items = []
-    for page in paginator.paginate(TableName=test_table.name, KeyConditions={
-            'p' : {'AttributeValueList': ['unorthodox_chars'], 'ComparisonOperator': 'EQ'},
-            'c' : {'AttributeValueList': [u'cÿbÿ'], 'ComparisonOperator': 'BEGINS_WITH'}
-        }):
-        got_items += page['Items']
-    print(got_items)
-    assert sorted([d['c'] for d in got_items]) == sorted([d['c'] for d in items if d['c'].startswith(u'cÿbÿ')])
-
-def test_begins_with_wrong_type(dynamodb, test_table_sn):
-    paginator = dynamodb.meta.client.get_paginator('query')
-    with pytest.raises(ClientError, match='ValidationException'):
-        for page in paginator.paginate(TableName=test_table_sn.name, KeyConditions={
-                'p' : {'AttributeValueList': ['unorthodox_chars'], 'ComparisonOperator': 'EQ'},
-                'c' : {'AttributeValueList': [17], 'ComparisonOperator': 'BEGINS_WITH'}
-                }):
-            pass
 
 # Items returned by Query should be sorted by the sort key. The following
 # tests verify that this is indeed the case, for the three allowed key types:
