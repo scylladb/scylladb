@@ -163,6 +163,12 @@ $ docker run --name some-scylla -d scylladb/scylla --alternator-port 8000
 
 **Since: 3.2**
 
+### `--alternator-write-isolation policy`
+
+The `--alternator-write-isolation` command line option chooses between four allowed write isolation policies described in docs/alternator/alternator.md. This option must be specified if Alternator is enabled - it does not have a default.
+
+**Since: 4.1**
+
 ### `--broadcast-address ADDR`
 
 The `--broadcast-address` command line option configures the IP address the Scylla instance tells other Scylla nodes in the cluster to connect to.

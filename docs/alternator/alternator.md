@@ -25,6 +25,14 @@ By default, Scylla listens on this port on all network interfaces.
 To listen only on a specific interface, pass also an "`alternator-address`"
 option.
 
+As we explain below in the "Write isolation policies", Alternator has
+four different choices for the implementation of writes, each with
+different advantages. You should consider which of the options makes
+more sense for your intended use case, and use the "`--alternator-write-isolation`"
+option to choose one. There is currently no default for this option: Trying
+to run Scylla with Alternator enabled without passing this option will
+result in an error asking you to set it.
+
 DynamoDB clients usually specify a single "endpoint" address, e.g.,
 `dynamodb.us-east-1.amazonaws.com`, and a DNS server and/or load balancers
 distribute the connections to many different backend nodes. Alternator
@@ -154,23 +162,28 @@ implemented, with the following limitations:
 
 ### Write isolation policies
 DynamoDB API update requests may involve a read before the write - e.g., a
-_conditional_ update, or an update based on the old value of an attribute.
+_conditional_ update or an update based on the old value of an attribute.
 The read and the write should be treated as a single transaction - protected
 (_isolated_) from other parallel writes to the same item.
 
-By default, Alternator does this isolation by using Scylla's LWT (lightweight
-transactions) for every write operation. However, LWT significantly slows
-writes down, so Alternator supports three additional _write isolation
-policies_, which can be chosen on a per-table basis and may make sense for
-certain workloads as explained below.
+Alternator could do this isolation by using Scylla's LWT (lightweight
+transactions) for every write operation, but this significantly slows
+down writes, and not necessary for workloads which don't use read-modify-write
+(RMW) updates.
 
-The write isolation policy of a table is configured by tagging the table (at
-CreateTable time, or any time later with TagResource) with the key
+So Alternator supports four _write isolation policies_, which can be chosen
+on a per-table basis and may make sense for certain workloads as explained
+below.
+
+A default write isolation policy **must** be chosen using the
+`--alternator-write-isolation` configuration option. Additionally, the write
+isolation policy for a specific table can be overriden by tagging the table
+(at CreateTable time, or any time later with TagResource) with the key
 `system:write_isolation`, and one of the following values:
 
-  * `a`, `always`, or `always_use_lwt` - This is the default choice.
-    It performs every write operation - even those that do not need a read
-    before the write - as a lightweight transaction.
+  * `a`, `always`, or `always_use_lwt` - This mode performs every write
+    operation - even those that do not need a read before the write - as a
+    lightweight transaction.
 
     This is the slowest choice, but also the only choice guaranteed to work
     correctly for every workload.

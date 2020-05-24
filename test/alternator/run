@@ -83,6 +83,7 @@ ln -s "$SCYLLA" "$SCYLLA_LINK"
         --alternator-address $SCYLLA_IP \
         $alternator_port_option \
         --alternator-enforce-authorization=1 \
+        --alternator-write-isolation=always_use_lwt \
         --developer-mode=1 \
         --ring-delay-ms 0 --collectd 0 \
         --smp 2 -m 1G \

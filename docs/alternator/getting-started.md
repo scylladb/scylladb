@@ -10,10 +10,12 @@ This section will guide you through the steps for setting up the cluster:
    nightly image by running: `docker pull scylladb/scylla-nightly:latest`
 2. Follow the steps in the [Scylla official download web page](https://www.scylladb.com/download/open-source/#docker)
    add to every "docker run" command: `-p 8000:8000` before the image name
-   and `--alternator-port=8000` at the end. The "alternator-port" option
-   specifies on which port Scylla will listen for the (unencrypted) DynamoDB API.
+   and `--alternator-port=8000 --alternator-write-isolation=always` at the end.
+   The "alternator-port" option specifies on which port Scylla will listen for
+   the (unencrypted) DynamoDB API, and the "alternator-write-isolation" chooses
+   whether or not Alternator will use LWT for every write.
    For example,
-   `docker run --name scylla -d -p 8000:8000 scylladb/scylla-nightly:latest --alternator-port=8000
+   `docker run --name scylla -d -p 8000:8000 scylladb/scylla-nightly:latest --alternator-port=8000 --alternator-write-isolation=always
 
 ## Testing Scylla's DynamoDB API support:
 ### Running AWS Tic Tac Toe demo app to test the cluster:
