@@ -1737,7 +1737,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
     maybe_write_row_marker(out, schema, clustered_row.marker(), clustering_key);
     maybe_write_row_tombstone(out, clustering_key, clustered_row);
 
-    get_metadata_collector().update_min_max_components(*_schema, clustered_row.key());
+    get_metadata_collector().update_min_max_components(clustered_row.key());
 
     // Write all cells of a partition's row.
     clustered_row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
@@ -2227,7 +2227,7 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
 void
 sstable::make_metadata_collector() {
     if (!_collector) {
-        _collector.emplace();
+        _collector.emplace(*get_schema());
     }
 }
 

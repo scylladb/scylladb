@@ -145,6 +145,7 @@ public:
         return hll::HyperLogLog();
     }
 private:
+    const schema& _schema;
     // EH of 150 can track a max value of 1697806495183, i.e., > 1.5PB
     utils::estimated_histogram _estimated_partition_size{150};
     // EH of 114 can track a max value of 2395318855, i.e., > 2B cells
@@ -186,8 +187,16 @@ private:
         }
     }
 
-    void do_update_min_max_components(const schema& schema, const clustering_key_prefix& key);
+    void do_update_min_max_components(const clustering_key_prefix& key);
 public:
+    explicit metadata_collector(const schema& schema)
+        : _schema(schema)
+    { }
+
+    const schema& get_schema() {
+        return _schema;
+    }
+
     void add_key(bytes_view key) {
         long hashed = utils::murmur_hash::hash2_64(key, 0);
         _cardinality.offer_hashed(hashed);
@@ -245,9 +254,9 @@ public:
         _has_legacy_counter_shards = _has_legacy_counter_shards || has_legacy_counter_shards;
     }
 
-    void update_min_max_components(const schema& schema, const clustering_key_prefix& key) {
-        if (schema.clustering_key_size()) {
-            do_update_min_max_components(schema, key);
+    void update_min_max_components(const clustering_key_prefix& key) {
+        if (_schema.clustering_key_size()) {
+            do_update_min_max_components(key);
         }
     }
 

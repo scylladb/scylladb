@@ -1259,7 +1259,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     flush_tmp_bufs();
 
     // Collect statistics
-    _sst.get_metadata_collector().update_min_max_components(_schema, clustered_row.key());
+    _sst.get_metadata_collector().update_min_max_components(clustered_row.key());
     collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key());
 }
 
@@ -1337,7 +1337,7 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
 
-    _sst.get_metadata_collector().update_min_max_components(_schema, marker.clustering);
+    _sst.get_metadata_collector().update_min_max_components(marker.clustering);
 }
 
 void writer::consume(rt_marker&& marker) {

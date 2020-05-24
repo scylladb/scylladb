@@ -26,20 +26,20 @@ logging::logger mdclogger("metadata_collector");
 
 namespace sstables {
 
-void metadata_collector::do_update_min_max_components(const schema& schema, const clustering_key_prefix& key) {
+void metadata_collector::do_update_min_max_components(const clustering_key_prefix& key) {
     auto may_grow = [] (std::vector<bytes_opt>& v, size_t target_size) {
         if (target_size > v.size()) {
             v.resize(target_size);
         }
     };
 
-    auto clustering_key_size = schema.clustering_key_size();
+    auto clustering_key_size = _schema.clustering_key_size();
     auto& min_seen = min_column_names();
     auto& max_seen = max_column_names();
     may_grow(min_seen, clustering_key_size);
     may_grow(max_seen, clustering_key_size);
 
-    auto& types = schema.clustering_key_type()->types();
+    auto& types = _schema.clustering_key_type()->types();
     auto i = 0U;
     for (auto& value : key.components()) {
         auto& type = types[i];
