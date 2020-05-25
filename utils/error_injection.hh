@@ -39,6 +39,13 @@
 
 namespace utils {
 
+// Exception thrown by enabled error injection
+class injected_error : public std::runtime_error {
+public:
+    injected_error(const sstring& err_name)
+    : runtime_error{err_name} { }
+};
+
 inline auto& get_local_injector();
 
 extern logging::logger errinj_logger;
@@ -122,10 +129,6 @@ class error_injection {
     // TODO: change to unordered_set once we have heterogeneous lookups
     std::map<sstring, bool, str_less> _enabled;
 
-    bool is_enabled(const std::string_view& injection_name) const {
-        return _enabled.find(injection_name) != _enabled.end();
-    }
-
     bool is_one_shot(const std::string_view& injection_name) const {
         const auto it = _enabled.find(injection_name);
         if (it == _enabled.end()) {
@@ -135,6 +138,14 @@ class error_injection {
     }
 
 public:
+    bool is_enabled(const std::string_view& injection_name, const bool dis_one = false) {
+        auto ret = _enabled.find(injection_name) != _enabled.end();
+        if (ret && dis_one && is_one_shot(injection_name)) {
+            disable(injection_name);
+        }
+        return ret;
+    }
+
     void enable(const std::string_view& injection_name, bool one_shot = false) {
         _enabled.emplace(injection_name, one_shot);
         errinj_logger.debug("Enabling injection {} \"{}\"",
@@ -205,6 +216,24 @@ public:
         return seastar::sleep<Clock>(duration);
     }
 
+    // \brief Inject a sleep to deadline with lambda(timeout)
+    template <typename Clock, typename Duration, typename Func>
+    [[gnu::always_inline]]
+    std::result_of_t<Func()> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline,
+                Func&& func) {
+        if (is_enabled(name)) {
+            if (is_one_shot(name)) {
+                disable(name);
+            }
+            std::chrono::milliseconds duration = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
+            errinj_logger.debug("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
+            return seastar::sleep<Clock>(duration).then([&func] {
+                    return func(); });
+        } else {
+            return func();
+        }
+    }
+
     // \brief Inject exception
     // \param exception_factory function returning an exception pointer
     template <typename Func>
@@ -263,6 +292,10 @@ template <>
 class error_injection<false> {
     using handler_fun = std::function<void()>;
 public:
+    constexpr bool is_enabled(const std::string_view& injection_name, const bool dis_one = false) {
+        return false;
+    }
+
     [[gnu::always_inline]]
     void enable(const std::string_view& injection_name, const bool one_shot = false) {}
 
@@ -291,6 +324,15 @@ public:
     [[gnu::always_inline]]
     future<> inject(const std::string_view& name, TimePoint deadline) {
         return make_ready_future<>();
+    }
+
+    // \brief Inject a sleep to deadline (timeout) with lambda
+    // Avoid adding a continuation
+    template <typename Clock, typename Duration, typename Func>
+    [[gnu::always_inline]]
+    std::result_of_t<Func()> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline,
+                Func&& func) {
+        return func();
     }
 
     // Inject exception
