@@ -20,34 +20,33 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import sys
 import argparse
-import subprocess
-import re
 from scylla_util import *
+
 
 def bool2str(val):
     return 'yes' if val else 'no'
 
+
 def str2bool(val):
-    return True if val == 'yes' else False
+    return val == 'yes'
+
 
 if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
     if is_redhat_variant():
-        cfg = sysconfig_parser('/etc/sysconfig/scylla-server')
+        cfg = SysconfigParser('/etc/sysconfig/scylla-server')
     else:
-        cfg = sysconfig_parser('/etc/default/scylla-server')
+        cfg = SysconfigParser('/etc/default/scylla-server')
     set_nic_and_disks = str2bool(get_set_nic_and_disks_config_value(cfg))
     if cfg.has_option('SET_CLOCKSOURCE'):
         set_clocksource = str2bool(cfg.get('SET_CLOCKSOURCE'))
     else:
         set_clocksource = 'no'
     ami = str2bool(cfg.get('AMI'))
-    
+
     parser = argparse.ArgumentParser(description='Setting parameters on Scylla sysconfig file.')
     parser.add_argument('--nic',
                         help='specify NIC')
@@ -72,8 +71,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.nic and not is_valid_nic(args.nic):
-            print('NIC {} not found.'.format(args.nic))
-            sys.exit(1)
+        print('NIC {} not found.'.format(args.nic))
+        sys.exit(1)
 
     ifname = args.nic if args.nic else cfg.get('IFNAME')
     network_mode = args.mode if args.mode else cfg.get('NETWORK_MODE')
@@ -88,9 +87,9 @@ if __name__ == '__main__':
     ethpciid = ''
     if network_mode == 'dpdk':
         dpdk_status = out('/opt/scylladb/scripts/dpdk-devbind.py --status')
-        match = re.search('if={} drv=(\S+)'.format(ifname), dpdk_status, flags=re.MULTILINE)
+        match = re.search(r'if={} drv=(\S+)'.format(ifname), dpdk_status, flags=re.MULTILINE)
         ethdrv = match.group(1)
-        match = re.search('^(\\S+:\\S+:\\S+\.\\S+) [^\n]+ if={} '.format(ifname), dpdk_status, flags=re.MULTILINE)
+        match = re.search(r'^(\\S+:\\S+:\\S+\.\\S+) [^\n]+ if={} '.format(ifname), dpdk_status, flags=re.MULTILINE)
         ethpciid = match.group(1)
 
     if args.mode:
@@ -120,7 +119,7 @@ if __name__ == '__main__':
 
     if cfg.has_option('SET_CLOCKSOURCE') and str2bool(cfg.get('SET_CLOCKSOURCE')) != args.set_clocksource:
         cfg.set('SET_CLOCKSOURCE', bool2str(args.set_clocksource))
-        
+
     if str2bool(cfg.get('AMI')) != args.ami:
         cfg.set('AMI', bool2str(args.ami))
     cfg.commit()

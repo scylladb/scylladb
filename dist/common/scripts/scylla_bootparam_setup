@@ -20,11 +20,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import re
-import sys
 import argparse
-import subprocess
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -43,7 +39,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     if os.path.exists('/etc/default/grub'):
-        cfg = sysconfig_parser('/etc/default/grub')
+        cfg = SysconfigParser('/etc/default/grub')
         cmdline_linux = cfg.get('GRUB_CMDLINE_LINUX')
         if len(re.findall(r'.*clocksource', cmdline_linux)) == 0:
             cmdline_linux += ' clocksource=tsc tsc=reliable'

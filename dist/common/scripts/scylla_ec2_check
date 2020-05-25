@@ -20,8 +20,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import sys
 import argparse
 from scylla_util import *
 
@@ -37,7 +35,7 @@ if __name__ == '__main__':
         print('NIC {} doesn\'t exist.'.format(args.nic))
         sys.exit(1)
 
-    aws = aws_instance()
+    aws = AwsInstance()
     instance_class = aws.instance_class()
     en = aws.get_en_interface_type()
     match = re.search(r'^driver: (\S+)$', out('ethtool -i {}'.format(args.nic)), flags=re.MULTILINE)

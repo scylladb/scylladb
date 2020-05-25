@@ -20,11 +20,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import sys
 import argparse
-import subprocess
-import re
 
 from pkg_resources import parse_version
 
@@ -50,7 +46,7 @@ if __name__ == '__main__':
             with open('/etc/ntp.conf', 'w') as f:
                 f.writelines(conf2)
                 f.write('server ntp.ubuntu.com iburst')
-        ntp = systemd_unit('ntp.service')
+        ntp = SystemdUnit('ntp.service')
         ntp.stop()
         # ignore error, ntpd may able to adjust clock later
         run('ntpdate ntp.ubuntu.com', exception=False)
@@ -63,7 +59,7 @@ if __name__ == '__main__':
         match = re.search(r'^server\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)
         server = match.group(1)
         if is_systemd():
-            ntpd = systemd_unit('ntpd.service')
+            ntpd = SystemdUnit('ntpd.service')
             ntpd.stop()
             run('ntpdate {}'.format(server))
             ntpd.enable()
@@ -85,7 +81,7 @@ if __name__ == '__main__':
                 with open('/etc/chrony.conf', 'w') as f:
                     f.write(conf2)
                 conf = conf2
-            chronyd = systemd_unit('chronyd.service')
+            chronyd = SystemdUnit('chronyd.service')
             chronyd.enable()
             chronyd.restart()
             run('chronyc makestep')
@@ -100,7 +96,7 @@ if __name__ == '__main__':
                 conf = conf2
             match = re.search(r'^server\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)
             server = match.group(1)
-            ntpd = systemd_unit('ntpd.service')
+            ntpd = SystemdUnit('ntpd.service')
             ntpd.stop()
             # ignore error, ntpd may able to adjust clock later
             run('ntpdate {}'.format(server), exception=False)

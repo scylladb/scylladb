@@ -1,0 +1,8 @@
+#!/bin/bash
+
+# Exit if any one of the commands below fails
+set -e
+
+sudo pip3 install pylint==2.5.2
+
+pylint dist/common/scripts/scylla* dist/common/scripts/*.py dist/common/scripts/node_exporter_install

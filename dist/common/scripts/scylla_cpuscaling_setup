@@ -20,9 +20,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import sys
-import shlex
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -34,10 +31,10 @@ if __name__ == '__main__':
         sys.exit(0)
     if is_debian_variant():
         run('apt-get install -y cpufrequtils')
-        cfg = sysconfig_parser('/etc/default/cpufrequtils')
+        cfg = SysconfigParser('/etc/default/cpufrequtils')
         cfg.set('GOVERNOR', 'performance')
         cfg.commit()
-        cpufreq = systemd_unit('cpufrequtils.service')
+        cpufreq = SystemdUnit('cpufrequtils.service')
         cpufreq.enable()
         cpufreq.restart()
     if is_gentoo_variant():
@@ -48,7 +45,7 @@ if __name__ == '__main__':
         with open('/etc/conf.d/cpupower', 'w') as f:
             f.write(new)
         if is_systemd():
-            cpufreq = systemd_unit('cpupower-frequency-set.service')
+            cpufreq = SystemdUnit('cpupower-frequency-set.service')
             cpufreq.enable()
             cpufreq.restart()
         else:
@@ -56,10 +53,10 @@ if __name__ == '__main__':
             run('rc-service cpupower start')
     if is_redhat_variant():
         run('yum install -y cpupowerutils')
-        cfg = sysconfig_parser('/etc/sysconfig/cpupower')
+        cfg = SysconfigParser('/etc/sysconfig/cpupower')
         cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
         cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
         cfg.commit()
-        cpupwr = systemd_unit('cpupower.service')
+        cpupwr = SystemdUnit('cpupower.service')
         cpupwr.enable()
         cpupwr.restart()

@@ -21,8 +21,6 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
-import sys
-import yaml
 import argparse
 import subprocess
 
@@ -43,18 +41,19 @@ def main():
     args = parser.parse_args()
     cfg = parse_scylla_dirs_with_default(conf=args.config)
     mountpoints = set()
-    for d in cfg['data_file_directories']:
-        mountpoints.add(find_mount_point(d))
+    for data_dir in cfg['data_file_directories']:
+        mountpoints.add(find_mount_point(data_dir))
 
     mountpoints.add(find_mount_point(cfg['commitlog_directory']))
     # workaround of #2649
     subprocess.call(["/opt/scylladb/scripts/scylla-blocktune", "--set-nomerges", "1"])
-    for d in mountpoints:
-        print("Running fstrim on {} ...".format(d))
-        res = subprocess.call(["fstrim", d])
+    for mountpoint in mountpoints:
+        print("Running fstrim on {} ...".format(mountpoint))
+        res = subprocess.call(["fstrim", mountpoint])
         if res != 0:
-            print("{} doesn't support TRIM.".format(d))
+            print("{} doesn't support TRIM.".format(mountpoint))
     subprocess.call(["/opt/scylladb/scripts/scylla-blocktune", "--set-nomerges", "2"])
+
 
 if __name__ == "__main__":
     main()

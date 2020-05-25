@@ -20,9 +20,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import subprocess
-import shutil
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -30,7 +27,7 @@ if __name__ == '__main__':
         print('Requires root permission.')
         sys.exit(1)
     if is_systemd():
-        systemd_unit('scylla-fstrim.timer').unmask()
-        systemd_unit('scylla-fstrim.timer').enable()
+        SystemdUnit('scylla-fstrim.timer').unmask()
+        SystemdUnit('scylla-fstrim.timer').enable()
     if is_redhat_variant():
-        systemd_unit('fstrim.timer').disable()
+        SystemdUnit('fstrim.timer').disable()

@@ -38,6 +38,6 @@ if __name__ == '__main__':
         with open(etcdir()+'/scylla.d/dev-mode.conf', 'w') as f:
             f.close()
     else:
-        cfg = sysconfig_parser(etcdir()+'/scylla.d/dev-mode.conf')
+        cfg = SysconfigParser(etcdir()+'/scylla.d/dev-mode.conf')
         cfg.set('DEV_MODE', '--developer-mode=1')
         cfg.commit()

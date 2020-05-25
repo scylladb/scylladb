@@ -41,7 +41,7 @@ if __name__ == '__main__':
         parser.print_help()
         sys.exit(1)
 
-    conf_args=[]
+    conf_args = []
     if args.lock_memory:
         conf_args.append('--lock-memory=1')
     if args.memory:
@@ -52,4 +52,3 @@ if __name__ == '__main__':
 
     with open(str(etcdir_p() / 'scylla.d' / 'memory.conf'), 'w') as f:
         f.write(conf)
-

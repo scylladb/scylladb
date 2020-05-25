@@ -31,13 +31,20 @@ import uuid
 import re
 import glob
 import urllib.request
-from pkg_resources import parse_version
 import multiprocessing as mp
+
+from pkg_resources import parse_version
 
 VERSION = "1.0"
 quiet = False
 # Temporary url for the review
 version_url = "https://i6a5h9l1kl.execute-api.us-east-1.amazonaws.com/prod/check_version"
+
+config = None
+repo_id = None
+repo_type = None
+uid = None
+api_address = None
 
 
 def trace(*vals):
@@ -48,10 +55,6 @@ def traceln(*vals):
     trace(*(vals + ('\n',)))
 
 
-def help(args):
-    parser.print_help()
-
-
 def sh_command(*args):
     p = subprocess.Popen(args, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE)
@@ -60,8 +63,10 @@ def sh_command(*args):
         raise Exception(err)
     return out
 
+
 def get_url(path):
     return urllib.request.urlopen(path).read().decode('utf-8')
+
 
 def get_json_from_url(path):
     pool = mp.Pool(processes=1)
@@ -72,11 +77,12 @@ def get_json_from_url(path):
     result = pool.apply_async(get_url, args=(path,))
     try:
         retval = result.get(timeout=5)
-    except mp.TimeoutError as err:
+    except mp.TimeoutError:
         pool.terminate()
         pool.join()
         raise
     return json.loads(retval)
+
 
 def get_api(path):
     return get_json_from_url("http://" + api_address + path)
@@ -86,9 +92,9 @@ def version_compare(a, b):
     return parse_version(a) < parse_version(b)
 
 
-def create_uuid_file(fl):
-    with open(args.uuid_file, 'w') as myfile:
-        myfile.write(str(uuid.uuid1()) + "\n")
+def create_uuid_file(uuid_filename):
+    with open(uuid_filename, 'w') as uuid_file:
+        uuid_file.write(str(uuid.uuid1()) + "\n")
 
 
 def sanitize_version(version):
@@ -98,23 +104,24 @@ def sanitize_version(version):
     """
     if version and '-' in version:
         return version.split('-', 1)[0]
-    else:
-        return version
+    return version
 
 
-def get_repo_file(dir):
-    files = glob.glob(dir)
+def get_repo_file(directory):
+    files = glob.glob(directory)
     files.sort(key=os.path.getmtime, reverse=True)
     for name in files:
-        with open(name, 'r') as myfile:
-            for line in myfile:
-                match = re.search(".*http.?://repositories.*/scylladb/([^/\s]+)/.*/([^/\s]+)/scylladb-.*", line)
+        with open(name, 'r') as repo_file:
+            for line in repo_file:
+                match = re.search(r".*http.?://repositories.*/scylladb/([^/\s]+)/.*/([^/\s]+)/scylladb-.*", line)
                 if match:
                     return match.group(2), match.group(1)
     return None, None
 
 
 def check_version(ar):
+    # pylint: disable=too-many-branches
+
     if config and (not config.has_option("housekeeping", "check-version") or not config.getboolean("housekeeping", "check-version")):
         return
     if ar.version and ar.version != '':
@@ -139,7 +146,7 @@ def check_version(ar):
         versions = get_json_from_url(version_url + params)
         latest_version = versions["version"]
         latest_patch_version = versions["latest_patch_version"]
-    except Exception:
+    except Exception:  # pylint: disable=broad-except
         traceln("Unable to retrieve version information")
         return
 
@@ -152,46 +159,53 @@ def check_version(ar):
         else:
             traceln("You current Scylla release is ", current_version, " the latest minor release is ", latest_version, " go to http://www.scylladb.com for upgrade instructions")
     elif version_compare(current_version, latest_patch_version):
-            traceln("You current Scylla release is ", current_version, " while the latest patch release is ", latest_patch_version, ", update for the latest bug fixes and improvements")
+        traceln("You current Scylla release is ", current_version, " while the latest patch release is ", latest_patch_version, ", update for the latest bug fixes and improvements")
 
 
-parser = argparse.ArgumentParser(description='ScyllaDB help report tool', conflict_handler="resolve")
-parser.add_argument('-q', '--quiet', action='store_true', default=False, help='Quiet mode')
-parser.add_argument('-c', '--config', default="", help='An optional config file. Specifying a missing file will terminate the script')
-parser.add_argument('--uuid', default="", help='A uuid for the requests')
-parser.add_argument('--uuid-file', default="", help='A uuid file for the requests')
-parser.add_argument('--repo-files', default="", help='The repository files that is been used for private repositories')
-parser.add_argument('--api-address', default="localhost:10000", help='The ip and port of the scylla api')
+def main():
+    global quiet, config, repo_id, repo_type, uid, api_address  # pylint: disable=global-statement
 
-subparsers = parser.add_subparsers(help='Available commands')
-parser_help = subparsers.add_parser('help', help='Display help information')
-parser_help.set_defaults(func=help)
-parser_system = subparsers.add_parser('version', help='Check if the current running version is the latest one')
-parser_system.add_argument('--mode', default="c", help='Which mode the version check runs')
-parser_system.add_argument('--version', default="", help='Use a given version to compare to')
-parser_system.set_defaults(func=check_version)
+    parser = argparse.ArgumentParser(description='ScyllaDB help report tool', conflict_handler="resolve")
+    parser.add_argument('-q', '--quiet', action='store_true', default=False, help='Quiet mode')
+    parser.add_argument('-c', '--config', default="", help='An optional config file. Specifying a missing file will terminate the script')
+    parser.add_argument('--uuid', default="", help='A uuid for the requests')
+    parser.add_argument('--uuid-file', default="", help='A uuid file for the requests')
+    parser.add_argument('--repo-files', default="", help='The repository files that is been used for private repositories')
+    parser.add_argument('--api-address', default="localhost:10000", help='The ip and port of the scylla api')
 
-args = parser.parse_args()
-quiet = args.quiet
-config = None
-repo_id = None
-repo_type = None
+    subparsers = parser.add_subparsers(help='Available commands')
+    parser_help = subparsers.add_parser('help', help='Display help information')
+    parser_help.set_defaults(func=lambda _: parser.print_help())
+    parser_system = subparsers.add_parser('version', help='Check if the current running version is the latest one')
+    parser_system.add_argument('--mode', default="c", help='Which mode the version check runs')
+    parser_system.add_argument('--version', default="", help='Use a given version to compare to')
+    parser_system.set_defaults(func=check_version)
 
-if args.config != "":
-    if not os.path.isfile(args.config):
-        traceln("Config file ", args.config, " is missing, terminating")
-        sys.exit(0)
-    config = configparser.SafeConfigParser()
-    config.read(args.config)
-uid = None
-if args.uuid != "":
-    uid = args.uuid
-if args.uuid_file != "":
-    if not os.path.exists(args.uuid_file):
-        create_uuid_file(args.uuid_file)
-    with open(args.uuid_file, 'r') as myfile:
-        uid = myfile.read().replace('\n', '')
-api_address = args.api_address
-if args.repo_files != "":
-    repo_type, repo_id = get_repo_file(args.repo_files)
-args.func(args)
+    args = parser.parse_args()
+    quiet = args.quiet
+    config = None
+    repo_id = None
+    repo_type = None
+
+    if args.config != "":
+        if not os.path.isfile(args.config):
+            traceln("Config file ", args.config, " is missing, terminating")
+            sys.exit(0)
+        config = configparser.SafeConfigParser()
+        config.read(args.config)
+    uid = None
+    if args.uuid != "":
+        uid = args.uuid
+    if args.uuid_file != "":
+        if not os.path.exists(args.uuid_file):
+            create_uuid_file(args.uuid_file)
+        with open(args.uuid_file, 'r') as myfile:
+            uid = myfile.read().replace('\n', '')
+    api_address = args.api_address
+    if args.repo_files != "":
+        repo_type, repo_id = get_repo_file(args.repo_files)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

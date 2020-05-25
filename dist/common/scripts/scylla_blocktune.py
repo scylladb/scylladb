@@ -22,6 +22,7 @@
 #
 
 import os
+from os.path import join, exists, dirname, realpath
 
 from scylla_util import parse_scylla_dirs_with_default
 
@@ -30,7 +31,7 @@ from scylla_util import parse_scylla_dirs_with_default
 def try_write(path, data):
     try:
         open(path, 'w').write(data)
-    except Exception:
+    except Exception:  # pylint: disable=broad-except
         print("warning: unable to tune {} to {}".format(path, data))
 
 
@@ -56,7 +57,6 @@ tuned_blockdevs = set()
 # tune a blockdevice (sysfs node); updates I/O scheduler
 # and merge behavior.  Tunes dependent devices
 def tune_blockdev(path, nomerges):
-    from os.path import join, exists, dirname, realpath
     path = realpath(path)
     print('tuning {}'.format(path))
     if path in tuned_blockdevs:
@@ -95,7 +95,7 @@ def tune_fs(path, nomerges):
 
 # tunes all filesystems referenced from a scylla.yaml
 def tune_yaml(path, nomerges):
-    y = parse_scylla_dirs_with_default(conf=path)
-    for fs in y['data_file_directories']:
-        tune_fs(fs, nomerges)
-    tune_fs(y['commitlog_directory'], nomerges)
+    scylla_yaml = parse_scylla_dirs_with_default(conf=path)
+    for file_system in scylla_yaml['data_file_directories']:
+        tune_fs(file_system, nomerges)
+    tune_fs(scylla_yaml['commitlog_directory'], nomerges)

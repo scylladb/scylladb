@@ -26,8 +26,7 @@ import yaml
 
 
 def get(config, key):
-    s = open(config).read()
-    cfg = yaml.safe_load(s)
+    cfg = yaml.safe_load(open(config).read())
     try:
         val = cfg[key]
     except KeyError:

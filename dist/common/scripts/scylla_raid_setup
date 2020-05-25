@@ -50,11 +50,11 @@ if __name__ == '__main__':
 
     root = args.root.rstrip('/')
     if args.volume_role == 'all':
-        mount_at=root
+        mount_at = root
     elif args.volume_role == 'data':
-        mount_at='{}/data'.format(root)
+        mount_at = '{}/data'.format(root)
     elif args.volume_role == 'commitlog':
-        mount_at='{}/commitlog'.format(root)
+        mount_at = '{}/commitlog'.format(root)
     else:
         print('Invalid role specified ({})'.format(args.volume_role))
         parser.print_help()
@@ -102,7 +102,7 @@ if __name__ == '__main__':
             run('udevadm settle')
         run('mkfs.xfs {} -f'.format(fsdev))
     else:
-        procs=[]
+        procs = []
         for disk in disks:
             d = disk.replace('/dev/', '')
             discard_path = '/sys/block/{}/queue/discard_granularity'.format(d)

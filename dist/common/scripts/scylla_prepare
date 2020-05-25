@@ -20,16 +20,15 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import sys
 import glob
 import platform
 
 from scylla_util import *
 
+
 def verify_cpu():
     if platform.machine() == 'x86_64':
-        needed_flags = set(['sse4_2', 'pclmulqdq'])
+        needed_flags = {'sse4_2', 'pclmulqdq'}
         for line in open('/proc/cpuinfo'):
             if line.startswith('flags'):
                 flags = set(line.split()[2:])
@@ -44,9 +43,9 @@ if __name__ == '__main__':
         print('Requires root permission.')
         sys.exit(1)
     if is_redhat_variant():
-        cfg = sysconfig_parser('/etc/sysconfig/scylla-server')
+        cfg = SysconfigParser('/etc/sysconfig/scylla-server')
     else:
-        cfg = sysconfig_parser('/etc/default/scylla-server')
+        cfg = SysconfigParser('/etc/default/scylla-server')
     ami = cfg.get('AMI')
     mode = cfg.get('NETWORK_MODE')
 

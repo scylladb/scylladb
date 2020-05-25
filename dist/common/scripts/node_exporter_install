@@ -20,15 +20,13 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import sys
-import tempfile
 import tarfile
-from scylla_util import *
 import argparse
 
-VERSION='0.17.0'
-INSTALL_DIR=scylladir()+'/Prometheus/node_exporter'
+from scylla_util import *
+
+VERSION = '0.17.0'
+INSTALL_DIR = scylladir()+'/Prometheus/node_exporter'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Download and install prometheus node_exporter')
@@ -65,7 +63,7 @@ if __name__ == '__main__':
             node_exporter_p.unlink()
         os.symlink('{install_dir}/node_exporter-{version}.linux-amd64/node_exporter'.format(install_dir=INSTALL_DIR, version=VERSION), str(node_exporter_p))
         if is_systemd():
-            node_exporter = systemd_unit('node-exporter.service')
+            node_exporter = SystemdUnit('node-exporter.service')
             node_exporter.enable()
             node_exporter.start()
         else:

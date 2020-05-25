@@ -20,48 +20,47 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import sys
 import argparse
 import glob
-import shutil
-import io
 import stat
 from scylla_util import *
 
 interactive = False
 HOUSEKEEPING_TIMEOUT = 60
-def when_interactive_ask_service(interactive, msg1, msg2, default = None):
+
+
+def when_interactive_ask_service(msg1, msg2, default=None):
     if not interactive:
         return default
 
     print(msg1)
     print(msg2)
     while True:
-        if default == True:
+        if default is True:
             prompt = '[YES/no]'
-        elif default == False:
+        elif default is False:
             prompt = '[yes/NO]'
         else:
             prompt = '[yes/no]'
         ans = input(prompt).lower()
         if len(ans) == 0:
             return default
-        if ans == 'yes' or ans == 'y':
+        if ans in ['yes', 'y']:
             return True
-        elif ans == 'no' or ans =='n':
+        if ans in ['no', 'n']:
             return False
+
 
 def print_non_interactive_suggestion_message(args):
     colorprint('{green}scylla_setup accepts command line arguments as well!{nocolor} For easily provisioning in a similar environment than this, type:\n')
 
     base_string = "    scylla_setup"
-    outlines = [ base_string ]
-    for key,value in vars(args).items():
+    outlines = [base_string]
+    for key, value in vars(args).items():
         if not value:
             continue
-        x = ' --{}'.format(key.replace('_','-'))
-        if type(value) != bool:
+        x = ' --{}'.format(key.replace('_', '-'))
+        if isinstance(value, bool):
             x += ' {}'.format(str(value))
 
         if len(outlines[-1]) + len(x) > 72:
@@ -69,9 +68,10 @@ def print_non_interactive_suggestion_message(args):
         outlines[-1] += x
 
     print(' \\\n'.join(outlines))
-    if args.no_io_setup == False:
+    if not args.no_io_setup:
         print('\nAlso, to avoid the time-consuming I/O tuning you can add --no-io-setup and copy the contents of /etc/scylla.d/io*')
         print('Only do that if you are moving the files into machines with the exact same hardware')
+
 
 def interactive_choose_nic():
     nics = [os.path.basename(n) for n in glob.glob('/sys/class/net/*') if n != '/sys/class/net/lo']
@@ -88,19 +88,21 @@ def interactive_choose_nic():
             if is_valid_nic(n):
                 return n
 
+
 def do_verify_package(pkg):
     if is_debian_variant():
-        res = run('dpkg -s {}'.format(pkg), silent=True, exception=False)
+        _res = run('dpkg -s {}'.format(pkg), silent=True, exception=False)
     elif is_redhat_variant():
-        res = run('rpm -q {}'.format(pkg), silent=True, exception=False)
+        _res = run('rpm -q {}'.format(pkg), silent=True, exception=False)
     elif is_gentoo_variant():
-        res = 0 if len(glob.glob('/var/db/pkg/*/{}-*'.format(pkg))) else 1
+        _res = 0 if glob.glob('/var/db/pkg/*/{}-*'.format(pkg)) else 1
     else:
         print("OS variant not recognized")
-        res = 1
-    if res != 0:
+        _res = 1
+    if _res != 0:
         print('{} package is not installed.'.format(pkg))
         sys.exit(1)
+
 
 def list_block_devices():
     devices = []
@@ -116,11 +118,12 @@ def list_block_devices():
             devices.extend([d for d in glob.glob(p) if d != '/dev/mapper/control'])
     return devices
 
+
 def get_unused_disks():
     unused = []
     for dev in list_block_devices():
         # dev contains partitions
-        if len(glob.glob('/sys/class/block/{dev}/{dev}*'.format(dev=dev.replace('/dev/','')))) > 0:
+        if len(glob.glob('/sys/class/block/{dev}/{dev}*'.format(dev=dev.replace('/dev/', '')))) > 0:
             continue
         # dev is used
         if not is_unused_disk(dev):
@@ -128,32 +131,37 @@ def get_unused_disks():
         unused.append(dev)
     return unused
 
+
 def swap_exists():
     swaps = out('swapon --noheadings --raw')
-    return True if swaps != '' else False
+    return swaps != ''
+
 
 def run_setup_script(name, script):
-    global interactive
-    res = run('{}/{}'.format(scriptsdir(), script), exception=False)
-    if res != 0:
+    _res = run('{}/{}'.format(scriptsdir(), script), exception=False)
+    if _res != 0:
         if interactive:
             colorprint('{red}{name} setup failed. Press any key to continue...{nocolor}', name=name)
             input()
         else:
             print('{} setup failed.'.format(name))
             sys.exit(1)
-    return res
+    return _res
 
-if __name__ == '__main__':
+
+def main():
+    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+
+    global interactive  # pylint: disable=global-statement
     if not is_nonroot() and os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
     parser = argparse.ArgumentParser(description='Configure environment for Scylla.')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--disks',
-                        help='specify disks for RAID')
+                       help='specify disks for RAID')
     group.add_argument('--no-raid-setup', action='store_true', default=False,
-                        help='skip raid setup')
+                       help='skip raid setup')
     parser.add_argument('--nic',
                         help='specify NIC')
     parser.add_argument('--ntp-domain',
@@ -246,8 +254,8 @@ if __name__ == '__main__':
     if interactive:
         colorprint('{green}Skip any of the following steps by answering \'no\'{nocolor}')
 
-    def interactive_ask_service(msg1, msg2, default = None):
-        return when_interactive_ask_service(interactive, msg1, msg2, default)
+    def interactive_ask_service(msg1, msg2, default=None):
+        return when_interactive_ask_service(msg1, msg2, default)
 
     if is_ec2():
         ec2_check = interactive_ask_service('Do you want to run Amazon EC2 configuration check?', 'Yes - runs a script to verify that this instance is optimized for running Scylla. No - skips the configuration check.', ec2_check)
@@ -273,7 +281,7 @@ if __name__ == '__main__':
     args.no_enable_service = not enable_service
     if enable_service:
         if is_systemd():
-            systemd_unit('scylla-server.service').enable()
+            SystemdUnit('scylla-server.service').enable()
         elif is_gentoo_variant():
             run('rc-update add scylla-server default')
 
@@ -285,32 +293,32 @@ if __name__ == '__main__':
                 with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
                     f.write('[housekeeping]\ncheck-version: True\n')
                 if is_systemd():
-                    systemd_unit('scylla-housekeeping-daily.timer').unmask()
-                    systemd_unit('scylla-housekeeping-restart.timer').unmask()
+                    SystemdUnit('scylla-housekeeping-daily.timer').unmask()
+                    SystemdUnit('scylla-housekeeping-restart.timer').unmask()
             else:
                 with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
                     f.write('[housekeeping]\ncheck-version: False\n')
                 if is_systemd():
-                    hk_daily = systemd_unit('scylla-housekeeping-daily.timer')
+                    hk_daily = SystemdUnit('scylla-housekeeping-daily.timer')
                     hk_daily.mask()
                     hk_daily.stop()
-                    hk_restart = systemd_unit('scylla-housekeeping-restart.timer')
+                    hk_restart = SystemdUnit('scylla-housekeeping-restart.timer')
                     hk_restart.mask()
                     hk_restart.stop()
 
-        cur_version=out('scylla --version', exception=False)
+        cur_version = out('scylla --version', exception=False)
         if len(cur_version) > 0:
             if is_debian_variant():
-                new_version=out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version {} --mode i'.format(scriptsdir(), cur_version), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
+                new_version = out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version {} --mode i'.format(scriptsdir(), cur_version), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
             else:
-                new_version=out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version {} --mode i'.format(scriptsdir(), cur_version), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
+                new_version = out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version {} --mode i'.format(scriptsdir(), cur_version), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
             if len(new_version) > 0:
                 print(new_version)
         else:
             if is_debian_variant():
-                new_version=out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version unknown --mode u'.format(scriptsdir()), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
+                new_version = out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version unknown --mode u'.format(scriptsdir()), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
             else:
-                new_version=out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version unknown --mode u'.format(scriptsdir()), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
+                new_version = out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version unknown --mode u'.format(scriptsdir()), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
             print('A Scylla executable was not found, please check your installation {}'.format(new_version))
 
         if is_redhat_variant():
@@ -319,7 +327,7 @@ if __name__ == '__main__':
             if selinux_setup:
                 res = run_setup_script('SELinux', 'scylla_selinux_setup')
                 if res != 0:
-                    selinux_reboot_required=True
+                    selinux_reboot_required = True
 
         if args.ami:
             bootparam_setup = interactive_ask_service('Do you want add hugepages capability to the bootloader options?', 'Yes - enable hugepages at boot time. Choosing yes greatly improves performance. No - skips this step.', bootparam_setup)
@@ -448,3 +456,7 @@ if __name__ == '__main__':
 
         if dist_name() == 'Ubuntu':
             run('apt-get install -y hugepages')
+
+
+if __name__ == '__main__':
+    main()

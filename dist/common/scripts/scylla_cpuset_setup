@@ -39,7 +39,7 @@ if __name__ == '__main__':
         parser.print_help()
         sys.exit(1)
 
-    cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
+    cfg = SysconfigParser('/etc/scylla.d/cpuset.conf')
     cfg.set('CPUSET', '{cpuset}{smp}'.format( \
             cpuset='--cpuset {} '.format(args.cpuset) if args.cpuset else '', \
             smp='--smp {} '.format(args.smp) if args.smp else '' \

@@ -29,9 +29,9 @@ if __name__ == '__main__':
         print('Requires root permission.')
         sys.exit(1)
     if is_redhat_variant():
-        cfg = sysconfig_parser('/etc/sysconfig/scylla-server')
+        cfg = SysconfigParser('/etc/sysconfig/scylla-server')
     else:
-        cfg = sysconfig_parser('/etc/default/scylla-server')
+        cfg = SysconfigParser('/etc/default/scylla-server')
 
 
     if cfg.get('NETWORK_MODE') == 'virtio':
