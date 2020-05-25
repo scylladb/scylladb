@@ -1444,9 +1444,9 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
             std::vector<std::vector<data_value>> expected = {
                 // The following represents the "v1 = 5" change. The "v2 = null" change gets merged with a different change, see below
                 {int32_t(5), int_null, bool_null, map_null, keys_null, int64_t(5)},
-                {int_null, int_null, bool_null, vmap({{0,6},{1,6}}), keys_null, long_null /*FIXME: ttl = 6*/},
+                {int_null, int_null, bool_null, vmap({{0,6},{1,6}}), keys_null, int64_t(6)},
                 // The following represents the "m[2] = 7" change. The "m[3] = null" change gets merged with a different change, see below
-                {int_null, int_null, bool_null, vmap({{2,7}}), keys_null, long_null /*FIXME: ttl = 7*/},
+                {int_null, int_null, bool_null, vmap({{2,7}}), keys_null, int64_t(7)},
                 // The "v2 = null" and "v[3] = null" changes get merged with the "m[4] = 0" change, because dead cells
                 // don't have a "ttl" concept; thus we put them together with alive cells which don't have a ttl (so ttl column = null).
                 {int_null, int_null, true, vmap({{4,0}}), vkeys({3}), long_null},
