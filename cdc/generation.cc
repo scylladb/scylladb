@@ -34,8 +34,36 @@
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 
 #include "cdc/generation.hh"
+#include "cdc/generation_service.hh"
+
+class and_reducer {
+private:
+    bool _result = true;
+public:
+    future<> operator()(bool value) {
+        _result = value && _result;
+        return make_ready_future<>();
+    }
+    bool get() {
+        return _result;
+    }
+};
+
+class or_reducer {
+private:
+    bool _result = false;
+public:
+    future<> operator()(bool value) {
+        _result = value || _result;
+        return make_ready_future<>();
+    }
+    bool get() {
+        return _result;
+    }
+};
 
 extern logging::logger cdc_log;
 
@@ -326,6 +354,295 @@ void update_streams_description(
             }
         });
     }
+}
+
+static void assert_shard_zero(const sstring& where) {
+    if (this_shard_id() != 0) {
+        on_internal_error(cdc_log, format("`{}`: must be run on shard 0", where));
+    }
+}
+
+// generation_service code might be racing with system_distributed_keyspace deinitialization
+// (the deinitialization order is broken).
+// Therefore, whenever we want to access sys_dist_ks in a background task,
+// we need to check if the instance is still there. Storing the shared pointer will keep it alive.
+static shared_ptr<db::system_distributed_keyspace> get_sys_dist_ks(sharded<db::system_distributed_keyspace>& svc) {
+    if (!svc.local_is_initialized()) {
+        throw std::runtime_error("system distributed keyspace not initialized");
+    }
+
+    return svc.local_shared();
+}
+
+// Run inside seastar::async context.
+bool generation_service::do_learn_generation(db_clock::time_point ts) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+
+    if (container().map_reduce(and_reducer(),
+            [ts] (generation_service& svc) { return !svc._metadata.prepare(ts); }).get0()) {
+        // None of our shards is interested in this generation.
+        return false;
+    }
+
+    auto desc = get_sys_dist_ks(_sys_dist_ks)->read_cdc_topology_description(
+            ts, { _ring.count_normal_token_owners() }).get0();
+    if (!desc) {
+        throw std::runtime_error(format(
+            "could not retrieve description of generation {} from system_distributed.cdc_topology_description."
+            " Reading the table did not return any result for this timestamp."
+            " Current time: {}", ts, db_clock::now()));
+    }
+
+    update_generation_timestamp(ts);
+
+    // Return `true` iff the generation was inserted on any of our shards.
+    return container().map_reduce(or_reducer(),
+            [ts, desc_ = *desc] (generation_service& svc) mutable
+                { return svc._metadata.insert(ts, std::move(desc_)); }).get0();
+}
+
+void generation_service::learn_generation(db_clock::time_point ts) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+
+    cdc_log.info("Learning generation {}...", ts);
+
+    // The gate keeps the service from stopping, in particular from being freed,
+    // which makes discarding the future safe.
+    (void)with_gate(_async_gate, [this, ts] {
+        // Learning new generations doesn't happen often so we spawn a thread to make our lifes easier.
+        return async([this, ts] {
+            bool using_this_gen = false;
+            while (true) {
+                try {
+                    using_this_gen = do_learn_generation(ts);
+                    break;
+                } catch (...) {
+                    cdc_log.warn(
+                            "Failed to learn generation {}. Reason: \"{}\". Retrying...",
+                            ts, std::current_exception());
+
+                    sleep_abortable(std::chrono::seconds(5), _abort_source).get();
+                }
+            }
+
+            if (!using_this_gen) {
+                cdc_log.info("Generation {} already known.", ts);
+                return;
+            }
+
+            cdc_log.info("Learned generation {}. Updating system_distributed.cdc_description...", ts);
+
+            while (true) {
+                try {
+                    do_update_streams_description(
+                            ts, *get_sys_dist_ks(_sys_dist_ks), { _ring.count_normal_token_owners() });
+                    return;
+                } catch (...) {
+                    cdc_log.warn(
+                        "Failed to update system_distributed.cdc_description with generation {}."
+                        " Reason: \"{}\". Retrying...",
+                        ts, std::current_exception());
+
+                    sleep_abortable(std::chrono::seconds(60), _abort_source).get();
+                }
+            }
+        });
+    }).handle_exception([ts] (std::exception_ptr ep) {
+        // The only possible exception here should be coming from sleep_abortable or the gate.
+        // This means we're shutting down. No need to do anything fancy.
+        try {
+            std::rethrow_exception(ep);
+        } catch (...) {
+            cdc_log.warn("Error while learning generation {}: {}", ts, std::current_exception());
+        }
+    });
+}
+
+void generation_service::new_generation(
+        const std::unordered_set<dht::token>& bootstrap_tokens,
+        bool in_single_node_test) {
+    using namespace std::chrono;
+    assert_shard_zero(__PRETTY_FUNCTION__);
+
+    cdc_log.info("Creating a new CDC generation...");
+
+    auto desc = topology_description_generator(_db_cfg, bootstrap_tokens, _ring, _gossiper).generate();
+
+    // For propagating our generation, we will depend on the (not always true) ring_delay assumption:
+    // anything inserted into gossip will arrive at other live nodes within ring_delay.
+    // We're adding 2 * ring_delay to give us just a little more time.
+    // If we're currently running a single-node unit test it's not necessary to add any delay.
+    auto ts = db_clock::now() + (
+            in_single_node_test
+                ? milliseconds(0)
+                : (2 * milliseconds(_db_cfg.ring_delay_ms()) + duration_cast<milliseconds>(generation_leeway)));
+
+    cdc_log.info("New generation's timestamp: {}", ts);
+
+    get_sys_dist_ks(_sys_dist_ks)->insert_cdc_topology_description(
+            ts, std::move(desc), { _ring.count_normal_token_owners() }).get();
+
+    cdc_log.info("Inserted generation {} into system_distributed.cdc_topology_description.", ts);
+
+    update_generation_timestamp(ts);
+}
+
+void generation_service::before_join_token_ring(
+        const std::unordered_set<dht::token>& bootstrap_tokens,
+        const gms::feature_service& feature_svc,
+        bool in_single_node_test) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+    assert(!db::system_keyspace::bootstrap_complete());
+
+    if (!_db_cfg.check_experimental(db::experimental_features_t::CDC)) {
+        // We should not be able to join the cluster if other nodes support CDC but we don't.
+        // The check should have been made somewhere in storage_service::prepare_to_join (`check_knows_remote_features`).
+        assert(!feature_svc.cluster_supports_cdc());
+        return;
+    }
+
+    new_generation(bootstrap_tokens, in_single_node_test);
+}
+
+void generation_service::after_join(bool in_single_node_test) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+
+    assert(db::system_keyspace::bootstrap_complete());
+
+    if (!_current_ts) {
+        restore_generation_timestamp();
+    }
+
+    _gossiper.register_(shared_from_this());
+
+    auto latest_ts = _current_ts;
+    for (const auto& ep: _gossiper.get_endpoint_states()) {
+        auto ts = gms::versioned_value::cdc_streams_timestamp_from_string(
+                _gossiper.get_application_state_value(ep.first, gms::application_state::CDC_STREAMS_TIMESTAMP));
+        if (!latest_ts || (ts && *ts > *latest_ts)) {
+            latest_ts = ts;
+        }
+    }
+
+    if (latest_ts) {
+        cdc_log.info("Latest generation seen during startup: {}", *latest_ts);
+        learn_generation(*latest_ts);
+        return;
+    }
+
+    if (!_db_cfg.check_experimental(db::experimental_features_t::CDC)) {
+        return;
+    }
+
+    cdc_log.warn("No CDC generation seen during startup. Upgrading?");
+
+    try {
+        new_generation({}, in_single_node_test);
+    } catch (...) {
+        cdc_log.error(
+            "Could not create new generation on startup. Reason: {}\n"
+            " If you are performing a rolling upgrade, make sure you restart nodes one by node,"
+            " and make sure that nodes are connected (there are no network issues)."
+            " You can still proceed with the upgrade. One of the nodes should eventually be able"
+            " to create a CDC generation. If every node reports this error, try restarting one of the nodes"
+            " so it can retry.",
+            std::current_exception());
+        // FIXME: after implementing check_and_repair_cdc_generation(), mention it here.
+    }
+}
+
+void generation_service::update_generation_timestamp(db_clock::time_point ts) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+
+    auto units = get_units(_current_ts_sem, 1).get0();
+
+    if (_current_ts && *_current_ts >= ts) {
+        return;
+    }
+
+    db::system_keyspace::update_cdc_streams_timestamp(ts).get();
+    _gossiper.add_local_application_state(
+            gms::application_state::CDC_STREAMS_TIMESTAMP, gms::versioned_value::cdc_streams_timestamp(ts)
+    ).get();
+    _current_ts = ts;
+
+    cdc_log.info("Updated latest generation timestamp to {}.", *_current_ts);
+}
+
+void generation_service::restore_generation_timestamp() {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+    assert(db::system_keyspace::bootstrap_complete());
+
+    auto units = get_units(_current_ts_sem, 1).get0();
+
+    if (_current_ts) {
+        return;
+    }
+
+    cdc_log.info("Restoring generation timestamp from local tables...");
+
+    auto ts = db::system_keyspace::get_saved_cdc_streams_timestamp().get0();
+    if (!ts) {
+        cdc_log.info("No generation timestamp found in local tables.");
+        return;
+    }
+
+    _gossiper.add_local_application_state(
+            gms::application_state::CDC_STREAMS_TIMESTAMP, gms::versioned_value::cdc_streams_timestamp(*ts)
+    ).get();
+    _current_ts = ts;
+
+    cdc_log.info("Generation timestamp restored: {}", *_current_ts);
+}
+
+void generation_service::on_change(gms::inet_address ep, gms::application_state state, const gms::versioned_value& v) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+
+    if (state != gms::application_state::CDC_STREAMS_TIMESTAMP) {
+        return;
+    }
+
+    auto ts = gms::versioned_value::cdc_streams_timestamp_from_string(v.value);
+    cdc_log.debug("Endpoint: {}, CDC generation timestamp change: {}", ep, ts);
+    if (!ts) {
+        return;
+    }
+
+    learn_generation(*ts);
+}
+
+void generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+
+    auto val = ep_state.get_application_state_ptr(gms::application_state::CDC_STREAMS_TIMESTAMP);
+    if (!val) {
+        return;
+    }
+
+    on_change(ep, gms::application_state::CDC_STREAMS_TIMESTAMP, *val);
+}
+
+generation_service::generation_service(
+        gms::gossiper& g, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        abort_source& abort_src, const db::config& cfg, const locator::token_metadata& ring)
+    : _gossiper(g), _sys_dist_ks(sys_dist_ks), _abort_source(abort_src), _db_cfg(cfg), _ring(ring) {
+}
+
+future<> generation_service::stop() {
+    if (this_shard_id() != 0) {
+        _stopped = true;
+        return make_ready_future<>();
+    }
+
+    return _gossiper.unregister_(shared_from_this()).then([this] {
+        return _async_gate.close().then([this] {
+            _stopped = true;
+        });
+    });
+}
+
+generation_service::~generation_service() {
+    assert(_stopped);
 }
 
 } // namespace cdc
