@@ -34,30 +34,9 @@
 #pragma once
 
 #include <vector>
-#include <unordered_set>
-#include <seastar/util/noncopyable_function.hh>
 
 #include "database_fwd.hh"
-#include "db_clock.hh"
 #include "dht/token.hh"
-
-namespace seastar {
-    class abort_source;
-} // namespace seastar
-
-namespace db {
-    class config;
-    class system_distributed_keyspace;
-} // namespace db
-
-namespace gms {
-    class inet_address;
-    class gossiper;
-} // namespace gms
-
-namespace locator {
-    class token_metadata;
-} // namespace locator
 
 namespace cdc {
 
@@ -112,66 +91,5 @@ public:
 
     const std::vector<token_range_description>& entries() const;
 };
-
-/* Should be called when we're restarting and we noticed that we didn't save any streams timestamp in our local tables,
- * which means that we're probably upgrading from a non-CDC/old CDC version (another reason could be
- * that there's a bug, or the user messed with our local tables).
- *
- * It checks whether we should be the node to propose the first generation of CDC streams.
- * The chosen condition is arbitrary, it only tries to make sure that no two nodes propose a generation of streams
- * when upgrading, and nothing bad happens if they for some reason do (it's mostly an optimization).
- */
-bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper&);
-
-/*
- * Read this node's streams generation timestamp stored in the LOCAL table.
- * Assumes that the node has successfully bootstrapped, and we're not upgrading from a non-CDC version,
- * so the timestamp is present.
- */
-future<db_clock::time_point> get_local_streams_timestamp();
-
-/* Generate a new set of CDC streams and insert it into the distributed cdc_topology_description table.
- * Returns the timestamp of this new generation.
- *
- * Should be called when starting the node for the first time (i.e., joining the ring).
- *
- * Assumes that the system_distributed keyspace is initialized.
- *
- * The caller of this function is expected to insert this timestamp into the gossiper as fast as possible,
- * so that other nodes learn about the generation before their clocks cross the timestmap
- * (not guaranteed in the current implementation, but expected to be the common case;
- *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
- */
-db_clock::time_point make_new_cdc_generation(
-        const db::config& cfg,
-        const std::unordered_set<dht::token>& bootstrap_tokens,
-        const locator::token_metadata& tm,
-        const gms::gossiper& g,
-        db::system_distributed_keyspace& sys_dist_ks,
-        std::chrono::milliseconds ring_delay,
-        bool for_testing);
-
-/* Retrieves CDC streams generation timestamp from the given endpoint's application state (broadcasted through gossip).
- * We might be during a rolling upgrade, so the timestamp might not be there (if the other node didn't upgrade yet),
- * but if the cluster already supports CDC, then every newly joining node will propose a new CDC generation,
- * which means it will gossip the generation's timestamp.
- */
-std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper&);
-
-/* Inform CDC users about a generation of streams (identified by the given timestamp)
- * by inserting it into the cdc_description table.
- *
- * Assumes that the cdc_topology_description table contains this generation.
- *
- * Returning from this function does not mean that the table update was successful: the function
- * might run an asynchronous task in the background.
- *
- * Run inside seastar::async context.
- */
-void update_streams_description(
-        db_clock::time_point,
-        shared_ptr<db::system_distributed_keyspace>,
-        noncopyable_function<unsigned()> get_num_token_owners,
-        abort_source&);
 
 } // namespace cdc

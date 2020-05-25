@@ -28,8 +28,23 @@
 #include "metadata.hh"
 #include "generation.hh"
 
+namespace seastar {
+class abort_source;
+}
+
 namespace gms {
 class feature_service;
+class inet_address;
+class gossiper;
+}
+
+namespace db {
+class config;
+class system_distributed_keyspace;
+}
+
+namespace locator {
+class token_metadata;
 }
 
 namespace cdc {

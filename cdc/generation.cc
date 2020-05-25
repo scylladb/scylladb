@@ -251,52 +251,6 @@ public:
     }
 };
 
-bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper& g) {
-    auto my_host_id = g.get_host_id(me);
-    auto& eps = g.get_endpoint_states();
-    return std::none_of(eps.begin(), eps.end(),
-            [&] (const std::pair<gms::inet_address, gms::endpoint_state>& ep) {
-        return my_host_id < g.get_host_id(ep.first);
-    });
-}
-
-future<db_clock::time_point> get_local_streams_timestamp() {
-    return db::system_keyspace::get_saved_cdc_streams_timestamp().then([] (std::optional<db_clock::time_point> ts) {
-        if (!ts) {
-            auto err = format("get_local_streams_timestamp: tried to retrieve streams timestamp after bootstrapping, but it's not present");
-            cdc_log.error("{}", err);
-            throw std::runtime_error(err);
-        }
-        return *ts;
-    });
-}
-
-// Run inside seastar::async context.
-db_clock::time_point make_new_cdc_generation(
-        const db::config& cfg,
-        const std::unordered_set<dht::token>& bootstrap_tokens,
-        const locator::token_metadata& tm,
-        const gms::gossiper& g,
-        db::system_distributed_keyspace& sys_dist_ks,
-        std::chrono::milliseconds ring_delay,
-        bool for_testing) {
-    auto gen = topology_description_generator(cfg, bootstrap_tokens, tm, g).generate();
-
-    // Begin the race.
-    auto ts = db_clock::now() + (
-            for_testing ? std::chrono::milliseconds(0) : (
-                2 * ring_delay + std::chrono::duration_cast<std::chrono::milliseconds>(generation_leeway)));
-    sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tm.count_normal_token_owners() }).get();
-
-    return ts;
-}
-
-std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper& g) {
-    auto streams_ts_string = g.get_application_state_value(endpoint, gms::application_state::CDC_STREAMS_TIMESTAMP);
-    cdc_log.trace("endpoint={}, streams_ts_string={}", endpoint, streams_ts_string);
-    return gms::versioned_value::cdc_streams_timestamp_from_string(streams_ts_string);
-}
-
 // Run inside seastar::async context.
 static void do_update_streams_description(
         db_clock::time_point streams_ts,
@@ -323,37 +277,6 @@ static void do_update_streams_description(
 
     sys_dist_ks.create_cdc_desc(streams_ts, streams_vec, ctx).get();
     cdc_log.info("CDC description table successfully updated with generation {}.", streams_ts);
-}
-
-void update_streams_description(
-        db_clock::time_point streams_ts,
-        shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
-        noncopyable_function<unsigned()> get_num_token_owners,
-        abort_source& abort_src) {
-    try {
-        do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
-    } catch(...) {
-        cdc_log.warn(
-            "Could not update CDC description table with generation {}: {}. Will retry in the background.",
-            streams_ts, std::current_exception());
-
-        // It is safe to discard this future: we keep system distributed keyspace alive.
-        (void)seastar::async([
-            streams_ts, sys_dist_ks, get_num_token_owners = std::move(get_num_token_owners), &abort_src
-        ] {
-            while (true) {
-                sleep_abortable(std::chrono::seconds(60), abort_src).get();
-                try {
-                    do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
-                    return;
-                } catch (...) {
-                    cdc_log.warn(
-                        "Could not update CDC description table with generation {}: {}. Will try again.",
-                        streams_ts, std::current_exception());
-                }
-            }
-        });
-    }
 }
 
 static void assert_shard_zero(const sstring& where) {
