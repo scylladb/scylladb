@@ -365,6 +365,7 @@ scylla_tests = set([
     'test/boost/schema_changes_test',
     'test/boost/sstable_conforms_to_mutation_source_test',
     'test/boost/sstable_resharding_test',
+    'test/boost/sstable_directory_test',
     'test/boost/sstable_test',
     'test/boost/storage_proxy_test',
     'test/boost/top_k_test',
