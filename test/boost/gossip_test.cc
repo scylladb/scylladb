@@ -38,6 +38,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/config.hh"
 #include "sstables/compaction_manager.hh"
+#include "cdc/generation_service.hh"
 
 namespace db::view {
 class view_update_generator;
@@ -56,6 +57,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
         sharded<gms::feature_service> feature_service;
         sharded<locator::token_metadata> token_metadata;
+        sharded<cdc::generation_service> cdc_gen_svc;
 
         token_metadata.start().get();
         auto stop_token_mgr = defer([&token_metadata] { token_metadata.stop().get(); });
@@ -81,7 +83,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         service::storage_service_config sscfg;
         sscfg.available_memory =  memory::stats().total_memory();
 
-        service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), true).get();
+        service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), std::ref(cdc_gen_svc), true).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
         db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources)).get();
@@ -92,6 +94,11 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         auto stop_db = defer([&] { db.stop().get(); });
         auto stop_database_d = defer([&db] {
             stop_database(db).get();
+        });
+
+        cdc_gen_svc.start(std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(*cfg), std::ref(token_metadata)).get();
+        auto stop_cdc_gen_svc = defer([&cdc_gen_svc] {
+            cdc_gen_svc.stop().get();
         });
 
     });

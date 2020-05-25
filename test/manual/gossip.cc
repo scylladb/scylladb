@@ -35,6 +35,7 @@
 #include <seastar/core/thread.hh>
 #include <chrono>
 #include "db/config.hh"
+#include "cdc/generation_service.hh"
 
 namespace bpo = boost::program_options;
 
@@ -80,6 +81,7 @@ int main(int ac, char ** av) {
             sharded<abort_source> abort_sources;
             sharded<service::migration_notifier> mnotif;
             sharded<locator::token_metadata> token_metadata;
+            sharded<cdc::generation_service> cdc_gen_svc;
 
             abort_sources.start().get();
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
@@ -90,7 +92,7 @@ int main(int ac, char ** av) {
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
             gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(*cfg)).get();
-            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg, mnotif, token_metadata).get();
+            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg, mnotif, token_metadata, std::ref(cdc_gen_svc)).get();
             netw::get_messaging_service().start(listen).get();
             auto& server = netw::get_local_messaging_service();
             auto port = server.port();

@@ -58,6 +58,7 @@
 #include "auth/service.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "cdc/generation_service.hh"
 
 using namespace std::chrono_literals;
 
@@ -450,11 +451,12 @@ public:
             auto stop_cql_config = defer([&] { cql_config.stop().get(); });
 
             sharded<db::view::view_update_generator> view_update_generator;
+            sharded<cdc::generation_service> cdc_gen_service;
 
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), std::ref(cdc_gen_service), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
@@ -527,8 +529,15 @@ public:
 
             db::system_keyspace::migrate_truncation_records(feature_service.local().cluster_supports_truncation_table()).get();
 
+            cdc_gen_service.start(std::ref(gms::get_gossiper()), std::ref(sys_dist_ks),
+                    std::ref(abort_sources), std::ref(*cfg), std::ref(token_metadata)).get();
+            auto stop_cdc_gen_service = defer([&cdc_gen_service] {
+                cdc_gen_service.stop().get();
+            });
+
+
             sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy)).get();
+            cdc.start(std::ref(proxy), std::ref(cdc_gen_service)).get();
             auto stop_cdc_service = defer([&] {
                 cdc.stop().get();
             });

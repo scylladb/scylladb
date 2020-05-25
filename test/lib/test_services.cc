@@ -29,6 +29,7 @@
 #include "gms/gossiper.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "cdc/generation_service.hh"
 
 
 class storage_service_for_tests::impl {
@@ -42,6 +43,7 @@ class storage_service_for_tests::impl {
     sharded<service::migration_notifier> _mnotif;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
     sharded<db::view::view_update_generator> _view_update_generator;
+    sharded<cdc::generation_service> _cdc_gen_svc;
 public:
     impl() {
         auto thread = seastar::thread_impl::get();
@@ -57,12 +59,14 @@ public:
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000).get();
         service::storage_service_config sscfg;
         sscfg.available_memory = memory::stats().total_memory();
-        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, std::ref(_mnotif), std::ref(_token_metadata), true).get();
+        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, std::ref(_mnotif), std::ref(_token_metadata), std::ref(_cdc_gen_svc), true).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();
+        _cdc_gen_svc.start(std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_abort_source), std::ref(_cfg), std::ref(_token_metadata)).get();
     }
     ~impl() {
+        _cdc_gen_svc.stop().get();
         service::get_storage_service().stop().get();
         netw::get_messaging_service().stop().get();
         _db.stop().get();

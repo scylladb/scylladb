@@ -78,6 +78,7 @@
 #include "redis/service.hh"
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
+#include "cdc/generation_service.hh"
 #include "alternator/tags_extension.hh"
 #include "alternator/rmw_operation.hh"
 
@@ -715,6 +716,7 @@ int main(int ac, char** av) {
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<cql3::cql_config> cql_config;
             static sharded<::cql_config_updater> cql_config_updater;
+            static sharded<cdc::generation_service> cdc_gen_service;
             cql_config.start().get();
             //FIXME: discarded future
             (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
@@ -726,7 +728,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata, cdc_gen_service).get();
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
@@ -989,9 +991,26 @@ int main(int ac, char** av) {
             });
             repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator).get();
 
+            supervisor::notify("starting CDC Generation Management service");
+            /* This service uses the system distributed keyspace.
+             * It will only do that *after* it has joined the token ring, and the token ring joining
+             * procedure (`storage_service::init_server`) is responsible for initializing sys_dist_ks.
+             *
+             * However, sys_dist_ks is stopped *before* CGM is stopped (`storage_service::drain_on_shutdown` below),
+             * so CGM takes sharded<db::sys_dist_ks> and must check local_is_initialized() every time it accesses it,
+             * then take local_shared() (this will prevent sys_dist_ks from being destroyed while CGM operates on it).
+             */
+            cdc_gen_service.start(std::ref(gossiper), std::ref(sys_dist_ks),
+                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(*cfg), std::ref(token_metadata)).get();
+            auto stop_cdc_gen_service = defer_verbose_shutdown("CDC Generation Management service", [] {
+                cdc_gen_service.stop().get();
+            });
+
+            supervisor::notify("starting CDC Log service");
             static sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy)).get();
-            auto stop_cdc_service = defer_verbose_shutdown("cdc", [] {
+            // FIXME: find a way to pass only metadata; cdc log doesn't need the entire cdc gen service
+            cdc.start(std::ref(proxy), std::ref(cdc_gen_service)).get();
+            auto stop_cdc_service = defer_verbose_shutdown("CDC Log service", [] {
                 cdc.stop().get();
             });
 

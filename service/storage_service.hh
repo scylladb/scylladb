@@ -64,13 +64,16 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
-#include "cdc/metadata.hh"
 
 namespace db {
 class system_distributed_keyspace;
 namespace view {
 class view_update_generator;
 }
+}
+
+namespace cdc {
+    class generation_service;
 }
 
 namespace cql_transport {
@@ -168,7 +171,7 @@ private:
      */
     bool _for_testing;
 public:
-    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, /* only for tests */ bool for_testing = false);
+    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, sharded<cdc::generation_service>& cdc_gen_service, /* only for tests */ bool for_testing = false);
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -192,10 +195,6 @@ public:
 
     locator::token_metadata& get_token_metadata() {
         return _token_metadata;
-    }
-
-    cdc::metadata& get_cdc_metadata() {
-        return _cdc_metadata;
     }
 
     const service::migration_notifier& get_migration_notifier() const {
@@ -228,9 +227,10 @@ private:
     /* This abstraction maintains the token/endpoint metadata information */
     token_metadata& _token_metadata;
 
-    // Maintains the set of known CDC generations used to pick streams for log writes (i.e., the partition keys of these log writes).
-    // Updated in response to certain gossip events (see the handle_cdc_generation function).
-    cdc::metadata _cdc_metadata;
+    /* CDC generation management service.
+     * It is sharded<>&, and not simply a reference, because the service will not yet be started
+     * when storage_service is constructed (but it will be when init_server is called). */
+    sharded<cdc::generation_service>& _cdc_gen_service;
 public:
     std::chrono::milliseconds get_ring_delay();
     dht::token_range_vector get_local_ranges(const sstring& keyspace_name) const {
@@ -287,20 +287,11 @@ private:
 
     std::unordered_set<token> _bootstrap_tokens;
 
-    /* The timestamp of the CDC streams generation that this node has proposed when joining.
-     * This value is nullopt only when:
-     * 1. this node is being upgraded from a non-CDC version,
-     * 2. this node is starting for the first time or restarting with CDC previously disabled,
-     *    in which case the value should become populated before we leave the join_token_ring procedure.
-     */
-    std::optional<db_clock::time_point> _cdc_streams_ts;
-
 public:
     void enable_all_features();
 
-    /* Broadcasts the chosen tokens through gossip,
-     * together with a CDC streams timestamp (if we start a new CDC generation) and STATUS=NORMAL. */
-    void set_gossip_tokens(const std::unordered_set<dht::token>&, std::optional<db_clock::time_point>);
+    /* Broadcasts the chosen tokens through gossip together with STATUS = NORMAL. */
+    void set_gossip_tokens(const std::unordered_set<dht::token>&);
 
     void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
 
@@ -346,8 +337,8 @@ private:
     // Runs in thread context
     void shutdown_client_servers();
 
-    // Tokens and the CDC streams timestamp of the replaced node.
-    using replacement_info = std::pair<std::unordered_set<token>, std::optional<db_clock::time_point>>;
+    // Tokens of the replaced node.
+    using replacement_info = std::unordered_set<token>;
     future<replacement_info> prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
 
 public:
@@ -538,25 +529,6 @@ private:
     void do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
 
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
-
-    /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
-     * and start using it for CDC log writes if it's not obsolete.
-     */
-    void handle_cdc_generation(std::optional<db_clock::time_point>);
-    /* Returns `true` iff we started using the generation (it was not obsolete),
-     * which means that this node might write some CDC log entries using streams from this generation. */
-    bool do_handle_cdc_generation(db_clock::time_point);
-
-    /* If `handle_cdc_generation` fails, it schedules an asynchronous retry in the background
-     * using `async_handle_cdc_generation`.
-     */
-    void async_handle_cdc_generation(db_clock::time_point);
-
-    /* Scan CDC generation timestamps gossiped by other nodes and retrieve the latest one.
-     * This function should be called once at the end of the node startup procedure
-     * (after the node is started and running normally, it will retrieve generations on gossip events instead).
-     */
-    void scan_cdc_generations();
 
     future<> replicate_to_all_cores();
     future<> do_replicate_to_all_cores();
@@ -916,7 +888,8 @@ public:
 future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
-        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm);
+        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm,
+        sharded<cdc::generation_service>& cdc_gen_service);
 future<> deinit_storage_service();
 
 }
