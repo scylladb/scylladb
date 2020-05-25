@@ -61,6 +61,7 @@
 #include "stats.hh"
 #include "utils/observable.hh"
 #include "sstables/shareable_components.hh"
+#include "sstables/open_info.hh"
 
 #include <seastar/util/optimized_optional.hh>
 #include <boost/intrusive/list.hpp>
@@ -81,8 +82,6 @@ extern logging::logger sstlog;
 class key;
 class sstable_writer;
 class sstable_writer_k_l;
-struct foreign_sstable_open_info;
-struct sstable_open_info;
 class sstables_manager;
 
 template<typename T>
@@ -850,23 +849,6 @@ public:
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&);
 };
 
-struct entry_descriptor {
-    sstring sstdir;
-    sstring ks;
-    sstring cf;
-    int64_t generation;
-    sstable::version_types version;
-    sstable::format_types format;
-    component_type component;
-
-    static entry_descriptor make_descriptor(sstring sstdir, sstring fname);
-
-    entry_descriptor(sstring sstdir, sstring ks, sstring cf, int64_t generation,
-                     sstable::version_types version, sstable::format_types format,
-                     component_type component)
-        : sstdir(sstdir), ks(ks), cf(cf), generation(generation), version(version), format(format), component(component) {}
-};
-
 // Waits for all prior tasks started on current shard related to sstable management to finish.
 //
 // There may be asynchronous cleanup started from sstable destructor. Since we can't have blocking
@@ -923,27 +905,6 @@ public:
     stop_iteration consume(range_tombstone&& rt);
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
-};
-
-// contains data for loading a sstable using components shared by a single shard;
-// can be moved across shards
-struct foreign_sstable_open_info {
-    foreign_ptr<lw_shared_ptr<shareable_components>> components;
-    std::vector<shard_id> owners;
-    seastar::file_handle data;
-    seastar::file_handle index;
-    uint64_t generation;
-    sstable::version_types version;
-    sstable::format_types format;
-    uint64_t uncompressed_data_size;
-};
-
-// can only be used locally
-struct sstable_open_info {
-    lw_shared_ptr<shareable_components> components;
-    std::vector<shard_id> owners;
-    file data;
-    file index;
 };
 
 future<> init_metrics();
