@@ -955,6 +955,9 @@ public:
                                         : value.value().first_fragment()
                                         ;
                                     value_callback(key, val, live);
+                                    if (value.is_live_and_has_ttl()) {
+                                        ttl = value.ttl();
+                                    }
                                 }
                             };
 
