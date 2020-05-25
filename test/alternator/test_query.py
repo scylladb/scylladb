@@ -21,6 +21,7 @@
 #   * test_key_conditions.py: the KeyConditions paramter.
 #   * test_key_condition_expression.py: the KeyConditionExpression parameter.
 #   * test_filter_expression.py: the FilterExpression parameter.
+#   * test_query_filter.py: the QueryFilter parameter.
 
 import random
 import pytest
@@ -106,6 +107,8 @@ def test_query_sort_order_number(test_table_sn):
     got_sort_keys = [x['c'] for x in got_items]
     assert got_sort_keys == numbers
 
+# Note: this is a very partial check for the QueryFilter feature. See
+# test_query_filter.py for much more exhaustive tests for this feature.
 def test_query_filtering_attributes_equality(filled_test_table):
     test_table, items = filled_test_table
 
@@ -147,33 +150,6 @@ def test_query_filter_expression(filled_test_table):
     print(got_items)
     assert multiset([item for item in items if item['p'] == 'long' and item['attribute'] == 'xxxx' and item['another'] == 'yy']) == multiset(got_items)
 
-# QueryFilter can only contain non-key attributes in order to be compatible
-def test_query_filtering_key_equality(filled_test_table):
-    test_table, items = filled_test_table
-
-    with pytest.raises(ClientError, match='ValidationException'):
-        query_filter = {
-            "c" : {
-                "AttributeValueList" : [ "5" ],
-                "ComparisonOperator": "EQ"
-            }
-        }
-        got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'}}, QueryFilter=query_filter)
-        print(got_items)
-
-    with pytest.raises(ClientError, match='ValidationException'):
-        query_filter = {
-            "attribute" : {
-                "AttributeValueList" : [ "x" ],
-                "ComparisonOperator": "EQ"
-            },
-            "p" : {
-                "AttributeValueList" : [ "5" ],
-                "ComparisonOperator": "EQ"
-            }
-        }
-        got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': ['long'], 'ComparisonOperator': 'EQ'}}, QueryFilter=query_filter)
-        print(got_items)
 
 # Test Query with the AttributesToGet parameter. Result should include the
 # selected attributes only - if one wants the key attributes as well, one
