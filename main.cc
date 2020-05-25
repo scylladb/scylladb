@@ -875,12 +875,6 @@ int main(int ac, char** av) {
 
             distributed_loader::ensure_system_table_directories(db).get();
 
-            static sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy)).get();
-            auto stop_cdc_service = defer_verbose_shutdown("cdc", [] {
-                cdc.stop().get();
-            });
-
             supervisor::notify("loading non-system sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
@@ -994,6 +988,13 @@ int main(int ac, char** av) {
                 rs.stop().get();
             });
             repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator).get();
+
+            static sharded<cdc::cdc_service> cdc;
+            cdc.start(std::ref(proxy)).get();
+            auto stop_cdc_service = defer_verbose_shutdown("cdc", [] {
+                cdc.stop().get();
+            });
+
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();

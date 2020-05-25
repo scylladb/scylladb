@@ -513,12 +513,6 @@ public:
             }).get();
             distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
-            sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy)).get();
-            auto stop_cdc_service = defer([&] {
-                cdc.stop().get();
-            });
-
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
             db::system_keyspace::minimal_setup(db, qp);
@@ -532,6 +526,12 @@ public:
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
             db::system_keyspace::migrate_truncation_records(feature_service.local().cluster_supports_truncation_table()).get();
+
+            sharded<cdc::cdc_service> cdc;
+            cdc.start(std::ref(proxy)).get();
+            auto stop_cdc_service = defer([&] {
+                cdc.stop().get();
+            });
 
             service::get_local_storage_service().init_messaging_service_part().get();
             service::get_local_storage_service().init_server(service::bind_messaging_port(false)).get();
