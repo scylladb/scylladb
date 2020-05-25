@@ -173,6 +173,9 @@ public:
     }
     // called only when all replicas replied
     virtual void release_mutation() = 0;
+    // called when reply is received
+    // alllows mutation holder to have its own accounting
+    virtual void reply(gms::inet_address ep) {};
 };
 
 // different mutation for each destination (for read repairs)
@@ -329,13 +332,17 @@ public:
         return true;
     }
     virtual void release_mutation() override {
+        _proposal.release();
+    }
+    virtual void reply(gms::inet_address ep) override {
         // The handler will be set for "learn", but not for PAXOS repair
         // since repair may not include all replicas
         if (_handler) {
-            _handler->prune(_proposal->ballot);
+            if (_handler->learned(ep)) {
+                _handler->prune(_proposal->ballot);
+            }
         }
-        _proposal.release();
-    }
+    };
 };
 
 class abstract_write_response_handler : public seastar::enable_shared_from_this<abstract_write_response_handler> {
@@ -373,6 +380,7 @@ protected:
 protected:
     virtual bool waited_for(gms::inet_address from) = 0;
     void signal(gms::inet_address from) {
+        _mutation_holder->reply(from);
         if (waited_for(from)) {
             signal();
         }
@@ -1239,9 +1247,6 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
 }
 
 void paxos_response_handler::prune(utils::UUID ballot) {
-    if (_has_dead_endpoints) {
-        return;
-    }
     if ( _proxy->get_stats().cas_now_pruning >= pruning_limit) {
         _proxy->get_stats().cas_coordinator_dropped_prune++;
         return;
@@ -1263,6 +1268,14 @@ void paxos_response_handler::prune(utils::UUID ballot) {
     }).finally([h = shared_from_this()] {
         h->_proxy->get_stats().cas_now_pruning--;
     });
+}
+
+bool paxos_response_handler::learned(gms::inet_address ep) {
+    if (boost::range::find(_live_endpoints, ep) != _live_endpoints.end()) {
+        _learned++;
+        return _learned == _required_participants;
+    }
+    return false;
 }
 
 static std::vector<gms::inet_address>

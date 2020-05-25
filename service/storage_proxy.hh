@@ -639,11 +639,6 @@ private:
     db::consistency_level _cl_for_learn;
     // Live endpoints, as per get_paxos_participants()
     std::vector<gms::inet_address> _live_endpoints;
-    // True if there are dead endpoints
-    // We don't include endpoints known to be unavailable in pending
-    // endpoints list, but need to be aware of them to avoid pruning
-    // system.paxos data if some endpoint is missing a Paxos write.
-    bool _has_dead_endpoints;
     // How many endpoints need to respond favourably for the protocol to progress to the next step.
     size_t _required_participants;
     // A deadline when the entire CAS operation timeout expires, derived from write_request_timeout_in_ms
@@ -654,6 +649,8 @@ private:
     dht::decorated_key _key;
     // service permit from admission control
     service_permit _permit;
+    // how many replicas replied to learn
+    uint64_t _learned = 0;
 
     // Unique request id generator.
     static thread_local uint64_t next_id;
@@ -687,7 +684,6 @@ public:
         storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(_schema->ks_name(), _key.token(), _cl_for_paxos);
         _live_endpoints = std::move(pp.endpoints);
         _required_participants = pp.required_participants;
-        _has_dead_endpoints = pp.has_dead_endpoints;
         tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
                 _key.token(), _live_endpoints, _required_participants);
         _proxy->get_stats().cas_foreground++;
@@ -728,6 +724,9 @@ public:
     void set_cl_for_learn(db::consistency_level cl) {
         _cl_for_learn = cl;
     }
+    // this is called with an id of a replica that replied to learn request
+    // adn returns true when quorum of such requests are accumulated
+    bool learned(gms::inet_address ep);
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;
