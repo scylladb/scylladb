@@ -449,7 +449,8 @@ future<> timestamp_based_splitting_mutation_writer::consume(clustering_row&& cr)
 }
 
 future<> timestamp_based_splitting_mutation_writer::consume(range_tombstone&& rt) {
-    return write_to_bucket(_classifier(rt.tomb.timestamp), std::move(rt));
+    auto timestamp = _classifier(rt.tomb.timestamp);
+    return write_to_bucket(timestamp, std::move(rt));
 }
 
 future<> timestamp_based_splitting_mutation_writer::consume(partition_end&& pe) {
