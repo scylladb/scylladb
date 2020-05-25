@@ -180,7 +180,7 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
             f = f.then([schema, &decision, timeout, tr_state] {
                 logger.debug("Committing decision {}", decision);
                 tracing::trace(tr_state, "Committing decision {}", decision);
-                return get_local_storage_proxy().mutate_locally(schema, decision.update, db::commitlog::force_sync::yes, timeout);
+                return get_local_storage_proxy().mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
             });
         } else {
             logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);

@@ -281,7 +281,7 @@ int main(int argc, char** argv) {
             uint64_t i = 0;
             while (i < sstables) {
                 auto m = gen();
-                env.local_db().apply(s, freeze(m), db::commitlog::force_sync::no, db::no_timeout).get();
+                env.local_db().apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
                 if (tab.active_memtable().occupancy().used_space() > sstable_size) {
                     tab.flush().get();
                     ++i;

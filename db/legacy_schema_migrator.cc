@@ -594,7 +594,7 @@ public:
                 db::schema_tables::add_type_to_schema_mutation(t.metadata, t.timestamp.time_since_epoch().count(), mutations);
             }
         }
-        return _qp.proxy().mutate_locally(std::move(mutations));
+        return _qp.proxy().mutate_locally(std::move(mutations), tracing::trace_state_ptr());
     }
 
     future<> flush_schemas() {
