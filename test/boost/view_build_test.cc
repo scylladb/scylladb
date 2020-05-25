@@ -432,7 +432,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
 
         auto sst = t->make_streaming_staging_sstable();
         sstables::sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
-        auto& pc = service::get_local_streaming_write_priority();
+        auto& pc = service::get_local_streaming_priority();
 
         sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
         sst->open_data().get();

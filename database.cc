@@ -2047,7 +2047,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
     });
     auto&& full_slice = schema->full_slice();
     return make_flat_multi_range_reader(std::move(schema), std::move(ms), std::move(range_generator), std::move(full_slice),
-            service::get_local_streaming_read_priority(), {}, mutation_reader::forwarding::no);
+            service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no);
 }
 
 std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {

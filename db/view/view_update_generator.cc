@@ -58,7 +58,7 @@ future<> view_update_generator::start() {
                             std::move(ssts),
                             query::full_partition_range,
                             s->full_slice(),
-                            service::get_local_streaming_read_priority(),
+                            service::get_local_streaming_priority(),
                             nullptr,
                             ::streamed_mutation::forwarding::no,
                             ::mutation_reader::forwarding::no);

@@ -334,7 +334,7 @@ table::make_sstable_reader(schema_ptr s,
                                    tracing::trace_state_ptr trace_state,
                                    streamed_mutation::forwarding fwd,
                                    mutation_reader::forwarding fwd_mr) const {
-    auto* semaphore = service::get_local_streaming_read_priority().id() == pc.id()
+    auto* semaphore = service::get_local_streaming_priority().id() == pc.id()
         ? _config.streaming_read_concurrency_semaphore
         : _config.read_concurrency_semaphore;
 
@@ -497,7 +497,7 @@ flat_mutation_reader
 table::make_streaming_reader(schema_ptr s,
                            const dht::partition_range_vector& ranges) const {
     auto& slice = s->full_slice();
-    auto& pc = service::get_local_streaming_read_priority();
+    auto& pc = service::get_local_streaming_priority();
 
     auto source = mutation_source([this] (schema_ptr s, reader_permit, const dht::partition_range& range, const query::partition_slice& slice,
                                       const io_priority_class& pc, tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
@@ -515,7 +515,7 @@ table::make_streaming_reader(schema_ptr s,
 
 flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
         const query::partition_slice& slice, mutation_reader::forwarding fwd_mr) const {
-    const auto& pc = service::get_local_streaming_read_priority();
+    const auto& pc = service::get_local_streaming_priority();
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
 
@@ -841,7 +841,7 @@ table::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
             auto fp = permit.release_sstable_write_permit();
             database_sstable_write_monitor monitor(std::move(fp), newtab, _compaction_manager, _compaction_strategy, old->get_max_timestamp());
             return do_with(std::move(monitor), [this, newtab, old, permit = std::move(permit)] (auto& monitor) mutable {
-                auto&& priority = service::get_local_streaming_write_priority();
+                auto&& priority = service::get_local_streaming_priority();
                 sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer();
                 cfg.backup = incremental_backups_enabled();
                 return write_memtable_to_sstable(*old, newtab, monitor, cfg, priority).then([this, newtab, old] {
@@ -889,7 +889,7 @@ future<> table::seal_active_streaming_memtable_big(streaming_memtable_big& smb, 
 
                 auto fp = permit.release_sstable_write_permit();
                 auto monitor = std::make_unique<database_sstable_write_monitor>(std::move(fp), newtab, _compaction_manager, _compaction_strategy, old->get_max_timestamp());
-                auto&& priority = service::get_local_streaming_write_priority();
+                auto&& priority = service::get_local_streaming_priority();
                 sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer();
                 cfg.backup = incremental_backups_enabled();
                 cfg.leave_unsealed = true;
@@ -2592,7 +2592,7 @@ future<row_locker::lock_holder>
 table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeout_clock::time_point timeout,
         std::vector<sstables::shared_sstable>& excluded_sstables) const {
     return do_push_view_replica_updates(s, std::move(m), timeout, as_mutation_source_excluding(excluded_sstables),
-            service::get_local_streaming_read_priority(), query::partition_slice::option_set::of<query::partition_slice::option::bypass_cache>());
+            service::get_local_streaming_priority(), query::partition_slice::option_set::of<query::partition_slice::option::bypass_cache>());
 }
 
 mutation_source
