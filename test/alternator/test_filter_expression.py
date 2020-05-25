@@ -16,7 +16,7 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 # Tests for the FilterExpression parameter of the Query and Scan operations.
-# KeyConditionExpression is a newer version of the older "QueryFilter" and
+# FilterExpression is a newer version of the older "QueryFilter" and
 # "ScanFilter" syntax.
 
 import pytest
@@ -49,17 +49,19 @@ def random_m():
     return {random_s(): random_i() for i in range(random.randint(1,3))}
 def random_set():
     return set([random_i() for i in range(random.randint(1,3))])
+def random_sets():
+    return set([random_s() for i in range(random.randint(1,3))])
 def random_bool():
     return bool(random.randint(0,1))
 def random_item(p, i):
+    item = {'p': p, 'c': i, 's': random_s(), 'b': random_b(), 'i': random_i(),
+            'l': random_l(), 'm': random_m(), 'ns': random_set(), 'ss': random_sets(), 'bool': random_bool() }
+    # The "r" attribute doesn't appears on all items, and when it does it has a random type
     if i == 0:
         # Ensure that the first item always has an 'r' value.
         t = random.randint(1,4)
     else:
         t = random.randint(0,4)
-    item = {'p': p, 'c': i, 's': random_s(), 'b': random_b(), 'i': random_i(),
-            'l': random_l(), 'm': random_m(), 'ns': random_set(), 'bool': random_bool() }
-    # The "r" attribute doesn't appears on all items, and when it does it has a random type
     if t == 1:
         item['r'] = random_i()
     elif t == 2:
@@ -272,6 +274,8 @@ def test_filter_expression_num_between_reverse(test_table_sn_with_data):
     i2 = items[3]['i']
     if i1 < i2:
         i1, i2 = i2, i1
+    if i1 == i2:
+        i1 = i1 + 1
     with pytest.raises(ClientError, match='ValidationException.* BETWEEN'):
         full_query(table, KeyConditionExpression='p=:p', FilterExpression='i BetWEeN :i1 AnD :i2',
             ExpressionAttributeValues={':p': p, ':i1': i1, ':i2': i2})
@@ -317,26 +321,59 @@ def test_filter_expression_bytes_begins(test_table_sn_with_data):
     expected_items = [item for item in items if item['b'].startswith(start)]
     assert(got_items == expected_items)
 
-# The DynamoDB documentation says that contains() only works on strings and
-# sets, but this is not entirely true - it also works on bytes, and for
-# surprisingly for numbers instead of returning an error, it just empty
-# results. I don't know why.
+# The DynamoDB document of contains() is confusing. It turns out it checks
+# for two unrelated conditions:
+#
+#  * Whether an attribute is a string and contains a given string as a
+#    substring.
+#    (and same for byte arrays)
+#
+#  * Whether an attribute is a list or set and contains a given value as one
+#    of its member.
+#
+# Don't confuse this definition for other things (equality check, subset
+# check, etc.) which contains() does not do.
+
+# As explained above, a number can be "contained" in an attribute if it is
+# a set or list and contains this number as an element.
 @pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_num_contains(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
-    i = items[2]['i']
-    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(i, :i)',
-        ExpressionAttributeValues={':p': p, ':i': i})
-    # DynamoDB returns empty results here instead of an error, I don't know why.
+    for xn in ['ns', 'l']:
+        xv = next(iter(items[2][xn]))
+        got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains('+xn+', :i)',
+        ExpressionAttributeValues={':p': p, ':i': xv})
+        expected_items = [item for item in items if xv in item[xn]]
+        assert(got_items == expected_items)
+
+# As explained above, contains() can check for the given value being a
+# *member* or some set or list attribute - not the value being a *subset*
+# of the attribute.
+@pytest.mark.xfail(reason="FilterExpression not yet implemented")
+def test_filter_expression_set_contains(test_table_sn_with_data):
+    table, p, items = test_table_sn_with_data
+    s = items[2]['ns']
+    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(ns, :s)',
+        ExpressionAttributeValues={':p': p, ':s': s})
+    # A set is not a member of itself, so nothing matches.
     assert(got_items == [])
 
 @pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_string_contains(test_table_sn_with_data):
+    # Test the "obvious" case - find strings with a given substring:
     table, p, items = test_table_sn_with_data
     substring = items[2]['s'][2:4]
     got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(s, :substring)',
         ExpressionAttributeValues={':p': p, ':substring': substring})
     expected_items = [item for item in items if substring in item['s']]
+    assert(got_items == expected_items)
+    # But a string can also match sets or lists with it as a member!
+    # Note that this is just a special case of matching any value as a member
+    s = next(iter(items[2]['ss']))
+    print(s)
+    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(ss, :s)',
+        ExpressionAttributeValues={':p': p, ':s': s})
+    expected_items = [item for item in items if s in item['ss']]
     assert(got_items == expected_items)
 
 @pytest.mark.xfail(reason="FilterExpression not yet implemented")
@@ -347,41 +384,12 @@ def test_filter_expression_bytes_contains(test_table_sn_with_data):
         ExpressionAttributeValues={':p': p, ':substring': substring})
     expected_items = [item for item in items if substring in item['b']]
     assert(got_items == expected_items)
+    # As for strings, a byte array may also match sets or lists with it as
+    # a member.
 
-# For sets, contains() checks whether they contain a specific item.
-# It *cannot* be used to check for subsets.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
-def test_filter_expression_set_contains(test_table_sn_with_data):
-    table, p, items = test_table_sn_with_data
-    # One value from a set:
-    i = next(iter(items[2]['ns']))
-    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(ns, :i)',
-        ExpressionAttributeValues={':p': p, ':i': i})
-    expected_items = [item for item in items if i in item['ns']]
-    assert(got_items == expected_items)
-    # contains() cannot be used to search for sets containing a certain
-    # subset. Trying to use a set as the second parameter of contains()
-    # will result in no matches.
-    s = items[2]['ns']
-    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(ns, :s)',
-        ExpressionAttributeValues={':p': p, ':s': s})
-    assert(got_items == [])
-
-# While the DynamoDB documentation claims that contains() is allowed only for
-# strings, bytes and sets, it is actually supported also for lists:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
-def test_filter_expression_list_contains(test_table_sn_with_data):
-    table, p, items = test_table_sn_with_data
-    # One value from a list:
-    i = items[2]['l'][0]
-    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(l, :i)',
-        ExpressionAttributeValues={':p': p, ':i': i})
-    expected_items = [item for item in items if i in item['l']]
-    assert(got_items == expected_items)
-
-# We could also imagine what contains() could do for a map (check if the map
-# contains an attribute with the given name), DynamoDB doesn't support this
-# use case. Nothing matches.
+# We could also imagine what contains() could do for searching maps (check if
+# the map contains the given key or value), DynamoDB doesn't support this use
+# case. Nothing matches.
 @pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_map_contains(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
@@ -389,13 +397,23 @@ def test_filter_expression_map_contains(test_table_sn_with_data):
     i = next(iter(items[2]['m']))
     got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(m, :i)',
         ExpressionAttributeValues={':p': p, ':i': i})
-    #The following would have made sense, but it's not supported by DynamoDB:
+    #The following could have made sense, but it's what DynamoDB does:
     #expected_items = [item for item in items if i in item['m']]
     expected_items = []
     assert(got_items == expected_items)
+    # One value from a map:
+    i = next(iter(items[2]['m']))
+    v = items[2]['m'][i]
+    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(m, :i)',
+        ExpressionAttributeValues={':p': p, ':i': i})
+    #The following could have made sense, but it's what DynamoDB does:
+    #expected_items = [item for item in items if i in item['m'].itervalues()]
+    expected_items = []
+    assert(got_items == expected_items)
 
-# For unsupported types such as bool, the filter expression matches nothing.
-# It is not equivalent to an equality check.
+# For a bool constant, contains() will look for lists with this value -
+# it won't match the actual value. It is not not equivalent to an equality
+# check.
 @pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_bool_contains(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
