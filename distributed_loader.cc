@@ -170,7 +170,7 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
       return dir.invoke_on_all([&dir] (sstables::sstable_directory& d) {
         // Supposed to be called with the node either down or on behalf of maintenance tasks
         // like nodetool refresh
-        return d.process_sstable_dir(service::get_local_streaming_read_priority()).then([&dir, &d] {
+        return d.process_sstable_dir(service::get_local_streaming_priority()).then([&dir, &d] {
             return d.move_foreign_sstables(dir);
         });
       });
@@ -278,7 +278,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
             auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
             auto& cm = table.get_compaction_manager();
             auto max_threshold = table.schema()->max_compaction_threshold();
-            auto& iop = service::get_local_streaming_read_priority();
+            auto& iop = service::get_local_streaming_priority();
             return d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop).then([&d, &dir] {
                 return d.move_foreign_sstables(dir);
             });
@@ -327,7 +327,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<d
     return dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode] (sstables::sstable_directory& d) {
         auto& table = db.local().find_column_family(ks_name, table_name);
         auto& cm = table.get_compaction_manager();
-        auto& iop = service::get_local_streaming_read_priority();
+        auto& iop = service::get_local_streaming_priority();
         return d.reshape(cm, table, creator, iop, mode);
     }, uint64_t(0), std::plus<uint64_t>()).then([start] (uint64_t total_size) {
         if (total_size > 0) {

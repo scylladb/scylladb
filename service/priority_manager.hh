@@ -28,8 +28,7 @@ namespace service {
 class priority_manager {
     ::io_priority_class _commitlog_priority;
     ::io_priority_class _mt_flush_priority;
-    ::io_priority_class _stream_read_priority;
-    ::io_priority_class _stream_write_priority;
+    ::io_priority_class _streaming_priority;
     ::io_priority_class _sstable_query_read;
     ::io_priority_class _compaction_priority;
 
@@ -45,13 +44,8 @@ public:
     }
 
     const ::io_priority_class&
-    streaming_read_priority() const {
-        return _stream_read_priority;
-    }
-
-    const ::io_priority_class&
-    streaming_write_priority() const {
-        return _stream_write_priority;
+    streaming_priority() const {
+        return _streaming_priority;
     }
 
     const ::io_priority_class&
@@ -79,13 +73,8 @@ get_local_memtable_flush_priority() {
 }
 
 const inline ::io_priority_class&
-get_local_streaming_read_priority() {
-    return get_local_priority_manager().streaming_read_priority();
-}
-
-const inline ::io_priority_class&
-get_local_streaming_write_priority() {
-    return get_local_priority_manager().streaming_write_priority();
+get_local_streaming_priority() {
+    return get_local_priority_manager().streaming_priority();
 }
 
 const inline ::io_priority_class&
