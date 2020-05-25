@@ -60,6 +60,7 @@
 #include "tracing/tracing_backend_registry.hh"
 #include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
+#include "db/sstables-format-selector.hh"
 #include <seastar/net/dns.hh>
 #include <seastar/core/io_queue.hh>
 #include <seastar/core/abort_on_ebadf.hh>
@@ -855,7 +856,13 @@ int main(int ac, char** av) {
             sstables::init_metrics().get();
 
             db::system_keyspace::minimal_setup(db, qp);
-            service::read_sstables_format(service::get_storage_service()).get();
+
+            db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
+
+            sst_format_selector.start().get();
+            auto stop_format_selector = defer_verbose_shutdown("sstables format selector", [&sst_format_selector] {
+                sst_format_selector.stop().get();
+            });
 
             // schema migration, if needed, is also done on shard 0
             db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
@@ -896,7 +903,7 @@ int main(int ac, char** av) {
                 db.register_connection_drop_notifier(netw::get_local_messaging_service());
             }).get();
             supervisor::notify("setting up system keyspace");
-            db::system_keyspace::setup(db, qp, service::get_storage_service()).get();
+            db::system_keyspace::setup(db, qp, feature_service).get();
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
             if (cl != nullptr) {
@@ -1006,7 +1013,13 @@ int main(int ac, char** av) {
                 gms::stop_gossiping().get();
             });
 
-            ss.init_server_without_the_messaging_service_part().get();
+            ss.init_server().get();
+            sst_format_selector.sync();
+            ss.join_cluster().get();
+
+            startlog.info("SSTable data integrity checker is {}.",
+                    cfg->enable_sstable_data_integrity_check() ? "enabled" : "disabled");
+
             api::set_server_snapshot(ctx).get();
             auto stop_snapshots = defer_verbose_shutdown("snapshots", [] {
                 service::get_storage_service().invoke_on_all(&service::storage_service::snapshots_close).get();

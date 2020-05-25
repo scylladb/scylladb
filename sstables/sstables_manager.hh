@@ -53,6 +53,13 @@ class sstables_manager {
     db::large_data_handler& _large_data_handler;
     const db::config& _db_config;
     gms::feature_service& _features;
+    // _sstables_format is the format used for writing new sstables.
+    // Here we set its default value, but if we discover that all the nodes
+    // in the cluster support a newer format, _sstables_format will be set to
+    // that format. read_sstables_format() also overwrites _sstables_format
+    // if an sstable format was chosen earlier (and this choice was persisted
+    // in the system table).
+    sstable_version_types _format = sstable_version_types::mc;
 
 public:
     explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat);
@@ -70,7 +77,8 @@ public:
     sstable_writer_config configure_writer() const;
     const db::config& config() const { return _db_config; }
 
-    sstables::sstable::version_types get_highest_supported_format() const;
+    void set_format(sstable_version_types format) { _format = format; }
+    sstables::sstable::version_types get_highest_supported_format() const { return _format; }
 
 private:
     db::large_data_handler& get_large_data_handler() const {

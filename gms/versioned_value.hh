@@ -245,8 +245,8 @@ public:
         return versioned_value(to_sstring(value));
     }
 
-    static versioned_value supported_features(const sstring& features) {
-        return versioned_value(features);
+    static versioned_value supported_features(const std::set<std::string_view>& features) {
+        return versioned_value(::join(",", features));
     }
 
     static versioned_value cache_hitrates(const sstring& hitrates) {

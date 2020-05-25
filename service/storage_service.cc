@@ -93,8 +93,6 @@ namespace service {
 
 static logging::logger slogger("storage_service");
 
-static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
-
 distributed<storage_service> _the_storage_service;
 
 
@@ -117,7 +115,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
         , _token_metadata(tm)
-        , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks)
@@ -127,18 +124,10 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
     commit_error.connect([this] { isolate_on_commit_error(); });
-
-    if (!for_testing) {
-        if (this_shard_id() == 0) {
-            _feature_service.cluster_supports_mc_sstable().when_enabled(_mc_feature_listener);
-        }
-    } else {
-        _sstables_format = sstables::sstable_version_types::mc;
-    }
 }
 
 void storage_service::enable_all_features() {
-    auto features = get_config_supported_features_set();
+    auto features = _feature_service.known_feature_set();
     _feature_service.enable(features);
 }
 
@@ -195,26 +184,6 @@ storage_service::isolate_on_commit_error() {
 
 bool storage_service::is_auto_bootstrap() const {
     return _db.local().get_config().auto_bootstrap();
-}
-
-// The features this node supports
-std::set<std::string_view> storage_service::get_known_features_set() {
-    return _feature_service.known_feature_set();
-}
-
-sstring storage_service::get_config_supported_features() {
-    return join(",", get_config_supported_features_set());
-}
-
-// The features this node supports and is allowed to advertise to other nodes
-std::set<std::string_view> storage_service::get_config_supported_features_set() {
-    auto features = _feature_service.known_feature_set();
-
-    if (sstables::is_later(sstables::sstable_version_types::mc, _sstables_format)) {
-        features.erase(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
-    }
-
-    return features;
 }
 
 std::unordered_set<token> get_replace_tokens() {
@@ -296,7 +265,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     } else {
         auto seeds = _gossiper.get_seeds();
         auto my_ep = get_broadcast_address();
-        auto local_features = get_known_features_set();
+        auto local_features = _feature_service.known_feature_set();
 
         if (seeds.count(my_ep)) {
             // This node is a seed node
@@ -386,7 +355,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     get_storage_service().invoke_on_all([local_host_id] (auto& ss) {
         ss._local_host_id = local_host_id;
     }).get();
-    auto features = get_config_supported_features();
+    auto features = _feature_service.supported_feature_set();
     if (!replacing_a_node_with_diff_ip) {
         // Replacing node with a different ip should own the host_id only after
         // the replacing node becomes NORMAL status. It is updated in
@@ -437,13 +406,6 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     if (do_bind) {
         gms::get_local_gossiper().wait_for_gossip_to_settle().get();
     }
-    wait_for_feature_listeners_to_finish();
-}
-
-void storage_service::wait_for_feature_listeners_to_finish() {
-    // This makes sure that every feature listener that was started
-    // finishes before we move forward.
-    get_units(_feature_listeners_sem, 1).get0();
 }
 
 static auth::permissions_cache_config permissions_cache_config_from_db_config(const db::config& dc) {
@@ -1591,8 +1553,8 @@ future<> storage_service::init_messaging_service_part() {
     return get_storage_service().invoke_on_all(&service::storage_service::init_messaging_service);
 }
 
-future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
-    return seastar::async([this, delay, do_bind] {
+future<> storage_service::init_server(bind_messaging_port do_bind) {
+    return seastar::async([this, do_bind] {
         _initialized = true;
 
         // Register storage_service to migration_notifier so we can update
@@ -1637,14 +1599,12 @@ future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
         }
 
         prepare_to_join(std::move(loaded_endpoints), loaded_peer_features, do_bind);
+    });
+}
 
-        join_token_ring(delay);
-
-        if (_db.local().get_config().enable_sstable_data_integrity_check()) {
-            slogger.info0("SSTable data integrity checker is enabled.");
-        } else {
-            slogger.info0("SSTable data integrity checker is disabled.");
-        }
+future<> storage_service::join_cluster() {
+    return seastar::async([this] {
+        join_token_ring(get_ring_delay().count());
     });
 }
 
@@ -1698,9 +1658,7 @@ future<> storage_service::gossip_sharder() {
 }
 
 future<> storage_service::stop() {
-    return with_semaphore(_feature_listeners_sem, 1, [this] {
-        return uninit_messaging_service();
-    }).then([this] {
+    return uninit_messaging_service().then([this] {
         return _service_memory_limiter.wait(_service_memory_total); // make sure nobody uses the semaphore
     });
 }
@@ -1711,7 +1669,7 @@ future<> storage_service::check_for_endpoint_collision(const std::unordered_map<
     return seastar::async([this, loaded_peer_features] {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
-        auto local_features = get_known_features_set();
+        auto local_features = _feature_service.known_feature_set();
         do {
             slogger.info("Checking remote features with gossip");
             _gossiper.do_shadow_round().get();
@@ -1784,7 +1742,7 @@ storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_add
     // make magic happen
     slogger.info("Checking remote features with gossip");
     return _gossiper.do_shadow_round().then([this, loaded_peer_features, replace_address] {
-        auto local_features = get_known_features_set();
+        auto local_features = _feature_service.known_feature_set();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
 
         // now that we've gossiped at least once, we should be able to find the node we're replacing
@@ -3411,42 +3369,6 @@ future<> init_storage_service(sharded<abort_source>& abort_source, distributed<d
 
 future<> deinit_storage_service() {
     return service::get_storage_service().stop();
-}
-
-void feature_enabled_listener::on_enabled() {
-    if (_started) {
-        return;
-    }
-    _started = true;
-    //FIXME: discarded future.
-    (void)with_semaphore(_sem, 1, [this] {
-        if (!sstables::is_later(_format, _s._sstables_format)) {
-            return make_ready_future<bool>(false);
-        }
-        return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(_format)).then([this] {
-            return get_storage_service().invoke_on_all([this] (storage_service& s) {
-                s._sstables_format = _format;
-            });
-        }).then([] { return true; });
-    }).then([this] (bool update_features) {
-        if (!update_features) {
-            return make_ready_future<>();
-        }
-        return gms::get_local_gossiper().add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
-                                                                     gms::versioned_value::supported_features(_s.get_config_supported_features()));
-    });
-}
-
-future<> read_sstables_format(distributed<storage_service>& ss) {
-    return db::system_keyspace::get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME).then([&ss] (std::optional<sstring> format_opt) {
-        if (format_opt) {
-            sstables::sstable_version_types format = sstables::from_string(*format_opt);
-            return ss.invoke_on_all([format] (storage_service& s) {
-                s._sstables_format = format;
-            });
-        }
-        return make_ready_future<>();
-    });
 }
 
 future<> storage_service::set_cql_ready(bool ready) {

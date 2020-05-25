@@ -59,7 +59,6 @@
 #include "streaming/stream_state.hh"
 #include <seastar/core/distributed.hh>
 #include "utils/disk-error-handler.hh"
-#include "gms/feature.hh"
 #include "service/migration_listener.hh"
 #include "gms/feature_service.hh"
 #include <seastar/core/metrics_registration.hh>
@@ -106,19 +105,6 @@ enum class disk_error { regular, commit };
 
 struct bind_messaging_port_tag {};
 using bind_messaging_port = bool_class<bind_messaging_port_tag>;
-
-class feature_enabled_listener : public gms::feature::listener {
-    storage_service& _s;
-    seastar::named_semaphore& _sem;
-    sstables::sstable_version_types _format;
-public:
-    feature_enabled_listener(storage_service& s, seastar::named_semaphore& sem, sstables::sstable_version_types format)
-        : _s(s)
-        , _sem(sem)
-        , _format(format)
-    { }
-    void on_enabled() override;
-};
 
 struct storage_service_config {
     size_t available_memory;
@@ -281,8 +267,6 @@ public:
 private:
     mode _operation_mode = mode::STARTING;
     friend std::ostream& operator<<(std::ostream& os, const mode& mode);
-    friend future<> read_sstables_format(distributed<storage_service>&);
-    friend class feature_enabled_listener;
     /* Used for tracking drain progress */
 public:
     struct drain_progress {
@@ -311,17 +295,7 @@ private:
      */
     std::optional<db_clock::time_point> _cdc_streams_ts;
 
-    // _sstables_format is the format used for writing new sstables.
-    // Here we set its default value, but if we discover that all the nodes
-    // in the cluster support a newer format, _sstables_format will be set to
-    // that format. read_sstables_format() also overwrites _sstables_format
-    // if an sstable format was chosen earlier (and this choice was persisted
-    // in the system table).
-    sstables::sstable_version_types _sstables_format = sstables::sstable_version_types::la;
-    seastar::named_semaphore _feature_listeners_sem = {1, named_semaphore_exception_factory{"feature listeners"}};
-    feature_enabled_listener _mc_feature_listener;
 public:
-    sstables::sstable_version_types sstables_format() const { return _sstables_format; }
     void enable_all_features();
 
     /* Broadcasts the chosen tokens through gossip,
@@ -405,11 +379,9 @@ public:
      * completed
      * \see init_messaging_service_part
      */
-    future<> init_server_without_the_messaging_service_part(bind_messaging_port do_bind = bind_messaging_port::yes) {
-        return init_server(get_ring_delay().count(), do_bind);
-    }
+    future<> init_server(bind_messaging_port do_bind = bind_messaging_port::yes);
 
-    future<> init_server(int delay, bind_messaging_port do_bind = bind_messaging_port::yes);
+    future<> join_cluster();
 
     future<> drain_on_shutdown();
 
@@ -421,7 +393,6 @@ private:
     bool should_bootstrap() const;
     void prepare_to_join(std::vector<inet_address> loaded_endpoints, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
     void join_token_ring(int delay);
-    void wait_for_feature_listeners_to_finish();
     void maybe_start_sys_dist_ks();
 public:
     inline bool is_joined() const {
@@ -930,10 +901,7 @@ private:
 public:
     utils::UUID get_local_id() const { return _local_host_id; }
 
-    sstring get_config_supported_features();
-    std::set<std::string_view> get_config_supported_features_set();
 private:
-    std::set<std::string_view> get_known_features_set();
     future<> set_cql_ready(bool ready);
     void notify_down(inet_address endpoint);
     void notify_left(inet_address endpoint);
@@ -950,7 +918,5 @@ future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
         storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm);
 future<> deinit_storage_service();
-
-future<> read_sstables_format(distributed<storage_service>& ss);
 
 }

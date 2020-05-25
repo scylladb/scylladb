@@ -1157,8 +1157,8 @@ schema_ptr aggregates() {
 
 } //</legacy>
 
-static future<> setup_version() {
-    return gms::inet_address::lookup(qctx->db().get_config().rpc_address()).then([](gms::inet_address a) {
+static future<> setup_version(distributed<gms::feature_service>& feat) {
+    return gms::inet_address::lookup(qctx->db().get_config().rpc_address()).then([&feat](gms::inet_address a) {
         sstring req = sprint("INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         , db::system_keyspace::LOCAL);
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
@@ -1174,7 +1174,7 @@ static future<> setup_version() {
                              a.addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
                              netw::get_local_messaging_service().listen_address().addr(),
-                             service::get_local_storage_service().get_config_supported_features()
+                             ::join(",", feat.local().supported_feature_set())
         ).discard_result();
     });
 }
@@ -1263,9 +1263,9 @@ static future<> cache_truncation_record(distributed<database>& db);
 
 future<> setup(distributed<database>& db,
                distributed<cql3::query_processor>& qp,
-               distributed<service::storage_service>& ss) {
+               distributed<gms::feature_service>& feat) {
     minimal_setup(db, qp);
-    return setup_version().then([&db] {
+    return setup_version(feat).then([&db] {
         return update_schema_version(db.local().get_version());
     }).then([] {
         return init_local_cache();

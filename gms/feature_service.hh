@@ -37,15 +37,19 @@ namespace service { class storage_service; }
 
 namespace gms {
 
+class feature_service;
+
 struct feature_config {
-    bool enable_sstables_mc_format = false;
-    bool enable_user_defined_functions = false;
-    bool enable_cdc = false;
-    std::set<sstring> disabled_features;
+private:
+    std::set<sstring> _disabled_features;
+    std::set<sstring> _masked_features;
     feature_config();
+
+    friend class feature_service;
+    friend feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled);
 };
 
-feature_config feature_config_from_db_config(db::config& cfg);
+feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled = {});
 
 /**
  * A gossip feature tracks whether all the nodes the current one is
@@ -64,9 +68,11 @@ public:
     future<> stop();
     // Has to run inside seastar::async context
     void enable(const sstring& name);
+    void support(const std::string_view& name);
     void enable(const std::set<std::string_view>& list);
     db::schema_features cluster_schema_features() const;
     std::set<std::string_view> known_feature_set();
+    std::set<std::string_view> supported_feature_set();
 
 private:
     gms::feature _range_tombstones_feature;

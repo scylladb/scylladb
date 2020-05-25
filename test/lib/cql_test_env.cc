@@ -434,8 +434,7 @@ public:
             auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
-            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
-            fcfg.disabled_features = cfg_in.disabled_features;
+            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
             sharded<gms::feature_service> feature_service;
             feature_service.start(fcfg).get();
             auto stop_feature_service = defer([&] { feature_service.stop().get(); });
@@ -535,7 +534,9 @@ public:
             db::system_keyspace::migrate_truncation_records(feature_service.local().cluster_supports_truncation_table()).get();
 
             service::get_local_storage_service().init_messaging_service_part().get();
-            service::get_local_storage_service().init_server_without_the_messaging_service_part(service::bind_messaging_port(false)).get();
+            service::get_local_storage_service().init_server(service::bind_messaging_port(false)).get();
+            service::get_local_storage_service().join_cluster().get();
+
             auto deinit_storage_service_server = defer([&auth_service] {
                 gms::stop_gossiping().get();
                 auth_service.stop().get();
