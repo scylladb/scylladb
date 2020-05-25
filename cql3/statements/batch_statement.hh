@@ -153,12 +153,22 @@ public:
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
             service::storage_proxy& storage, service::query_state& state, const query_options& options) const override;
+
+    future<>
+    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
+
 private:
     friend class batch_statement_executor;
+    friend class batch_statement_executor_consumer;
     future<shared_ptr<cql_transport::messages::result_message>> do_execute(
             service::storage_proxy& storage,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) const;
+    future<> do_execute(
+            service::storage_proxy& storage,
+            service::query_state& query_state, const query_options& options,
+            bool local, api::timestamp_type now,
+            cql3::query_result_consumer& result_consumer) const;
 
     future<> execute_without_conditions(
             service::storage_proxy& storage,
@@ -172,6 +182,11 @@ private:
             service::storage_proxy& storage,
             const query_options& options,
             service::query_state& state) const;
+    future<> execute_with_conditions(
+            service::storage_proxy& proxy,
+            const query_options& options,
+            service::query_state& qs,
+            cql3::query_result_consumer& result_consumer) const;
 public:
     // FIXME: no cql_statement::to_string() yet
 #if 0

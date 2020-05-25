@@ -472,8 +472,8 @@ future<> query_processor::stop() {
     });
 }
 
-future<::shared_ptr<result_message>>
-query_processor::execute_direct(const sstring_view& query_string, service::query_state& query_state, query_options& options) {
+future<>
+query_processor::execute_direct(const sstring_view& query_string, service::query_state& query_state, query_options& options, query_result_consumer& result_consumer) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state());
@@ -492,18 +492,19 @@ query_processor::execute_direct(const sstring_view& query_string, service::query
             metrics.regularStatementsExecuted.inc();
 #endif
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return cql_statement->check_access(_proxy, query_state.get_client_state()).then([this, cql_statement, &query_state, &options] () mutable {
-        return process_authorized_statement(std::move(cql_statement), query_state, options);
+    return cql_statement->check_access(_proxy, query_state.get_client_state()).then([this, cql_statement, &query_state, &options, &result_consumer] () mutable {
+        return process_authorized_statement(std::move(cql_statement), query_state, options, result_consumer);
     });
 }
 
-future<::shared_ptr<result_message>>
+future<>
 query_processor::execute_prepared(
         statements::prepared_statement::checked_weak_ptr prepared,
         cql3::prepared_cache_key_type cache_key,
         service::query_state& query_state,
         const query_options& options,
-        bool needs_authorization) {
+        bool needs_authorization,
+        query_result_consumer& result_consumer) {
 
     ::shared_ptr<cql_statement> statement = prepared->statement;
     future<> fut = make_ready_future<>();
@@ -516,8 +517,8 @@ query_processor::execute_prepared(
     }
     log.trace("execute_prepared: \"{}\"", statement->raw_cql_statement);
 
-    return fut.then([this, statement = std::move(statement), &query_state, &options] () mutable {
-        return process_authorized_statement(std::move(statement), query_state, options);
+    return fut.then([this, statement = std::move(statement), &query_state, &options, &result_consumer] () mutable {
+        return process_authorized_statement(std::move(statement), query_state, options, result_consumer);
     });
 }
 
@@ -539,47 +540,36 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+future<>
+query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, query_result_consumer& result_consumer) {
+    auto& client_state = query_state.get_client_state();
+
+    ++_stats.queries_by_cl[size_t(options.get_consistency())];
+
+    statement->validate(_proxy, client_state);
+
+    return statement->execute(_proxy, query_state, options, result_consumer).then([statement] {});
+}
+
+future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
 query_processor::prepare(sstring query_string, service::query_state& query_state) {
     auto& client_state = query_state.get_client_state();
     return prepare(std::move(query_string), client_state, client_state.is_thrift());
 }
 
-future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
 query_processor::prepare(sstring query_string, const service::client_state& client_state, bool for_thrift) {
     using namespace cql_transport::messages;
     if (for_thrift) {
-        return prepare_one<result_message::prepared::thrift>(
+        return prepare_one(
                 std::move(query_string),
                 client_state,
-                compute_thrift_id, prepared_cache_key_type::thrift_id);
+                compute_thrift_id);
     } else {
-        return prepare_one<result_message::prepared::cql>(
+        return prepare_one(
                 std::move(query_string),
                 client_state,
-                compute_id,
-                prepared_cache_key_type::cql_id);
-    }
-}
-
-::shared_ptr<cql_transport::messages::result_message::prepared>
-query_processor::get_stored_prepared_statement(
-        const std::string_view& query_string,
-        const sstring& keyspace,
-        bool for_thrift) {
-    using namespace cql_transport::messages;
-    if (for_thrift) {
-        return get_stored_prepared_statement_one<result_message::prepared::thrift>(
-                query_string,
-                keyspace,
-                compute_thrift_id,
-                prepared_cache_key_type::thrift_id);
-    } else {
-        return get_stored_prepared_statement_one<result_message::prepared::cql>(
-                query_string,
-                keyspace,
-                compute_id,
-                prepared_cache_key_type::cql_id);
+                compute_id);
     }
 }
 
@@ -844,18 +834,19 @@ query_processor::execute_with_params(
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<>
 query_processor::execute_batch(
         ::shared_ptr<statements::batch_statement> batch,
         service::query_state& query_state,
         query_options& options,
-        std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-    return batch->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
+        std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries,
+        query_result_consumer& result_consumer) {
+    return batch->check_access(_proxy, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries), &result_consumer] () mutable {
         return parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second)).handle_exception([this] (auto eptr) {
                 log.error("failed to cache the entry: {}", eptr);
             });
-        }).then([this, &query_state, &options, batch] {
+        }).then([this, &query_state, &options, batch, &result_consumer] {
             batch->validate();
             batch->validate(_proxy, query_state.get_client_state());
             _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
@@ -866,7 +857,7 @@ query_processor::execute_batch(
                 }
                 log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
             }
-            return batch->execute(_proxy, query_state, options);
+            return batch->execute(_proxy, query_state, options, result_consumer);
         });
     });
 }

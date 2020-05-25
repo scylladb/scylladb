@@ -44,6 +44,7 @@
 #include "service/storage_service.hh"
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/query_result_consumer.hh"
 #include "timeout_config.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
@@ -936,32 +937,36 @@ public:
         throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
-    class cql3_result_visitor final : public cql_transport::messages::result_message::visitor {
-        CqlResult _result;
+    class cql_result_consumer final : public cql3::query_result_consumer {
+    private:
+        CqlResult _response;
     public:
-        const CqlResult& result() const {
-            return _result;
+        cql_result_consumer() {
+            _response.__set_type(CqlResultType::VOID);
         }
-        virtual void visit(const cql_transport::messages::result_message::void_message&) override {
-            _result.__set_type(CqlResultType::VOID);
+
+        void set_keyspace(const sstring& keyspace) override {
+            // Returning VOID message, so nothing to do
         }
-        virtual void visit(const cql_transport::messages::result_message::set_keyspace& m) override {
-            _result.__set_type(CqlResultType::VOID);
+
+        void set_result(cql3::result rs) override {
+            _response = to_thrift_result(rs);
         }
-        virtual void visit(const cql_transport::messages::result_message::prepared::cql& m) override {
-            throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
+
+        void set_schema_change(shared_ptr<cql_transport::event::schema_change>& change) override {
+            // Returning VOID message, so nothing to do
         }
-        virtual void visit(const cql_transport::messages::result_message::prepared::thrift& m) override {
-            throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
-        }
-        virtual void visit(const cql_transport::messages::result_message::schema_change& m) override {
-            _result.__set_type(CqlResultType::VOID);
-        }
-        virtual void visit(const cql_transport::messages::result_message::rows& m) override {
-            _result = to_thrift_result(m.rs());
-        }
-        virtual void visit(const cql_transport::messages::result_message::bounce_to_shard& m) override {
+
+        void move_to_shard(unsigned shard_id) override {
             throw TProtocolException(TProtocolException::TProtocolExceptionType::NOT_IMPLEMENTED, "Thrift does not support executing LWT statements");
+        }
+
+        void add_warning(const sstring& w) override {
+            throw std::runtime_error("Unimplemented add_warning");
+        }
+
+        CqlResult get_response() {
+            return std::move(_response);
         }
     };
 
@@ -973,11 +978,12 @@ public:
             auto& qp = _query_processor.local();
             auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), _timeout_config, std::nullopt, std::vector<cql3::raw_value_view>(),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
-            auto f = qp.execute_direct(query, _query_state, *opts);
-            return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
-                cql3_result_visitor visitor;
-                ret->accept(visitor);
-                return cob(visitor.result());
+
+            auto visitor = std::make_unique<cql_result_consumer>();
+
+            auto f = qp.execute_direct(query, _query_state, *opts, *visitor);
+            return f.then([cob = std::move(cob), opts = std::move(opts), visitor = std::move(visitor)] {
+                return cob(visitor->get_response());
             });
         });
     }
@@ -986,29 +992,22 @@ public:
         throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
-    class prepared_result_visitor final : public cql_transport::messages::result_message::visitor_base {
-        CqlPreparedResult _result;
-    public:
-        const CqlPreparedResult& result() const {
-            return _result;
+    static CqlPreparedResult build_prepare_result(cql3::prepared_cache_key_type key, const cql3::statements::prepared_statement& prep_stmt) {
+        CqlPreparedResult result;
+        result.__set_itemId(cql3::prepared_cache_key_type::thrift_id(key));
+        auto& names = prep_stmt.bound_names;
+        result.__set_count(names.size());
+        std::vector<std::string> variable_types;
+        std::vector<std::string> variable_names;
+        for (auto& csp : names) {
+            variable_types.emplace_back(csp->type->name());
+            variable_names.emplace_back(csp->name->to_string());
         }
-        virtual void visit(const cql_transport::messages::result_message::prepared::cql& m) override {
-            throw std::runtime_error("Unexpected result message type.");
-        }
-        virtual void visit(const cql_transport::messages::result_message::prepared::thrift& m) override {
-            _result.__set_itemId(m.get_id());
-            auto& names = m.metadata()->names();
-            _result.__set_count(names.size());
-            std::vector<std::string> variable_types;
-            std::vector<std::string> variable_names;
-            for (auto csp : names) {
-                variable_types.emplace_back(csp->type->name());
-                variable_names.emplace_back(csp->name->to_string());
-            }
-            _result.__set_variable_types(std::move(variable_types));
-            _result.__set_variable_names(std::move(variable_names));
-        }
-    };
+        result.__set_variable_types(std::move(variable_types));
+        result.__set_variable_names(std::move(variable_names));
+
+        return result;
+    }
 
     void prepare_cql3_query(thrift_fn::function<void(CqlPreparedResult const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
         with_exn_cob(std::move(exn_cob), [&] {
@@ -1016,10 +1015,10 @@ public:
             if (compression != Compression::type::NONE) {
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
             }
-            return _query_processor.local().prepare(query, _query_state).then([cob = std::move(cob)](auto&& stmt) {
-                prepared_result_visitor visitor;
-                stmt->accept(visitor);
-                cob(visitor.result());
+
+            return _query_processor.local().prepare(query, _query_state).then([cob = std::move(cob)]
+                    (std::tuple<cql3::prepared_cache_key_type, cql3::statements::prepared_statement::checked_weak_ptr> t) {
+                return cob(build_prepare_result(std::get<0>(t), *std::get<1>(t)));
             });
         });
     }
@@ -1053,11 +1052,11 @@ public:
             auto& qp = _query_processor.local();
             auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), _timeout_config, std::nullopt, std::move(bytes_values),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
-            auto f = qp.execute_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization);
-            return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
-                cql3_result_visitor visitor;
-                ret->accept(visitor);
-                return cob(visitor.result());
+            auto visitor = std::make_unique<cql_result_consumer>();
+
+            auto f = qp.execute_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization, *visitor);
+            return f.then([cob = std::move(cob), opts = std::move(opts), visitor = std::move(visitor)] {
+                return cob(visitor->get_response());
             });
         });
     }

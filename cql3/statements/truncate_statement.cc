@@ -107,6 +107,16 @@ truncate_statement::execute(service::storage_proxy& proxy, service::query_state&
     });
 }
 
+future<>
+truncate_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const {
+    if (proxy.get_db().local().find_schema(keyspace(), column_family())->is_view()) {
+        throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");
+    }
+    return proxy.truncate_blocking(keyspace(), column_family()).handle_exception([](auto ep) {
+        throw exceptions::truncate_exception(ep);
+    });
+}
+
 }
 
 }

@@ -87,7 +87,6 @@ public:
     };
     using response_type = result;
 private:
-    class fmt_visitor;
     friend class connection;
     class connection : public boost::intrusive::list_base_hook<> {
        // using result = redis_server::result;

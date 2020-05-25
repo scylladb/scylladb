@@ -51,6 +51,7 @@
 #include "service/client_state.hh"
 #include "exceptions/exceptions.hh"
 #include "connection_notifier.hh"
+#include "cql3/query_result_consumer.hh"
 
 #include "auth/authenticator.hh"
 
@@ -440,7 +441,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         case cql_binary_opcode::AUTH_RESPONSE: return wrap_in_foreign(process_auth_response(stream, std::move(in), client_state, trace_state));
         case cql_binary_opcode::OPTIONS:       return wrap_in_foreign(process_options(stream, std::move(in), client_state, trace_state));
         case cql_binary_opcode::QUERY:         return process_query(stream, std::move(in), client_state, std::move(permit), trace_state);
-        case cql_binary_opcode::PREPARE:       return wrap_in_foreign(process_prepare(stream, std::move(in), client_state, trace_state));
+        case cql_binary_opcode::PREPARE:       return process_prepare(stream, std::move(in), client_state, trace_state);
         case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), client_state, std::move(permit), trace_state);
         case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), client_state, std::move(permit), trace_state);
         case cql_binary_opcode::REGISTER:      return wrap_in_foreign(process_register(stream, std::move(in), client_state, trace_state));
@@ -762,10 +763,6 @@ cql_server::connection::init_cql_serialization_format() {
     _cql_serialization_format = cql_serialization_format(_version);
 }
 
-std::unique_ptr<cql_server::response>
-make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state,
-        cql_protocol_version_type version, bool skip_metadata = false);
-
 template<typename Process>
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 cql_server::connection::process_on_shard(unsigned shard, uint16_t stream, fragmented_temporary_buffer::istream is,
@@ -805,6 +802,146 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
     });
 }
 
+class fmt_consumer final : public cql3::query_result_consumer {
+private:
+    int16_t _stream;
+    uint8_t _version;
+    bool _skip_metadata;
+    tracing::trace_state_ptr _tr_state;
+    std::optional<unsigned> _move_to_shard;
+    std::unique_ptr<cql_server::response> _response;
+    uint16_t _warnings_count = 0;
+    std::optional<cql_server::response::placeholder<uint16_t>> _warnings_count_placeholder;
+
+    void create_response() {
+        _response = std::make_unique<cql_server::response>(_stream, cql_binary_opcode::RESULT, _tr_state);
+    }
+
+    void prepare_response() {
+        if (!_response) {
+            create_response();
+        } else {
+            maybe_close_warning_section();
+        }
+    }
+
+    void open_warning_section() {
+        _response->set_frame_flag(cql_frame_flags::warning);
+        _warnings_count = 0;
+        _warnings_count_placeholder = _response->write_short_placeholder();
+    }
+
+    bool warning_section_closed() const {
+        return !_warnings_count_placeholder;
+    }
+
+    void maybe_close_warning_section() {
+        if (_warnings_count_placeholder) {
+            _warnings_count_placeholder->write(_warnings_count);
+            _warnings_count_placeholder = std::nullopt;
+        }
+    }
+
+public:
+    fmt_consumer(int16_t stream, uint8_t version, bool skip_metadata, tracing::trace_state_ptr tr_state)
+        : _stream(stream)
+        , _version{version}
+        , _skip_metadata{skip_metadata}
+        , _tr_state(std::move(tr_state))
+    { }
+
+    void set_keyspace(const sstring& keyspace) override {
+        prepare_response();
+        _response->write_int(0x0003);
+        _response->write_string(keyspace);
+    }
+
+    void set_result(cql3::result rs) override {
+        prepare_response();
+        _response->write_int(0x0002);
+        _response->write(rs.get_metadata(), _skip_metadata);
+        auto row_count_plhldr = _response->write_int_placeholder();
+
+        class visitor {
+            cql_server::response& _response;
+            int32_t _row_count = 0;
+        public:
+            visitor(cql_server::response& r) : _response(r) { }
+
+            void start_row() {
+                _row_count++;
+            }
+            void accept_value(std::optional<query::result_bytes_view> cell) {
+                _response.write_value(cell);
+            }
+            void end_row() { }
+
+            int32_t row_count() const { return _row_count; }
+        };
+
+        auto v = visitor(*_response);
+        rs.visit(v);
+        row_count_plhldr.write(v.row_count());
+    }
+
+    void set_schema_change(shared_ptr<cql_transport::event::schema_change>& change) override {
+        prepare_response();
+        assert(change);
+        assert(change->type == event::event_type::SCHEMA_CHANGE);
+        _response->write_int(0x0005);
+        _response->serialize(*change, _version);
+    }
+
+    void move_to_shard(unsigned shard_id) override {
+        _move_to_shard = shard_id;
+    }
+
+    void add_warning(const sstring& w) override {
+        if (__builtin_expect(_version > 3, true)) {
+            if (!_response) {
+                create_response();
+                open_warning_section();
+            } else if (warning_section_closed()) {
+                throw std::runtime_error(
+                        "Warning added to CQL response after warning section was closed.");
+            }
+            if (_warnings_count == std::numeric_limits<uint16_t>::max()) {
+                throw std::runtime_error("Number of warnings exceeded limit.");
+            }
+            ++_warnings_count;
+            _response->write_string(w);
+        }
+    }
+
+    std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned> get_response() {
+        if (_move_to_shard) {
+            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*_move_to_shard);
+        } else {
+            tracing::trace(_tr_state, "Done processing - preparing a result");
+            if (!_response) {
+                create_response();
+                // Mark as void message
+                _response->write_int(0x0001);
+            }
+            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(make_foreign(std::move(_response)));
+        }
+    }
+};
+
+static foreign_ptr<std::unique_ptr<cql_server::response>>
+build_prepare_result(int16_t stream, uint8_t version, const tracing::trace_state_ptr& tr_state_ptr,
+        cql3::prepared_cache_key_type key, const cql3::statements::prepared_statement& prep_stmt) {
+    std::unique_ptr<cql_server::response> response
+            = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state_ptr);
+    response->write_int(0x0004);
+    response->write_short_bytes(cql3::prepared_cache_key_type::cql_id(key));
+    response->write(cql3::prepared_metadata(prep_stmt.bound_names, prep_stmt.partition_key_bind_indices), version);
+    if (version > 1) {
+        response->write(*prep_stmt.statement->get_result_metadata());
+    }
+    return make_foreign(std::move(response));
+}
+
 static future<std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>>
 process_query_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version, cql_serialization_format serialization_format,
@@ -827,13 +964,10 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
 
-    return qp.local().execute_direct(query, query_state, options).then([q_state = std::move(q_state), stream, skip_metadata, version] (auto msg) {
-        if (msg->move_to_shard()) {
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
-        } else {
-            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
-        }
+    auto fmt = std::make_unique<fmt_consumer>(stream, version, skip_metadata, trace_state);
+
+    return qp.local().execute_direct(query, query_state, options, *fmt).then([fmt = std::move(fmt), q_state = std::move(q_state)] {
+        return fmt->get_response();
     });
 }
 
@@ -842,7 +976,7 @@ cql_server::connection::process_query(uint16_t stream, request_reader in, servic
     return process(stream, in, client_state, std::move(permit), std::move(trace_state), process_query_internal);
 }
 
-future<std::unique_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state& client_state,
+future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::process_prepare(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
     auto query = sstring(in.read_long_string_view());
 
@@ -851,9 +985,9 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
 
     auto cpu_id = this_shard_id();
     auto cpus = boost::irange(0u, smp::count);
-    return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &client_state] (unsigned int c) mutable {
+    return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &client_state, stream, trace_state] (unsigned int c) mutable {
         if (c != cpu_id) {
-            return smp::submit_to(c, [this, query, &client_state] () mutable {
+            return smp::submit_to(c, [this, query, &client_state, stream, trace_state] () mutable {
                 return _server._query_processor.local().prepare(std::move(query), client_state, false).discard_result();
             });
         } else {
@@ -861,11 +995,13 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
         }
     }).then([this, query, stream, &client_state, trace_state] () mutable {
         tracing::trace(trace_state, "Done preparing on remote shards");
-        return _server._query_processor.local().prepare(std::move(query), client_state, false).then([this, stream, &client_state, trace_state] (auto msg) {
-            tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
-                return messages::result_message::prepared::cql::get_id(msg);
+        return _server._query_processor.local().prepare(std::move(query), client_state, false).then([this, stream, &client_state, trace_state]
+                (std::tuple<cql3::prepared_cache_key_type, cql3::statements::prepared_statement::checked_weak_ptr> t) {
+            const auto& key = std::get<0>(t);
+            tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&key] {
+                return cql3::prepared_cache_key_type::cql_id(key);
             }));
-            return make_result(stream, *msg, trace_state, _version);
+            return build_prepare_result(stream, _version, trace_state, key, *std::get<1>(t));
         });
     });
 }
@@ -933,14 +1069,9 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     }
 
     tracing::trace(trace_state, "Processing a statement");
-    return qp.local().execute_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization)
-            .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version] (auto msg) {
-        if (msg->move_to_shard()) {
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
-        } else {
-            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
-        }
+    auto fmt = std::make_unique<fmt_consumer>(stream, version, skip_metadata, trace_state);
+    return qp.local().execute_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization, *fmt).then([fmt = std::move(fmt), q_state = std::move(q_state)] {
+        return fmt->get_response();
     });
 }
 
@@ -1053,14 +1184,9 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     }
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
-    return qp.local().execute_batch(batch, query_state, options, std::move(pending_authorization_entries))
-            .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
-        if (msg->move_to_shard()) {
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(*msg->move_to_shard());
-        } else {
-            tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return std::variant<foreign_ptr<std::unique_ptr<cql_server::response>>, unsigned>(make_foreign(make_result(stream, *msg, trace_state, version)));
-        }
+    auto fmt = std::make_unique<fmt_consumer>(stream, version, false, trace_state);
+    return qp.local().execute_batch(batch, query_state, options, std::move(pending_authorization_entries), *fmt).then([fmt = std::move(fmt), q_state = std::move(q_state)] {
+        return fmt->get_response();
     });
 }
 
@@ -1215,92 +1341,6 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     }
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
     response->write_string_multimap(opts);
-    return response;
-}
-
-class cql_server::fmt_visitor : public messages::result_message::visitor_base {
-private:
-    uint8_t _version;
-    cql_server::response& _response;
-    bool _skip_metadata;
-public:
-    fmt_visitor(uint8_t version, cql_server::response& response, bool skip_metadata)
-        : _version{version}
-        , _response{response}
-        , _skip_metadata{skip_metadata}
-    { }
-
-    virtual void visit(const messages::result_message::void_message&) override {
-        _response.write_int(0x0001);
-    }
-
-    virtual void visit(const messages::result_message::set_keyspace& m) override {
-        _response.write_int(0x0003);
-        _response.write_string(m.get_keyspace());
-    }
-
-    virtual void visit(const messages::result_message::prepared::cql& m) override {
-        _response.write_int(0x0004);
-        _response.write_short_bytes(m.get_id());
-        _response.write(*m.metadata(), _version);
-        if (_version > 1) {
-            _response.write(*m.result_metadata());
-        }
-    }
-
-    virtual void visit(const messages::result_message::schema_change& m) override {
-        auto change = m.get_change();
-        switch (change->type) {
-        case event::event_type::SCHEMA_CHANGE: {
-            auto sc = static_pointer_cast<event::schema_change>(change);
-            _response.write_int(0x0005);
-            _response.serialize(*sc, _version);
-            break;
-        }
-        default:
-            assert(0);
-        }
-    }
-
-    virtual void visit(const messages::result_message::rows& m) override {
-        _response.write_int(0x0002);
-        auto& rs = m.rs();
-        _response.write(rs.get_metadata(), _skip_metadata);
-        auto row_count_plhldr = _response.write_int_placeholder();
-
-        class visitor {
-            cql_server::response& _response;
-            int32_t _row_count = 0;
-        public:
-            visitor(cql_server::response& r) : _response(r) { }
-
-            void start_row() {
-                _row_count++;
-            }
-            void accept_value(std::optional<query::result_bytes_view> cell) {
-                _response.write_value(cell);
-            }
-            void end_row() { }
-
-            int32_t row_count() const { return _row_count; }
-        };
-
-        auto v = visitor(_response);
-        rs.visit(v);
-        row_count_plhldr.write(v.row_count());
-    }
-};
-
-std::unique_ptr<cql_server::response>
-make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state,
-        cql_protocol_version_type version, bool skip_metadata) {
-    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
-    if (__builtin_expect(!msg.warnings().empty() && version > 3, false)) {
-        response->set_frame_flag(cql_frame_flags::warning);
-        response->write_string_list(msg.warnings());
-    }
-    cql_server::fmt_visitor fmt{version, *response, skip_metadata};
-    msg.accept(fmt);
     return response;
 }
 
@@ -1491,6 +1531,10 @@ void cql_server::response::write_short(uint16_t n)
     auto u = htons(n);
     auto *s = reinterpret_cast<const int8_t*>(&u);
     _body.write(bytes_view(s, sizeof(u)));
+}
+
+cql_server::response::placeholder<uint16_t> cql_server::response::write_short_placeholder() {
+    return placeholder<uint16_t>(_body.write_place_holder(sizeof(uint16_t)));
 }
 
 template<typename T>

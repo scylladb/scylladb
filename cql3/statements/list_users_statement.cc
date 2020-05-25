@@ -118,3 +118,63 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
         });
     });
 }
+
+future<>
+cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const {
+    static const sstring virtual_table_name("users");
+
+    static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
+        return make_lw_shared<column_specification>(
+            auth::meta::AUTH_KS,
+            virtual_table_name,
+            ::make_shared<column_identifier>(name, true),
+            ty);
+    };
+
+    static thread_local const auto metadata = ::make_shared<cql3::metadata>(
+        std::vector<lw_shared_ptr<column_specification>>{
+                make_column_spec("name", utf8_type),
+                make_column_spec("super", boolean_type)});
+
+    static const auto make_results = [&result_consumer](const auth::service& as, std::unordered_set<sstring>&& roles) {
+        using cql_transport::messages::result_message;
+
+        auto results = std::make_unique<result_set>(metadata);
+
+        std::vector<sstring> sorted_roles(roles.cbegin(), roles.cend());
+        std::sort(sorted_roles.begin(), sorted_roles.end());
+
+        return do_with(
+                std::move(sorted_roles),
+                std::move(results),
+                [&as, &result_consumer](const std::vector<sstring>& sorted_roles, std::unique_ptr<result_set>& results) {
+            return do_for_each(sorted_roles, [&as, &results](const sstring& role) {
+                return when_all_succeed(
+                        as.has_superuser(role),
+                        as.underlying_role_manager().can_login(role)).then([&results, &role](bool super, bool login) {
+                    if (login) {
+                        results->add_column_value(utf8_type->decompose(role));
+                        results->add_column_value(boolean_type->decompose(super));
+                    }
+                });
+            }).then([&results, &result_consumer] {
+                result_consumer.set_result(result(std::move(results)));
+            });
+        });
+    };
+
+    const auto& cs = state.get_client_state();
+    const auto& as = *cs.get_auth_service();
+
+    return auth::has_superuser(as, *cs.user()).then([&cs, &as](bool has_superuser) {
+        if (has_superuser) {
+            return as.underlying_role_manager().query_all().then([&as](std::unordered_set<sstring> roles) {
+                return make_results(as, std::move(roles));
+            });
+        }
+
+        return auth::get_roles(as, *cs.user()).then([&as](std::unordered_set<sstring> granted_roles) {
+            return make_results(as, std::move(granted_roles));
+        });
+    });
+}

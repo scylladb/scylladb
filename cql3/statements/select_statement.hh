@@ -99,7 +99,12 @@ protected:
 protected :
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options) const;
+    virtual future<> do_execute(service::storage_proxy& proxy,
+                            service::query_state& state,
+                            const query_options& options,
+                            cql3::query_result_consumer& result_consumer) const;
     friend class select_statement_executor;
+    friend class select_statement_executor_consumer;
 public:
     select_statement(schema_ptr schema,
             uint32_t bound_terms,
@@ -125,9 +130,20 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options) const override;
 
+    future<>
+    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
+
     future<::shared_ptr<cql_transport::messages::result_message>> execute(service::storage_proxy& proxy,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now) const;
+    future<>
+    execute(service::storage_proxy& proxy,
+                            lw_shared_ptr<query::read_command> cmd,
+                            dht::partition_range_vector&& partition_ranges,
+                            service::query_state& state,
+                            const query_options& options,
+                            gc_clock::time_point now,
+                            cql3::query_result_consumer& result_consumer) const;
 
     struct primary_key {
         dht::decorated_key partition;
@@ -136,7 +152,12 @@ public:
 
     future<shared_ptr<cql_transport::messages::result_message>> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
-
+    future<>
+    process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
+                                    lw_shared_ptr<query::read_command> cmd,
+                                    const query_options& options,
+                                    gc_clock::time_point now,
+                                    cql3::query_result_consumer& result_consumer) const;
     const sstring& keyspace() const;
 
     const sstring& column_family() const;
@@ -214,6 +235,8 @@ public:
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
             service::query_state& state, const query_options& options) const override;
+    future<> do_execute(service::storage_proxy& proxy,
+            service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
 
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
             const foreign_ptr<lw_shared_ptr<query::result>>& results, service::storage_proxy& proxy, service::query_state& state, const query_options& options) const;
@@ -235,6 +258,16 @@ private:
             const query_options& options,
             gc_clock::time_point now,
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+    future<>
+    process_base_query_results(
+            foreign_ptr<lw_shared_ptr<query::result>> results,
+            lw_shared_ptr<query::read_command> cmd,
+            service::storage_proxy& proxy,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            lw_shared_ptr<const service::pager::paging_state> paging_state,
+            cql3::query_result_consumer& result_consumer) const;
 
     lw_shared_ptr<query::read_command>
     prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now, bool use_paging) const;
@@ -255,6 +288,15 @@ private:
             const query_options& options,
             gc_clock::time_point now,
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+    future<>
+    execute_base_query(
+            service::storage_proxy& proxy,
+            dht::partition_range_vector&& partition_ranges,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            lw_shared_ptr<const service::pager::paging_state> paging_state,
+            cql3::query_result_consumer& result_consumer) const;
 
     // Function for fetching the selected columns from a list of clustering rows.
     // It is currently used only in our Secondary Index implementation - ordinary
@@ -281,6 +323,15 @@ private:
             const query_options& options,
             gc_clock::time_point now,
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+    future<>
+    execute_base_query(
+            service::storage_proxy& proxy,
+            std::vector<primary_key>&& primary_keys,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            lw_shared_ptr<const service::pager::paging_state> paging_state,
+            cql3::query_result_consumer& result_consumer) const;
 
     virtual void update_stats_rows_read(int64_t rows_read) const override {
         _stats.rows_read += rows_read;

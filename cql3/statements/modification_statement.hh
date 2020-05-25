@@ -211,6 +211,12 @@ public:
     build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
             const column_set& mask, bool is_applied,
             const update_parameters::prefetch_data& rows);
+    static void build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
+            const column_set& columns,
+            bool is_applied,
+            const update_parameters::prefetch_data& rows,
+            cql3::query_result_consumer& result_consumer);
+
 public:
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const;
     virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const;
@@ -263,7 +269,10 @@ public:
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
     do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
+    future<>
+    do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options, cql3::query_result_consumer& result_consumer) const;
     friend class modification_statement_executor;
+    friend class modification_statement_executor_consumer;
 public:
     // True if the statement has IF conditions. Pre-computed during prepare.
     bool has_conditions() const { return _has_regular_column_conditions || _has_static_column_conditions; }
@@ -275,12 +284,17 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const override;
 
+    future<>
+    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql3::query_result_consumer& result_consumer) const override;
+
 private:
     future<>
     execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const;
+    future<>
+    execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options, cql3::query_result_consumer& result_consumer) const;
 
 public:
     /**

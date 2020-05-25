@@ -52,6 +52,7 @@
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/query_result_consumer.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "service/migration_listener.hh"
@@ -59,6 +60,7 @@
 #include "transport/messages/result_message.hh"
 
 namespace cql3 {
+
 
 namespace statements {
 class batch_statement;
@@ -192,20 +194,22 @@ public:
         return *it;
     }
 
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute_prepared(
             statements::prepared_statement::checked_weak_ptr statement,
             cql3::prepared_cache_key_type cache_key,
             service::query_state& query_state,
             const query_options& options,
-            bool needs_authorization);
+            bool needs_authorization,
+            query_result_consumer& result_consumer);
 
     /// Execute a client statement that was not prepared.
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute_direct(
             const std::string_view& query_string,
             service::query_state& query_state,
-            query_options& options);
+            query_options& options,
+            query_result_consumer& result_consumer);
 
     future<::shared_ptr<untyped_result_set>>
     execute_internal(const sstring& query_string, const std::initializer_list<data_value>& values = { }) {
@@ -304,20 +308,21 @@ public:
             const timeout_config& timeout_config,
             const std::initializer_list<data_value>& = { });
 
-    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+    future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
     prepare(sstring query_string, service::query_state& query_state);
 
-    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+    future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
     prepare(sstring query_string, const service::client_state& client_state, bool for_thrift);
 
     future<> stop();
 
-    future<::shared_ptr<cql_transport::messages::result_message>>
+    future<>
     execute_batch(
             ::shared_ptr<statements::batch_statement>,
             service::query_state& query_state,
             query_options& options,
-            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
+            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries,
+            query_result_consumer& result_consumer);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::string_view& query,
@@ -335,6 +340,9 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options);
+
+    future<>
+    process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, query_result_consumer& result_consumer);
 
     /*!
      * \brief created a state object for paging
@@ -372,28 +380,22 @@ private:
     bool has_more_results(::shared_ptr<cql3::internal_query_state> state) const;
 
     ///
-    /// \tparam ResultMsgType type of the returned result message (CQL or Thrift)
     /// \tparam PreparedKeyGenerator a function that generates the prepared statement cache key for given query and
     ///         keyspace
-    /// \tparam IdGetter a function that returns the corresponding prepared statement ID (CQL or Thrift) for a given
-    ////        prepared statement cache key
     /// \param query_string
     /// \param client_state
     /// \param id_gen prepared ID generator, called before the first deferring
-    /// \param id_getter prepared ID getter, passed to deferred context by reference. The caller must ensure its
-    ////       liveness.
     /// \return
-    template <typename ResultMsgType, typename PreparedKeyGenerator, typename IdGetter>
-    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+    template <typename PreparedKeyGenerator>
+    future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>
     prepare_one(
             sstring query_string,
             const service::client_state& client_state,
-            PreparedKeyGenerator&& id_gen,
-            IdGetter&& id_getter) {
+            PreparedKeyGenerator&& id_gen) {
         return do_with(
                 id_gen(query_string, client_state.get_raw_keyspace()),
                 std::move(query_string),
-                [this, &client_state, &id_getter](const prepared_cache_key_type& key, const sstring& query_string) {
+                [this, &client_state](const prepared_cache_key_type& key, const sstring& query_string) {
             return _prepared_cache.get(key, [this, &query_string, &client_state] {
                 auto prepared = get_statement(query_string, client_state);
                 auto bound_terms = prepared->statement->get_bound_terms();
@@ -405,37 +407,15 @@ private:
                 }
                 assert(bound_terms == prepared->bound_names.size());
                 return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
-            }).then([&key, &id_getter] (auto prep_ptr) {
-                return make_ready_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(
-                        ::make_shared<ResultMsgType>(id_getter(key), std::move(prep_ptr)));
+            }).then([&key] (statements::prepared_statement::checked_weak_ptr prep_ptr) {
+                return make_ready_future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>(
+                        std::make_tuple(std::move(key), std::move(prep_ptr)));
             }).handle_exception_type([&query_string] (typename prepared_statements_cache::statement_is_too_big&) {
-                return make_exception_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(
+                return make_exception_future<std::tuple<prepared_cache_key_type, statements::prepared_statement::checked_weak_ptr>>(
                         prepared_statement_is_too_big(query_string));
             });
         });
     };
-
-    template <typename ResultMsgType, typename KeyGenerator, typename IdGetter>
-    ::shared_ptr<cql_transport::messages::result_message::prepared>
-    get_stored_prepared_statement_one(
-            const std::string_view& query_string,
-            const sstring& keyspace,
-            KeyGenerator&& key_gen,
-            IdGetter&& id_getter) {
-        auto cache_key = key_gen(query_string, keyspace);
-        auto it = _prepared_cache.find(cache_key);
-        if (it == _prepared_cache.end()) {
-            return ::shared_ptr<cql_transport::messages::result_message::prepared>();
-        }
-
-        return ::make_shared<ResultMsgType>(id_getter(cache_key), *it);
-    }
-
-    ::shared_ptr<cql_transport::messages::result_message::prepared>
-    get_stored_prepared_statement(
-            const std::string_view& query_string,
-            const sstring& keyspace,
-            bool for_thrift);
 };
 
 class query_processor::migration_subscriber : public service::migration_listener {
