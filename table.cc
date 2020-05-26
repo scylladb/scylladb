@@ -44,6 +44,7 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include "utils/error_injection.hh"
 
 static logging::logger tlogger("table");
 static seastar::metrics::label column_family_label("cf");
@@ -2546,6 +2547,9 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     auto& base = schema();
     m.upgrade(base);
     gc_clock::time_point now = gc_clock::now();
+    utils::get_local_injector().inject("table_push_view_replica_updates_stale_time_point", [&now] {
+        now -= 10s;
+    });
     auto views = affected_views(base, m, now);
     if (views.empty()) {
         return make_ready_future<row_locker::lock_holder>();
@@ -2576,8 +2580,9 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.
     future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
-    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout, now, source = std::move(source), tr_state = std::move(tr_state), &sem, &io_priority] (row_locker::lock_holder lock) mutable {
-      tracing::trace(tr_state, "View updates for {}.{} require read-before-write - base table reader is created", base->ks_name(), base->cf_name());
+    return utils::get_local_injector().inject("table_push_view_replica_updates_timeout", timeout).then([lockf = std::move(lockf), timeout] () mutable {
+        return std::move(lockf);
+    }).then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout, now, source = std::move(source), &sem, tr_state = std::move(tr_state), &io_priority] (row_locker::lock_holder lock) mutable {
       return do_with(
         dht::partition_range::make_singular(m.decorated_key()),
         std::move(slice),
