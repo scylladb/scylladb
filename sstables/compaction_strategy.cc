@@ -1080,6 +1080,10 @@ reader_consumer compaction_strategy::make_interposer_consumer(const mutation_sou
     return _compaction_strategy_impl->make_interposer_consumer(ms_meta, std::move(end_consumer));
 }
 
+bool compaction_strategy::use_interposer_consumer() const {
+    return _compaction_strategy_impl->use_interposer_consumer();
+}
+
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {
     ::shared_ptr<compaction_strategy_impl> impl;
 

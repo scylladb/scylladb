@@ -5772,3 +5772,89 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         cm.stop().wait();
     });
 }
+
+//
+// Test that https://github.com/scylladb/scylla/issues/6472 is gone
+//
+SEASTAR_TEST_CASE(test_bug_6472) {
+    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+        auto builder = schema_builder("tests", "test_bug_6472")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        std::map<sstring, sstring> opts = {
+            { time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
+            { time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
+        };
+        builder.set_compaction_strategy_options(opts);
+        builder.set_gc_grace_seconds(0);
+        auto s = builder.build();
+
+        auto sst_gen = [&env, s, tmpdir_path, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, tmpdir_path, (*gen)++, la, big);
+        };
+
+        auto next_timestamp = [] (auto step) {
+            using namespace std::chrono;
+            return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
+        };
+
+        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+
+        auto make_expiring_cell = [&] (std::chrono::hours step) {
+            static thread_local int32_t value = 1;
+
+            auto key_str = tokens[0].first;
+            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+
+            mutation m(s, key);
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_timestamp(step), gc_clock::duration(step + 5s));
+            return m;
+        };
+
+        auto cm = make_lw_shared<compaction_manager>();
+        column_family::config cfg = column_family_test_config();
+        cfg.datadir = tmpdir_path;
+        cfg.enable_disk_writes = true;
+        cfg.enable_commitlog = false;
+        cfg.enable_cache = false;
+        cfg.enable_incremental_backups = false;
+            reader_concurrency_semaphore sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{});
+            cfg.read_concurrency_semaphore = &sem;
+        auto tracker = make_lw_shared<cache_tracker>();
+        cell_locker_stats cl_stats;
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        cf->mark_ready_for_writes();
+        cf->start();
+
+        // Make 100 expiring cells which belong to different time windows
+        std::vector<mutation> muts;
+        muts.reserve(101);
+        for (auto i = 1; i < 101; i++) {
+            muts.push_back(make_expiring_cell(std::chrono::hours(i)));
+        }
+        muts.push_back(make_expiring_cell(std::chrono::hours(110)));
+
+        //
+        // Reproduce issue 6472 by making an input set which causes both interposer and GC writer to be enabled
+        //
+        std::vector<shared_sstable> sstables_spanning_many_windows = {
+            make_sstable_containing(sst_gen, muts),
+            make_sstable_containing(sst_gen, muts),
+        };
+        utils::UUID run_id = utils::make_random_uuid();
+        for (auto& sst : sstables_spanning_many_windows) {
+            sstables::test(sst).set_run_identifier(run_id);
+        }
+
+        // Make sure everything we wanted expired is expired by now.
+        forward_jump_clocks(std::chrono::hours(101));
+
+        auto ret = compact_sstables(sstables::compaction_descriptor(sstables_spanning_many_windows, default_priority_class()),
+                                    *cf, sst_gen, replacer_fn_no_op()).get0();
+        BOOST_REQUIRE(ret.new_sstables.size() == 1);
+        return make_ready_future<>();
+    });
+}

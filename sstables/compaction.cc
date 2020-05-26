@@ -559,6 +559,7 @@ private:
     }
 
     virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) = 0;
+    virtual bool use_interposer_consumer() const = 0;
 
     compaction_info finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
         _info->ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(ended_at.time_since_epoch()).count();
@@ -640,8 +641,10 @@ public:
         return garbage_collected_sstable_writer(_gc_sstable_writer_data);
     }
 
-    bool contains_multi_fragment_runs() const {
-        return _contains_multi_fragment_runs;
+    bool enable_garbage_collected_sstable_writer() const {
+        // FIXME: Disable GC writer if interposer consumer is enabled until they both can work simultaneously.
+        // More details can be found at https://github.com/scylladb/scylla/issues/6472
+        return _contains_multi_fragment_runs && !use_interposer_consumer();
     }
 
     template <typename GCConsumer = noop_compacted_fragments_consumer>
@@ -745,6 +748,10 @@ public:
         return _cf.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
     }
 
+    bool use_interposer_consumer() const override {
+        return _cf.get_compaction_strategy().use_interposer_consumer();
+    }
+
     void report_start(const sstring& formatted_msg) const override {
         clogger.info("Compacting {}", formatted_msg);
     }
@@ -824,7 +831,7 @@ private:
     void maybe_replace_exhausted_sstables_by_sst(shared_sstable sst) {
         // Skip earlier replacement of exhausted sstables if compaction works with only single-fragment runs,
         // meaning incremental compaction is disabled for this compaction.
-        if (!_contains_multi_fragment_runs) {
+        if (!enable_garbage_collected_sstable_writer()) {
             return;
         }
         // Replace exhausted sstable(s), if any, by new one(s) in the column family.
@@ -1242,6 +1249,10 @@ public:
         };
     }
 
+    bool use_interposer_consumer() const override {
+        return true;
+    }
+
     void report_start(const sstring& formatted_msg) const override {
         clogger.info("Resharding {}", formatted_msg);
     }
@@ -1333,7 +1344,7 @@ compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf) 
                 cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
     auto c = make_compaction(cf, std::move(descriptor));
-    if (c->contains_multi_fragment_runs()) {
+    if (c->enable_garbage_collected_sstable_writer()) {
         auto gc_writer = c->make_garbage_collected_sstable_writer();
         return compaction::run(std::move(c), std::move(gc_writer));
     }

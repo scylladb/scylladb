@@ -132,6 +132,9 @@ public:
     uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate);
 
     reader_consumer make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer);
+
+    // Returns whether or not interposer consumer is used by a given strategy.
+    bool use_interposer_consumer() const;
 };
 
 // Creates a compaction_strategy object from one of the strategies available.
