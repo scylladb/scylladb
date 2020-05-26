@@ -351,6 +351,10 @@ static bool is_log_name(const std::string_view& table_name) {
     return boost::ends_with(table_name, cdc_log_suffix);
 }
 
+bool is_cdc_metacolumn_name(const sstring& name) {
+    return name.compare(0, cdc_meta_column_prefix.size(), cdc_meta_column_prefix) == 0;
+}
+
 bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table_name) {
     auto base_schema = get_base_table(service::get_local_storage_proxy().get_db().local(), ks_name, table_name);
     if (!base_schema) {

@@ -146,6 +146,8 @@ bytes log_data_column_deleted_name_bytes(const bytes& column_name);
 seastar::sstring log_data_column_deleted_elements_name(std::string_view column_name);
 bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name);
 
+bool is_cdc_metacolumn_name(const sstring& name);
+
 utils::UUID generate_timeuuid(api::timestamp_type t);
 
 } // namespace cdc
