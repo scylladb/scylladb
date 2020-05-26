@@ -572,14 +572,15 @@ SEASTAR_THREAD_TEST_CASE(test_time_based_cache_eviction) {
 
 sstring make_string_blob(size_t size) {
     const char* const letters = "abcdefghijklmnoqprsuvwxyz";
-    std::random_device rd;
+    static thread_local std::random_device rd;
+    static thread_local std::default_random_engine re(rd());
     std::uniform_int_distribution<size_t> dist(0, 25);
 
     sstring s;
     s.resize(size);
 
     for (size_t i = 0; i < size; ++i) {
-        s[i] = letters[dist(rd)];
+        s[i] = letters[dist(re)];
     }
 
     return s;
