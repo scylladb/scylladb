@@ -218,9 +218,7 @@ static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
         return false;
     }
     if (it2->name == "S") {
-        std::string_view val1(it1->value.GetString(), it1->value.GetStringLength());
-        std::string_view val2(it2->value.GetString(), it2->value.GetStringLength());
-        return val1.substr(0, val2.size()) == val2;
+        return rjson::to_string_view(it1->value).starts_with(rjson::to_string_view(it2->value));
     } else /* it2->name == "B" */ {
         return base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
     }

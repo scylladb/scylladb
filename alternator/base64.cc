@@ -131,7 +131,7 @@ bool base64_begins_with(std::string_view base, std::string_view operand) {
         return false;
     }
     if (base64_padding_len(operand) == 0) {
-        return base.substr(0, operand.size()) == operand;
+        return base.starts_with(operand);
     }
     const std::string_view unpadded_base_prefix = base.substr(0, operand.size() - 4);
     const std::string_view unpadded_operand = operand.substr(0, operand.size() - 4);
@@ -141,5 +141,5 @@ bool base64_begins_with(std::string_view base, std::string_view operand) {
     // Decode and compare last 4 bytes of base64-encoded strings
     const std::string base_remainder = base64_decode_string(base.substr(operand.size() - 4, operand.size()));
     const std::string operand_remainder = base64_decode_string(operand.substr(operand.size() - 4));
-    return base_remainder.substr(0, operand_remainder.size()) == operand_remainder;
+    return base_remainder.starts_with(operand_remainder);
 }

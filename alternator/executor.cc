@@ -2124,7 +2124,7 @@ rjson::value calculate_value(const parsed::value& v,
                             if (it2->name == "S") {
                                 std::string_view val1 = rjson::to_string_view(it1->value);
                                 std::string_view val2 = rjson::to_string_view(it2->value);
-                                ret = val1.substr(0, val2.size()) == val2;
+                                ret = val1.starts_with(val2);
                             } else /* it2->name == "B" */ {
                                 ret = base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
                             }
