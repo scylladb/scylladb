@@ -42,7 +42,6 @@
 
 #include <tuple>
 #include <seastar/core/gate.hh>
-#include <seastar/core/apply.hh>
 #include <seastar/core/metrics_registration.hh>
 #include "tracing/tracing.hh"
 #include "table_helper.hh"
