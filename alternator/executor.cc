@@ -1173,15 +1173,18 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) {
 
 // The DynamoDB API doesn't let the client control the server's timeout.
 // Let's pick something reasonable:
-static db::timeout_clock::time_point default_timeout() {
+db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + 10s;
 }
-
-static std::optional<rjson::value> describe_single_item(schema_ptr schema,
-        const query::partition_slice& slice,
-        const cql3::selection::selection& selection,
-        const query::result& query_result,
-        std::unordered_set<std::string>&& attrs_to_get);
+        
+static future<std::unique_ptr<rjson::value>> get_previous_item(
+        service::storage_proxy& proxy,
+        service::client_state& client_state,
+        schema_ptr schema,
+        const partition_key& pk,
+        const clustering_key& ck,
+        service_permit permit,
+        alternator::stats& stats);
 
 static lw_shared_ptr<query::read_command> previous_item_read_command(schema_ptr schema,
         const clustering_key& ck,
@@ -1249,7 +1252,7 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
 std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) {
     if (qr->row_count()) {
         auto selection = cql3::selection::selection::wildcard(_schema);
-        auto previous_item = describe_single_item(_schema, slice, *selection, *qr, {});
+        auto previous_item = executor::describe_single_item(_schema, slice, *selection, *qr, {});
         if (previous_item) {
             return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts);
         }
@@ -1315,9 +1318,9 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     auto command = previous_item_read_command(schema, ck, selection);
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
-    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
+    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
             [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
+        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
         if (previous_item) {
             return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
         } else {
@@ -1346,7 +1349,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
                     return rmw_operation_return(std::move(_return_attributes));
                 });
             });
@@ -1354,13 +1357,13 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         assert(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
             return rmw_operation_return(std::move(_return_attributes));
         });
     }
     // If we're still here, we need to do this write using LWT:
     stats.write_using_lwt++;
-    auto timeout = default_timeout();
+    auto timeout = executor::default_timeout();
     auto selection = cql3::selection::selection::wildcard(schema());
     auto read_command = needs_read_before_write ?
             previous_item_read_command(schema(), _ck, selection) :
@@ -1637,7 +1640,7 @@ public:
 
 static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, dht::decorated_key dk, std::vector<put_or_delete_item>&& mutation_builders,
         service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
-    auto timeout = default_timeout();
+    auto timeout = executor::default_timeout();
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
     return proxy.cas(schema, op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
@@ -1693,7 +1696,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         }
         return proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
-                default_timeout(),
+                executor::default_timeout(),
                 trace_state,
                 std::move(permit));
     } else {
@@ -1861,11 +1864,57 @@ std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, 
     return {};
 }
 
-static std::optional<rjson::value> describe_single_item(schema_ptr schema,
+/**
+ * Helper routine to extract data when we already have 
+ * row, etc etc.
+ * 
+ * Note: include_all_embedded_attributes means we should
+ * include all values in the `ATTRS_COLUMN_NAME` map column.
+ * 
+ * We could change the behaviour to simply include all values 
+ * from this column if the `ATTRS_COLUMN_NAME` is explicit in 
+ * `attrs_to_get`, but I am scared to do that now in case 
+ * there is some corner case in existing code.
+ * 
+ * Explicit bool means we can be sure all previous calls are 
+ * as before.
+ */ 
+void executor::describe_single_item(const cql3::selection::selection& selection,
+    const std::vector<bytes_opt>& result_row,
+    const std::unordered_set<std::string>& attrs_to_get,
+    rjson::value& item,
+    bool include_all_embedded_attributes) 
+{
+    const auto& columns = selection.get_columns();
+    auto column_it = columns.begin();
+    for (const bytes_opt& cell : result_row) {
+        std::string column_name = (*column_it)->name_as_text();
+        if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
+            if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
+                rjson::set_with_string_name(item, column_name, rjson::empty_object());
+                rjson::value& field = item[column_name.c_str()];
+                rjson::set_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(*cell, **column_it));
+            }
+        } else if (cell) {
+            auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
+            auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
+            for (auto entry : keys_and_values) {
+                std::string attr_name = value_cast<sstring>(entry.first);
+                if (include_all_embedded_attributes || attrs_to_get.empty() || attrs_to_get.count(attr_name) > 0) {
+                    bytes value = value_cast<bytes>(entry.second);
+                    rjson::set_with_string_name(item, attr_name, deserialize_item(value));
+                }
+            }
+        }
+        ++column_it;
+    }
+}
+
+std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        std::unordered_set<std::string>&& attrs_to_get) {
+        const std::unordered_set<std::string>& attrs_to_get) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
@@ -1880,29 +1929,7 @@ static std::optional<rjson::value> describe_single_item(schema_ptr schema,
     // FIXME: I think this can't really be a loop, there should be exactly
     // one result after above we handled the 0 result case
     for (auto& result_row : result_set->rows()) {
-        const auto& columns = selection.get_columns();
-        auto column_it = columns.begin();
-        for (const bytes_opt& cell : result_row) {
-            std::string column_name = (*column_it)->name_as_text();
-            if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
-                if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
-                    rjson::set_with_string_name(item, column_name, rjson::empty_object());
-                    rjson::value& field = item[column_name.c_str()];
-                    rjson::set_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(*cell, **column_it));
-                }
-            } else if (cell) {
-                auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
-                auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
-                for (auto entry : keys_and_values) {
-                    std::string attr_name = value_cast<sstring>(entry.first);
-                    if (attrs_to_get.empty() || attrs_to_get.count(attr_name) > 0) {
-                        bytes value = value_cast<bytes>(entry.second);
-                        rjson::set_with_string_name(item, attr_name, deserialize_item(value));
-                    }
-                }
-            }
-            ++column_it;
-        }
+        describe_single_item(selection, result_row, attrs_to_get, item);
     }
     return item;
 }
@@ -2296,8 +2323,8 @@ static rjson::value describe_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        std::unordered_set<std::string>&& attrs_to_get) {
-    std::optional<rjson::value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), std::move(attrs_to_get));
+        const std::unordered_set<std::string>& attrs_to_get) {
+    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get);
     if (!opt_item) {
         // If there is no matching item, we're supposed to return an empty
         // object without an Item member - not one with an empty Item member
@@ -2345,7 +2372,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "GetItem");
 
-    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
+    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time);
         return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
@@ -2409,7 +2436,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
-            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(default_timeout(), permit, client_state)).then(
+            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
                 std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get));
                 return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(
@@ -2703,7 +2730,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
     auto p = service::pager::query_pagers::pager(schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
-    return p->fetch_page(limit, gc_clock::now(), default_timeout()).then(
+    return p->fetch_page(limit, gc_clock::now(), executor::default_timeout()).then(
             [p, schema, cql_stats, partition_slice = std::move(partition_slice),
              selection = std::move(selection), query_state_ptr = std::move(query_state_ptr),
              attrs_to_get = std::move(attrs_to_get),
