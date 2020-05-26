@@ -222,11 +222,7 @@ static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
         std::string_view val2(it2->value.GetString(), it2->value.GetStringLength());
         return val1.substr(0, val2.size()) == val2;
     } else /* it2->name == "B" */ {
-        // TODO (optimization): Check the begins_with condition directly on
-        // the base64-encoded string, without making a decoded copy.
-        bytes val1 = base64_decode(it1->value);
-        bytes val2 = base64_decode(it2->value);
-        return val1.substr(0, val2.size()) == val2;
+        return base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
     }
 }
 
