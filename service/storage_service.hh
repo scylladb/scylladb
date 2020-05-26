@@ -161,8 +161,6 @@ private:
     bool _for_testing;
 public:
     storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, /* only for tests */ bool for_testing = false);
-    void isolate_on_error();
-    void isolate_on_commit_error();
 
     // Needed by distributed<>
     future<> stop();
@@ -874,6 +872,8 @@ public:
     }
 private:
     void do_isolate_on_error(disk_error type);
+    future<> isolate();
+
     utils::UUID _local_host_id;
 public:
     utils::UUID get_local_id() const { return _local_host_id; }

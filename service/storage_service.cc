@@ -110,10 +110,10 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator) {
     register_metrics();
-    sstable_read_error.connect([this] { isolate_on_error(); });
-    sstable_write_error.connect([this] { isolate_on_error(); });
-    general_disk_error.connect([this] { isolate_on_error(); });
-    commit_error.connect([this] { isolate_on_commit_error(); });
+    sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); });
+    sstable_write_error.connect([this] { do_isolate_on_error(disk_error::regular); });
+    general_disk_error.connect([this] { do_isolate_on_error(disk_error::regular); });
+    commit_error.connect([this] { do_isolate_on_error(disk_error::commit); });
 }
 
 void storage_service::enable_all_features() {
@@ -160,16 +160,6 @@ void storage_service::register_metrics() {
                 return static_cast<std::underlying_type_t<node_external_status>>(map_operation_mode(_operation_mode));
             }),
     });
-}
-
-void
-storage_service::isolate_on_error() {
-    do_isolate_on_error(disk_error::regular);
-}
-
-void
-storage_service::isolate_on_commit_error() {
-    do_isolate_on_error(disk_error::commit);
 }
 
 bool storage_service::is_auto_bootstrap() const {
@@ -1443,24 +1433,22 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
 static std::optional<future<>> drain_in_progress;
 
 future<> storage_service::stop_transport() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return seastar::async([&ss] {
-            slogger.info("Stop transport: starts");
+    return seastar::async([this] {
+        slogger.info("Stop transport: starts");
 
-            ss.shutdown_client_servers();
-            slogger.info("Stop transport: shutdown rpc and cql server done");
+        shutdown_client_servers();
+        slogger.info("Stop transport: shutdown rpc and cql server done");
 
-            gms::stop_gossiping().get();
-            slogger.info("Stop transport: stop_gossiping done");
+        gms::stop_gossiping().get();
+        slogger.info("Stop transport: stop_gossiping done");
 
-            ss.do_stop_ms().get();
-            slogger.info("Stop transport: shutdown messaging_service done");
+        do_stop_ms().get();
+        slogger.info("Stop transport: shutdown messaging_service done");
 
-            ss.do_stop_stream_manager().get();
-            slogger.info("Stop transport: shutdown stream_manager done");
+        do_stop_stream_manager().get();
+        slogger.info("Stop transport: shutdown stream_manager done");
 
-            slogger.info("Stop transport: done");
-        });
+        slogger.info("Stop transport: done");
     });
 }
 
@@ -2132,8 +2120,6 @@ future<int64_t> storage_service::true_snapshots_size() {
     });
   });
 }
-
-static std::atomic<bool> isolated = { false };
 
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
@@ -2980,13 +2966,21 @@ future<> storage_service::uninit_messaging_service() {
 
 void storage_service::do_isolate_on_error(disk_error type)
 {
+    static std::atomic<bool> isolated = { false };
+
     if (!isolated.exchange(true)) {
         slogger.warn("Shutting down communications due to I/O errors until operator intervention");
         slogger.warn("{} error: {}", type == disk_error::commit ? "Commitlog" : "Disk", std::current_exception());
         // isolated protect us against multiple stops
         //FIXME: discarded future.
-        (void)service::get_local_storage_service().stop_transport();
+        (void)isolate();
     }
+}
+
+future<> storage_service::isolate() {
+    return run_with_no_api_lock([] (storage_service& ss) {
+        return ss.stop_transport();
+    });
 }
 
 future<sstring> storage_service::get_removal_status() {
