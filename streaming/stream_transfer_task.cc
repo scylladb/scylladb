@@ -52,11 +52,11 @@
 #include "dht/sharder.hh"
 #include "service/priority_manager.hh"
 #include <boost/range/irange.hpp>
-#include "service/storage_service.hh"
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_set.hpp>
 #include "sstables/sstables.hh"
 #include "database.hh"
+#include "gms/feature_service.hh"
 
 namespace streaming {
 

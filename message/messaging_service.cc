@@ -24,7 +24,6 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "gms/inet_address_serializer.hh"
-#include "service/storage_service.hh"
 #include "streaming/prepare_message.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"

@@ -60,7 +60,6 @@
 #include "frozen_mutation.hh"
 #include <seastar/core/do_with.hh>
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
 #include <seastar/core/fstream.hh>
@@ -79,6 +78,7 @@
 #include "sstables/progress_monitor.hh"
 #include "auth/common.hh"
 #include "tracing/trace_keyspace_helper.hh"
+#include "gms/feature_service.hh"
 
 #include "checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
