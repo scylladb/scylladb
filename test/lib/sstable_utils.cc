@@ -153,7 +153,7 @@ token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
     return key_and_token_pair;
 }
 
-future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator, replacer_fn replacer) {
+future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator, compaction_sstable_replacer_fn replacer) {
     descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
         return creator();
     };
