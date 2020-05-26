@@ -428,8 +428,8 @@ def add_param_writer_basic_type(name, base_state, typ, var_type="", var_index=No
         var_index = "uint32_t(" + str(var_index) + ")"
     create_variant_state = Template("auto state = state_of_${base_state}__$name<Output> { start_frame(_out), std::move(_state) };").substitute(locals()) if var_index and root_node else ""
     set_varient_index = "serialize(_out, " + var_index + ");\n" if var_index is not None else ""
-    set_command = ("_state.f.end(_out);" if not root_node else "state.f.end(_out);") if var_type is not "" else ""
-    return_command = "{ _out, std::move(_state._parent) }" if var_type is not "" and not root_node else "{ _out, std::move(_state) }"
+    set_command = ("_state.f.end(_out);" if not root_node else "state.f.end(_out);") if var_type != "" else ""
+    return_command = "{ _out, std::move(_state._parent) }" if var_type != "" and not root_node else "{ _out, std::move(_state) }"
 
     allow_fragmented = False
     if typ in ['bytes', 'sstring']:
@@ -476,8 +476,8 @@ def add_param_writer_object(name, base_state, typ, var_type="", var_index=None, 
     if not is_stub(typ) and is_local_type(typ):
         ret += add_param_writer_basic_type(name, base_state, typ, var_type, var_index, root_node)
     if is_stub(typ):
-        set_command = "_state.f.end(_out);" if var_type is not "" else ""
-        return_command = "{ _out, std::move(_state._parent) }" if var_type is not "" and not root_node else "{ _out, std::move(_state) }"
+        set_command = "_state.f.end(_out);" if var_type != "" else ""
+        return_command = "{ _out, std::move(_state._parent) }" if var_type != "" and not root_node else "{ _out, std::move(_state) }"
         ret += Template(reindent(4, """
             template<typename Serializer>
             after_${base_state}__${name}<Output> ${name}$var_type(Serializer&& f) && {
