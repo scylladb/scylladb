@@ -67,7 +67,8 @@ int main(int argc, char** argv) {
                 }
 
                 // Evict in random order to stress more
-                std::shuffle(refs.begin(), refs.end(), std::random_device());
+                std::random_device rd;
+                std::shuffle(refs.begin(), refs.end(), std::default_random_engine(rd()));
                 r.make_evictable([&] {
                     return with_allocator(r.allocator(), [&] {
                         if (refs.empty()) {

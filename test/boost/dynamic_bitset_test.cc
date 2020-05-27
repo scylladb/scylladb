@@ -117,7 +117,7 @@ BOOST_AUTO_TEST_CASE(test_find_last_prev) {
     BOOST_REQUIRE_EQUAL(i, 174);
 }
 
-static void test_random_ops(size_t size, std::random_device& rd ) {
+static void test_random_ops(size_t size, std::default_random_engine& re ) {
     // BOOST_REQUIRE and friends are very slow, just use regular throws instead.
     auto require = [] (bool b) {
         if (!b) {
@@ -139,9 +139,9 @@ static void test_random_ops(size_t size, std::random_device& rd ) {
     };
     size_t limit = std::log(size) * 1000;
     for (size_t i = 0; i != limit; ++i) {
-        if (global_op_dist(rd) == 0) {
+        if (global_op_dist(re) == 0) {
             // perform a global operation
-            switch (global_op_selection_dist(rd)) {
+            switch (global_op_selection_dist(re)) {
             case 0:
                 for (size_t j = 0; j != size; ++j) {
                     db.clear(j);
@@ -157,28 +157,28 @@ static void test_random_ops(size_t size, std::random_device& rd ) {
             }
         } else {
             // perform a single-bit operation
-            switch (single_op_selection_dist(rd)) {
+            switch (single_op_selection_dist(re)) {
             case 0: {
-                auto bit = bit_dist(rd);
+                auto bit = bit_dist(re);
                 db.set(bit);
                 bv[bit] = true;
                 break;
             }
             case 1: {
-                auto bit = bit_dist(rd);
+                auto bit = bit_dist(re);
                 db.clear(bit);
                 bv[bit] = false;
                 break;
             }
             case 2: {
-                auto bit = bit_dist(rd);
+                auto bit = bit_dist(re);
                 bool dbb = db.test(bit);
                 bool bvb = bv[bit];
                 require_equal(dbb, bvb);
                 break;
             }
             case 3: {
-                auto bit = bit_dist(rd);
+                auto bit = bit_dist(re);
                 auto next = db.find_next_set(bit);
                 if (next == db.npos) {
                     require(!boost::algorithm::any_of(boost::irange<size_t>(bit+1, size), is_set));
@@ -215,7 +215,8 @@ static void test_random_ops(size_t size, std::random_device& rd ) {
 
 BOOST_AUTO_TEST_CASE(test_random_operations) {
     std::random_device rd;
+    std::default_random_engine re(rd());
     for (auto size : { 1, 63, 64, 65, 2000, 4096-65, 4096-64, 4096-63, 4096-1, 4096, 4096+1, 262144-1, 262144, 262144+1}) {
-        BOOST_CHECK_NO_THROW(test_random_ops(size, rd));
+        BOOST_CHECK_NO_THROW(test_random_ops(size, re));
     }
 }
