@@ -28,6 +28,7 @@
 #include "sstables/shared_sstable.hh"
 #include "exceptions/exceptions.hh"
 #include "sstables/compaction_backlog_manager.hh"
+#include "compaction_strategy_type.hh"
 
 class table;
 using column_family = table;
@@ -36,15 +37,6 @@ class flat_mutation_reader;
 struct mutation_source_metadata;
 
 namespace sstables {
-
-enum class compaction_strategy_type {
-    null,
-    major,
-    size_tiered,
-    leveled,
-    date_tiered,
-    time_window,
-};
 
 class compaction_strategy_impl;
 class sstable;
