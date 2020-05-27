@@ -2129,19 +2129,17 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
         f = make_checked_file(commit_error_handler, std::move(f));
         descriptor d(filename, pfx);
         auto w = make_lw_shared<work>(std::move(f), d, read_io_prio_class, off);
-        auto ret = w->s.listen(next);
+        auto ret = w->s.listen(next).done();
 
-        //FIXME: discarded future.
-        (void)w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
+        return w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
             if (!w->failed) {
                 w->s.close();
             }
         }).handle_exception([w](auto ep) {
             w->s.set_exception(ep);
+        }).finally([ret = std::move(ret)] () mutable {
+            return std::move(ret);
         });
-        // #6265 - must keep subscription alive.
-        auto res = ret.done();
-        return res.finally([ret = std::move(ret)] {});
     });
 }
 
