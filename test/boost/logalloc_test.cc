@@ -168,8 +168,8 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
 
         // Shuffle, so that we don't free whole segments back to the pool
         // and there's nothing to reclaim.
-        std::random_device random;
-        std::shuffle(allocated2.begin(), allocated2.end(), std::default_random_engine(random()));
+        std::default_random_engine random{std::random_device{}()};
+        std::shuffle(allocated2.begin(), allocated2.end(), random);
 
         with_allocator(reg2.allocator(), [&] {
             auto it = allocated2.begin();
