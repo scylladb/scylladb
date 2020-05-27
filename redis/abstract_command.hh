@@ -28,12 +28,15 @@
 #include "db/consistency_level_type.hh"
 #include "db/timeout_clock.hh"
 #include "db/system_keyspace.hh"
-#include "service/storage_proxy.hh"
 #include "keys.hh"
 #include "timestamp.hh"
 #include <unordered_map>
 
 class service_permit;
+
+namespace service {
+class storage_proxy;
+}
 
 namespace redis {
 

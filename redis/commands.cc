@@ -25,7 +25,6 @@
 #include "redis/reply.hh"
 #include "types.hh"
 #include "service_permit.hh"
-#include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 #include "redis/options.hh"
 #include "redis/query_utils.hh"
