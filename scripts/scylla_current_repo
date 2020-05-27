@@ -3,7 +3,7 @@
 VERSION=$(./SCYLLA-VERSION-GEN)
 SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
 SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
-
+PRODUCT=$(cat build/SCYLLA-PRODUCT-FILE)
 
 . /etc/os-release
 print_usage() {
@@ -49,11 +49,11 @@ else
         TARGET=`lsb_release -c|awk '{print $2}'`
     fi 
     if [ "$TARGET" = "trusty" ] || [ "$TARGET" = "xenial" ]; then
-        echo http://downloads.scylladb.com/deb/ubuntu/scylla-$REPO_VERSION-$TARGET.list
+        echo http://downloads.scylladb.com/downloads/$PRODUCT/deb/ubuntu/scylla-$REPO_VERSION-$TARGET.list
     elif [ "$TARGET" = "jessie" ]; then
-        echo http://downloads.scylladb.com/deb/debian/scylla-$REPO_VERSION-$TARGET.list
+        echo http://downloads.scylladb.com/downloads/$PRODUCT/deb/debian/scylla-$REPO_VERSION-$TARGET.list
     elif [ "$TARGET" = "centos" ]; then
-        echo http://downloads.scylladb.com/rpm/centos/scylla-$REPO_VERSION.repo
+        echo http://downloads.scylladb.com/downloads/$PRODUCT/rpm/centos/scylla-$REPO_VERSION.repo
     else
         echo "Unsupported distribution."
         exit 1
