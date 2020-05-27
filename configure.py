@@ -1221,6 +1221,7 @@ def configure_seastar(build_dir, mode):
         '-DSeastar_LD_FLAGS={}'.format(seastar_ldflags),
         '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_STD_OPTIONAL_VARIANT_STRINGVIEW=ON',
+        '-DSeastar_API_LEVEL=2',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
     ]
 
