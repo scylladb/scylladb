@@ -1807,33 +1807,57 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             }
             keyspace_name = "system_traces";
         }
-        auto token_ownership = dht::token::describe_ownership(ss._token_metadata.sorted_tokens());
 
-        std::map<gms::inet_address, float> final_ownership;
+        // The following loops seems computationally heavy, but it's not as bad.
+        // The upper two simply iterate over all the endpoints by iterating over all the
+        // DC and all the instances in each DC.
+        //
+        // The call for get_range_for_endpoint is done once per endpoint
+        return do_with(dht::token::describe_ownership(ss._token_metadata.sorted_tokens()),
+                ss._token_metadata.get_topology().get_datacenter_endpoints(),
+                std::map<gms::inet_address, float>(),
+                [&ss, keyspace_name](const std::map<token, float>& token_ownership, std::unordered_map<sstring,
+                        std::unordered_set<gms::inet_address>>& datacenter_endpoints,
+                        std::map<gms::inet_address, float>& final_ownership) {
+            return do_for_each(datacenter_endpoints, [&ss, &keyspace_name, &final_ownership, &token_ownership](std::pair<sstring,std::unordered_set<inet_address>>&& endpoints) mutable {
+                return do_with(std::unordered_set<inet_address>(endpoints.second), [&ss, &keyspace_name, &final_ownership, &token_ownership](const std::unordered_set<inet_address>& endpoints_map) mutable {
+                    return do_for_each(endpoints_map, [&ss, &keyspace_name, &final_ownership, &token_ownership](const gms::inet_address& endpoint) mutable {
+                        // calculate the ownership with replication and add the endpoint to the final ownership map
+                        try {
+                            return do_with(float(0.0f), dht::token_range_vector(ss.get_ranges_for_endpoint(keyspace_name, endpoint)),
+                                    [&final_ownership, &token_ownership, &endpoint](float& ownership, const dht::token_range_vector& ranges) mutable {
+                                ownership = 0.0f;
+                                return do_for_each(ranges, [&token_ownership,&ownership](const dht::token_range& r) mutable {
+                                    // get_ranges_for_endpoint will unwrap the first range.
+                                    // With t0 t1 t2 t3, the first range (t3,t0] will be splitted
+                                    // as (min,t0] and (t3,max]. Skippping the range (t3,max]
+                                    // we will get the correct ownership number as if the first
+                                    // range were not splitted.
+                                    if (!r.end()) {
+                                        return make_ready_future<>();
+                                    }
+                                    auto end_token = r.end()->value();
+                                    auto loc = token_ownership.find(end_token);
+                                    if (loc != token_ownership.end()) {
+                                        ownership += loc->second;
+                                    }
+                                    return make_ready_future<>();
+                                }).then([&final_ownership, &ownership, &endpoint]() mutable {
+                                    final_ownership[endpoint] = ownership;
+                                });
+                            });
+                        }  catch (no_such_keyspace&) {
+                            // In case ss.get_ranges_for_endpoint(keyspace_name, endpoint) is not found, just mark it as zero and continue
+                            final_ownership[endpoint] = 0;
+                            return make_ready_future<>();
+                        }
 
-        // calculate ownership per dc
-        for (auto endpoints : ss._token_metadata.get_topology().get_datacenter_endpoints()) {
-            // calculate the ownership with replication and add the endpoint to the final ownership map
-            for (const gms::inet_address& endpoint : endpoints.second) {
-                float ownership = 0.0f;
-                for (range<token> r : ss.get_ranges_for_endpoint(keyspace_name, endpoint)) {
-                    // get_ranges_for_endpoint will unwrap the first range.
-                    // With t0 t1 t2 t3, the first range (t3,t0] will be splitted
-                    // as (min,t0] and (t3,max]. Skippping the range (t3,max]
-                    // we will get the correct ownership number as if the first
-                    // range were not splitted.
-                    if (!r.end()) {
-                        continue;
-                    }
-                    auto end_token = r.end()->value();
-                    if (token_ownership.find(end_token) != token_ownership.end()) {
-                        ownership += token_ownership[end_token];
-                    }
-                }
-                final_ownership[endpoint] = ownership;
-            }
-        }
-        return final_ownership;
+                    });
+                });
+            }).then([&final_ownership] {
+                return final_ownership;
+            });
+        });
     });
 }
 
