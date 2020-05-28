@@ -51,6 +51,7 @@ class result_memory_limiter {
 public:
     static constexpr size_t minimum_result_size = 4 * 1024;
     static constexpr size_t maximum_result_size = 1 * 1024 * 1024;
+    static constexpr size_t unlimited_result_size = std::numeric_limits<size_t>::max();
 public:
     explicit result_memory_limiter(size_t maximum_total_result_memory)
         : _maximum_total_result_memory(maximum_total_result_memory)

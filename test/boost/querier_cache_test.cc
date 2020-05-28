@@ -723,7 +723,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         db.query_mutations(s,
                 cmd2,
                 query::full_partition_range,
-                1024 * 1024 * 1024 * 1024,
+                query::result_memory_limiter::unlimited_result_size,
                 nullptr,
                 db::no_timeout).get();
         return make_ready_future<>();
