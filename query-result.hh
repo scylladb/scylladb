@@ -196,7 +196,7 @@ public:
 
     // Checks whether the result can grow any more.
     stop_iteration check() const {
-        stop_iteration stop { _total_used_memory > result_memory_limiter::maximum_result_size };
+        stop_iteration stop { _total_used_memory > _maximum_result_size };
         if (!stop && _used_memory >= _blocked_bytes && _limiter) {
             return _limiter->check() && _stop_on_global_limit;
         }
