@@ -247,6 +247,8 @@ public:
     const locator::token_metadata& get_token_metadata() const { return _token_metadata; }
     locator::token_metadata& get_token_metadata() { return _token_metadata; }
 
+    query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
+
 private:
     distributed<database>& _db;
     locator::token_metadata& _token_metadata;

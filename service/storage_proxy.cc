@@ -1316,6 +1316,21 @@ endpoints_to_replica_ids(locator::token_metadata& tm, const std::vector<gms::ine
     return replica_ids;
 }
 
+query::max_result_size storage_proxy::get_max_result_size(const query::partition_slice& slice) const {
+    // Unpaged and reverse queries.
+    if (!slice.options.contains<query::partition_slice::option::allow_short_read>() || slice.options.contains<query::partition_slice::option::reversed>()) {
+        auto& db = _db.local();
+        // We only limit user queries.
+        if (current_scheduling_group() == db.get_statement_scheduling_group()) {
+            return query::max_result_size(db.get_config().max_memory_for_unlimited_query_soft_limit(), db.get_config().max_memory_for_unlimited_query_hard_limit());
+        } else {
+            return query::max_result_size(query::result_memory_limiter::unlimited_result_size);
+        }
+    } else {
+        return query::max_result_size(query::result_memory_limiter::maximum_result_size);
+    }
+}
+
 bool storage_proxy::need_throttle_writes() const {
     return get_global_stats().background_write_bytes > _background_write_throttle_threahsold || get_global_stats().queued_write_bytes > 6*1024*1024;
 }
