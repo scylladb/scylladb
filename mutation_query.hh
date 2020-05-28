@@ -164,7 +164,7 @@ future<reconcilable_result> mutation_query(
     gc_clock::time_point query_time,
     db::timeout_clock::time_point timeout,
     query::query_class_config class_config,
-    query::result_memory_accounter&& accounter = { },
+    query::result_memory_accounter&& accounter,
     tracing::trace_state_ptr trace_ptr = nullptr,
     query::querier_cache_context cache_ctx = { });
 

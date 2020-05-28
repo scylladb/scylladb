@@ -2001,7 +2001,7 @@ struct query_state {
                          const query::read_command& cmd,
                          query::result_options opts,
                          const dht::partition_range_vector& ranges,
-                         query::result_memory_accounter memory_accounter = { })
+                         query::result_memory_accounter memory_accounter)
             : schema(std::move(s))
             , cmd(cmd)
             , builder(cmd.slice, opts, std::move(memory_accounter))

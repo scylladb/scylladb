@@ -152,7 +152,10 @@ private:
 
     friend class result_memory_limiter;
 public:
-    result_memory_accounter() = default;
+    explicit result_memory_accounter(size_t max_size) noexcept
+        : _blocked_bytes(0)
+        , _maximum_result_size(max_size) {
+    }
 
     result_memory_accounter(result_memory_accounter&& other) noexcept
         : _limiter(std::exchange(other._limiter, nullptr))
