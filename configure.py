@@ -1197,7 +1197,9 @@ for m in ['debug', 'release', 'sanitize']:
 
 gcc_linker_output = subprocess.check_output(['gcc', '-###', '/dev/null', '-o', 't'], stderr=subprocess.STDOUT).decode('utf-8')
 original_dynamic_linker = re.search('-dynamic-linker ([^ ]*)', gcc_linker_output).groups()[0]
-dynamic_linker = '/' * 2000 + original_dynamic_linker
+# gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
+# that. The 512 includes the null at the end, hence the 511 bellow.
+dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
 
 forced_ldflags = '-Wl,'
 
