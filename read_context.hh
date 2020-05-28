@@ -120,6 +120,7 @@ public:
 class read_context final : public enable_lw_shared_from_this<read_context> {
     row_cache& _cache;
     schema_ptr _schema;
+    reader_permit _permit;
     const dht::partition_range& _range;
     const query::partition_slice& _slice;
     const io_priority_class& _pc;
@@ -144,6 +145,7 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
 public:
     read_context(row_cache& cache,
             schema_ptr schema,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
@@ -151,6 +153,7 @@ public:
             mutation_reader::forwarding fwd_mr)
         : _cache(cache)
         , _schema(std::move(schema))
+        , _permit(std::move(permit))
         , _range(range)
         , _slice(slice)
         , _pc(pc)
@@ -176,6 +179,7 @@ public:
     read_context(const read_context&) = delete;
     row_cache& cache() { return _cache; }
     const schema_ptr& schema() const { return _schema; }
+    reader_permit permit() const { return _permit; }
     const dht::partition_range& range() const { return _range; }
     const query::partition_slice& slice() const { return _slice; }
     const io_priority_class& pc() const { return _pc; }

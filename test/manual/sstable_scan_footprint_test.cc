@@ -119,9 +119,9 @@ public:
             app_config["stats-file"].as<sstring>(),
             std::chrono::milliseconds(app_config["stats-period-ms"].as<unsigned>())};
     }
-    stats_collector(table& tab, std::optional<params> p)
+    stats_collector(reader_concurrency_semaphore& sem, std::optional<params> p)
         : _params(std::move(p))
-        , _sem(tab.read_concurrency_semaphore())
+        , _sem(sem)
         , _initial_res(_sem.available_resources()) {
     }
     stats_collector(const stats_collector&) = delete;
@@ -186,7 +186,8 @@ void execute_reads(reader_concurrency_semaphore& sem, unsigned reads, unsigned c
 
         if (sem.waiters()) {
             testlog.trace("Waiting for queue to drain");
-            sem.wait_admission(1, db::no_timeout).get();
+            auto permit = sem.make_permit();
+            permit.wait_admission(1, db::no_timeout).get();
         }
     }
 
@@ -307,12 +308,14 @@ int main(int argc, char** argv) {
             auto prev_occupancy = logalloc::shard_tracker().occupancy();
             testlog.info("Occupancy before: {}", prev_occupancy);
 
+            auto& sem = env.local_db().make_query_class_config().semaphore;
+
             testlog.info("Reading");
-            stats_collector sc(tab, stats_collector_params);
+            stats_collector sc(sem, stats_collector_params);
             try {
                 auto _ = sc.collect();
                 memory::set_heap_profiling_enabled(true);
-                execute_reads(tab.read_concurrency_semaphore(), reads, read_concurrency, [&] (unsigned i) {
+                execute_reads(sem, reads, read_concurrency, [&] (unsigned i) {
                     return env.execute_cql(format("select * from ks.test where pk = 0 and ck > {} limit 100;",
                             tests::random::get_int(rows / 2))).discard_result();
                 });

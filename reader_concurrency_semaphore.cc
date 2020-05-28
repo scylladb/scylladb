@@ -26,62 +26,57 @@
 #include "utils/exceptions.hh"
 
 
-reader_permit::impl::impl(reader_concurrency_semaphore& semaphore, reader_resources base_cost) : semaphore(semaphore), base_cost(base_cost) {
+reader_permit::resource_units::resource_units(reader_concurrency_semaphore& semaphore, reader_resources res) noexcept
+        : _semaphore(&semaphore), _resources(res) {
 }
 
-reader_permit::impl::~impl() {
-    semaphore.signal(base_cost);
+reader_permit::resource_units::resource_units(resource_units&& o) noexcept
+    : _semaphore(o._semaphore)
+    , _resources(std::exchange(o._resources, {})) {
 }
 
-reader_permit::memory_units::memory_units(reader_concurrency_semaphore* semaphore, ssize_t memory) noexcept
-        : _semaphore(semaphore), _memory(memory) {
-    if (_semaphore && _memory) {
-        _semaphore->consume_memory(_memory);
-    }
-}
-
-reader_permit::memory_units::memory_units(memory_units&& o) noexcept
-    : _semaphore(std::exchange(o._semaphore, nullptr))
-    , _memory(std::exchange(o._memory, 0)) {
-}
-
-reader_permit::memory_units::~memory_units() {
+reader_permit::resource_units::~resource_units() {
     reset();
 }
 
-reader_permit::memory_units& reader_permit::memory_units::operator=(memory_units&& o) noexcept {
+reader_permit::resource_units& reader_permit::resource_units::operator=(resource_units&& o) noexcept {
     if (&o == this) {
         return *this;
     }
     reset();
-    _semaphore = std::exchange(o._semaphore, nullptr);
-    _memory = std::exchange(o._memory, 0);
+    _semaphore = o._semaphore;
+    _resources = std::exchange(o._resources, {});
     return *this;
 }
 
-void reader_permit::memory_units::reset(size_t memory) {
-    if (_semaphore) {
-        _semaphore->consume_memory(memory);
-        _semaphore->signal_memory(_memory);
+void reader_permit::resource_units::add(resource_units&& o) {
+    assert(_semaphore == o._semaphore);
+    _resources += std::exchange(o._resources, {});
+}
+
+void reader_permit::resource_units::reset(reader_resources res) {
+    _semaphore->consume(res);
+    if (_resources) {
+        _semaphore->signal(_resources);
     }
-    _memory = memory;
+    _resources = res;
 }
 
-reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, reader_resources base_cost)
-    : _impl(make_lw_shared<reader_permit::impl>(semaphore, base_cost)) {
+reader_permit::reader_permit(reader_concurrency_semaphore& semaphore)
+    : _semaphore(&semaphore) {
 }
 
-reader_permit::memory_units reader_permit::get_memory_units(size_t memory) {
-    return memory_units(_impl ? &_impl->semaphore : nullptr, memory);
+future<reader_permit::resource_units> reader_permit::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
+    return _semaphore->do_wait_admission(memory, timeout);
 }
 
-void reader_permit::release() {
-    _impl->semaphore.signal(_impl->base_cost);
-    _impl->base_cost = {};
+reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
+    return consume_resources(reader_resources{0, ssize_t(memory)});
 }
 
-reader_permit no_reader_permit() {
-    return reader_permit{};
+reader_permit::resource_units reader_permit::consume_resources(reader_resources res) {
+    _semaphore->consume(res);
+    return resource_units(*_semaphore, res);
 }
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
@@ -90,12 +85,16 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
         auto& x = _wait_list.front();
         _resources -= x.res;
         try {
-            x.pr.set_value(reader_permit(*this, x.res));
+            x.pr.set_value(reader_permit::resource_units(*this, x.res));
         } catch (...) {
             x.pr.set_exception(std::current_exception());
         }
         _wait_list.pop_front();
     }
+}
+
+reader_concurrency_semaphore::~reader_concurrency_semaphore() {
+    broken(std::make_exception_ptr(broken_semaphore{}));
 }
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(std::unique_ptr<inactive_read> ir) {
@@ -139,13 +138,12 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
     return true;
 }
 
-future<reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory,
-        db::timeout_clock::time_point timeout) {
+future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
         if (_prethrow_action) {
             _prethrow_action();
         }
-        return make_exception_future<reader_permit>(
+        return make_exception_future<reader_permit::resource_units>(
                 std::make_exception_ptr(std::runtime_error(
                         format("{}: restricted mutation reader queue overload", _name))));
     }
@@ -161,17 +159,23 @@ future<reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory
     }
     if (may_proceed(r)) {
         _resources -= r;
-        return make_ready_future<reader_permit>(reader_permit(*this, r));
+        return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(*this, r));
     }
-    promise<reader_permit> pr;
+    promise<reader_permit::resource_units> pr;
     auto fut = pr.get_future();
     _wait_list.push_back(entry(std::move(pr), r), timeout);
     return fut;
 }
 
-reader_permit reader_concurrency_semaphore::consume_resources(resources r) {
-    _resources -= r;
-    return reader_permit(*this, r);
+reader_permit reader_concurrency_semaphore::make_permit() {
+    return reader_permit(*this);
+}
+
+void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
+    while (!_wait_list.empty()) {
+        _wait_list.front().pr.set_exception(std::make_exception_ptr(broken_semaphore{}));
+        _wait_list.pop_front();
+    }
 }
 
 // A file that tracks the memory usage of buffers resulting from read
@@ -244,11 +248,8 @@ public:
     }
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
-        return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([this, units = _permit.get_memory_units(range_size)] (temporary_buffer<uint8_t> buf) {
-            if (_permit) {
-                buf = make_tracked_temporary_buffer(std::move(buf), _permit);
-            }
-            return make_ready_future<temporary_buffer<uint8_t>>(std::move(buf));
+        return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([this, units = _permit.consume_memory(range_size)] (temporary_buffer<uint8_t> buf) {
+            return make_ready_future<temporary_buffer<uint8_t>>(make_tracked_temporary_buffer(std::move(buf), _permit));
         });
     }
 };

@@ -39,6 +39,7 @@
 using seastar::future;
 
 class mutation_source;
+class reader_permit;
 
 GCC6_CONCEPT(
     template<typename Consumer>
@@ -677,7 +678,7 @@ flat_mutation_reader_from_mutations(std::vector<mutation> ms,
 ///     ranges. Otherwise the reader is created with
 ///     mutation_reader::forwarding::yes.
 flat_mutation_reader
-make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
+make_flat_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
                              const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
                              tracing::trace_state_ptr trace_state = nullptr,
                              flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
@@ -689,6 +690,7 @@ make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::pa
 flat_mutation_reader
 make_flat_multi_range_reader(
         schema_ptr s,
+        reader_permit permit,
         mutation_source source,
         std::function<std::optional<dht::partition_range>()> generator,
         const query::partition_slice& slice,

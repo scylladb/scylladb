@@ -113,6 +113,7 @@ private:
     Querier make_querier(const dht::partition_range& range) {
         return Querier(_mutation_source,
             _s.schema(),
+            _sem.make_permit(),
             range,
             _s.schema()->full_slice(),
             service::get_local_sstable_query_read_priority(),
@@ -160,7 +161,7 @@ public:
 
     test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h, size_t cache_size = 100000)
         : _sem(reader_concurrency_semaphore::no_limits{})
-        , _cache(_sem, cache_size, entry_ttl)
+        , _cache(cache_size, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr, reader_permit, const dht::partition_range& range) {
             auto rd = flat_mutation_reader_from_mutations(_mutations, range);
@@ -675,22 +676,22 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 nullptr,
                 db::no_timeout).get();
 
-        auto& semaphore = cf.read_concurrency_semaphore();
+        auto& semaphore = db.make_query_class_config().semaphore;
+        auto permit = semaphore.make_permit();
 
         BOOST_CHECK_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 0);
 
         // Drain all resources of the semaphore
-        std::vector<reader_permit> permits;
         const auto resources = semaphore.available_resources();
-        permits.reserve(resources.count);
-        const auto per_permit_memory  = resources.memory / resources.count;
+        const auto per_count_memory  = resources.memory / resources.count;
 
-        for (int i = 0; i < resources.count; ++i) {
-            permits.emplace_back(semaphore.wait_admission(per_permit_memory, db::no_timeout).get0());
+        auto units = permit.wait_admission(per_count_memory, db::no_timeout).get0();
+        for (int i = 0; i < resources.count - 1; ++i) {
+            units.add(permit.wait_admission(per_count_memory, db::no_timeout).get0());
         }
 
         BOOST_CHECK_EQUAL(semaphore.available_resources().count, 0);
-        BOOST_CHECK(semaphore.available_resources().memory < per_permit_memory);
+        BOOST_CHECK(semaphore.available_resources().memory < per_count_memory);
 
         auto cmd2 = query::read_command(s->id(),
                 s->version(),
@@ -748,12 +749,13 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
     test_querier_cache t;
 
     auto& sem = t.get_semaphore();
+    auto permit = sem.make_permit();
 
-    auto permit1 = sem.consume_resources(reader_concurrency_semaphore::resources(sem.available_resources().count, 0));
+    auto resources = permit.consume_resources(reader_resources(sem.available_resources().count, 0));
 
     BOOST_CHECK_EQUAL(sem.available_resources().count, 0);
 
-    auto permit2_fut = sem.wait_admission(1, db::no_timeout);
+    auto fut = permit.wait_admission(1, db::no_timeout);
 
     BOOST_CHECK_EQUAL(sem.waiters(), 1);
 
@@ -763,7 +765,7 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
         .no_drops()
         .resource_based_evictions();
 
-    permit1.release();
+    resources.reset();
 
-    permit2_fut.get();
+    fut.get();
 }

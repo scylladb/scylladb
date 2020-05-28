@@ -46,6 +46,7 @@ class built_indexes_virtual_reader {
         built_indexes_reader(
                 database& db,
                 schema_ptr schema,
+                reader_permit permit,
                 column_family& built_views,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
@@ -57,6 +58,7 @@ class built_indexes_virtual_reader {
                 , _db(db)
                 , _underlying(built_views.make_reader(
                         built_views.schema(),
+                        std::move(permit),
                         range,
                         slice,
                         pc,
@@ -118,7 +120,7 @@ public:
 
     flat_mutation_reader operator()(
             schema_ptr s,
-            reader_permit,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
@@ -128,6 +130,7 @@ public:
         return make_flat_mutation_reader<built_indexes_reader>(
                 _db,
                 std::move(s),
+                std::move(permit),
                 _db.find_column_family(s->ks_name(), system_keyspace::v3::BUILT_VIEWS),
                 range,
                 slice,

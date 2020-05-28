@@ -1021,13 +1021,13 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
 
         const auto& partitions = pop_desc.partitions;
         smp::invoke_on_all([cfg, db = &env.db(), gs = global_schema_ptr(pop_desc.schema), &partitions] {
-            auto& sem = db->local().find_column_family(gs.get()).read_concurrency_semaphore();
+            auto& sem = db->local().make_query_class_config().semaphore;
 
             auto resources = sem.available_resources();
             resources -= reader_concurrency_semaphore::resources{1, 0};
-            auto permit = sem.consume_resources(resources);
+            auto permit = sem.make_permit();
 
-            return run_fuzzy_test_workload(cfg, *db, gs.get(), partitions).finally([permit = std::move(permit)] {});
+            return run_fuzzy_test_workload(cfg, *db, gs.get(), partitions).finally([units = permit.consume_resources(resources)] {});
         }).handle_exception([seed] (std::exception_ptr e) {
             testlog.error("Test workload failed with exception {}."
                     " To repeat this particular run, replace the random seed of the test, with that of this run ({})."

@@ -54,7 +54,7 @@ future<> view_update_generator::start() {
                     }
 
                     flat_mutation_reader staging_sstable_reader = ::make_range_sstable_reader(s,
-                            no_reader_permit(),
+                            _db.make_query_class_config().semaphore.make_permit(),
                             std::move(ssts),
                             query::full_partition_range,
                             s->full_slice(),

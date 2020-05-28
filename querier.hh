@@ -142,6 +142,7 @@ struct position_view {
 template <emit_only_live_rows OnlyLive>
 class querier {
     schema_ptr _schema;
+    reader_permit _permit;
     std::unique_ptr<const dht::partition_range> _range;
     std::unique_ptr<const query::partition_slice> _slice;
     flat_mutation_reader _reader;
@@ -151,14 +152,16 @@ class querier {
 public:
     querier(const mutation_source& ms,
             schema_ptr schema,
+            reader_permit permit,
             dht::partition_range range,
             query::partition_slice slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_ptr)
         : _schema(schema)
+        , _permit(permit)
         , _range(std::make_unique<dht::partition_range>(std::move(range)))
         , _slice(std::make_unique<query::partition_slice>(std::move(slice)))
-        , _reader(ms.make_reader(schema, no_reader_permit(), *_range, *_slice, pc, std::move(trace_ptr),
+        , _reader(ms.make_reader(schema, std::move(permit), *_range, *_slice, pc, std::move(trace_ptr),
                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
         , _compaction_state(make_lw_shared<compact_for_query_state<OnlyLive>>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
     }
@@ -203,6 +206,10 @@ public:
         return _schema;
     }
 
+    reader_permit& permit() {
+        return _permit;
+    }
+
     position_view current_position() const {
         const dht::decorated_key* dk = _compaction_state->current_partition();
         const clustering_key_prefix* clustering_key = _last_ckey ? &*_last_ckey : nullptr;
@@ -231,6 +238,7 @@ class shard_mutation_querier {
     std::unique_ptr<const dht::partition_range> _reader_range;
     std::unique_ptr<const query::partition_slice> _reader_slice;
     flat_mutation_reader _reader;
+    reader_permit _permit;
     dht::decorated_key _nominal_pkey;
     std::optional<clustering_key_prefix> _nominal_ckey;
 
@@ -240,12 +248,14 @@ public:
             std::unique_ptr<const dht::partition_range> reader_range,
             std::unique_ptr<const query::partition_slice> reader_slice,
             flat_mutation_reader reader,
+            reader_permit permit,
             dht::decorated_key nominal_pkey,
             std::optional<clustering_key_prefix> nominal_ckey)
         : _query_ranges(std::move(query_ranges))
         , _reader_range(std::move(reader_range))
         , _reader_slice(std::move(reader_slice))
         , _reader(std::move(reader))
+        , _permit(std::move(permit))
         , _nominal_pkey(std::move(nominal_pkey))
         , _nominal_ckey(std::move(nominal_ckey)) {
     }
@@ -260,6 +270,10 @@ public:
 
     schema_ptr schema() const {
         return _reader.schema();
+    }
+
+    reader_permit& permit() {
+        return _permit;
     }
 
     position_view current_position() const {
@@ -376,6 +390,12 @@ public:
             }, _value);
         }
 
+        reader_permit& permit() {
+            return std::visit([] (auto& q) -> reader_permit& {
+                return q.permit();
+            }, _value);
+        }
+
         dht::partition_ranges_view ranges() const {
             return std::visit([] (auto& q) {
                 return q.ranges();
@@ -413,7 +433,6 @@ public:
           boost::intrusive::constant_time_size<false>>;
 
 private:
-    reader_concurrency_semaphore& _sem;
     entries _entries;
     index _data_querier_index;
     index _mutation_querier_index;
@@ -426,7 +445,7 @@ private:
     void scan_cache_entries();
 
 public:
-    explicit querier_cache(reader_concurrency_semaphore& sem, size_t max_cache_size = 1'000'000, std::chrono::seconds entry_ttl = default_entry_ttl);
+    explicit querier_cache(size_t max_cache_size = 1'000'000, std::chrono::seconds entry_ttl = default_entry_ttl);
 
     querier_cache(const querier_cache&) = delete;
     querier_cache& operator=(const querier_cache&) = delete;

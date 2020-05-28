@@ -47,7 +47,7 @@ using namespace cache;
 flat_mutation_reader
 row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, const dht::partition_range& pr) {
     ctx.on_underlying_created();
-    return src.make_reader(_schema, no_reader_permit(), pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
+    return src.make_reader(_schema, ctx.permit(), pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
 }
 
 static thread_local mutation_application_stats dummy_app_stats;
@@ -737,6 +737,7 @@ row_cache::make_scanning_reader(const dht::partition_range& range, lw_shared_ptr
 
 flat_mutation_reader
 row_cache::make_reader(schema_ptr s,
+                       reader_permit permit,
                        const dht::partition_range& range,
                        const query::partition_slice& slice,
                        const io_priority_class& pc,
@@ -744,7 +745,7 @@ row_cache::make_reader(schema_ptr s,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr)
 {
-    auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, fwd_mr);
+    auto ctx = make_lw_shared<read_context>(*this, s, std::move(permit), range, slice, pc, trace_state, fwd_mr);
 
     if (!ctx->is_range_query() && !fwd_mr) {
         auto mr = _read_section(_tracker.region(), [&] {

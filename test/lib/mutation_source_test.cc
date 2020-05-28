@@ -35,6 +35,7 @@
 #include "test/lib/make_random_string.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/log.hh"
+#include "test/lib/reader_permit.hh"
 #include <boost/algorithm/string/join.hpp>
 #include "types/user.hh"
 #include "types/map.hh"
@@ -176,7 +177,7 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
                 auto test_common = [&] (const query::partition_slice& slice) {
                     testlog.info("Read whole partitions at once");
                     auto pranges_walker = partition_range_walker(pranges);
-                    auto mr = ms.make_reader(s.schema(), no_reader_permit(), pranges_walker.initial_range(), slice,
+                    auto mr = ms.make_reader(s.schema(), tests::make_permit(), pranges_walker.initial_range(), slice,
                                              default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
                     auto actual = assert_that(std::move(mr));
                     for (auto& expected : mutations) {
@@ -202,7 +203,7 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
 
                     testlog.info("Read partitions with fast-forwarding to each individual row");
                     pranges_walker = partition_range_walker(pranges);
-                    mr = ms.make_reader(s.schema(), no_reader_permit(), pranges_walker.initial_range(), slice,
+                    mr = ms.make_reader(s.schema(), tests::make_permit(), pranges_walker.initial_range(), slice,
                                         default_priority_class(), nullptr, streamed_mutation::forwarding::yes, fwd_mr);
                     actual = assert_that(std::move(mr));
                     for (auto& expected : mutations) {
@@ -238,14 +239,14 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
                 test_common(slice);
 
                 testlog.info("Test monotonic positions");
-                auto mr = ms.make_reader(s.schema(), no_reader_permit(), query::full_partition_range, slice,
+                auto mr = ms.make_reader(s.schema(), tests::make_permit(), query::full_partition_range, slice,
                                             default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
                 assert_that(std::move(mr)).has_monotonic_positions();
 
                 if (range_size != 1) {
                     testlog.info("Read partitions fast-forwarded to the range of interest");
                     auto pranges_walker = partition_range_walker(pranges);
-                    mr = ms.make_reader(s.schema(), no_reader_permit(), pranges_walker.initial_range(), slice,
+                    mr = ms.make_reader(s.schema(), tests::make_permit(), pranges_walker.initial_range(), slice,
                                         default_priority_class(), nullptr, streamed_mutation::forwarding::yes, fwd_mr);
                     auto actual = assert_that(std::move(mr));
                     for (auto& expected : mutations) {
@@ -285,7 +286,7 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
 
                 testlog.info("Read partitions with just static rows");
                 auto pranges_walker = partition_range_walker(pranges);
-                mr = ms.make_reader(s.schema(), no_reader_permit(), pranges_walker.initial_range(), slice,
+                mr = ms.make_reader(s.schema(), tests::make_permit(), pranges_walker.initial_range(), slice,
                                     default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
                 auto actual = assert_that(std::move(mr));
                 for (auto& expected : mutations) {
@@ -312,7 +313,7 @@ static void test_slicing_and_fast_forwarding(populate_fn_ex populate) {
                     test_common(slice);
 
                     testlog.info("Test monotonic positions");
-                    auto mr = ms.make_reader(s.schema(), no_reader_permit(), query::full_partition_range, slice,
+                    auto mr = ms.make_reader(s.schema(), tests::make_permit(), query::full_partition_range, slice,
                                                 default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
                     assert_that(std::move(mr)).has_monotonic_positions();
                 }
@@ -385,10 +386,10 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
         mutation_source ms = populate(m.schema(), {m}, gc_clock::now());
 
         flat_mutation_reader sliced_reader =
-            ms.make_reader(m.schema(), no_reader_permit(), prange, slice_with_ranges);
+            ms.make_reader(m.schema(), tests::make_permit(), prange, slice_with_ranges);
 
         flat_mutation_reader fwd_reader =
-            ms.make_reader(m.schema(), no_reader_permit(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+            ms.make_reader(m.schema(), tests::make_permit(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
 
         std::optional<mutation_rebuilder> builder{};
         struct consumer {
@@ -476,7 +477,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn_ex populate
     auto new_stream = [&ms, s, &m] () -> flat_reader_assertions {
         testlog.info("Creating new streamed_mutation");
         auto res = assert_that(ms.make_reader(s,
-            no_reader_permit(),
+            tests::make_permit(),
             query::full_partition_range,
             s->full_slice(),
             default_priority_class(),
@@ -612,7 +613,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn_ex
 
     auto pr = dht::partition_range::make({keys[0]}, {keys[1]});
     auto rd = assert_that(ms.make_reader(s,
-        no_reader_permit(),
+        tests::make_permit(),
         pr,
         s->full_slice(),
         default_priority_class(),
@@ -714,7 +715,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
             ))
             .build();
 
-        auto rd = assert_that(ms.make_reader(s, no_reader_permit(), pr, slice));
+        auto rd = assert_that(ms.make_reader(s, tests::make_permit(), pr, slice));
 
         rd.produces_partition_start(m.decorated_key());
         rd.produces_row_with_key(keys[2]);
@@ -733,7 +734,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
             ))
             .build();
 
-        auto rd = assert_that(ms.make_reader(s, no_reader_permit(), pr, slice));
+        auto rd = assert_that(ms.make_reader(s, tests::make_permit(), pr, slice));
 
         rd.produces_partition_start(m.decorated_key())
             .produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()))
@@ -788,7 +789,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(populate_f
 
     mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
     auto rd = assert_that(ms.make_reader(s,
-        no_reader_permit(),
+        tests::make_permit(),
         query::full_partition_range,
         s->full_slice(),
         default_priority_class(),
@@ -872,7 +873,7 @@ static void test_range_queries(populate_fn_ex populate) {
 
     auto test_slice = [&] (dht::partition_range r) {
         testlog.info("Testing range {}", r);
-        assert_that(ds.make_reader(s, no_reader_permit(), r))
+        assert_that(ds.make_reader(s, tests::make_permit(), r))
             .produces(slice(partitions, r))
             .produces_end_of_stream();
     };
@@ -976,7 +977,7 @@ void test_all_data_is_read_back(populate_fn_ex populate) {
         auto ms = populate(m.schema(), {m}, query_time);
         mutation copy(m);
         copy.partition().compact_for_compaction(*copy.schema(), always_gc, query_time);
-        assert_that(ms.make_reader(m.schema())).produces_compacted(copy, query_time);
+        assert_that(ms.make_reader(m.schema(), tests::make_permit())).produces_compacted(copy, query_time);
     });
 }
 
@@ -1013,7 +1014,7 @@ static void test_date_tiered_clustering_slicing(populate_fn_ex populate) {
             .with_range(ss.make_ckey_range(1, 2))
             .build();
         auto prange = dht::partition_range::make_singular(pkey);
-        assert_that(ms.make_reader(s, no_reader_permit(), prange, slice))
+        assert_that(ms.make_reader(s, tests::make_permit(), prange, slice))
             .produces(m1, slice.row_ranges(*s, pkey.key()))
             .produces_end_of_stream();
     }
@@ -1023,7 +1024,7 @@ static void test_date_tiered_clustering_slicing(populate_fn_ex populate) {
             .with_range(query::clustering_range::make_singular(ss.make_ckey(0)))
             .build();
         auto prange = dht::partition_range::make_singular(pkey);
-        assert_that(ms.make_reader(s, no_reader_permit(), prange, slice))
+        assert_that(ms.make_reader(s, tests::make_permit(), prange, slice))
             .produces(m1)
             .produces_end_of_stream();
     }
@@ -1110,14 +1111,14 @@ static void test_clustering_slices(populate_fn_ex populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(0)))
             .build();
-        assert_that(ds.make_reader(s, no_reader_permit(), pr, slice))
+        assert_that(ds.make_reader(s, tests::make_permit(), pr, slice))
             .produces_eos_or_empty_mutation();
     }
 
     {
         auto slice = partition_slice_builder(*s)
             .build();
-        auto rd = assert_that(ds.make_reader(s, no_reader_permit(), pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
+        auto rd = assert_that(ds.make_reader(s, tests::make_permit(), pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
         rd.produces_partition_start(pk)
           .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
           .produces_row_with_key(ck1)
@@ -1128,7 +1129,7 @@ static void test_clustering_slices(populate_fn_ex populate) {
     {
         auto slice = partition_slice_builder(*s)
             .build();
-        auto rd = assert_that(ds.make_reader(s, no_reader_permit(), pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
+        auto rd = assert_that(ds.make_reader(s, tests::make_permit(), pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
         rd.produces_partition_start(pk)
           .produces_end_of_stream()
           .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
@@ -1140,7 +1141,7 @@ static void test_clustering_slices(populate_fn_ex populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(1)))
             .build();
-        assert_that(ds.make_reader(s, no_reader_permit(), pr, slice))
+        assert_that(ds.make_reader(s, tests::make_permit(), pr, slice))
             .produces(row1 + row2 + row3 + row4 + row5 + del_1, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
@@ -1148,7 +1149,7 @@ static void test_clustering_slices(populate_fn_ex populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(2)))
             .build();
-        assert_that(ds.make_reader(s, no_reader_permit(), pr, slice))
+        assert_that(ds.make_reader(s, tests::make_permit(), pr, slice))
             .produces(row6 + row7 + del_1 + del_2, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
@@ -1157,7 +1158,7 @@ static void test_clustering_slices(populate_fn_ex populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(1, 2)))
             .build();
-        assert_that(ds.make_reader(s, no_reader_permit(), pr, slice))
+        assert_that(ds.make_reader(s, tests::make_permit(), pr, slice))
             .produces(row3 + row4 + del_1, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
@@ -1166,7 +1167,7 @@ static void test_clustering_slices(populate_fn_ex populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(3)))
             .build();
-        assert_that(ds.make_reader(s, no_reader_permit(), pr, slice))
+        assert_that(ds.make_reader(s, tests::make_permit(), pr, slice))
             .produces(row8 + del_3, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
@@ -1174,12 +1175,12 @@ static void test_clustering_slices(populate_fn_ex populate) {
     // Test out-of-range partition keys
     {
         auto pr = dht::partition_range::make_singular(keys[0]);
-        assert_that(ds.make_reader(s, no_reader_permit(), pr, s->full_slice()))
+        assert_that(ds.make_reader(s, tests::make_permit(), pr, s->full_slice()))
             .produces_eos_or_empty_mutation();
     }
     {
         auto pr = dht::partition_range::make_singular(keys[2]);
-        assert_that(ds.make_reader(s, no_reader_permit(), pr, s->full_slice()))
+        assert_that(ds.make_reader(s, tests::make_permit(), pr, s->full_slice()))
             .produces_eos_or_empty_mutation();
     }
 }
@@ -1202,7 +1203,7 @@ static void test_query_only_static_row(populate_fn_ex populate) {
     // fully populate cache
     {
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-        assert_that(ms.make_reader(s.schema(), no_reader_permit(), prange, s.schema()->full_slice()))
+        assert_that(ms.make_reader(s.schema(), tests::make_permit(), prange, s.schema()->full_slice()))
             .produces(m1)
             .produces_end_of_stream();
     }
@@ -1213,7 +1214,7 @@ static void test_query_only_static_row(populate_fn_ex populate) {
             .with_ranges({})
             .build();
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-        assert_that(ms.make_reader(s.schema(), no_reader_permit(), prange, slice))
+        assert_that(ms.make_reader(s.schema(), tests::make_permit(), prange, slice))
             .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
             .produces_end_of_stream();
     }
@@ -1224,7 +1225,7 @@ static void test_query_only_static_row(populate_fn_ex populate) {
             .with_ranges({})
             .build();
         auto prange = dht::partition_range::make_singular(m1.decorated_key());
-        assert_that(ms.make_reader(s.schema(), no_reader_permit(), prange, slice))
+        assert_that(ms.make_reader(s.schema(), tests::make_permit(), prange, slice))
             .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
             .produces_end_of_stream();
     }
@@ -1246,7 +1247,7 @@ static void test_query_no_clustering_ranges_no_static_columns(populate_fn_ex pop
 
     {
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-        assert_that(ms.make_reader(s.schema(), no_reader_permit(), prange, s.schema()->full_slice()))
+        assert_that(ms.make_reader(s.schema(), tests::make_permit(), prange, s.schema()->full_slice()))
             .produces(m1)
             .produces_end_of_stream();
     }
@@ -1257,7 +1258,7 @@ static void test_query_no_clustering_ranges_no_static_columns(populate_fn_ex pop
             .with_ranges({})
             .build();
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-        assert_that(ms.make_reader(s.schema(), no_reader_permit(), prange, slice))
+        assert_that(ms.make_reader(s.schema(), tests::make_permit(), prange, slice))
             .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
             .produces_end_of_stream();
     }
@@ -1268,7 +1269,7 @@ static void test_query_no_clustering_ranges_no_static_columns(populate_fn_ex pop
             .with_ranges({})
             .build();
         auto prange = dht::partition_range::make_singular(m1.decorated_key());
-        assert_that(ms.make_reader(s.schema(), no_reader_permit(), prange, slice))
+        assert_that(ms.make_reader(s.schema(), tests::make_permit(), prange, slice))
             .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
             .produces_end_of_stream();
     }
@@ -1284,7 +1285,7 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn_ex popu
 
     auto source = populate(s.schema(), {m}, gc_clock::now());
     assert_that(source.make_reader(s.schema(),
-                no_reader_permit(),
+                tests::make_permit(),
                 query::full_partition_range,
                 s.schema()->full_slice(),
                 default_priority_class(),
@@ -1333,7 +1334,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn_ex populate) {
 
     {
         auto slice = partition_slice_builder(*s).with_range(range).build();
-        auto rd = ds.make_reader(s, no_reader_permit(), query::full_partition_range, slice);
+        auto rd = ds.make_reader(s, tests::make_permit(), query::full_partition_range, slice);
 
         auto prange = position_range(range);
         mutation result(m1.schema(), m1.decorated_key());
@@ -1351,7 +1352,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn_ex populate) {
 
     // Check fast_forward_to()
     {
-        auto rd = ds.make_reader(s, no_reader_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
+        auto rd = ds.make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
             nullptr, streamed_mutation::forwarding::yes);
 
         auto prange = position_range(range);
@@ -1413,7 +1414,7 @@ void test_next_partition(populate_fn_ex populate) {
         mutations.push_back(std::move(m));
     }
     auto source = populate(s.schema(), mutations, gc_clock::now());
-    assert_that(source.make_reader(s.schema()))
+    assert_that(source.make_reader(s.schema(), tests::make_permit()))
         .next_partition() // Does nothing before first partition
         .produces_partition_start(pkeys[0])
         .produces_static_row()

@@ -644,7 +644,7 @@ private:
     // determined using the index file).
     // This function is intended (and optimized for) random access, not
     // for iteration through all the rows.
-    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, const io_priority_class& pc);
+    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, const io_priority_class& pc, reader_permit permit);
 
     future<summary_entry&> read_summary_entry(size_t i);
 

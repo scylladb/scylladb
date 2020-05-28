@@ -268,7 +268,7 @@ public:
     flat_mutation_reader
     make_reader(
         schema_ptr s,
-        reader_permit permit = no_reader_permit(),
+        reader_permit permit,
         partition_range range = query::full_partition_range) const
     {
         auto& full_slice = s->full_slice();
@@ -315,9 +315,10 @@ snapshot_source make_empty_snapshot_source();
 // a semaphore to track and limit the memory usage of readers. It also
 // contains a timeout and a maximum queue size for inactive readers
 // whose construction is blocked.
-flat_mutation_reader make_restricted_flat_reader(reader_concurrency_semaphore& semaphore,
+flat_mutation_reader make_restricted_flat_reader(
         mutation_source ms,
         schema_ptr s,
+        reader_permit permit,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         const io_priority_class& pc = default_priority_class(),
@@ -325,12 +326,13 @@ flat_mutation_reader make_restricted_flat_reader(reader_concurrency_semaphore& s
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
-inline flat_mutation_reader make_restricted_flat_reader(reader_concurrency_semaphore& semaphore,
+inline flat_mutation_reader make_restricted_flat_reader(
                                               mutation_source ms,
                                               schema_ptr s,
+                                              reader_permit permit,
                                               const dht::partition_range& range = query::full_partition_range) {
     auto& full_slice = s->full_slice();
-    return make_restricted_flat_reader(semaphore, std::move(ms), std::move(s), range, full_slice);
+    return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), range, full_slice);
 }
 
 using mutation_source_opt = optimized_optional<mutation_source>;

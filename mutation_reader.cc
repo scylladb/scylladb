@@ -667,6 +667,7 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
     struct mutation_source_and_params {
         mutation_source _ms;
         schema_ptr _s;
+        reader_permit _permit;
         std::reference_wrapper<const dht::partition_range> _range;
         std::reference_wrapper<const query::partition_slice> _slice;
         std::reference_wrapper<const io_priority_class> _pc;
@@ -674,17 +675,17 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
         streamed_mutation::forwarding _fwd;
         mutation_reader::forwarding _fwd_mr;
 
-        flat_mutation_reader operator()(reader_permit permit) {
-            return _ms.make_reader(std::move(_s), std::move(permit), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr);
+        flat_mutation_reader operator()() {
+            return _ms.make_reader(std::move(_s), std::move(_permit), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr);
         }
     };
 
     struct pending_state {
-        reader_concurrency_semaphore& semaphore;
         mutation_source_and_params reader_factory;
     };
     struct admitted_state {
         flat_mutation_reader reader;
+        reader_permit::resource_units units;
     };
     std::variant<pending_state, admitted_state> _state;
 
@@ -702,17 +703,18 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
             return fn(state->reader);
         }
 
-        return std::get<pending_state>(_state).semaphore.wait_admission(new_reader_base_cost,
-                timeout).then([this, fn = std::move(fn)] (reader_permit permit) mutable {
+        return std::get<pending_state>(_state).reader_factory._permit.wait_admission(new_reader_base_cost,
+                timeout).then([this, fn = std::move(fn)] (reader_permit::resource_units units) mutable {
             auto reader_factory = std::move(std::get<pending_state>(_state).reader_factory);
-            _state.emplace<admitted_state>(admitted_state{reader_factory(std::move(permit))});
+            _state.emplace<admitted_state>(admitted_state{reader_factory(), std::move(units)});
             return fn(std::get<admitted_state>(_state).reader);
         });
     }
 public:
-    restricting_mutation_reader(reader_concurrency_semaphore& semaphore,
+    restricting_mutation_reader(
             mutation_source ms,
             schema_ptr s,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
@@ -720,8 +722,8 @@ public:
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr)
         : impl(s)
-        , _state(pending_state{semaphore,
-                mutation_source_and_params{std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr}}) {
+        , _state(pending_state{
+                mutation_source_and_params{std::move(ms), std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr}}) {
     }
 
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
@@ -766,16 +768,17 @@ public:
 };
 
 flat_mutation_reader
-make_restricted_flat_reader(reader_concurrency_semaphore& semaphore,
+make_restricted_flat_reader(
                        mutation_source ms,
                        schema_ptr s,
+                       reader_permit permit,
                        const dht::partition_range& range,
                        const query::partition_slice& slice,
                        const io_priority_class& pc,
                        tracing::trace_state_ptr trace_state,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader<restricting_mutation_reader>(semaphore, std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    return make_flat_mutation_reader<restricting_mutation_reader>(std::move(ms), std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
 

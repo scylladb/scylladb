@@ -45,6 +45,7 @@
 #include "db/batchlog_manager.hh"
 #include "schema_builder.hh"
 #include "test/lib/tmpdir.hh"
+#include "test/lib/reader_permit.hh"
 #include "db/query_context.hh"
 #include "test/lib/test_services.hh"
 #include "db/view/view_builder.hh"
@@ -277,7 +278,7 @@ public:
                                       table_name = std::move(table_name)] (database& db) mutable {
           auto& cf = db.find_column_family(ks_name, table_name);
           auto schema = cf.schema();
-          return cf.find_partition_slow(schema, pkey)
+          return cf.find_partition_slow(schema, tests::make_permit(), pkey)
                   .then([schema, ckey, column_name, exp] (column_family::const_mutation_partition_ptr p) {
             assert(p != nullptr);
             auto row = p->find_row(*schema, ckey);

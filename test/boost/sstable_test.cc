@@ -340,7 +340,7 @@ public:
     int count_row_end = 0;
 
     test_row_consumer(int64_t t)
-        : row_consumer(no_reader_permit(), tracing::trace_state_ptr()
+        : row_consumer(tests::make_permit(), tracing::trace_state_ptr()
         , default_priority_class()), desired_timestamp(t) {
     }
 
@@ -461,7 +461,7 @@ public:
     int count_range_tombstone = 0;
 
     count_row_consumer()
-        : row_consumer(no_reader_permit(), tracing::trace_state_ptr(), default_priority_class()) {
+        : row_consumer(tests::make_permit(), tracing::trace_state_ptr(), default_priority_class()) {
     }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
@@ -839,7 +839,7 @@ SEASTAR_TEST_CASE(wrong_range) {
     return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/wrongrange", 114, [] (auto sstp) {
         return do_with(make_dkey(uncompressed_schema(), "todata"), [sstp] (auto& key) {
             auto s = columns_schema();
-            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, no_reader_permit(), key));
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, tests::make_permit(), key));
             return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, &key, rd] (auto mutation) {
                 return make_ready_future<>();
             });
@@ -975,7 +975,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstri
     return seastar::async([sstp, s, key, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
         auto dkey = make_dkey(s, key.c_str());
-        auto rd = sstp->read_row_flat(s, no_reader_permit(), dkey, ps);
+        auto rd = sstp->read_row_flat(s, tests::make_permit(), dkey, ps);
         auto mfopt = rd(db::no_timeout).get0();
         if (!mfopt) {
             return 0;
@@ -996,7 +996,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstri
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
     return seastar::async([sstp, s, key] () mutable {
         auto dkey = make_dkey(s, key.c_str());
-        auto rd = sstp->read_row_flat(s, no_reader_permit(), dkey);
+        auto rd = sstp->read_row_flat(s, tests::make_permit(), dkey);
         auto mfopt = rd(db::no_timeout).get0();
         if (!mfopt) {
             return 0;
@@ -1018,7 +1018,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstring ck2) {
     return seastar::async([sstp, s, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
-        auto reader = sstp->read_range_rows_flat(s, no_reader_permit(), query::full_partition_range, ps);
+        auto reader = sstp->read_range_rows_flat(s, tests::make_permit(), query::full_partition_range, ps);
         int nrows = 0;
         auto mfopt = reader(db::no_timeout).get0();
         while (mfopt) {

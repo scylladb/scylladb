@@ -28,6 +28,7 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "test/lib/flat_mutation_reader_assertions.hh"
+#include "test/lib/reader_permit.hh"
 #include <seastar/core/reactor.hh>
 
 using namespace sstables;
@@ -92,7 +93,7 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
     }
 
     // validate the sstable
-    auto rd = assert_that(sst->as_mutation_source().make_reader(s));
+    auto rd = assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit()));
     for (auto&& m : merged) {
         rd.produces(m);
     }
@@ -117,7 +118,7 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
         mt->apply(m);
     }
 
-    sst->write_components(mt->make_flat_reader(s), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
+    sst->write_components(mt->make_flat_reader(s, tests::make_permit()), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();
 
     return sst;

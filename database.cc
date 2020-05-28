@@ -190,8 +190,11 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             max_count_streaming_concurrent_reads,
             max_memory_streaming_concurrent_reads(),
             "_streaming_concurrency_sem")
+    // No limits, just for accounting.
+    , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{})
     , _system_read_concurrency_sem(
-            max_count_system_concurrent_reads,
+            // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
+            max_count_concurrent_reads,
             max_memory_system_concurrent_reads(),
             "_system_read_concurrency_sem")
     , _data_query_stage("data_query", &column_family::query)
@@ -200,7 +203,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _version(empty_version)
     , _compaction_manager(make_compaction_manager(_cfg, dbcfg, as))
     , _enable_incremental_backups(cfg.incremental_backups())
-    , _querier_cache(_read_concurrency_sem, dbcfg.available_memory * 0.04)
+    , _querier_cache(dbcfg.available_memory * 0.04)
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(_cfg.compaction_large_partition_warning_threshold_mb()*1024*1024,
               _cfg.compaction_large_row_warning_threshold_mb()*1024*1024,
               _cfg.compaction_large_cell_warning_threshold_mb()*1024*1024,
@@ -916,8 +919,8 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.compaction_enforce_min_threshold = _config.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = _config.dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
-    cfg.read_concurrency_semaphore = _config.read_concurrency_semaphore;
     cfg.streaming_read_concurrency_semaphore = _config.streaming_read_concurrency_semaphore;
+    cfg.compaction_concurrency_semaphore = _config.compaction_concurrency_semaphore;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
     cfg.compaction_scheduling_group = _config.compaction_scheduling_group;
@@ -931,10 +934,8 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     // avoid self-reporting
     if (is_system_table(s)) {
         cfg.sstables_manager = &db.get_system_sstables_manager();
-        cfg.max_memory_for_unlimited_query = std::numeric_limits<uint64_t>::max();
     } else {
         cfg.sstables_manager = &db.get_user_sstables_manager();
-        cfg.max_memory_for_unlimited_query = db_config.max_memory_for_unlimited_query();
     }
 
     cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
@@ -1179,6 +1180,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     return _data_query_stage(&cf,
             std::move(s),
             seastar::cref(cmd),
+            make_query_class_config(),
             opts,
             seastar::cref(ranges),
             std::move(trace_state),
@@ -1211,7 +1213,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             cmd.partition_limit,
             cmd.timestamp,
             timeout,
-            cf.get_config().max_memory_for_unlimited_query,
+            make_query_class_config(),
             std::move(accounter),
             std::move(trace_state),
             std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
@@ -1273,6 +1275,19 @@ void database::register_connection_drop_notifier(netw::messaging_service& ms) {
     });
 }
 
+query_class_config database::make_query_class_config() {
+    // Everything running in the statement group is considered a user query
+    if (current_scheduling_group() == _dbcfg.statement_scheduling_group) {
+        return query_class_config{_read_concurrency_sem, _cfg.max_memory_for_unlimited_query()};
+    // Reads done on behalf of view update generation run in the streaming group
+    } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
+        return query_class_config{_streaming_concurrency_sem, std::numeric_limits<uint64_t>::max()};
+    // Everything else is considered a system query
+    } else {
+        return query_class_config{_system_read_concurrency_sem, std::numeric_limits<uint64_t>::max()};
+    }
+}
+
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     return fmt_print(out, "{{column_family: {}/{}}}", cf._schema->ks_name(), cf._schema->cf_name());
 }
@@ -1329,7 +1344,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
             // counter state for each modified cell...
 
             tracing::trace(trace_state, "Reading counter values from the CF");
-            return counter_write_query(m_schema, cf.as_mutation_source(), m.decorated_key(), slice, trace_state)
+            return counter_write_query(m_schema, cf.as_mutation_source(), make_query_class_config().semaphore.make_permit(), m.decorated_key(), slice, trace_state)
                     .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
@@ -1540,7 +1555,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     if (cf.views().empty()) {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout, sync).finally([op = std::move(op)] { });
     }
-    future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m, timeout, std::move(tr_state));
+    future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m, timeout, std::move(tr_state), make_query_class_config().semaphore);
     return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout, &cf, op = std::move(op), sync] (row_locker::lock_holder lock) mutable {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout, sync).finally(
                 // Hold the local lock on the base-table partition or row
@@ -1631,8 +1646,8 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.compaction_enforce_min_threshold = _cfg.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
-    cfg.read_concurrency_semaphore = &_read_concurrency_sem;
     cfg.streaming_read_concurrency_semaphore = &_streaming_concurrency_sem;
+    cfg.compaction_concurrency_semaphore = &_compaction_concurrency_sem;
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
 
@@ -1751,6 +1766,11 @@ future<> stop_database(sharded<database>& sdb) {
 
 future<> database::stop_large_data_handler() {
     return _large_data_handler->stop();
+}
+
+void database::revert_initial_system_read_concurrency_boost() {
+    _system_read_concurrency_sem.consume({database::max_count_concurrent_reads - database::max_count_system_concurrent_reads, 0});
+    dblog.debug("Reverted system read concurrency from initial {} to normal {}", database::max_count_concurrent_reads, database::max_count_system_concurrent_reads);
 }
 
 future<>
@@ -2051,8 +2071,9 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
                 std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();
-    return make_flat_multi_range_reader(std::move(schema), std::move(ms), std::move(range_generator), std::move(full_slice),
-            service::get_local_streaming_read_priority(), {}, mutation_reader::forwarding::no);
+    auto& cf = db.local().find_column_family(schema);
+    return make_flat_multi_range_reader(std::move(schema), cf.streaming_read_concurrency_semaphore().make_permit(), std::move(ms),
+            std::move(range_generator), std::move(full_slice), service::get_local_streaming_read_priority(), {}, mutation_reader::forwarding::no);
 }
 
 std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {

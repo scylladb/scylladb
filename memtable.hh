@@ -197,7 +197,7 @@ public:
     future<> clear_gently() noexcept;
     schema_ptr schema() const { return _schema; }
     void set_schema(schema_ptr) noexcept;
-    future<> apply(memtable&);
+    future<> apply(memtable&, reader_permit);
     // Applies mutation to this memtable.
     // The mutation is upgraded to current schema.
     void apply(const mutation& m, db::rp_handle&& = {});
@@ -248,6 +248,7 @@ public:
     //
     // Mutations returned by the reader will all have given schema.
     flat_mutation_reader make_flat_reader(schema_ptr,
+                                          reader_permit permit,
                                           const dht::partition_range& range,
                                           const query::partition_slice& slice,
                                           const io_priority_class& pc = default_priority_class(),
@@ -256,9 +257,10 @@ public:
                                           mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
     flat_mutation_reader make_flat_reader(schema_ptr s,
+                                          reader_permit permit,
                                           const dht::partition_range& range = query::full_partition_range) {
         auto& full_slice = s->full_slice();
-        return make_flat_reader(s, range, full_slice);
+        return make_flat_reader(s, std::move(permit), range, full_slice);
     }
 
     flat_mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);

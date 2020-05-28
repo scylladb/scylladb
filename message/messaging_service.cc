@@ -279,7 +279,7 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
     : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, tcp_nodelay_what::all, 0, nullptr, memory_config{1'000'000},
-            scheduling_config{}, false)
+            scheduling_config{{{{}, "$default"}}, {}, {}}, false)
 {}
 
 static
@@ -321,6 +321,11 @@ void messaging_service::do_start_listen() {
     //        local or remote datacenter, and whether or not the connection will be used for gossip. We can fix
     //        the first by wrapping its server_socket, but not the second.
     auto limits = rpc_resource_limits(_mcfg.rpc_memory_limit);
+    limits.isolate_connection = [this] (sstring isolation_cookie) {
+        rpc::isolation_config cfg;
+        cfg.sched_group = scheduling_group_for_isolation_cookie(isolation_cookie);
+        return cfg;
+    };
     if (!_server[0]) {
         auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
             so.streaming_domain = sdomain;
@@ -386,8 +391,10 @@ messaging_service::messaging_service(gms::inet_address ip
     , _should_listen_to_broadcast_address(sltba)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
+    , _clients(2 + scfg.statement_tenants.size() * 2)
     , _mcfg(mcfg)
     , _scheduling_config(scfg)
+    , _scheduling_info_for_connection_index(initial_scheduling_info())
 {
     _rpc->set_logger(&rpc_logger);
     register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size) {
@@ -396,6 +403,11 @@ messaging_service::messaging_service(gms::inet_address ip
         ci.attach_auxiliary("max_result_size", max_result_size.value_or(query::result_memory_limiter::maximum_result_size));
         return rpc::no_wait;
     });
+
+    _connection_index_for_tenant.reserve(_scheduling_config.statement_tenants.size());
+    for (unsigned i = 0; i <  _scheduling_config.statement_tenants.size(); ++i) {
+        _connection_index_for_tenant.push_back({_scheduling_config.statement_tenants[i].sched_group, i});
+    }
 }
 
 msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
@@ -449,24 +461,6 @@ rpc::no_wait_type messaging_service::no_wait() {
 
 static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     switch (verb) {
-    case messaging_verb::CLIENT_ID:
-    case messaging_verb::MUTATION:
-    case messaging_verb::READ_DATA:
-    case messaging_verb::READ_MUTATION_DATA:
-    case messaging_verb::READ_DIGEST:
-    case messaging_verb::GOSSIP_DIGEST_ACK:
-    case messaging_verb::DEFINITIONS_UPDATE:
-    case messaging_verb::TRUNCATE:
-    case messaging_verb::MIGRATION_REQUEST:
-    case messaging_verb::SCHEMA_CHECK:
-    case messaging_verb::COUNTER_MUTATION:
-    // Use the same RPC client for light weight transaction
-    // protocol steps as for standard mutations and read requests.
-    case messaging_verb::PAXOS_PREPARE:
-    case messaging_verb::PAXOS_ACCEPT:
-    case messaging_verb::PAXOS_LEARN:
-    case messaging_verb::PAXOS_PRUNE:
-        return 0;
     // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
     // sent on a different connection to avoid potential deadlocks
     // as well as reduce latency as there are potentially many requests
@@ -476,7 +470,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GOSSIP_SHUTDOWN:
     case messaging_verb::GOSSIP_ECHO:
     case messaging_verb::GET_SCHEMA_VERSION:
-        return 1;
+        return 0;
     case messaging_verb::PREPARE_MESSAGE:
     case messaging_verb::PREPARE_DONE_MESSAGE:
     case messaging_verb::STREAM_MUTATION:
@@ -499,6 +493,24 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM:
     case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
     case messaging_verb::HINT_MUTATION:
+        return 1;
+    case messaging_verb::CLIENT_ID:
+    case messaging_verb::MUTATION:
+    case messaging_verb::READ_DATA:
+    case messaging_verb::READ_MUTATION_DATA:
+    case messaging_verb::READ_DIGEST:
+    case messaging_verb::GOSSIP_DIGEST_ACK:
+    case messaging_verb::DEFINITIONS_UPDATE:
+    case messaging_verb::TRUNCATE:
+    case messaging_verb::MIGRATION_REQUEST:
+    case messaging_verb::SCHEMA_CHECK:
+    case messaging_verb::COUNTER_MUTATION:
+    // Use the same RPC client for light weight transaction
+    // protocol steps as for standard mutations and read requests.
+    case messaging_verb::PAXOS_PREPARE:
+    case messaging_verb::PAXOS_ACCEPT:
+    case messaging_verb::PAXOS_LEARN:
+    case messaging_verb::PAXOS_PRUNE:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
@@ -518,20 +530,61 @@ static constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> 
 
 static std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> s_rpc_client_idx_table = make_rpc_client_idx_table();
 
-static unsigned get_rpc_client_idx(messaging_verb verb) {
-    return s_rpc_client_idx_table[static_cast<size_t>(verb)];
+unsigned
+messaging_service::get_rpc_client_idx(messaging_verb verb) const {
+    auto idx = s_rpc_client_idx_table[static_cast<size_t>(verb)];
+
+    if (idx < 2) {
+        return idx;
+    }
+
+    // A statement or statement-ack verb
+    const auto curr_sched_group = current_scheduling_group();
+    for (unsigned i = 0; i < _connection_index_for_tenant.size(); ++i) {
+        if (_connection_index_for_tenant[i].sched_group == curr_sched_group) {
+            // i == 0: the default tenant maps to the default client indexes of 2 and 3.
+            idx += i * 2;
+            break;
+        }
+    }
+    return idx;
 }
+
+std::vector<messaging_service::scheduling_info_for_connection_index>
+messaging_service::initial_scheduling_info() const {
+    if (_scheduling_config.statement_tenants.empty()) {
+        throw std::runtime_error("messaging_service::initial_scheduling_info(): must have at least one tenant configured");
+    }
+    auto sched_infos = std::vector<scheduling_info_for_connection_index>({
+        { _scheduling_config.gossip, "gossip" },
+        { _scheduling_config.streaming, "streaming", },
+    });
+    sched_infos.reserve(sched_infos.size() + _scheduling_config.statement_tenants.size() * 2);
+    for (const auto& tenant : _scheduling_config.statement_tenants) {
+        sched_infos.push_back({ tenant.sched_group, "statement:" + tenant.name });
+        sched_infos.push_back({ tenant.sched_group, "statement-ack:" + tenant.name });
+    }
+    return sched_infos;
+};
 
 scheduling_group
 messaging_service::scheduling_group_for_verb(messaging_verb verb) const {
-    static const scheduling_group scheduling_config::*idx_to_group[] = {
-        &scheduling_config::statement,
-        &scheduling_config::gossip,
-        &scheduling_config::streaming,
-        &scheduling_config::statement,
-    };
-    return _scheduling_config.*(idx_to_group[get_rpc_client_idx(verb)]);
+    return _scheduling_info_for_connection_index[get_rpc_client_idx(verb)].sched_group;
 }
+
+scheduling_group
+messaging_service::scheduling_group_for_isolation_cookie(const sstring& isolation_cookie) const {
+    // Once per connection, so a loop is fine.
+    for (auto&& info : _scheduling_info_for_connection_index) {
+        if (info.isolation_cookie == isolation_cookie) {
+            return info.sched_group;
+        }
+    }
+    // Client is using a new connection class that the server doesn't recognize yet.
+    // Assume it's important, after server upgrade we'll recognize it.
+    return default_scheduling_group();
+}
+
 
 /**
  * Get an IP for a given endpoint to connect to
@@ -643,6 +696,10 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }
     opts.tcp_nodelay = must_tcp_nodelay;
     opts.reuseaddr = true;
+    // We send cookies only for non-default statement tenant clients.
+    if (idx > 3) {
+        opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
+    }
 
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
