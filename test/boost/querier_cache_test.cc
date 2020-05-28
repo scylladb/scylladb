@@ -658,10 +658,12 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         auto s = cf.schema();
 
         cf.flush().get();
+        auto slice = s->full_slice();
+        slice.options.set<query::partition_slice::option::allow_short_read>();
 
         auto cmd1 = query::read_command(s->id(),
                 s->version(),
-                s->full_slice(),
+                slice,
                 1,
                 gc_clock::now(),
                 std::nullopt,
@@ -696,7 +698,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
 
         auto cmd2 = query::read_command(s->id(),
                 s->version(),
-                s->full_slice(),
+                slice,
                 1,
                 gc_clock::now(),
                 std::nullopt,

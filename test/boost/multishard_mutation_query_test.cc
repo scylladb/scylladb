@@ -881,6 +881,7 @@ run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<database>& db, 
 
     const auto partition_slice = partition_slice_builder(*schema)
         .with_ranges(generate_clustering_ranges(rnd_engine, *schema, part_descs))
+        .with_option<query::partition_slice::option::allow_short_read>()
         .build();
 
     const auto is_stateful = stateful_query(std::uniform_int_distribution<int>(0, 3)(rnd_engine));
