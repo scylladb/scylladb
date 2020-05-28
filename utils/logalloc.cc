@@ -390,8 +390,6 @@ public:
     // will be at least reserve_segments + div_ceil(bytes, segment::size).
     // Returns the amount by which segment_pool.total_memory_in_use() has decreased.
     size_t compact_and_evict(size_t reserve_segments, size_t bytes);
-    // Like compact_and_evict() but assumes that reclaim_lock is held around the operation.
-    size_t compact_and_evict_locked(size_t reserve_segments, size_t bytes);
     void full_compaction();
     void reclaim_all_free_segments();
     occupancy_stats region_occupancy();
@@ -403,6 +401,9 @@ public:
     // Abort on allocation failure from LSA
     void enable_abort_on_bad_alloc() { _abort_on_bad_alloc = true; }
     bool should_abort_on_bad_alloc() const { return _abort_on_bad_alloc; }
+private:
+    // Like compact_and_evict() but assumes that reclaim_lock is held around the operation.
+    size_t compact_and_evict_locked(size_t reserve_segments, size_t bytes);
 };
 
 class tracker_reclaimer_lock {
@@ -1952,7 +1953,9 @@ size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_t
     }
     reclaiming_lock rl(*this);
     reclaim_timer timing_guard;
-    return compact_and_evict_locked(reserve_segments, memory_to_release);
+    size_t released = compact_and_evict_locked(reserve_segments, memory_to_release);
+    timing_guard.stop(released);
+    return released;
 }
 
 size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t memory_to_release) {
