@@ -1151,19 +1151,18 @@ private:
         }
     };
 
-    void* alloc_small(allocation_strategy::migrate_fn migrator, segment::size_type size, size_t alignment) {
+    void* alloc_small(const object_descriptor& desc, segment::size_type size, size_t alignment) {
         if (!_active) {
             _active = new_segment();
             _active_offset = 0;
         }
 
-        auto desc = object_descriptor(migrator);
         auto desc_encoded_size = desc.encoded_size();
 
         size_t obj_offset = align_up_for_asan(align_up(_active_offset + desc_encoded_size, alignment));
         if (obj_offset + size > segment::size) {
             close_and_open();
-            return alloc_small(migrator, size, alignment);
+            return alloc_small(desc, size, alignment);
         }
 
         auto old_active_offset = _active_offset;
@@ -1246,7 +1245,7 @@ private:
 
         for_each_live(seg, [this] (const object_descriptor* desc, void* obj) {
             auto size = desc->live_size(obj);
-            auto dst = alloc_small(desc->migrator(), size, desc->alignment());
+            auto dst = alloc_small(*desc, size, desc->alignment());
             _sanitizer.on_migrate(obj, size, dst);
             desc->migrator()->migrate(obj, dst, size);
         });
@@ -1388,7 +1387,7 @@ public:
             shard_segment_pool.update_non_lsa_memory_in_use(allocated_size);
             return ptr;
         } else {
-            auto ptr = alloc_small(migrator, (segment::size_type) size, alignment);
+            auto ptr = alloc_small(object_descriptor(migrator), (segment::size_type) size, alignment);
             _sanitizer.on_allocation(ptr, size);
             return ptr;
         }
