@@ -1182,8 +1182,22 @@ extra_cxxflags["release.cc"] = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\
 for m in ['debug', 'release', 'sanitize']:
     modes[m]['cxxflags'] += ' ' + dbgflag
 
-get_dynamic_linker_output = subprocess.check_output(['./reloc/get-dynamic-linker.sh'], shell=True)
-dynamic_linker = get_dynamic_linker_output.decode('utf-8').strip()
+# The relocatable package includes its own dynamic linker. We don't
+# know the path it will be installed to, so for now use a very long
+# path so that patchelf doesn't need to edit the program headers.  The
+# kernel imposes a limit of 4096 bytes including the null. The other
+# constraint is that the build-id has to be in the first page, so we
+# can't use all 4096 bytes for the dynamic linker.
+# In here we just guess that 2000 extra / should be enough to cover
+# any path we get installed to but not so large that the build-id is
+# pushed to the second page.
+# At the end of the build we check that the build-id is indeed in the
+# first page. At install time we check that patchelf doesn't modify
+# the program headers.
+
+gcc_linker_output = subprocess.check_output(['gcc', '-###', '/dev/null', '-o', 't'], stderr=subprocess.STDOUT).decode('utf-8')
+original_dynamic_linker = re.search('-dynamic-linker ([^ ]*)', gcc_linker_output).groups()[0]
+dynamic_linker = '/' * 2000 + original_dynamic_linker
 
 forced_ldflags = '-Wl,'
 
