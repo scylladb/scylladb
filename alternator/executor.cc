@@ -3068,8 +3068,14 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     }
 
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
-    //FIXME(sarna): ScanFilter is deprecated in favor of FilterExpression
+
     rjson::value* scan_filter = rjson::find(request, "ScanFilter");
+    auto conditional_operator = get_conditional_operator(request);
+    if (conditional_operator != conditional_operator_type::MISSING &&
+        (!scan_filter || (scan_filter->IsObject() && scan_filter->GetObject().ObjectEmpty()))) {
+            throw api_error("ValidationException", "'ConditionalOperator' parameter cannot be specified for missing or empty ScanFilter");
+    }
+
     db::consistency_level cl = get_read_consistency(request);
     if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
         return make_ready_future<request_return_type>(api_error("ValidationException",
@@ -3094,7 +3100,8 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions;
     if (scan_filter) {
         const cql3::query_options query_options = cql3::query_options(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
-        filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *scan_filter);
+        bool require_all = conditional_operator != conditional_operator_type::OR;
+        filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *scan_filter, require_all);
         partition_ranges = filtering_restrictions->get_partition_key_ranges(query_options);
         ck_bounds = filtering_restrictions->get_clustering_bounds(query_options);
     }
@@ -3517,6 +3524,7 @@ calculate_bounds_condition_expression(schema_ptr schema,
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
+
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.query++;
     elogger.trace("Querying {}", request);
@@ -3562,14 +3570,19 @@ future<executor::request_return_type> executor::query(client_state& client_state
                         rjson::find(request, "ExpressionAttributeNames"),
                         used_attribute_names);
 
-    //FIXME(sarna): QueryFilter is deprecated in favor of FilterExpression
     rjson::value* query_filter = rjson::find(request, "QueryFilter");
+    auto conditional_operator = get_conditional_operator(request);
+    if (conditional_operator != conditional_operator_type::MISSING &&
+        (!query_filter || (query_filter->IsObject() && query_filter->GetObject().ObjectEmpty()))) {
+            throw api_error("ValidationException", "'ConditionalOperator' parameter cannot be specified for missing or empty QueryFilter");
+    }
 
     auto attrs_to_get = calculate_attrs_to_get(request);
 
     ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions;
     if (query_filter) {
-        filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *query_filter);
+        bool require_all = conditional_operator != conditional_operator_type::OR;
+        filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *query_filter, require_all);
         auto pk_defs = filtering_restrictions->get_partition_key_restrictions()->get_column_defs();
         auto ck_defs = filtering_restrictions->get_clustering_columns_restrictions()->get_column_defs();
         if (!pk_defs.empty()) {

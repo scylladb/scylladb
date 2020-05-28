@@ -81,9 +81,15 @@ static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_
     return make_shared<cql3::restrictions::single_column_restriction::EQ>(cdef, std::move(restriction_value));
 }
 
-::shared_ptr<cql3::restrictions::statement_restrictions> get_filtering_restrictions(schema_ptr schema, const column_definition& attrs_col, const rjson::value& query_filter) {
+// Convert a QueryFilter or ScanFilter parameter into an equivalent set of
+// Scylla statement_restrictions which can be used in filtering a query.
+::shared_ptr<cql3::restrictions::statement_restrictions> get_filtering_restrictions(schema_ptr schema, const column_definition& attrs_col, const rjson::value& query_filter, bool require_all) {
     clogger.trace("Getting filtering restrictions for: {}", rjson::print(query_filter));
     auto filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(schema, true);
+    if (!require_all) {
+        // FIXME: Need to implement ConditionalOperator=OR case
+        throw api_error("ValidationException", "QueryFilter or ScanFilter with ConditionalOperator=OR not yet implemented");
+    }
     for (auto it = query_filter.MemberBegin(); it != query_filter.MemberEnd(); ++it) {
         std::string_view column_name(it->name.GetString(), it->name.GetStringLength());
         const rjson::value& condition = it->value;

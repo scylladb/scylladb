@@ -47,7 +47,7 @@ enum class conditional_operator_type {
 };
 conditional_operator_type get_conditional_operator(const rjson::value& req);
 
-::shared_ptr<cql3::restrictions::statement_restrictions> get_filtering_restrictions(schema_ptr schema, const column_definition& attrs_col, const rjson::value& query_filter);
+::shared_ptr<cql3::restrictions::statement_restrictions> get_filtering_restrictions(schema_ptr schema, const column_definition& attrs_col, const rjson::value& query_filter, bool require_all);
 
 bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value>& previous_item);
 
