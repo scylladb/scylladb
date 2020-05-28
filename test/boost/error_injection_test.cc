@@ -42,7 +42,7 @@ SEASTAR_TEST_CASE(test_inject_noop) {
     utils::error_injection<false> errinj;
 
     BOOST_REQUIRE_NO_THROW(errinj.inject("noop1",
-            [] () { throw std::runtime_error("shouldn't happen"); }).get());
+            [] () { throw std::runtime_error("shouldn't happen"); }));
 
     BOOST_ASSERT(errinj.enabled_injections().empty());
 

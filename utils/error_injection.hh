@@ -187,8 +187,8 @@ public:
         return seastar::sleep(duration);
     }
 
-    template <typename Clock, typename Duration>
     // \brief Inject a sleep to deadline (timeout)
+    template <typename Clock, typename Duration>
     [[gnu::always_inline]]
     future<> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline) {
 
@@ -286,10 +286,10 @@ public:
         return make_ready_future<>();
     }
 
-    // Inject a sleep to deadline (timeout)
-    template<class TimePoint>
+    // \brief Inject a sleep to deadline (timeout)
+    template <typename Clock, typename Duration>
     [[gnu::always_inline]]
-    future<> inject(const std::string_view& name, TimePoint deadline) {
+    future<> inject(const std::string_view& name, std::chrono::time_point<Clock, Duration> deadline) {
         return make_ready_future<>();
     }
 
