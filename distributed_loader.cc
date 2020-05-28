@@ -415,12 +415,65 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<d
     });
 }
 
+// Loads SSTables into the main directory (or staging) and returns how many were loaded
+future<size_t>
+distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sharded<database>& db,
+        sharded<db::view::view_update_generator>& view_update_generator, fs::path datadir, sstring ks, sstring cf) {
+
+    auto& table = db.local().find_column_family(ks, cf);
+
+    return do_with(dht::ring_position::max(), dht::ring_position::min(), [&table, &dir, &view_update_generator, datadir = std::move(datadir)] (dht::ring_position& min, dht::ring_position& max) {
+        return dir.do_for_each_sstable([&table, datadir = std::move(datadir), &min, &max] (sstables::shared_sstable sst) {
+            min = std::min(dht::ring_position(sst->get_first_decorated_key()), min, dht::ring_position_less_comparator(*table.schema()));
+            max = std::max(dht::ring_position(sst->get_last_decorated_key()) , max, dht::ring_position_less_comparator(*table.schema()));
+
+            auto gen = table.calculate_generation_for_new_table();
+            dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
+            return sst->move_to_new_dir(datadir.native(), gen,  true).then([&table, sst] {
+                table._sstables_opened_but_not_loaded.push_back(std::move(sst));
+                return make_ready_future<>();
+            });
+        }).then([&table, &min, &max] {
+            // nothing loaded
+            if (min.is_max() && max.is_min()) {
+                return make_ready_future<>();
+            }
+
+            return table.get_row_cache().invalidate([&table] () noexcept {
+                for (auto& sst : table._sstables_opened_but_not_loaded) {
+                    try {
+                        table.load_sstable(sst, true);
+                    } catch (...) {
+                        dblog.error("Failed to load {}: {}. Aborting.", sst->toc_filename(), std::current_exception());
+                        abort();
+                    }
+                }
+            }, dht::partition_range::make({min, true}, {max, true}));
+        }).then([&view_update_generator, &table] {
+            return parallel_for_each(table._sstables_opened_but_not_loaded, [&view_update_generator, &table] (sstables::shared_sstable& sst) {
+                if (sst->requires_view_building()) {
+                    return view_update_generator.local().register_staging_sstable(sst, table.shared_from_this());
+                }
+                return make_ready_future<>();
+            });
+        }).then_wrapped([&table] (future<> f) {
+            auto opened = std::exchange(table._sstables_opened_but_not_loaded, {});
+            if (!f.failed()) {
+                return make_ready_future<size_t>(opened.size());
+            } else {
+                return make_exception_future<size_t>(f.get_exception());
+            }
+        });
+    });
+}
+
 future<>
-distributed_loader::process_upload_dir(distributed<database>& db, sstring ks, sstring cf) {
+distributed_loader::process_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
+        distributed<db::view::view_update_generator>& view_update_generator, sstring ks, sstring cf) {
     seastar::thread_attributes attr;
     attr.sched_group = db.local().get_streaming_scheduling_group();
 
-    return seastar::async(std::move(attr), [&db, ks = std::move(ks), cf = std::move(cf)] {
+    return seastar::async(std::move(attr), [&db, &view_update_generator, &sys_dist_ks, ks = std::move(ks), cf = std::move(cf)] {
         global_column_family_ptr global_table(db, ks, cf);
 
         sharded<sstables::sstable_directory> directory;
@@ -460,77 +513,28 @@ distributed_loader::process_upload_dir(distributed<database>& db, sstring ks, ss
                     global_table->get_sstables_manager().get_highest_supported_format(),
                     sstables::sstable::format_types::big, &error_handler_gen_for_upload_dir);
         }).get();
-    });
-}
 
-// This function will iterate through upload directory in column family,
-// and will do the following for each sstable found:
-// 1) Mutate sstable level to 0.
-// 2) Check if view updates need to be generated from this sstable. If so, leave it intact for now.
-// 3) Otherwise, create hard links to its components in column family dir.
-// 4) Remove all of its components in upload directory.
-// At the end, it's expected that upload dir contains only staging sstables
-// which need to wait until view updates are generated from them.
-//
-// Return a vector containing descriptor of sstables to be loaded.
-future<std::vector<sstables::entry_descriptor>>
-distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks, sstring ks_name, sstring cf_name) {
-    return seastar::async([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] {
-        std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
-        std::vector<sstables::entry_descriptor> flushed;
+        reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
+            auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
+            return global_table->make_sstable(upload.native(), gen,
+                  global_table->get_sstables_manager().get_highest_supported_format(),
+                  sstables::sstable::format_types::big,
+                  &error_handler_gen_for_upload_dir);
+        }).get();
 
-        auto& cf = db.local().find_column_family(ks_name, cf_name);
-        auto upload_dir = fs::path(cf._config.datadir) / "upload";
-        verify_owner_and_mode(upload_dir).get();
-        lister::scan_dir(upload_dir, { directory_entry_type::regular }, [&descriptors] (fs::path parent_dir, directory_entry de) {
-              auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
-              if (comps.component != component_type::TOC) {
-                  return make_ready_future<>();
-              }
-              descriptors.emplace(comps.generation, std::move(comps));
-              return make_ready_future<>();
-        }, &sstables::manifest_json_filter).get();
+        const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), *global_table, streaming::stream_reason::repair).get0();
 
-        flushed.reserve(descriptors.size());
-        for (auto& [generation, comps] : descriptors) {
-            auto descriptors = db.invoke_on(column_family::calculate_shard_from_sstable_generation(generation), [&sys_dist_ks, ks_name, cf_name, comps] (database& db) {
-                return seastar::async([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name), comps = std::move(comps)] () mutable {
-                    auto& cf = db.find_column_family(ks_name, cf_name);
-                    auto sst = cf.make_sstable(cf._config.datadir + "/upload", comps.generation, comps.version, comps.format, &error_handler_gen_for_upload_dir);
-                    auto gen = cf.calculate_generation_for_new_table();
-
-                    sst->read_toc().get();
-                    schema_ptr s = cf.schema();
-                    if (s->is_counter() && !sst->has_scylla_component()) {
-                        sstring error = "Direct loading non-Scylla SSTables containing counters is not supported.";
-                        if (db.get_config().enable_dangerous_direct_import_of_cassandra_counters()) {
-                            dblog.info("{} But trying to continue on user's request.", error);
-                        } else {
-                            dblog.error("{} Use sstableloader instead.", error);
-                            throw std::runtime_error(fmt::format("{} Use sstableloader instead.", error));
-                        }
-                    }
-                    if (s->is_view()) {
-                        throw std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead.");
-                    }
-                    sst->mutate_sstable_level(0).get();
-                    const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), cf, streaming::stream_reason::repair).get0();
-                    sstring datadir = cf._config.datadir;
-                    if (use_view_update_path) {
-                        // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
-                        datadir += "/staging";
-                    }
-                    sst->create_links(datadir, gen).get();
-                    sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir()).get();
-                    comps.generation = gen;
-                    comps.sstdir = std::move(datadir);
-                    return std::move(comps);
-                });
-            }).get0();
-
-            flushed.push_back(std::move(descriptors));
+        auto datadir = upload.parent_path();
+        if (use_view_update_path) {
+            // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
+           datadir /= "staging";
         }
-        return std::vector<sstables::entry_descriptor>(std::move(flushed));
+
+        size_t loaded = directory.map_reduce0([&db, ks, cf, datadir, &view_update_generator] (sstables::sstable_directory& dir) {
+            return make_sstables_available(dir, db, view_update_generator, datadir, ks, cf);
+        }, size_t(0), std::plus<size_t>()).get0();
+
+        dblog.info("Loaded {} SSTables into {}", loaded, datadir.native());
     });
 }
 
@@ -727,56 +731,6 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                     });
                 });
             }).get();
-        });
-    });
-}
-
-future<> distributed_loader::load_new_sstables(distributed<database>& db, distributed<db::view::view_update_generator>& view_update_generator,
-        sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables) {
-    return parallel_for_each(new_tables, [&] (auto comps) {
-        auto cf_sstable_open = [comps] (column_family& cf, sstables::foreign_sstable_open_info info) {
-            auto f = cf.open_sstable(std::move(info), comps.sstdir, comps.generation, comps.version, comps.format);
-            return f.then([&cf] (sstables::shared_sstable sst) mutable {
-                if (sst) {
-                    cf._sstables_opened_but_not_loaded.push_back(sst);
-                }
-                return make_ready_future<>();
-            });
-        };
-        return distributed_loader::open_sstable(db, comps, cf_sstable_open, service::get_local_compaction_priority())
-            .handle_exception([comps, ks, cf] (std::exception_ptr ep) {
-                auto name = sstables::sstable::filename(comps.sstdir, ks, cf, comps.version, comps.generation, comps.format, sstables::component_type::TOC);
-                dblog.error("Failed to open {}: {}", name, ep);
-                return make_exception_future<>(ep);
-            });
-    }).then([&db, &view_update_generator, ks, cf] {
-        return db.invoke_on_all([&view_update_generator, ks = std::move(ks), cfname = std::move(cf)] (database& db) {
-            auto& cf = db.find_column_family(ks, cfname);
-            return cf.get_row_cache().invalidate([&view_update_generator, &cf] () noexcept {
-                // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
-                // atomically load all opened sstables into column family.
-                for (auto& sst : cf._sstables_opened_but_not_loaded) {
-                    try {
-                        cf.load_sstable(sst, true);
-                    } catch(...) {
-                        dblog.error("Failed to load {}: {}. Aborting.", sst->toc_filename(), std::current_exception());
-                        abort();
-                    }
-                    if (sst->requires_view_building()) {
-                        // FIXME: discarded future.
-                        (void)view_update_generator.local().register_staging_sstable(sst, cf.shared_from_this());
-                    }
-                }
-                cf._sstables_opened_but_not_loaded.clear();
-                cf.trigger_compaction();
-            });
-        });
-    }).handle_exception([&db, ks, cf] (std::exception_ptr ep) {
-        return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
-            auto& cf = db.find_column_family(ks, cfname);
-            cf._sstables_opened_but_not_loaded.clear();
-        }).then([ep] {
-            return make_exception_future<>(ep);
         });
     });
 }

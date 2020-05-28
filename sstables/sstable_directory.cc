@@ -287,22 +287,25 @@ sstable_directory::remove_input_sstables_from_reshaping(std::vector<sstables::sh
     dirlog.debug("Removing {} reshaped SSTables", sstlist.size());
     return do_with(std::move(sstlist), std::unordered_set<sstables::shared_sstable>(),
             [this] (std::vector<sstables::shared_sstable>& sstlist, std::unordered_set<sstables::shared_sstable>& exclude) {
-        return parallel_for_each(sstlist, [this, &exclude] (sstables::shared_sstable sst) {
+
+        for (auto& sst : sstlist) {
             exclude.insert(sst);
-            return make_ready_future<>();
-        }).then([this, &exclude] {
-            return parallel_for_each(std::exchange(_unshared_local_sstables, {}), [this, &exclude] (sstables::shared_sstable sst) {
-                if (!exclude.count(sst)) {
-                    _unshared_local_sstables.push_back(sst);
-                }
-                return make_ready_future<>();
-            });
-        }).then([this, &exclude] {;
-            // Do this last for exception safety. If there is an exception on unlink we
-            // want to at least leave the SSTable unshared list in a sane state.
-            return parallel_for_each(exclude, [] (sstables::shared_sstable sst) {
-                return sst->unlink();
-            });
+        }
+
+        auto old = std::exchange(_unshared_local_sstables, {});
+
+        for (auto& sst : old) {
+            if (!exclude.count(sst)) {
+                _unshared_local_sstables.push_back(sst);
+            }
+        }
+
+        // Do this last for exception safety. If there is an exception on unlink we
+        // want to at least leave the SSTable unshared list in a sane state.
+        return parallel_for_each(std::move(sstlist), [] (sstables::shared_sstable sst) {
+            return sst->unlink();
+        }).then([] {
+            fmt::print("Finished removing all SSTables\n");
         });
     });
 }
