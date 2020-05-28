@@ -481,6 +481,11 @@ reader_consumer compaction_strategy_impl::make_interposer_consumer(const mutatio
     return end_consumer;
 }
 
+compaction_descriptor
+compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+    return compaction_descriptor();
+}
+
 } // namespace sstables
 
 size_tiered_backlog_tracker::inflight_component
@@ -1009,6 +1014,11 @@ compaction_strategy::make_sstable_set(schema_ptr schema) const {
 
 compaction_backlog_tracker& compaction_strategy::get_backlog_tracker() {
     return _compaction_strategy_impl->get_backlog_tracker();
+}
+
+sstables::compaction_descriptor
+compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+    return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, iop, mode);
 }
 
 uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {

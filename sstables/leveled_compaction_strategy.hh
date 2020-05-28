@@ -63,6 +63,8 @@ public:
     virtual compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }
+
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) override;
 };
 
 }

@@ -171,4 +171,69 @@ int64_t leveled_compaction_strategy::estimated_pending_compactions(column_family
     return manifest.get_estimated_tasks();
 }
 
+compaction_descriptor
+leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+    std::array<std::vector<shared_sstable>, leveled_manifest::MAX_LEVELS> level_info;
+
+    auto is_disjoint = [this, schema] (const std::vector<shared_sstable>& sstables, unsigned tolerance) {
+        unsigned disjoint_sstables = 0;
+        auto prev_last = dht::ring_position::min();
+        for (auto& sst : sstables) {
+            if (dht::ring_position(sst->get_first_decorated_key()).less_compare(*schema, prev_last)) {
+                disjoint_sstables++;
+            }
+            prev_last = dht::ring_position(sst->get_last_decorated_key());
+        }
+        return disjoint_sstables > tolerance;
+    };
+
+    for (auto& sst : input) {
+        auto sst_level = sst->get_sstable_level();
+        if (sst_level > leveled_manifest::MAX_LEVELS) {
+            leveled_manifest::logger.warn("Found SSTable with level {}, higher than the maximum {}. This is unexpected, but will fix", sst_level, leveled_manifest::MAX_LEVELS);
+
+            // This is really unexpected, so we'll just compact it all to fix it
+            compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, leveled_manifest::MAX_LEVELS - 1, _max_sstable_size_in_mb * 1024 * 1024);
+            desc.options = compaction_options::make_reshape();
+            return desc;
+        }
+        level_info[sst_level].push_back(sst);
+    }
+
+    for (auto& level : level_info) {
+        std::sort(level.begin(), level.end(), [this, schema] (shared_sstable a, shared_sstable b) {
+            return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
+        });
+    }
+
+    unsigned max_filled_level = 0;
+
+    size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
+    size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
+    unsigned tolerance = mode == reshape_mode::strict ? 0 : leveled_manifest::leveled_fan_out * 2;
+
+    if (level_info[0].size() > offstrategy_threshold) {
+        level_info[0].resize(std::min(level_info[0].size(), max_sstables));
+        compaction_descriptor desc(std::move(level_info[0]), std::optional<sstables::sstable_set>(), iop);
+        desc.options = compaction_options::make_reshape();
+        return desc;
+    }
+
+    for (unsigned level = 1; level < leveled_manifest::MAX_LEVELS; ++level) {
+        if (level_info[level].empty()) {
+            continue;
+        }
+        max_filled_level = std::max(max_filled_level, level);
+
+        if (!is_disjoint(level_info[level], tolerance)) {
+            // Unfortunately no good limit to limit input size to max_sstables for LCS major
+            compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, max_filled_level, _max_sstable_size_in_mb * 1024 * 1024);
+            desc.options = compaction_options::make_reshape();
+            return desc;
+        }
+    }
+
+   return compaction_descriptor();
+}
+
 }

@@ -351,6 +351,8 @@ public:
     virtual bool use_interposer_consumer() const override {
         return true;
     }
+
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) override;
 };
 
 }
