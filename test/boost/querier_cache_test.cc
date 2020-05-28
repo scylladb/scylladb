@@ -674,7 +674,6 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         db.query_mutations(s,
                 cmd1,
                 query::full_partition_range,
-                1024 * 1024,
                 nullptr,
                 db::no_timeout).get();
 
@@ -710,7 +709,6 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         db.query_mutations(s,
                 cmd2,
                 query::full_partition_range,
-                1024 * 1024,
                 nullptr,
                 db::no_timeout).get();
 
@@ -724,10 +722,10 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         // of the tracked buffers.
         cmd2.row_limit = query::max_rows;
         cmd2.partition_limit = query::max_partitions;
+        cmd2.max_result_size.emplace(query::result_memory_limiter::unlimited_result_size);
         db.query_mutations(s,
                 cmd2,
                 query::full_partition_range,
-                query::result_memory_limiter::unlimited_result_size,
                 nullptr,
                 db::no_timeout).get();
         return make_ready_future<>();

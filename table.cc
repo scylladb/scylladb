@@ -2037,13 +2037,12 @@ table::query(schema_ptr s,
         const dht::partition_range_vector& partition_ranges,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
-        uint64_t max_size,
         db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
     auto f = opts.request == query::result_request::only_digest
-             ? memory_limiter.new_digest_read(query::max_result_size(max_size)) : memory_limiter.new_data_read(query::max_result_size(max_size));
+             ? memory_limiter.new_digest_read(*cmd.max_result_size) : memory_limiter.new_data_read(*cmd.max_result_size);
     return f.then([this, lc, s = std::move(s), &cmd, class_config, opts, &partition_ranges,
             trace_state = std::move(trace_state), timeout, cache_ctx = std::move(cache_ctx)] (query::result_memory_accounter accounter) mutable {
         auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, opts, partition_ranges, std::move(accounter));

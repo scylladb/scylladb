@@ -753,7 +753,6 @@ public:
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
-        uint64_t max_result_size,
         db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx = { });
 
@@ -1299,7 +1298,6 @@ private:
         const dht::partition_range_vector&,
         tracing::trace_state_ptr,
         query::result_memory_limiter&,
-        uint64_t,
         db::timeout_clock::time_point,
         query::querier_cache_context> _data_query_stage;
 
@@ -1464,10 +1462,9 @@ public:
     unsigned shard_of(const frozen_mutation& m);
     future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
-                                                                  uint64_t max_result_size, db::timeout_clock::time_point timeout);
+                                                                  db::timeout_clock::time_point timeout);
     future<std::tuple<reconcilable_result, cache_temperature>> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
-                                                size_t max_result_size, tracing::trace_state_ptr trace_state,
-                                                db::timeout_clock::time_point timeout);
+                                                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
     future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout);

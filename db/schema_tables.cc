@@ -743,7 +743,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
 {
     auto dk = dht::decorate_key(*s, pkey);
     return do_with(dht::partition_range::make_singular(dk), [&proxy, dk, s = std::move(s), cmd = std::move(cmd)] (auto& range) {
-        return proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout)
+        return proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout, tracing::trace_state_ptr{})
                 .then([dk = std::move(dk), s](rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> res_hit_rate) {
                     auto&& [res, hit_rate] = res_hit_rate;
                     auto&& partitions = res->partitions();
