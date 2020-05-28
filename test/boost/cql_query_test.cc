@@ -4575,3 +4575,81 @@ SEASTAR_TEST_CASE(test_impossible_where) {
         require_rows(e, "SELECT * FROM t2 WHERE c>=10 AND c<=0 ALLOW FILTERING", {});
     });
 }
+
+SEASTAR_THREAD_TEST_CASE(test_query_limit) {
+    cql_test_config cfg;
+
+    cfg.db_config->max_memory_for_unlimited_query_soft_limit.set(256, utils::config_file::config_source::CommandLine);
+    cfg.db_config->max_memory_for_unlimited_query_hard_limit.set(1024, utils::config_file::config_source::CommandLine);
+
+    cfg.dbcfg.emplace();
+    cfg.dbcfg->available_memory = memory::stats().total_memory();
+    cfg.dbcfg->statement_scheduling_group = seastar::create_scheduling_group("statement", 1000).get0();
+    cfg.dbcfg->streaming_scheduling_group = seastar::create_scheduling_group("streaming", 200).get0();
+
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE test (pk int, ck int, v text, PRIMARY KEY (pk, ck));").get();
+        auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
+
+        const int pk = 0;
+        const auto raw_pk = int32_type->decompose(data_value(pk));
+        const auto cql3_pk = cql3::raw_value::make_value(raw_pk);
+
+        const auto value = sstring(1024, 'a');
+        const auto raw_value = utf8_type->decompose(data_value(value));
+        const auto cql3_value = cql3::raw_value::make_value(raw_value);
+
+        const int num_rows = 10;
+
+        for (int i = 0; i != num_rows; ++i) {
+            const auto cql3_ck = cql3::raw_value::make_value(int32_type->decompose(data_value(i)));
+            e.execute_prepared(id, {cql3_pk, cql3_ck, cql3_value}).get();
+        }
+
+        auto& db = e.local_db();
+
+        const auto make_expected_row = [&] (int ck) -> std::vector<bytes_opt> {
+            return {raw_pk, int32_type->decompose(ck), raw_value};
+        };
+
+        const auto normal_rows = boost::copy_range<std::vector<std::vector<bytes_opt>>>(boost::irange(0, num_rows) | boost::adaptors::transformed(make_expected_row));
+        const auto reversed_rows = boost::copy_range<std::vector<std::vector<bytes_opt>>>(boost::irange(0, num_rows) | boost::adaptors::reversed | boost::adaptors::transformed(make_expected_row));
+
+        for (auto is_paged : {true, false}) {
+            for (auto is_reversed : {true, false}) {
+                for (auto scheduling_group : {db.get_statement_scheduling_group(), db.get_streaming_scheduling_group(), default_scheduling_group()}) {
+                    const auto should_fail = (!is_paged || is_reversed) && scheduling_group == db.get_statement_scheduling_group();
+                    testlog.info("checking: is_paged={}, is_reversed={}, scheduling_group={}, should_fail={}", is_paged, is_reversed, scheduling_group.name(), should_fail);
+                    const auto select_query = format("SELECT * FROM test WHERE pk = {} ORDER BY ck {};", pk, is_reversed ? "DESC" : "ASC");
+
+                    int32_t page_size = is_paged ? 10000 : -1;
+                    auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                                cql3::query_options::specific_options{page_size, nullptr, {}, api::new_timestamp()});
+
+                    const auto* expected_rows = is_reversed ? &reversed_rows : &normal_rows;
+
+                    try {
+                        auto result = with_scheduling_group(scheduling_group, [&e] (const sstring& q, std::unique_ptr<cql3::query_options> qo) {
+                            return e.execute_cql(q, std::move(qo));
+                        }, select_query, std::move(qo)).get0();
+                        assert_that(std::move(result))
+                                .is_rows()
+                                .with_rows(*expected_rows);
+
+                        if (should_fail) {
+                            BOOST_FAIL("Expected exception, but none was thrown.");
+                        } else {
+                            testlog.trace("No exception thrown, as expected.");
+                        }
+                    } catch (exceptions::read_failure_exception& e) {
+                        if (should_fail) {
+                            testlog.trace("Exception thrown, as expected: {}", e);
+                        } else {
+                            BOOST_FAIL(fmt::format("Expected no exception, but caught: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+    }, std::move(cfg)).get();
+}
