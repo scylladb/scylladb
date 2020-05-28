@@ -308,7 +308,7 @@ int main(int argc, char** argv) {
             auto prev_occupancy = logalloc::shard_tracker().occupancy();
             testlog.info("Occupancy before: {}", prev_occupancy);
 
-            auto& sem = env.local_db().make_query_class_config().semaphore;
+            auto& sem = env.local_db().get_reader_concurrency_semaphore();
 
             testlog.info("Reading");
             stats_collector sc(sem, stats_collector_params);

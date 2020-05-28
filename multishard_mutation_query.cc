@@ -244,7 +244,7 @@ public:
     virtual reader_concurrency_semaphore& semaphore() override {
         const auto shard = this_shard_id();
         if (!_semaphores[shard]) {
-            _semaphores[shard] = &_db.local().make_query_class_config().semaphore;
+            _semaphores[shard] = &_db.local().get_reader_concurrency_semaphore();
         }
         return *_semaphores[shard];
     }
@@ -618,18 +618,17 @@ static future<reconcilable_result> do_query_mutations(
                     mutation_reader::forwarding fwd_mr) {
                 return make_multishard_combining_reader(ctx, std::move(s), pr, ps, pc, std::move(trace_state), fwd_mr);
             });
-            auto class_config = ctx->db().local().make_query_class_config();
-            auto reader = make_flat_multi_range_reader(s, class_config.semaphore.make_permit(), std::move(ms), ranges, cmd.slice,
-                    service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
+            auto reader = make_flat_multi_range_reader(s, ctx->db().local().get_reader_concurrency_semaphore().make_permit(), std::move(ms), ranges,
+                    cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
 
             auto compaction_state = make_lw_shared<compact_for_mutation_query_state>(*s, cmd.timestamp, cmd.slice, cmd.row_limit,
                     cmd.partition_limit);
 
-            return do_with(std::move(reader), std::move(compaction_state), [&, class_config, accounter = std::move(accounter), timeout] (
+            return do_with(std::move(reader), std::move(compaction_state), [&, accounter = std::move(accounter), timeout] (
                         flat_mutation_reader& reader, lw_shared_ptr<compact_for_mutation_query_state>& compaction_state) mutable {
                 auto rrb = reconcilable_result_builder(*reader.schema(), cmd.slice, std::move(accounter));
                 return query::consume_page(reader, compaction_state, cmd.slice, std::move(rrb), cmd.row_limit, cmd.partition_limit, cmd.timestamp,
-                        timeout, class_config.max_memory_for_unlimited_query).then([&] (consume_result&& result) mutable {
+                        timeout, *cmd.max_result_size).then([&] (consume_result&& result) mutable {
                     return make_ready_future<page_consume_result>(page_consume_result(std::move(result), reader.detach_buffer(), std::move(compaction_state)));
                 });
             }).then_wrapped([&ctx] (future<page_consume_result>&& result_fut) {

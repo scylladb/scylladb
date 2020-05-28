@@ -78,7 +78,7 @@ future<> view_update_generator::start() {
                     auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader(
                             std::move(ms),
                             s,
-                            _db.make_query_class_config().semaphore.make_permit(),
+                            _db.get_reader_concurrency_semaphore().make_permit(),
                             query::full_partition_range,
                             s->full_slice(),
                             service::get_local_streaming_priority(),

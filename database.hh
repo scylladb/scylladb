@@ -1592,7 +1592,9 @@ public:
         return _supports_infinite_bound_range_deletions;
     }
 
-    query::query_class_config make_query_class_config();
+    // Get the reader concurrency semaphore, appropriate for the query class,
+    // which is deduced from the current scheduling group.
+    reader_concurrency_semaphore& get_reader_concurrency_semaphore();
 };
 
 future<> start_large_data_handler(sharded<database>& db);
