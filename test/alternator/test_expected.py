@@ -1052,6 +1052,19 @@ def test_update_expected_empty(test_table_s):
             AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
             Expected={}, ConditionalOperator='AND')
 
+# Specifying ConditionalOperator is forbidden if the "Expected" Attribute
+# is missing:
+def test_conditional_operator_expected_missing(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*ConditionalOperator'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+            ConditionalOperator='OR')
+    with pytest.raises(ClientError, match='ValidationException.*ConditionalOperator'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+            ConditionalOperator='AND')
+
 # All of the above tests tested "Expected" with the UpdateItem operation.
 # We now want to test that it works also with the PutItem and DeleteItems
 # operations. We don't need to check again all the different sub-cases tested
