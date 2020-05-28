@@ -1,4 +1,4 @@
-{{product}}-python3 ({{version}}-{{release}}-{{revision}}) {{codename}}; urgency=medium
+%{product}-python3 (%{version}-%{release}-%{revision}) %{codename}; urgency=medium
 
   * Initial release.
 

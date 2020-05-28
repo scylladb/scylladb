@@ -59,9 +59,6 @@ if [ ! -f "$RELOC_PKG" ]; then
     exit 1
 fi
 
-if [ -e debian ]; then
-    rm -rf debian
-fi
 if is_debian_variant; then
     sudo apt-get -y update
 fi
@@ -85,13 +82,6 @@ fi
 if [ ! -f /usr/bin/fakeroot ]; then
     pkg_install fakeroot
 fi
-if [ ! -f /usr/bin/pystache ] && [ ! -f /usr/local/bin/pystache ]; then
-    if is_redhat_variant; then
-        sudo yum install -y /usr/bin/pystache
-    elif is_debian_variant; then
-        sudo apt-get install -y python-pystache
-    fi
-fi
 if [ ! -f /usr/bin/file ]; then
     pkg_install file
 fi
@@ -106,17 +96,6 @@ if [ "$ID" = "debian" ] && [ ! -f /usr/share/keyrings/ubuntu-archive-keyring.gpg
     sudo apt-get install -y ubuntu-archive-keyring
 fi
 
-if [ -z "$TARGET" ]; then
-    if is_debian_variant; then
-        if [ ! -f /usr/bin/lsb_release ]; then
-            pkg_install lsb-release
-        fi
-        TARGET=`lsb_release -c|awk '{print $2}'`
-    else
-        echo "Please specify target"
-        exit 1
-    fi
-fi
 RELOC_PKG_FULLPATH=$(readlink -f $RELOC_PKG)
 RELOC_PKG_BASENAME=$(basename $RELOC_PKG)
 SCYLLA_VERSION=$(cat scylla-python3/SCYLLA-VERSION-FILE)
@@ -124,17 +103,5 @@ SCYLLA_RELEASE=$(cat scylla-python3/SCYLLA-RELEASE-FILE)
 
 ln -fv $RELOC_PKG_FULLPATH ../$PRODUCT-python3_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz
 
-cp -al scylla-python3/dist/debian/python3/debian debian
-if [ "$PRODUCT" != "scylla" ]; then
-    # rename all 'scylla-' prefixed artifacts in the debian folder to have the 
-    # product name as a prefix
-    find debian -maxdepth 1 -name "scylla-*" -exec bash -c 'mv $1 ${1/scylla-/$2-}' _ {} "$PRODUCT" \;
-fi
-REVISION="1"
-MUSTACHE_DIST="\"debian\": true, \"product\": \"$PRODUCT\", \"$PRODUCT\": true"
-pystache scylla-python3/dist/debian/python3/changelog.mustache "{ $MUSTACHE_DIST, \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"revision\": \"$REVISION\", \"codename\": \"$TARGET\" }" > debian/changelog
-pystache scylla-python3/dist/debian/python3/rules.mustache "{ $MUSTACHE_DIST }" > debian/rules
-pystache scylla-python3/dist/debian/python3/control.mustache "{ $MUSTACHE_DIST }" > debian/control
-chmod a+rx debian/rules
-
+cp -al scylla-python3/debian debian
 debuild -rfakeroot -us -uc
