@@ -1396,6 +1396,7 @@ public:
         return _commitlog.get();
     }
 
+    seastar::scheduling_group get_statement_scheduling_group() const { return _dbcfg.statement_scheduling_group; }
     seastar::scheduling_group get_streaming_scheduling_group() const { return _dbcfg.streaming_scheduling_group; }
     size_t get_available_memory() const { return _dbcfg.available_memory; }
 
