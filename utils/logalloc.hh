@@ -444,12 +444,22 @@ private:
 class tracker {
 public:
     class impl;
+
+    struct config {
+        bool defragment_on_idle;
+        bool abort_on_lsa_bad_alloc;
+        size_t lsa_reclamation_step;
+    };
+
+    void configure(const config& cfg);
+
 private:
     std::unique_ptr<impl> _impl;
     memory::reclaimer _reclaimer;
     friend class region;
     friend class region_impl;
     memory::reclaiming_result reclaim(seastar::memory::reclaimer::request);
+
 public:
     tracker();
     ~tracker();
@@ -463,10 +473,6 @@ public:
     // Invalidates references to objects in all compactible and evictable regions.
     //
     size_t reclaim(size_t bytes);
-
-    // Compacts one segment at a time from sparsest segment to least sparse until work_waiting_on_reactor returns true
-    // or there are no more segments to compact.
-    idle_cpu_handler_result compact_on_idle(work_waiting_on_reactor);
 
     // Compacts as much as possible. Very expensive, mainly for testing.
     // Guarantees that every live object from reclaimable regions will be moved.
@@ -486,14 +492,8 @@ public:
 
     impl& get_impl() { return *_impl; }
 
-    // Set the minimum number of segments reclaimed during single reclamation cycle.
-    void set_reclamation_step(size_t step_in_segments);
-
     // Returns the minimum number of segments reclaimed during single reclamation cycle.
     size_t reclamation_step() const;
-
-    // Abort on allocation failure from LSA
-    void enable_abort_on_bad_alloc();
 
     bool should_abort_on_bad_alloc();
 };

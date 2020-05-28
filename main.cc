@@ -1169,21 +1169,14 @@ int main(int ac, char** av) {
                 }).get();
             }
 
-            if (cfg->defragment_memory_on_idle()) {
-                smp::invoke_on_all([] () {
-                    engine().set_idle_cpu_handler([] (reactor::work_waiting_on_reactor check_for_work) {
-                        return logalloc::shard_tracker().compact_on_idle(check_for_work);
-                    });
-                }).get();
-            }
-            smp::invoke_on_all([&cfg] () {
-                return logalloc::shard_tracker().set_reclamation_step(cfg->lsa_reclamation_step());
+            smp::invoke_on_all([&cfg] {
+                logalloc::tracker::config st_cfg;
+                st_cfg.defragment_on_idle = cfg->defragment_memory_on_idle();
+                st_cfg.abort_on_lsa_bad_alloc = cfg->abort_on_lsa_bad_alloc();
+                st_cfg.lsa_reclamation_step = cfg->lsa_reclamation_step();
+                logalloc::shard_tracker().configure(st_cfg);
             }).get();
-            if (cfg->abort_on_lsa_bad_alloc()) {
-                smp::invoke_on_all([&cfg]() {
-                    return logalloc::shard_tracker().enable_abort_on_bad_alloc();
-                }).get();
-            }
+
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
             supervisor::notify("serving");
