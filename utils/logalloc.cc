@@ -1182,7 +1182,7 @@ private:
     void for_each_live(segment* seg, Func&& func) {
         // scylla-gdb.py:scylla_lsa_segment is coupled with this implementation.
 
-        static_assert(std::is_same<void, std::result_of_t<Func(const object_descriptor*, void*)>>::value, "bad Func signature");
+        static_assert(std::is_same<void, std::result_of_t<Func(const object_descriptor*, void*, size_t)>>::value, "bad Func signature");
 
         auto pos = align_up_for_asan(seg->at<const char>(0));
         while (pos < seg->at<const char>(segment::size)) {
@@ -1190,7 +1190,7 @@ private:
             const auto desc = object_descriptor::decode_forwards(pos);
             if (desc.is_live()) {
                 auto size = desc.live_size(pos);
-                func(&desc, const_cast<char*>(pos));
+                func(&desc, const_cast<char*>(pos), size);
                 pos += size;
             } else {
                 pos = old_pos + desc.dead_size();
@@ -1243,8 +1243,7 @@ private:
     void compact(segment* seg, segment_descriptor& desc) {
         ++_invalidate_counter;
 
-        for_each_live(seg, [this] (const object_descriptor* desc, void* obj) {
-            auto size = desc->live_size(obj);
+        for_each_live(seg, [this] (const object_descriptor* desc, void* obj, size_t size) {
             auto dst = alloc_small(*desc, size, desc->alignment());
             _sanitizer.on_migrate(obj, size, dst);
             desc->migrator()->migrate(obj, dst, size);
