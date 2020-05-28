@@ -1,4 +1,4 @@
-Source: {{product}}-python3
+Source: %{product}-python3
 Maintainer: Takuya ASADA <syuu@scylladb.com>
 Homepage: http://scylladb.com
 Section: python
@@ -7,7 +7,7 @@ X-Python3-Version: >= 3.4
 Standards-Version: 3.9.5
 Rules-Requires-Root: no
 
-Package: {{product}}-python3
+Package: %{product}-python3
 Architecture: amd64
 Description: A standalone python3 interpreter that can be moved around different Linux machines
  This is a self-contained python interpreter that can be moved around

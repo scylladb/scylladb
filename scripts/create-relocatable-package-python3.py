@@ -267,6 +267,7 @@ ar.reloc_add('build/python3/SCYLLA-RELEASE-FILE', arcname='SCYLLA-RELEASE-FILE')
 ar.reloc_add('build/python3/SCYLLA-VERSION-FILE', arcname='SCYLLA-VERSION-FILE')
 ar.reloc_add('build/SCYLLA-PRODUCT-FILE', arcname='SCYLLA-PRODUCT-FILE')
 ar.reloc_add('python3/install.sh', arcname='install.sh')
+ar.reloc_add('build/debian/python3/debian', arcname='debian')
 for p in ['pyhton3-libs'] + packages:
     pdir = pathlib.Path('/usr/share/licenses/{}/'.format(p))
     if pdir.exists():
