@@ -30,6 +30,7 @@
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/test_table.hh"
 #include "test/lib/log.hh"
+#include "test/lib/test_utils.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 
@@ -311,56 +312,6 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
 
         return make_ready_future<>();
     }).get();
-}
-
-namespace tests {
-
-std::string format_msg(std::string_view test_function_name, bool ok, std::experimental::source_location sl, std::string_view msg = {}) {
-    return fmt::format("{}(): {} @ {}() {}:{:d}{}{}", test_function_name, ok ? "OK" : "FAIL", sl.function_name(), sl.file_name(), sl.line(), msg.empty() ? "" : ": ", msg);
-}
-
-void check(bool condition, std::experimental::source_location sl = std::experimental::source_location::current()) {
-    if (condition) {
-        testlog.debug("{}", format_msg(__FUNCTION__, condition, sl));
-    } else {
-        testlog.error("{}", format_msg(__FUNCTION__, condition, sl));
-    }
-}
-
-template <typename LHS, typename RHS>
-void check_equal(const LHS& lhs, const RHS& rhs, std::experimental::source_location sl = std::experimental::source_location::current()) {
-    const auto condition = (lhs == rhs);
-    const auto msg = fmt::format("{} {}= {}", lhs, condition ? "=" : "!", rhs);
-    if (condition) {
-        testlog.debug("{}", format_msg(__FUNCTION__, condition, sl, msg));
-    } else {
-        testlog.error("{}", format_msg(__FUNCTION__, condition, sl, msg));
-    }
-}
-
-void require(bool condition, std::experimental::source_location sl = std::experimental::source_location::current()) {
-    if (condition) {
-        testlog.debug("{}", format_msg(__FUNCTION__, condition, sl));
-    } else {
-        throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, condition, sl));
-    }
-}
-
-template <typename LHS, typename RHS>
-void require_equal(const LHS& lhs, const RHS& rhs, std::experimental::source_location sl = std::experimental::source_location::current()) {
-    const auto condition = (lhs == rhs);
-    const auto msg = fmt::format("{} {}= {}", lhs, condition ? "=" : "!", rhs);
-    if (condition) {
-        testlog.debug("{}", format_msg(__FUNCTION__, condition, sl, msg));
-    } else {
-        throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, condition, sl, msg));
-    }
-}
-
-void fail(std::string_view msg, std::experimental::source_location sl = std::experimental::source_location::current()) {
-    throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, false, sl, msg));
-}
-
 }
 
 namespace {
