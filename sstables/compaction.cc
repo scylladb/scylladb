@@ -133,14 +133,25 @@ struct compaction_writer {
 class compacting_sstable_writer {
     compaction& _c;
     std::optional<compaction_writer> _writer = {};
+private:
+    inline void maybe_abort_compaction();
 public:
     explicit compacting_sstable_writer(compaction& c) : _c(c) { }
     void consume_new_partition(const dht::decorated_key& dk);
 
     void consume(tombstone t) { _writer->writer.consume(t); }
-    stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer->writer.consume(std::move(sr)); }
-    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _writer->writer.consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone&& rt) { return _writer->writer.consume(std::move(rt)); }
+    stop_iteration consume(static_row&& sr, tombstone, bool) {
+        maybe_abort_compaction();
+        return _writer->writer.consume(std::move(sr));
+    }
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
+        maybe_abort_compaction();
+        return _writer->writer.consume(std::move(cr));
+    }
+    stop_iteration consume(range_tombstone&& rt) {
+        maybe_abort_compaction();
+        return _writer->writer.consume(std::move(rt));
+    }
 
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
@@ -660,11 +671,15 @@ public:
     friend class garbage_collected_sstable_writer::data;
 };
 
-void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
-    if (_c._info->is_stop_requested()) {
+void compacting_sstable_writer::maybe_abort_compaction() {
+    if (_c._info->is_stop_requested()) [[unlikely]] {
         // Compaction manager will catch this exception and re-schedule the compaction.
         throw compaction_stop_exception(_c._info->ks_name, _c._info->cf_name, _c._info->stop_requested);
     }
+}
+
+void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
+    maybe_abort_compaction();
     if (!_writer) {
         _writer = _c.create_compaction_writer(dk);
     }
