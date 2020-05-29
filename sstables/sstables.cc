@@ -2265,10 +2265,10 @@ void sstable_writer_k_l::prepare_file_writer()
     options.write_behind = 10;
 
     if (!_compression_enabled) {
-        auto out = make_file_data_sink(std::move(_sst._data_file), options);
+        auto out = make_file_data_sink(std::move(_sst._data_file), options).get0();
         _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(out), options.buffer_size);
     } else {
-        auto out = make_file_output_stream(std::move(_sst._data_file), std::move(options));
+        auto out = make_file_output_stream(std::move(_sst._data_file), std::move(options)).get0();
         _writer = std::make_unique<file_writer>(make_compressed_file_k_l_format_output_stream(
                 std::move(out), &_sst._components->compression, _schema.get_compressor_params()));
     }
@@ -3466,8 +3466,10 @@ sstable::sstable(schema_ptr schema,
 }
 
 future<file_writer> file_writer::make(file f, file_output_stream_options options) noexcept {
-    output_stream<char> out = make_file_output_stream(std::move(f), std::move(options));
-    return make_ready_future<file_writer>(file_writer(std::move(out)));
+    return make_file_output_stream(std::move(f), std::move(options))
+        .then([](output_stream<char>&& out) {
+            return file_writer(std::move(out));
+        });
 }
 }
 

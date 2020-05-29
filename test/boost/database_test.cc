@@ -249,7 +249,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 
     auto write_file = [&require_exist] (const sstring& file_name, const sstring& text) {
         auto f = open_file_dma(file_name, open_flags::wo | open_flags::create | open_flags::truncate).get0();
-        auto os = make_file_output_stream(f, file_output_stream_options{});
+        auto os = make_file_output_stream(f, file_output_stream_options{}).get0();
         os.write(text).get();
         os.flush().get();
         os.close().get();

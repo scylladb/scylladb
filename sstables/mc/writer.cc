@@ -831,10 +831,10 @@ void writer::init_file_writers() {
     options.write_behind = 10;
 
     if (!_compression_enabled) {
-        auto out = make_file_data_sink(std::move(_sst._data_file), options);
+        auto out = make_file_data_sink(std::move(_sst._data_file), options).get0();
         _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(out), options.buffer_size);
     } else {
-        auto out = make_file_output_stream(std::move(_sst._data_file), options);
+        auto out = make_file_output_stream(std::move(_sst._data_file), options).get0();
         _data_writer = std::make_unique<file_writer>(
             make_compressed_file_m_format_output_stream(
                 std::move(out),
