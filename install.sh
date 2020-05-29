@@ -51,7 +51,7 @@ upgrade=false
 while [ $# -gt 0 ]; do
     case "$1" in
         "--root")
-            root="$2"
+            root="$(realpath "$2")"
             shift 2
             ;;
         "--prefix")
@@ -166,6 +166,9 @@ installconfig() {
         install "-m$perm" "$src" -Dt "$dest"
     fi
 }
+
+# change directory to the package's root directory
+cd "$(dirname "$0")"
 
 if [ -z "$prefix" ]; then
     if $nonroot; then
