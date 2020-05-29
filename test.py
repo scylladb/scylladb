@@ -42,6 +42,7 @@ import time
 import xml.etree.ElementTree as ET
 import yaml
 
+output_is_a_tty = sys.stdout.isatty()
 
 def create_formatter(*decorators):
     """Return a function which decorates its argument with the given
@@ -51,7 +52,7 @@ def create_formatter(*decorators):
 
     def nocolor(arg):
         return str(arg)
-    return color if os.isatty(sys.stdout.fileno()) else nocolor
+    return color if output_is_a_tty else nocolor
 
 
 class palette:
@@ -276,7 +277,7 @@ class BoostTest(UnitTest):
         boost_args += ['--report_level=no',
                        '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
         boost_args += ['--catch_system_errors=no']  # causes undebuggable cores
-        boost_args += ['--color_output={}'.format('true' if sys.stdout.isatty() else 'false')]
+        boost_args += ['--color_output={}'.format('true' if output_is_a_tty else 'false')]
         boost_args += ['--']
         self.args = boost_args + self.args
 
@@ -540,7 +541,7 @@ def parse_cmd_line():
                         help="Skip tests which match the provided pattern")
     args = parser.parse_args()
 
-    if not sys.stdout.isatty():
+    if not output_is_a_tty:
         args.verbose = True
 
     if not args.modes:
