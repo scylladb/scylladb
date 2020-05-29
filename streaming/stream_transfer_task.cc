@@ -44,6 +44,7 @@
 #include "streaming/stream_reason.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "mutation_reader.hh"
+#include "flat_mutation_reader.hh"
 #include "frozen_mutation.hh"
 #include "mutation.hh"
 #include "message/messaging_service.hh"
@@ -203,15 +204,27 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         }();
 
         auto sink_op = [sink, si, got_error_from_peer] () mutable -> future<> {
-            return do_with(std::move(sink), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd>& sink) {
-                return repeat([&sink, si, got_error_from_peer] () mutable {
-                    return si->reader(db::no_timeout).then([&sink, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
-                        if (mf && !(*got_error_from_peer)) {
+            mutation_fragment_stream_validator validator(*(si->reader.schema()));
+            return do_with(std::move(sink), std::move(validator), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd>& sink, mutation_fragment_stream_validator& validator) {
+                return repeat([&sink, &validator, si, got_error_from_peer] () mutable {
+                    return si->reader(db::no_timeout).then([&sink, &validator, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
+                        if (*got_error_from_peer) {
+                            return make_exception_future<stop_iteration>(std::runtime_error("Got status error code from peer"));
+                        }
+                        if (mf) {
+                            if (!validator(mf->mutation_fragment_kind())) {
+                                return make_exception_future<stop_iteration>(std::runtime_error(format("Stream reader mutation_fragment validator failed, previous={}, current={}",
+                                        validator.previous_mutation_fragment_kind(), mf->mutation_fragment_kind())));
+                            }
                             frozen_mutation_fragment fmf = freeze(*s, *mf);
                             auto size = fmf.representation().size();
                             streaming::get_local_stream_manager().update_progress(si->plan_id, si->id.addr, streaming::progress_info::direction::OUT, size);
                             return sink(fmf, stream_mutation_fragments_cmd::mutation_fragment_data).then([] { return stop_iteration::no; });
                         } else {
+                            if (!validator.on_end_of_stream()) {
+                                return make_exception_future<stop_iteration>(std::runtime_error(format("Stream reader mutation_fragment validator failed on end_of_stream, previous={}, current=end_of_stream",
+                                        validator.previous_mutation_fragment_kind())));
+                            }
                             return make_ready_future<stop_iteration>(stop_iteration::yes);
                         }
                     });
