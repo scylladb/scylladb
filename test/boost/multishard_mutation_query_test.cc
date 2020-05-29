@@ -54,7 +54,7 @@ static void check_cache_population(distributed<database>& db, size_t queriers,
     parallel_for_each(boost::irange(0u, smp::count), [queriers, &db] (unsigned shard) {
         return db.invoke_on(shard, [queriers] (database& local_db) {
             auto& stats = local_db.get_querier_cache_stats();
-            BOOST_REQUIRE_EQUAL(stats.population, queriers);
+            tests::require_equal(stats.population, queriers);
         });
     }).get0();
 }
