@@ -53,10 +53,10 @@ public:
     }
 
     virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
-        if (!is_assignable(_term->test_assignment(db, keyspace, casted_spec_of(db, keyspace, *receiver)))) {
+        if (!is_assignable(_term->test_assignment(db, keyspace, *casted_spec_of(db, keyspace, *receiver)))) {
             throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", _term, _type));
         }
-        if (!is_assignable(test_assignment(db, keyspace, receiver))) {
+        if (!is_assignable(test_assignment(db, keyspace, *receiver))) {
             throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", *this, receiver->name, receiver->type->as_cql3_type()));
         }
         return _term->prepare(db, keyspace, receiver);
@@ -67,12 +67,12 @@ private:
                 ::make_shared<column_identifier>(to_string(), true), _type->prepare(db, keyspace).get_type());
     }
 public:
-    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
+    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override {
         try {
             auto&& casted_type = _type->prepare(db, keyspace).get_type();
-            if (receiver->type == casted_type) {
+            if (receiver.type == casted_type) {
                 return assignment_testable::test_result::EXACT_MATCH;
-            } else if (receiver->type->is_value_compatible_with(*casted_type)) {
+            } else if (receiver.type->is_value_compatible_with(*casted_type)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             } else {
                 return assignment_testable::test_result::NOT_ASSIGNABLE;

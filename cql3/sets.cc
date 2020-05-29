@@ -98,17 +98,17 @@ sets::literal::validate_assignable_to(database& db, const sstring& keyspace, con
 
     auto&& value_spec = value_spec_of(receiver);
     for (shared_ptr<term::raw> rt : _elements) {
-        if (!is_assignable(rt->test_assignment(db, keyspace, value_spec))) {
+        if (!is_assignable(rt->test_assignment(db, keyspace, *value_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid set literal for {}: value {} is not of type {}", *receiver.name, *rt, value_spec->type->as_cql3_type()));
         }
     }
 }
 
 assignment_testable::test_result
-sets::literal::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
-    if (!dynamic_pointer_cast<const set_type_impl>(receiver->type)) {
+sets::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!dynamic_pointer_cast<const set_type_impl>(receiver.type)) {
         // We've parsed empty maps as a set literal to break the ambiguity so handle that case now
-        if (dynamic_pointer_cast<const map_type_impl>(receiver->type) && _elements.empty()) {
+        if (dynamic_pointer_cast<const map_type_impl>(receiver.type) && _elements.empty()) {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         }
 
@@ -120,10 +120,10 @@ sets::literal::test_assignment(database& db, const sstring& keyspace, lw_shared_
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     }
 
-    auto&& value_spec = value_spec_of(*receiver);
+    auto&& value_spec = value_spec_of(receiver);
     // FIXME: make assignment_testable::test_all() accept ranges
     std::vector<shared_ptr<assignment_testable>> to_test(_elements.begin(), _elements.end());
-    return assignment_testable::test_all(db, keyspace, value_spec, to_test);
+    return assignment_testable::test_all(db, keyspace, *value_spec, to_test);
 }
 
 sstring

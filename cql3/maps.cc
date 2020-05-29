@@ -104,31 +104,31 @@ maps::literal::validate_assignable_to(database& db, const sstring& keyspace, con
     auto&& key_spec = maps::key_spec_of(receiver);
     auto&& value_spec = maps::value_spec_of(receiver);
     for (auto&& entry : entries) {
-        if (!is_assignable(entry.first->test_assignment(db, keyspace, key_spec))) {
+        if (!is_assignable(entry.first->test_assignment(db, keyspace, *key_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid map literal for {}: key {} is not of type {}", *receiver.name, *entry.first, key_spec->type->as_cql3_type()));
         }
-        if (!is_assignable(entry.second->test_assignment(db, keyspace, value_spec))) {
+        if (!is_assignable(entry.second->test_assignment(db, keyspace, *value_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid map literal for {}: value {} is not of type {}", *receiver.name, *entry.second, value_spec->type->as_cql3_type()));
         }
     }
 }
 
 assignment_testable::test_result
-maps::literal::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
-    if (!dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
+maps::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!dynamic_pointer_cast<const map_type_impl>(receiver.type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
     // If there is no elements, we can't say it's an exact match (an empty map if fundamentally polymorphic).
     if (entries.empty()) {
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     }
-    auto key_spec = maps::key_spec_of(*receiver);
-    auto value_spec = maps::value_spec_of(*receiver);
+    auto key_spec = maps::key_spec_of(receiver);
+    auto value_spec = maps::value_spec_of(receiver);
     // It's an exact match if all are exact match, but is not assignable as soon as any is non assignable.
     auto res = assignment_testable::test_result::EXACT_MATCH;
     for (auto entry : entries) {
-        auto t1 = entry.first->test_assignment(db, keyspace, key_spec);
-        auto t2 = entry.second->test_assignment(db, keyspace, value_spec);
+        auto t1 = entry.first->test_assignment(db, keyspace, *key_spec);
+        auto t2 = entry.second->test_assignment(db, keyspace, *value_spec);
         if (t1 == assignment_testable::test_result::NOT_ASSIGNABLE || t2 == assignment_testable::test_result::NOT_ASSIGNABLE)
             return assignment_testable::test_result::NOT_ASSIGNABLE;
         if (t1 != assignment_testable::test_result::EXACT_MATCH || t2 != assignment_testable::test_result::EXACT_MATCH)

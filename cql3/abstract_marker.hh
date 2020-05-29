@@ -72,7 +72,7 @@ public:
 
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
 
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
 
         virtual sstring to_string() const override;
     };

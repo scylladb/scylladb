@@ -88,7 +88,7 @@ public:
     public:
         static thread_local const ::shared_ptr<terminal> NULL_VALUE;
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
-            if (!is_assignable(test_assignment(db, keyspace, receiver))) {
+            if (!is_assignable(test_assignment(db, keyspace, *receiver))) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
             }
             return NULL_VALUE;
@@ -96,8 +96,8 @@ public:
 
         virtual assignment_testable::test_result test_assignment(database& db,
             const sstring& keyspace,
-            lw_shared_ptr<column_specification> receiver) const override {
-                return receiver->type->is_counter()
+            const column_specification& receiver) const override {
+                return receiver.type->is_counter()
                     ? assignment_testable::test_result::NOT_ASSIGNABLE
                     : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         }
@@ -161,7 +161,7 @@ public:
             return _text;
         }
 
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const;
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const;
 
         virtual sstring to_string() const override {
             return _type == type::STRING ? sstring(format("'{}'", _text)) : _text;

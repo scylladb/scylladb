@@ -77,7 +77,7 @@ public:
                                     const std::vector<shared_ptr<assignment_testable>>& provided_args,
                                     const sstring& receiver_ks,
                                     const sstring& receiver_cf,
-                                    lw_shared_ptr<column_specification> receiver = nullptr);
+                                    const column_specification* receiver = nullptr);
     template <typename AssignmentTestablePtrRange>
     static shared_ptr<function> get(database& db,
                                     const sstring& keyspace,
@@ -85,7 +85,7 @@ public:
                                     AssignmentTestablePtrRange&& provided_args,
                                     const sstring& receiver_ks,
                                     const sstring& receiver_cf,
-                                    lw_shared_ptr<column_specification> receiver = nullptr) {
+                                    const column_specification* receiver = nullptr) {
         const std::vector<shared_ptr<assignment_testable>> args(std::begin(provided_args), std::end(provided_args));
         return get(db, keyspace, name, args, receiver_ks, receiver_cf, receiver);
     }

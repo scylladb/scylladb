@@ -87,7 +87,7 @@ abstract_marker::raw::raw(int32_t bind_index)
     return ::make_shared<constants::marker>(_bind_index, receiver);
 }
 
-assignment_testable::test_result abstract_marker::raw::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
+assignment_testable::test_result abstract_marker::raw::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
     return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
 }
 

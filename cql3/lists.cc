@@ -93,7 +93,7 @@ lists::literal::validate_assignable_to(database& db, const sstring keyspace, con
     }
     auto&& value_spec = value_spec_of(receiver);
     for (auto rt : _elements) {
-        if (!is_assignable(rt->test_assignment(db, keyspace, value_spec))) {
+        if (!is_assignable(rt->test_assignment(db, keyspace, *value_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid list literal for {}: value {} is not of type {}",
                     *receiver.name, *rt, value_spec->type->as_cql3_type()));
         }
@@ -101,8 +101,8 @@ lists::literal::validate_assignable_to(database& db, const sstring keyspace, con
 }
 
 assignment_testable::test_result
-lists::literal::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
-    if (!dynamic_pointer_cast<const list_type_impl>(receiver->type)) {
+lists::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
+    if (!dynamic_pointer_cast<const list_type_impl>(receiver.type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
 
@@ -111,11 +111,11 @@ lists::literal::test_assignment(database& db, const sstring& keyspace, lw_shared
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     }
 
-    auto&& value_spec = value_spec_of(*receiver);
+    auto&& value_spec = value_spec_of(receiver);
     std::vector<shared_ptr<assignment_testable>> to_test;
     to_test.reserve(_elements.size());
     std::copy(_elements.begin(), _elements.end(), std::back_inserter(to_test));
-    return assignment_testable::test_all(db, keyspace, value_spec, to_test);
+    return assignment_testable::test_all(db, keyspace, *value_spec, to_test);
 }
 
 sstring

@@ -187,7 +187,7 @@ functions::get(database& db,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
         const sstring& receiver_cf,
-        lw_shared_ptr<column_specification> receiver) {
+        const column_specification* receiver) {
 
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
@@ -370,7 +370,7 @@ functions::validate_types(database& db,
         }
 
         auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
-        if (!is_assignable(provided->test_assignment(db, keyspace, expected))) {
+        if (!is_assignable(provided->test_assignment(db, keyspace, *expected))) {
             throw exceptions::invalid_request_exception(
                     format("Type error: {} cannot be passed as argument {:d} of function {} of type {}",
                             provided, i, fun->name(), expected->type->as_cql3_type()));
@@ -397,7 +397,7 @@ functions::match_arguments(database& db, const sstring& keyspace,
             continue;
         }
         auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
-        auto arg_res = provided->test_assignment(db, keyspace, expected);
+        auto arg_res = provided->test_assignment(db, keyspace, *expected);
         if (arg_res == assignment_testable::test_result::NOT_ASSIGNABLE) {
             return assignment_testable::test_result::NOT_ASSIGNABLE;
         }
@@ -514,7 +514,7 @@ function_call::raw::prepare(database& db, const sstring& keyspace, lw_shared_ptr
             [] (auto&& x) -> shared_ptr<assignment_testable> {
         return x;
     });
-    auto&& fun = functions::functions::get(db, keyspace, _name, args, receiver->ks_name, receiver->cf_name, receiver);
+    auto&& fun = functions::functions::get(db, keyspace, _name, args, receiver->ks_name, receiver->cf_name, receiver.get());
     if (!fun) {
         throw exceptions::invalid_request_exception(format("Unknown function {} called", _name));
     }
@@ -572,16 +572,16 @@ function_call::raw::execute(scalar_function& fun, std::vector<shared_ptr<term>> 
 }
 
 assignment_testable::test_result
-function_call::raw::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
+function_call::raw::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
     // Note: Functions.get() will return null if the function doesn't exist, or throw is no function matching
     // the arguments can be found. We may get one of those if an undefined/wrong function is used as argument
     // of another, existing, function. In that case, we return true here because we'll throw a proper exception
     // later with a more helpful error message that if we were to return false here.
     try {
-        auto&& fun = functions::get(db, keyspace, _name, _terms, receiver->ks_name, receiver->cf_name, receiver);
-        if (fun && receiver->type == fun->return_type()) {
+        auto&& fun = functions::get(db, keyspace, _name, _terms, receiver.ks_name, receiver.cf_name, &receiver);
+        if (fun && receiver.type == fun->return_type()) {
             return assignment_testable::test_result::EXACT_MATCH;
-        } else if (!fun || receiver->type->is_value_compatible_with(*fun->return_type())) {
+        } else if (!fun || receiver.type->is_value_compatible_with(*fun->return_type())) {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         } else {
             return assignment_testable::test_result::NOT_ASSIGNABLE;

@@ -67,7 +67,7 @@ public:
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const;
     public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
         virtual sstring assignment_testable_source_context() const override;
         virtual sstring to_string() const override;
     };

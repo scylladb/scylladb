@@ -122,15 +122,15 @@ void user_types::literal::validate_assignable_to(database& db, const sstring& ke
         }
         const shared_ptr<term::raw>& value = _entries.at(field);
         auto&& field_spec = field_spec_of(receiver, i);
-        if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, field_spec))) {
+        if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, *field_spec))) {
             throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver.name, field, field_spec->type->as_cql3_type()));
         }
     }
 }
 
-assignment_testable::test_result user_types::literal::test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const {
+assignment_testable::test_result user_types::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
     try {
-        validate_assignable_to(db, keyspace, *receiver);
+        validate_assignable_to(db, keyspace, receiver);
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     } catch (exceptions::invalid_request_exception& e) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;

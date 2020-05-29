@@ -107,8 +107,8 @@ public:
      */
     virtual void reset() = 0;
 
-    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
-        auto t1 = receiver->type->underlying_type();
+    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override {
+        auto t1 = receiver.type->underlying_type();
         auto t2 = get_type()->underlying_type();
         // We want columns of `counter_type' to be served by underlying type's overloads
         // (here: `counter_cell_view::total_value_type()') with an `EXACT_MATCH'.

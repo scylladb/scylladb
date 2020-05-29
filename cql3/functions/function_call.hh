@@ -79,7 +79,7 @@ public:
         // All parameters must be terminal
         static bytes_opt execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters);
     public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override;
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override;
         virtual sstring to_string() const override;
     };
 };

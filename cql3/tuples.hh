@@ -82,15 +82,15 @@ public:
 
                 auto&& value = _elements[i];
                 auto&& spec = component_spec_of(receiver, i);
-                if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, spec))) {
+                if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, *spec))) {
                     throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: component {:d} is not of type {}", receiver.name, i, spec->type->as_cql3_type()));
                 }
             }
         }
     public:
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const override {
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const override {
             try {
-                validate_assignable_to(db, keyspace, *receiver);
+                validate_assignable_to(db, keyspace, receiver);
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             } catch (exceptions::invalid_request_exception& e) {
                 return assignment_testable::test_result::NOT_ASSIGNABLE;
