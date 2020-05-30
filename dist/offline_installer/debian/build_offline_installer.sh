@@ -30,8 +30,27 @@ print_usage() {
     exit 1
 }
 
+is_redhat_variant() {
+    [ -f /etc/redhat-release ]
+}
 is_debian_variant() {
     [ -f /etc/debian_version ]
+}
+
+pkg_add() {
+    if is_redhat_variant; then
+        if [ -x /usr/bin/dnf ]; then
+            sudo dnf -y install "$@"
+        else
+            sudo yum -y install "$@"
+        fi
+    elif is_debian_variant; then
+        sudo apt-get update
+        sudo apt-get install -y "$@"
+    else
+        echo "Unsupported distribution"
+        exit 1
+    fi
 }
 
 REPO=
@@ -52,30 +71,21 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-. /etc/os-release
-
 if [ -z $REPO ] || [ -z $SUITE ]; then
     print_usage
     exit 1
 fi
 
-if ! is_debian_variant; then
-    echo "Unsupported distribution"
-    exit 1
-fi
-
-sudo apt-get update
-
 if [ ! -f /usr/bin/wget ]; then
-    sudo apt-get -y install wget
+    pkg_add wget
 fi
 
 if [ ! -f /usr/sbin/debootstrap ]; then
-    sudo apt-get -y install debootstrap
+    pkg_add debootstrap
 fi
 
 if [ ! -f /usr/bin/makeself ]; then
-    sudo apt-get -y install makeself
+    pkg_add makeself
 fi
 
 sudo rm -rf build/chroot build/offline_installer build/scylla_offline_installer.sh
