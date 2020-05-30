@@ -81,14 +81,14 @@ fi
 sudo rm -rf build/chroot build/offline_installer build/scylla_offline_installer.sh
 mkdir -p build/chroot
 sudo debootstrap $SUITE build/chroot
-if [ "$SUITE" = "trusty" ] || [ "$SUITE" = "xenial" ]; then
+if [ "$SUITE" = "trusty" ] || [ "$SUITE" = "xenial" ] || [ "$SUITE" = "bionic" ]; then
     sudo tee build/chroot/etc/apt/sources.list << EOS
 deb mirror://mirrors.ubuntu.com/mirrors.txt $SUITE main restricted universe multiverse
 deb mirror://mirrors.ubuntu.com/mirrors.txt $SUITE-updates main restricted universe multiverse
 deb mirror://mirrors.ubuntu.com/mirrors.txt $SUITE-backports main restricted universe multiverse
 deb mirror://mirrors.ubuntu.com/mirrors.txt $SUITE-security main restricted universe multiverse
 EOS
-elif [ "$SUITE" = "jessie" ]; then
+elif [ "$SUITE" = "jessie" ] || [ "$SUITE" = "stretch" ] || [ "$SUITE" = "buster" ]; then
     sudo tee build/chroot/etc/apt/sources.list << EOS
 deb http://httpredir.debian.org/debian $SUITE main contrib non-free
 deb-src http://httpredir.debian.org/debian $SUITE main contrib non-free
