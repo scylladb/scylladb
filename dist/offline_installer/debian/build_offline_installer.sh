@@ -88,6 +88,11 @@ if [ ! -f /usr/bin/makeself ]; then
     pkg_add makeself
 fi
 
+if ! makeself --help | grep -q keep-umask; then
+    echo "$(makeself --version) is too old, please install 2.4.0 or later"
+    exit 1
+fi
+
 sudo rm -rf build/chroot build/offline_installer build/scylla_offline_installer.sh
 mkdir -p build/chroot
 sudo debootstrap $SUITE build/chroot
@@ -128,4 +133,4 @@ sudo chroot build/chroot env DEBIAN_FRONTEND=noninteractive apt-get install -d -
 mkdir -p build/offline_installer/debs
 cp dist/offline_installer/debian/header build/offline_installer
 cp build/chroot/var/cache/apt/archives/*.deb build/offline_installer/debs
-(cd build; makeself offline_installer scylla_offline_installer.sh "Scylla offline package" ./header)
+(cd build; makeself --keep-umask offline_installer scylla_offline_installer.sh "Scylla offline package" ./header)
