@@ -89,6 +89,7 @@ fedora_packages=(
     glibc-langpack-en
     lld
     xxhash-devel
+    makeself
 )
 
 centos_packages=(
