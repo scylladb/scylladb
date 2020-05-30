@@ -1,0 +1,7 @@
+[epel8]
+name=Extra Packages for Enterprise Linux 8 - $basearch
+#baseurl=https://download.fedoraproject.org/pub/epel/8/Everything/$basearch
+metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-8&arch=$basearch&infra=$infra&content=$contentdir
+enabled=0
+gpgcheck=1
+countme=1

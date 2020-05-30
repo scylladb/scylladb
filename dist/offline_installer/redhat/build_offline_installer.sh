@@ -26,25 +26,30 @@ fi
 print_usage() {
     echo "build_offline_installer.sh --repo [URL]"
     echo "  --repo  repository for fetching scylla rpm, specify .repo file URL"
-    echo "  --releasever  use specific minor version of the distribution repo (ex: 7.4)"
+    echo "  --image [IMAGE]  Use the specified docker IMAGE"
+    echo "  --no-docker  Build offline installer without using docker"
     exit 1
 }
 
-is_rhel7_variant() {
-    [ "$ID" = "rhel" -o "$ID" = "ol" -o "$ID" = "centos" ] && [[ "$VERSION_ID" =~ ^7 ]]
-}
+here="$(realpath $(dirname "$0"))"
+releasever=`rpm -q --provides $(rpm -q --whatprovides "system-release(releasever)") | grep "system-release(releasever)"| uniq |  cut -d ' ' -f 3`
 
 REPO=
-RELEASEVER=
+IMAGE=docker.io/centos:7
+NO_DOCKER=false
 while [ $# -gt 0 ]; do
     case "$1" in
         "--repo")
             REPO=$2
             shift 2
             ;;
-        "--releasever")
-            RELEASEVER=$2
+        "--image")
+            IMAGE=$2
             shift 2
+            ;;
+        "--no-docker")
+            NO_DOCKER=true
+            shift 1
             ;;
         *)
             print_usage
@@ -59,25 +64,17 @@ if [ -z $REPO ]; then
     exit 1
 fi
 
-if ! is_rhel7_variant; then
-    echo "Unsupported distribution"
-    exit 1
-fi
-
-if [ "$ID" = "centos" ]; then
-    if [ ! -f /etc/yum.repos.d/epel.repo ]; then
-        sudo yum install -y epel-release
+if ! $NO_DOCKER; then
+    if [[ -f ~/.config/scylladb/dbuild ]]; then
+        . ~/.config/scylladb/dbuild
     fi
-    RELEASE=7
-else
-    if [ ! -f /etc/yum.repos.d/epel.repo ]; then
-        sudo rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+    if which docker >/dev/null 2>&1 ; then
+      tool=${DBUILD_TOOL-docker}
+    elif which podman >/dev/null 2>&1 ; then
+      tool=${DBUILD_TOOL-podman}
+    else
+      echo "Please make sure you install either podman or docker on this machine to run dbuild" && exit 1
     fi
-    RELEASE=7Server
-fi
-
-if [ ! -f /usr/bin/yumdownloader ]; then
-    sudo yum -y install yum-utils
 fi
 
 if [ ! -f /usr/bin/wget ]; then
@@ -85,6 +82,9 @@ if [ ! -f /usr/bin/wget ]; then
 fi
 
 if [ ! -f /usr/bin/makeself ]; then
+    if $NO_DOCKER; then
+        sudo yum -y install epel-release || sudo yum -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-"$releasever".noarch.rpm
+    fi
     sudo yum -y install makeself
 fi
 
@@ -92,22 +92,31 @@ if [ ! -f /usr/bin/createrepo ]; then
     sudo yum -y install createrepo
 fi
 
-sudo yum -y install yum-plugin-downloadonly
-
-cd /etc/yum.repos.d/
-sudo wget -N $REPO
-cd -
-
-sudo rm -rf build/installroot build/offline_installer build/scylla_offline_installer.sh
+sudo rm -rf build/installroot build/offline_docker build/offline_installer build/scylla_offline_installer.sh
 mkdir -p build/installroot
 mkdir -p build/installroot/etc/yum/vars
-sudo sh -c "echo $RELEASE >> build/installroot/etc/yum/vars/releasever"
+
+mkdir -p build/offline_docker
+wget "$REPO" -O build/offline_docker/scylla.repo
+cp "$here"/lib/install_deps.sh build/offline_docker
+cp "$here"/lib/Dockerfile.in build/offline_docker/Dockerfile
+sed -i -e "s#@@IMAGE@@#$IMAGE#" build/offline_docker/Dockerfile
+
+cd build/offline_docker
+if $NO_DOCKER; then
+    sudo cp scylla.repo /etc/yum.repos.d/scylla.repo
+    sudo ./install_deps.sh
+else
+    image_id=$($tool build -q .)
+fi
+cd -
 
 mkdir -p build/offline_installer
-cp dist/offline_installer/redhat/header build/offline_installer
-if [ -n "$RELEASEVER" ]; then
-    YUMOPTS="--releasever=$RELEASEVER"
+cp "$here"/lib/header build/offline_installer
+if $NO_DOCKER; then
+    "$here"/lib/construct_offline_repo.sh
+else
+    ./tools/toolchain/dbuild --image "$image_id" -- "$here"/lib/construct_offline_repo.sh
 fi
-sudo yum -y install $YUMOPTS --downloadonly --installroot=`pwd`/build/installroot --downloaddir=build/offline_installer scylla sudo ntp ntpdate net-tools kernel-tools
 (cd build/offline_installer; createrepo -v .)
 (cd build; makeself offline_installer scylla_offline_installer.sh "Scylla offline package" ./header)
