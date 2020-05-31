@@ -64,15 +64,13 @@ public:
     }
 };
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool ContextFactory = requires(const T factory, const uint8_t* ptr) {
+concept ContextFactory = requires(const T factory, const uint8_t* ptr) {
     { factory.create(ptr) } noexcept;
 };
 
 static_assert(ContextFactory<no_context_factory_t>,
               "no_context_factory_t has to meet ContextFactory constraints");
-)
 
 /// LSA migrator for IMR objects
 ///
@@ -81,7 +79,7 @@ static_assert(ContextFactory<no_context_factory_t>,
 /// of type `Structure`. The deserialisation context needed to invoke the mover
 /// is going to be created by the provided context factory `CtxFactory`.
 template<typename Structure, typename CtxFactory>
-GCC6_CONCEPT(requires ContextFactory<CtxFactory>)
+requires ContextFactory<CtxFactory>
 class lsa_migrate_fn final : public migrate_fn_type, CtxFactory {
 public:
     using structure = Structure;

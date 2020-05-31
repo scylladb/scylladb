@@ -150,7 +150,7 @@ protected:
     do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout);
 
     template<typename Visitor>
-    GCC6_CONCEPT(requires query::ResultVisitor<Visitor>)
+    requires query::ResultVisitor<Visitor>
     void handle_result(Visitor&& visitor,
                       const foreign_ptr<lw_shared_ptr<query::result>>& results,
                       uint32_t page_size, gc_clock::time_point now);

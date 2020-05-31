@@ -220,19 +220,17 @@ struct lua_table {
 template <typename Func>
 using lua_visit_ret_type = std::invoke_result_t<Func, const double&>;
 
-GCC6_CONCEPT(
 template <typename Func>
-concept bool CanHandleRawLuaTypes = requires(Func f) {
-    { f(*static_cast<const long long*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const double*>(nullptr)) }                         -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const big_decimal*>(nullptr)) }                    -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const std::string_view*>(nullptr)) }               -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const lua_table*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
+concept CanHandleRawLuaTypes = requires(Func f) {
+    { f(*static_cast<const long long*>(nullptr)) }                      -> std::same_as<lua_visit_ret_type<Func>>;
+    { f(*static_cast<const double*>(nullptr)) }                         -> std::same_as<lua_visit_ret_type<Func>>;
+    { f(*static_cast<const big_decimal*>(nullptr)) }                    -> std::same_as<lua_visit_ret_type<Func>>;
+    { f(*static_cast<const std::string_view*>(nullptr)) }               -> std::same_as<lua_visit_ret_type<Func>>;
+    { f(*static_cast<const lua_table*>(nullptr)) }                      -> std::same_as<lua_visit_ret_type<Func>>;
 };
-)
 
 template <typename Func>
-GCC6_CONCEPT(requires CanHandleRawLuaTypes<Func>)
+requires CanHandleRawLuaTypes<Func>
 static auto visit_lua_raw_value(lua_State* l, int index, Func&& f) {
     switch (lua_type(l, index)) {
     case LUA_TNONE:
@@ -275,19 +273,17 @@ static auto visit_decimal(const big_decimal &v, Func&& f) {
     return f(r.convert_to<double>());
 }
 
-GCC6_CONCEPT(
 template <typename Func>
-concept bool CanHandleLuaTypes = requires(Func f) {
-    { f(*static_cast<const double*>(nullptr)) }                         -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const utils::multiprecision_int*>(nullptr)) }      -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const big_decimal*>(nullptr)) }                    -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const std::string_view*>(nullptr)) }               -> lua_visit_ret_type<Func>;
-    { f(*static_cast<const lua_table*>(nullptr)) }                      -> lua_visit_ret_type<Func>;
+concept CanHandleLuaTypes = requires(Func f) {
+    { f(*static_cast<const double*>(nullptr)) }                         -> std::same_as<lua_visit_ret_type<Func>>;
+    { f(*static_cast<const utils::multiprecision_int*>(nullptr)) }      -> std::same_as<lua_visit_ret_type<Func>>;
+    { f(*static_cast<const big_decimal*>(nullptr)) }                    -> std::same_as<lua_visit_ret_type<Func>>;
+    { f(*static_cast<const std::string_view*>(nullptr)) }               -> std::same_as<lua_visit_ret_type<Func>>;
+    { f(*static_cast<const lua_table*>(nullptr)) }                      -> std::same_as<lua_visit_ret_type<Func>>;
 };
-)
 
 template <typename Func>
-GCC6_CONCEPT(requires CanHandleLuaTypes<Func>)
+requires CanHandleLuaTypes<Func>
 static auto visit_lua_value(lua_State* l, int index, Func&& f) {
     struct visitor {
         lua_State* l;

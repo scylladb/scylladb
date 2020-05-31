@@ -504,9 +504,7 @@ private:
     virtual flat_mutation_reader make_sstable_reader() const = 0;
 
     template <typename GCConsumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<GCConsumer>
-    )
+    requires CompactedFragmentsConsumer<GCConsumer>
     future<> setup(GCConsumer gc_consumer) {
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_schema));
         sstring formatted_msg = "[";
@@ -661,9 +659,7 @@ public:
     }
 
     template <typename GCConsumer = noop_compacted_fragments_consumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<GCConsumer>
-    )
+    requires CompactedFragmentsConsumer<GCConsumer>
     static future<compaction_info> run(std::unique_ptr<compaction> c, GCConsumer gc_consumer = GCConsumer());
 
     friend class compacting_sstable_writer;
@@ -1304,9 +1300,7 @@ public:
 };
 
 template <typename GCConsumer>
-GCC6_CONCEPT(
-    requires CompactedFragmentsConsumer<GCConsumer>
-)
+requires CompactedFragmentsConsumer<GCConsumer>
 future<compaction_info> compaction::run(std::unique_ptr<compaction> c, GCConsumer gc_consumer) {
     return seastar::async([c = std::move(c), gc_consumer = std::move(gc_consumer)] () mutable {
         auto consumer = c->setup(std::move(gc_consumer));

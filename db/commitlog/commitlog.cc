@@ -109,7 +109,7 @@ public:
         return _c.process(reinterpret_cast<const uint8_t*>(data), size);
     }
     template<typename FragmentedBuffer>
-    GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
+    requires FragmentRange<FragmentedBuffer>
     void process_fragmented(const FragmentedBuffer& buffer) {
         return _c.process_fragmented(buffer);
     }

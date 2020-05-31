@@ -21,22 +21,20 @@
 
 #pragma once
 
-#include <seastar/util/gcc6-concepts.hh>
 #include <type_traits>
+#include <concepts>
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool HasTriCompare =
+concept HasTriCompare =
     requires(const T& t) {
-        { t.compare(t) } -> int;
+        { t.compare(t) } -> std::same_as<int>;
     } && std::is_same<std::result_of_t<decltype(&T::compare)(T, T)>, int>::value; //FIXME: #1449
-)
 
 template<typename T>
 class with_relational_operators {
 private:
     template<typename U>
-    GCC6_CONCEPT( requires HasTriCompare<U> )
+    requires HasTriCompare<U>
     int do_compare(const U& t) const {
         return static_cast<const U*>(this)->compare(t);
     }

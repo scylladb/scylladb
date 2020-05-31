@@ -305,7 +305,7 @@ public:
 };
 
     template<typename Visitor>
-    GCC6_CONCEPT(requires query::ResultVisitor<Visitor>)
+    requires query::ResultVisitor<Visitor>
     void query_pager::handle_result(
             Visitor&& visitor,
             const foreign_ptr<lw_shared_ptr<query::result>>& results,

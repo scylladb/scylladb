@@ -449,7 +449,7 @@ def add_param_writer_basic_type(name, base_state, typ, var_type="", var_index=No
     if allow_fragmented:
         writer += Template(reindent(4, """
         template<typename FragmentedBuffer>
-        GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
+        requires FragmentRange<FragmentedBuffer>
         after_${base_state}__$name<Output> write_fragmented_$name$var_type(FragmentedBuffer&& fragments) && {
             $set_varient_index
             serialize_fragmented(_out, std::forward<FragmentedBuffer>(fragments));

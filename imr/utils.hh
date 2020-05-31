@@ -148,9 +148,9 @@ public:
     /// \note This function could be deprecated once the IMR starts supporting
     /// copying IMR objects.
     template<typename RawWriter>
-    GCC6_CONCEPT(requires requires (RawWriter wr, uint8_t* ptr) {
+    requires requires (RawWriter wr, uint8_t* ptr) {
         { wr(ptr) } noexcept;
-    })
+    }
     static object make_raw(size_t len, RawWriter&& wr, allocation_strategy::migrate_fn migrate = &imr::alloc::default_lsa_migrate_fn<structure>::migrate_fn) {
         object obj;
         auto ptr = static_cast<uint8_t*>(current_allocator().alloc(migrate, sizeof(void*) + len, 1));
@@ -163,7 +163,7 @@ public:
 
     /// Create an IMR objects
     template<typename Writer, typename MigrateFn>
-    GCC6_CONCEPT(requires WriterAllocator<Writer, Structure>)
+    requires WriterAllocator<Writer, Structure>
     static object make(Writer&& object_writer,
                        MigrateFn* migrate = &imr::alloc::default_lsa_migrate_fn<structure>::migrate_fn) {
         static_assert(std::is_same_v<typename MigrateFn::structure, structure>);
@@ -171,7 +171,7 @@ public:
     }
 private:
     template<typename Writer>
-    GCC6_CONCEPT(requires WriterAllocator<Writer, Structure>)
+    requires WriterAllocator<Writer, Structure>
     static object do_make(Writer&& object_writer, allocation_strategy::migrate_fn migrate) {
         struct alloc_deleter {
             size_t _size;

@@ -442,7 +442,7 @@ public:
         return bytes_view(reinterpret_cast<const int8_t*>(_stream.begin()), _stream.size());
       } else {
         using iterator_type = typename Stream::iterator_type ;
-        GCC6_CONCEPT(static_assert(FragmentRange<buffer_view<iterator_type>>));
+        static_assert(FragmentRange<buffer_view<iterator_type>>);
         return seastar::with_serialized_stream(_stream, seastar::make_visitor(
             [&] (typename seastar::memory_input_stream<iterator_type >::simple stream) {
                 return buffer_view<iterator_type>(bytes_view(reinterpret_cast<const int8_t*>(stream.begin()),
@@ -507,7 +507,7 @@ struct serializer<bytes> {
         }
     }
     template<typename Output, typename FragmentedBuffer>
-    GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
+    requires FragmentRange<FragmentedBuffer>
     static void write_fragmented(Output& out, FragmentedBuffer&& fragments) {
         safe_serialize_as_uint32(out, uint32_t(fragments.size_bytes()));
         using boost::range::for_each;
@@ -535,7 +535,7 @@ void serialize(Output& out, const bytes_ostream& v) {
     serializer<bytes>::write(out, v);
 }
 template<typename Output, typename FragmentedBuffer>
-GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
+requires FragmentRange<FragmentedBuffer>
 void serialize_fragmented(Output& out, FragmentedBuffer&& v) {
     serializer<bytes>::write_fragmented(out, std::forward<FragmentedBuffer>(v));
 }

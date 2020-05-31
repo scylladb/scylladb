@@ -122,26 +122,26 @@ public:
         return {_empty_prefix, bound_kind::incl_end};
     }
     template<template<typename> typename R>
-    GCC6_CONCEPT( requires Range<R, clustering_key_prefix_view> )
+    requires Range<R, clustering_key_prefix_view>
     static bound_view from_range_start(const R<clustering_key_prefix>& range) {
         return range.start()
                ? bound_view(range.start()->value(), range.start()->is_inclusive() ? bound_kind::incl_start : bound_kind::excl_start)
                : bottom();
     }
     template<template<typename> typename R>
-    GCC6_CONCEPT( requires Range<R, clustering_key_prefix> )
+    requires Range<R, clustering_key_prefix>
     static bound_view from_range_end(const R<clustering_key_prefix>& range) {
         return range.end()
                ? bound_view(range.end()->value(), range.end()->is_inclusive() ? bound_kind::incl_end : bound_kind::excl_end)
                : top();
     }
     template<template<typename> typename R>
-    GCC6_CONCEPT( requires Range<R, clustering_key_prefix> )
+    requires Range<R, clustering_key_prefix>
     static std::pair<bound_view, bound_view> from_range(const R<clustering_key_prefix>& range) {
         return {from_range_start(range), from_range_end(range)};
     }
     template<template<typename> typename R>
-    GCC6_CONCEPT( requires Range<R, clustering_key_prefix_view> )
+    requires Range<R, clustering_key_prefix_view>
     static std::optional<typename R<clustering_key_prefix_view>::bound> to_range_bound(const bound_view& bv) {
         if (&bv._prefix.get() == &_empty_prefix) {
             return {};

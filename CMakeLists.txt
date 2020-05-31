@@ -134,10 +134,6 @@ add_executable(scylla
         ${SEASTAR_SOURCE_FILES}
         ${SCYLLA_SOURCE_FILES})
 
-# Note that since CLion does not undestand GCC6 concepts, we always disable them (even if users configure otherwise).
-# CLion seems to have trouble with `-U` (macro undefinition), so we do it this way instead.
-list(REMOVE_ITEM SEASTAR_CFLAGS "-DHAVE_GCC6_CONCEPTS")
-
 # If the Seastar pkg-config information is available, append to the default flags.
 #
 # For ease of browsing the source code, we always pretend that DPDK is enabled.

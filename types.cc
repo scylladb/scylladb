@@ -724,7 +724,7 @@ bool abstract_type::is_string() const {
 }
 
 template<typename Predicate>
-GCC6_CONCEPT(requires CanHandleAllTypes<Predicate>)
+requires CanHandleAllTypes<Predicate>
 static bool find(const abstract_type& t, const Predicate& f) {
     struct visitor {
         const Predicate& f;

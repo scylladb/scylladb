@@ -22,24 +22,21 @@
 #pragma once
 
 #include <zlib.h>
-#include <seastar/util/gcc6-concepts.hh>
 #include "libdeflate/libdeflate.h"
 #include "utils/gz/crc_combine.hh"
 
-GCC6_CONCEPT(
 template<typename Checksum>
-concept bool ChecksumUtils = requires(const char* input, size_t size, uint32_t checksum) {
-    { Checksum::init_checksum() } -> uint32_t;
-    { Checksum::checksum(input, size) } -> uint32_t;
-    { Checksum::checksum(checksum, input, size) } -> uint32_t;
-    { Checksum::checksum_combine(checksum, checksum, size) } -> uint32_t;
+concept ChecksumUtils = requires(const char* input, size_t size, uint32_t checksum) {
+    { Checksum::init_checksum() } -> std::same_as<uint32_t>;
+    { Checksum::checksum(input, size) } -> std::same_as<uint32_t>;
+    { Checksum::checksum(checksum, input, size) } -> std::same_as<uint32_t>;
+    { Checksum::checksum_combine(checksum, checksum, size) } -> std::same_as<uint32_t>;
 
     // Tells whether checksum_combine() should be preferred over checksum().
     // For same checksummers it's faster to re-feed the buffer to checksum() than to
     // combine the checksum of the buffer.
-    { Checksum::prefer_combine() } -> bool;
+    { Checksum::prefer_combine() } -> std::same_as<bool>;
 };
-)
 
 struct adler32_utils {
     inline static uint32_t init_checksum() {

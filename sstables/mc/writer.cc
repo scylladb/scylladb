@@ -191,7 +191,7 @@ public:
 };
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 static void write(W& out, const clustering_block& block) {
     write_vint(out, block.header);
     for (const auto& [value, type]: block.values) {
@@ -200,7 +200,7 @@ static void write(W& out, const clustering_block& block) {
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_clustering_prefix(W& out, const schema& s,
     const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full) {
     clustering_blocks_input_range range{s, prefix, is_ephemerally_full};
@@ -301,7 +301,7 @@ public:
 };
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_missing_columns(W& out, const indexed_columns& columns, const row& row) {
     for (const auto value: missing_columns_input_range{columns, row}) {
         write_vint(out, value);
@@ -309,7 +309,7 @@ void write_missing_columns(W& out, const indexed_columns& columns, const row& ro
 }
 
 template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_unsigned_delta_vint(W& out, T value, T base) {
     using unsigned_type = std::make_unsigned_t<T>;
     unsigned_type unsigned_delta = static_cast<unsigned_type>(value) - static_cast<unsigned_type>(base);
@@ -321,25 +321,25 @@ void write_unsigned_delta_vint(W& out, T value, T base) {
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_delta_timestamp(W& out, api::timestamp_type timestamp, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, timestamp, enc_stats.min_timestamp);
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_delta_ttl(W& out, gc_clock::duration ttl, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, ttl.count(), enc_stats.min_ttl.count());
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_delta_local_deletion_time(W& out, int64_t local_deletion_time, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, local_deletion_time, enc_stats.min_local_deletion_time.time_since_epoch().count());
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_delta_local_deletion_time(W& out, gc_clock::time_point ldt, const encoding_stats& enc_stats) {
     write_unsigned_delta_vint(out, ldt.time_since_epoch().count(), enc_stats.min_local_deletion_time.time_since_epoch().count());
 }
@@ -519,13 +519,11 @@ static bound_kind_m get_kind(const rt_marker& marker) {
     return marker.kind;
 }
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool Clustered = requires(T t) {
-    { t.key() } -> const clustering_key_prefix&;
-    { get_kind(t) } -> bound_kind_m;
+concept Clustered = requires(T t) {
+    { t.key() } -> std::convertible_to<const clustering_key_prefix&>;
+    { get_kind(t) } -> std::same_as<bound_kind_m>;
 };
-)
 
 // Used for writing SSTables in 'mc' format.
 class writer : public sstable_writer::writer_impl {
@@ -706,9 +704,7 @@ private:
     void write_clustered(const rt_marker& marker, uint64_t prev_row_size);
 
     template <typename T>
-    GCC6_CONCEPT(
-        requires Clustered<T>
-    )
+    requires Clustered<T>
     void write_clustered(const T& clustered) {
         clustering_info info {clustered.key(), get_kind(clustered)};
         maybe_set_pi_first_clustering(info);
@@ -1279,7 +1275,7 @@ stop_iteration writer::consume(clustering_row&& cr) {
 
 // Write clustering prefix along with its bound kind and, if not full, its size
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 static void write_clustering_prefix(W& writer, bound_kind_m kind,
     const schema& s, const clustering_key_prefix& clustering) {
     assert(kind != bound_kind_m::static_clustering);

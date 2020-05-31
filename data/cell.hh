@@ -292,12 +292,10 @@ public:
     /// \arg data needs to remain valid as long as the writer is in use.
     /// \returns imr::WriterAllocator for cell::structure.
     template<typename FragmentRange, typename = std::enable_if_t<is_fragment_range_v<std::decay_t<FragmentRange>>>>
-    GCC6_CONCEPT(
-        requires std::is_nothrow_move_constructible_v<std::decay_t<FragmentRange>> &&
-                std::is_nothrow_copy_constructible_v<std::decay_t<FragmentRange>> &&
-                std::is_nothrow_copy_assignable_v<std::decay_t<FragmentRange>> &&
-                std::is_nothrow_move_assignable_v<std::decay_t<FragmentRange>>
-    )
+    requires std::is_nothrow_move_constructible_v<std::decay_t<FragmentRange>> &&
+            std::is_nothrow_copy_constructible_v<std::decay_t<FragmentRange>> &&
+            std::is_nothrow_copy_assignable_v<std::decay_t<FragmentRange>> &&
+            std::is_nothrow_move_assignable_v<std::decay_t<FragmentRange>>
     static auto make_collection(FragmentRange data) noexcept {
         return [data = std::move(data)] (auto&& serializer, auto&& allocations) noexcept {
             return serializer

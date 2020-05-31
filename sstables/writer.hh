@@ -127,9 +127,7 @@ serialized_size(sstable_version_types v, const T& object) {
 }
 
 template <typename ChecksumType>
-GCC6_CONCEPT(
-    requires ChecksumUtils<ChecksumType>
-)
+requires ChecksumUtils<ChecksumType>
 class checksummed_file_data_sink_impl : public data_sink_impl {
     data_sink _out;
     struct checksum& _c;
@@ -167,9 +165,7 @@ public:
 };
 
 template <typename ChecksumType>
-GCC6_CONCEPT(
-    requires ChecksumUtils<ChecksumType>
-)
+requires ChecksumUtils<ChecksumType>
 class checksummed_file_data_sink : public data_sink {
 public:
     checksummed_file_data_sink(file f, struct checksum& cinfo, uint32_t& full_file_checksum, file_output_stream_options options)
@@ -177,9 +173,7 @@ public:
 };
 
 template <typename ChecksumType>
-GCC6_CONCEPT(
-    requires ChecksumUtils<ChecksumType>
-)
+requires ChecksumUtils<ChecksumType>
 inline
 output_stream<char> make_checksummed_file_output_stream(file f, struct checksum& cinfo, uint32_t& full_file_checksum, file_output_stream_options options) {
     auto buffer_size = options.buffer_size;
@@ -187,9 +181,7 @@ output_stream<char> make_checksummed_file_output_stream(file f, struct checksum&
 }
 
 template <typename ChecksumType>
-GCC6_CONCEPT(
-    requires ChecksumUtils<ChecksumType>
-)
+requires ChecksumUtils<ChecksumType>
 class checksummed_file_writer : public file_writer {
     checksum _c;
     uint32_t _full_checksum;
@@ -217,7 +209,7 @@ using adler32_checksummed_file_writer = checksummed_file_writer<adler32_utils>;
 using crc32_checksummed_file_writer = checksummed_file_writer<crc32_utils>;
 
 template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 inline void write_vint_impl(W& out, T value) {
     using vint_type = std::conditional_t<std::is_unsigned_v<T>, unsigned_vint, signed_vint>;
     std::array<bytes::value_type, max_vint_length> encoding_buffer;
@@ -226,24 +218,24 @@ inline void write_vint_impl(W& out, T value) {
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_unsigned_vint(W& out, uint64_t value) {
     return write_vint_impl(out, value);
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_signed_vint(W& out, int64_t value) {
     return write_vint_impl(out, value);
 }
 
 template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 typename std::enable_if_t<!std::is_integral_v<T>>
 write_vint(W& out, T t) = delete;
 
 template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 inline void write_vint(W& out, T value) {
     static_assert(std::is_integral_v<T>, "Non-integral values can't be written using write_vint");
     return std::is_unsigned_v<T> ? write_unsigned_vint(out, value) : write_signed_vint(out, value);
@@ -251,7 +243,7 @@ inline void write_vint(W& out, T value) {
 
 
 template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 inline typename std::enable_if_t<std::is_integral<T>::value, void>
 write(sstable_version_types v, W& out, T i) {
     auto *nr = reinterpret_cast<const net::packed<T> *>(&i);
@@ -261,7 +253,7 @@ write(sstable_version_types v, W& out, T i) {
 }
 
 template <typename T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 inline typename std::enable_if_t<std::is_enum<T>::value, void>
 write(sstable_version_types v, W& out, T i) {
     write(v, out, static_cast<typename std::underlying_type<T>::type>(i));
@@ -269,7 +261,7 @@ write(sstable_version_types v, W& out, T i) {
 
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 inline void write(sstable_version_types v, W& out, bool i) {
     write(v, out, static_cast<uint8_t>(i));
 }
@@ -283,13 +275,13 @@ inline void write(sstable_version_types v, file_writer& out, double d) {
 
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 inline void write(sstable_version_types v, W& out, const bytes& s) {
     out.write(s);
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 inline void write(sstable_version_types v, W& out, bytes_view s) {
     out.write(reinterpret_cast<const char*>(s.data()), s.size());
 }
@@ -302,20 +294,20 @@ inline void write(sstable_version_types v, file_writer& out, bytes_ostream s) {
 
 
 template<typename W, typename First, typename Second, typename... Rest>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 inline void write(sstable_version_types v, W& out, const First& first, const Second& second, Rest&&... rest) {
     write(v, out, first);
     write(v, out, second, std::forward<Rest>(rest)...);
 }
 
 template <class T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 inline void write(sstable_version_types v, W& out, const vint<T>& t) {
     write_vint(out, t.value);
 }
 
 template <class T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
 write(sstable_version_types v, W& out, const T& t) {
     // describe_type() is not const correct, so cheat here:
@@ -534,7 +526,7 @@ void write_column_name(sstable_version_types v, Writer& out, const schema& s, co
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_cell_value(W& out, const abstract_type& type, bytes_view value) {
     if (!value.empty()) {
         if (type.value_length_if_fixed()) {
@@ -547,7 +539,7 @@ void write_cell_value(W& out, const abstract_type& type, bytes_view value) {
 }
 
 template <typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_cell_value(W& out, const abstract_type& type, atomic_cell_value_view value) {
     if (!value.empty()) {
         if (!type.value_length_if_fixed()) {
@@ -559,7 +551,7 @@ void write_cell_value(W& out, const abstract_type& type, atomic_cell_value_view 
 }
 
 template <typename WriteLengthFunc, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 void write_counter_value(counter_cell_view ccv, W& out, sstable_version_types v, WriteLengthFunc&& write_len_func) {
     auto shard_count = ccv.shard_count();
     static constexpr auto header_entry_size = sizeof(int16_t);

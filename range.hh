@@ -28,7 +28,6 @@
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-#include <seastar/util/gcc6-concepts.hh>
 
 template<typename T>
 class range_bound {
@@ -698,10 +697,8 @@ std::ostream& operator<<(std::ostream& out, const nonwrapping_range<U>& r) {
 template<typename T>
 using range = wrapping_range<T>;
 
-GCC6_CONCEPT(
 template<template<typename> typename T, typename U>
-concept bool Range = std::is_same<T<U>, wrapping_range<U>>::value || std::is_same<T<U>, nonwrapping_range<U>>::value;
-)
+concept Range = std::is_same<T<U>, wrapping_range<U>>::value || std::is_same<T<U>, nonwrapping_range<U>>::value;
 
 // Allow using range<T> in a hash table. The hash function 31 * left +
 // right is the same one used by Cassandra's AbstractBounds.hashCode().

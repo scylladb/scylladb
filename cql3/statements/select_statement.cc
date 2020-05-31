@@ -428,9 +428,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
 }
 
 template<typename KeyType>
-GCC6_CONCEPT(
-    requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
-)
+requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
 static KeyType
 generate_base_key_from_index_pk(const partition_key& index_pk, const std::optional<clustering_key>& index_ck, const schema& base_schema, const schema& view_schema) {
     const auto& base_columns = std::is_same_v<KeyType, partition_key> ? base_schema.partition_key_columns() : base_schema.clustering_key_columns();
@@ -844,9 +842,7 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
 }
 
 template<typename KeyType>
-GCC6_CONCEPT(
-    requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
-)
+requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
 static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_ck, const KeyType& base_key, const column_definition& index_cdef) {
     auto key_view = base_key.view();
     auto begin = key_view.begin();

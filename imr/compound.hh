@@ -23,8 +23,7 @@
 
 #include <array>
 #include <type_traits>
-
-#include <seastar/util/gcc6-concepts.hh>
+#include <concepts>
 
 #include "utils/meta.hh"
 
@@ -54,9 +53,9 @@ public:
         }
 
         template<typename Context = no_context_t>
-        GCC6_CONCEPT(requires requires(const Context& ctx) {
+        requires requires(const Context& ctx) {
             { ctx.template context_for<Tag>() } noexcept;
-        })
+        }
         auto get(const Context& ctx = no_context) noexcept {
             return Type::make_view(_ptr, ctx.template context_for<Tag>(_ptr));
         }
@@ -75,9 +74,9 @@ public:
     }
 public:
     template<typename Context>
-    GCC6_CONCEPT(requires requires(const Context& ctx) {
-        { ctx.template is_present<Tag>() } noexcept -> bool;
-    })
+    requires requires(const Context& ctx) {
+        { ctx.template is_present<Tag>() } noexcept -> std::same_as<bool>;
+    }
     static size_t serialized_object_size(const uint8_t* in, const Context& context) noexcept {
         return context.template is_present<Tag>()
                ? Type::serialized_object_size(in, context)
@@ -237,9 +236,9 @@ public:
 
 public:
     template<typename Context>
-    GCC6_CONCEPT(requires requires(const Context& ctx) {
-        { ctx.template active_alternative_of<Tag>() } noexcept -> alternative_index;
-    })
+    requires requires(const Context& ctx) {
+        { ctx.template active_alternative_of<Tag>() } noexcept -> std::same_as<alternative_index>;
+    }
     static size_t serialized_object_size(const uint8_t* in, const Context& context) noexcept {
         return choose_alternative(context.template active_alternative_of<Tag>(), [&] (auto object) noexcept {
             using alternative = std::remove_pointer_t<decltype(object)>;

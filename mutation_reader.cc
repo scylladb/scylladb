@@ -36,22 +36,20 @@ static constexpr size_t merger_small_vector_size = 4;
 template<typename T>
 using merger_vector = utils::small_vector<T, merger_small_vector_size>;
 
-GCC6_CONCEPT(
-    template<typename Producer>
-    concept bool FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range,
-            db::timeout_clock::time_point timeout) {
-        // The returned fragments are expected to have the same
-        // position_in_partition. Iterators and references are expected
-        // to be valid until the next call to operator()().
-        { p(timeout) } -> future<boost::iterator_range<merger_vector<mutation_fragment>::iterator>>;
-        // These have the same semantics as their
-        // flat_mutation_reader counterparts.
-        { p.next_partition() };
-        { p.fast_forward_to(part_range, timeout) } -> future<>;
-        { p.fast_forward_to(pos_range, timeout) } -> future<>;
-        { p.buffer_size() } -> size_t;
-    };
-)
+template<typename Producer>
+concept FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range,
+        db::timeout_clock::time_point timeout) {
+    // The returned fragments are expected to have the same
+    // position_in_partition. Iterators and references are expected
+    // to be valid until the next call to operator()().
+    { p(timeout) } -> std::same_as<future<boost::iterator_range<merger_vector<mutation_fragment>::iterator>>>;
+    // These have the same semantics as their
+    // flat_mutation_reader counterparts.
+    { p.next_partition() };
+    { p.fast_forward_to(part_range, timeout) } -> std::same_as<future<>>;
+    { p.fast_forward_to(pos_range, timeout) } -> std::same_as<future<>>;
+    { p.buffer_size() } -> std::same_as<size_t>;
+};
 
 /**
  * Merge mutation-fragments produced by producer.
@@ -68,9 +66,7 @@ GCC6_CONCEPT(
  * fast_forward_to() and next_partition(), as appropriate.
  */
 template<class Producer>
-GCC6_CONCEPT(
-    requires FragmentProducer<Producer>
-)
+requires FragmentProducer<Producer>
 class mutation_fragment_merger {
     using iterator = merger_vector<mutation_fragment>::iterator;
 
@@ -692,12 +688,10 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
     static const ssize_t new_reader_base_cost{16 * 1024};
 
     template<typename Function>
-    GCC6_CONCEPT(
-        requires std::is_move_constructible<Function>::value
-            && requires(Function fn, flat_mutation_reader& reader) {
-                fn(reader);
-            }
-    )
+    requires std::is_move_constructible<Function>::value
+        && requires(Function fn, flat_mutation_reader& reader) {
+            fn(reader);
+        }
     decltype(auto) with_reader(Function fn, db::timeout_clock::time_point timeout) {
         if (auto* state = std::get_if<admitted_state>(&_state)) {
             return fn(state->reader);

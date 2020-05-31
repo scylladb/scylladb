@@ -239,7 +239,7 @@ public:
         return !(*this == other);
     }
 };
-GCC6_CONCEPT(static_assert(FragmentRange<fragmented_temporary_buffer::view>));
+static_assert(FragmentRange<fragmented_temporary_buffer::view>);
 
 inline fragmented_temporary_buffer::operator view() const noexcept
 {
@@ -251,12 +251,10 @@ inline fragmented_temporary_buffer::operator view() const noexcept
 
 namespace fragmented_temporary_buffer_concepts {
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool ExceptionThrower = requires(T obj, size_t n) {
+concept ExceptionThrower = requires(T obj, size_t n) {
     obj.throw_out_of_range(n, n);
 };
-)
 
 }
 
@@ -279,7 +277,7 @@ private:
     }
 
     template<typename ExceptionThrower>
-    GCC6_CONCEPT(requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>)
+    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     void check_out_of_range(ExceptionThrower& exceptions, size_t n) {
         if (__builtin_expect(bytes_left() < n, false)) {
             exceptions.throw_out_of_range(n, bytes_left());
@@ -328,7 +326,7 @@ public:
             throw std::out_of_range(format("attempted to read {:d} bytes from a {:d} byte buffer", attempted_read, actual_left));
         }
     };
-    GCC6_CONCEPT(static_assert(fragmented_temporary_buffer_concepts::ExceptionThrower<default_exception_thrower>));
+    static_assert(fragmented_temporary_buffer_concepts::ExceptionThrower<default_exception_thrower>);
 
     istream(const vector_type& fragments, size_t total_size) noexcept
         : _current(fragments.begin())
@@ -350,7 +348,7 @@ public:
     }
 
     template<typename T, typename ExceptionThrower = default_exception_thrower>
-    GCC6_CONCEPT(requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>)
+    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     T read(ExceptionThrower&& exceptions = default_exception_thrower()) {
         auto new_end = _current_position + sizeof(T);
         if (__builtin_expect(new_end > _current_end, false)) {
@@ -363,7 +361,7 @@ public:
     }
 
     template<typename Output, typename ExceptionThrower = default_exception_thrower>
-    GCC6_CONCEPT(requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>)
+    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     Output read_to(size_t n, Output out, ExceptionThrower&& exceptions = default_exception_thrower()) {
         auto new_end = _current_position + n;
         if (__builtin_expect(new_end <= _current_end, true)) {
@@ -386,7 +384,7 @@ public:
     }
 
     template<typename ExceptionThrower = default_exception_thrower>
-    GCC6_CONCEPT(requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>)
+    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     view read_view(size_t n, ExceptionThrower&& exceptions = default_exception_thrower()) {
         auto new_end = _current_position + n;
         if (__builtin_expect(new_end <= _current_end, true)) {
@@ -407,7 +405,7 @@ public:
     }
 
     template<typename ExceptionThrower = default_exception_thrower>
-    GCC6_CONCEPT(requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>)
+    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     bytes_view read_bytes_view(size_t n, bytes_ostream& linearization_buffer, ExceptionThrower&& exceptions = default_exception_thrower()) {
         auto new_end = _current_position + n;
         if (__builtin_expect(new_end <= _current_end, true)) {

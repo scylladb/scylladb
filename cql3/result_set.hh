@@ -50,7 +50,6 @@
 
 #include "result_generator.hh"
 
-#include <seastar/util/gcc6-concepts.hh>
 
 namespace cql3 {
 
@@ -150,16 +149,12 @@ public:
     const std::vector<uint16_t>& partition_key_bind_indices() const;
 };
 
-GCC6_CONCEPT(
-
 template<typename Visitor>
-concept bool ResultVisitor = requires(Visitor& visitor) {
+concept ResultVisitor = requires(Visitor& visitor) {
     visitor.start_row();
     visitor.accept_value(std::optional<query::result_bytes_view>());
     visitor.end_row();
 };
-
-)
 
 class result_set {
     ::shared_ptr<metadata> _metadata;
@@ -199,7 +194,7 @@ public:
     const std::deque<std::vector<bytes_opt>>& rows() const;
 
     template<typename Visitor>
-    GCC6_CONCEPT(requires ResultVisitor<Visitor>)
+    requires ResultVisitor<Visitor>
     void visit(Visitor&& visitor) const {
         auto column_count = get_metadata().column_count();
         for (auto& row : _rows) {
@@ -264,7 +259,7 @@ public:
     }
 
     template<typename Visitor>
-    GCC6_CONCEPT(requires ResultVisitor<Visitor>)
+    requires ResultVisitor<Visitor>
     void visit(Visitor&& visitor) const {
         if (_result_set) {
             _result_set->visit(std::forward<Visitor>(visitor));

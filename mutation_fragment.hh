@@ -25,7 +25,6 @@
 #include "position_in_partition.hh"
 
 #include <optional>
-#include <seastar/util/gcc6-concepts.hh>
 #include <seastar/util/optimized_optional.hh>
 
 #include "seastar/core/future-util.hh"
@@ -246,59 +245,44 @@ public:
     friend std::ostream& operator<<(std::ostream& is, const partition_end& row);
 };
 
-GCC6_CONCEPT(
 template<typename T, typename ReturnType>
-concept bool MutationFragmentConsumer() {
-    return requires(T t, static_row sr, clustering_row cr, range_tombstone rt, partition_start ph, partition_end pe) {
-        { t.consume(std::move(sr)) } -> ReturnType;
-        { t.consume(std::move(cr)) } -> ReturnType;
-        { t.consume(std::move(rt)) } -> ReturnType;
-        { t.consume(std::move(ph)) } -> ReturnType;
-        { t.consume(std::move(pe)) } -> ReturnType;
+concept MutationFragmentConsumer =
+    requires(T t, static_row sr, clustering_row cr, range_tombstone rt, partition_start ph, partition_end pe) {
+        { t.consume(std::move(sr)) } -> std::same_as<ReturnType>;
+        { t.consume(std::move(cr)) } -> std::same_as<ReturnType>;
+        { t.consume(std::move(rt)) } -> std::same_as<ReturnType>;
+        { t.consume(std::move(ph)) } -> std::same_as<ReturnType>;
+        { t.consume(std::move(pe)) } -> std::same_as<ReturnType>;
     };
-}
-)
 
-GCC6_CONCEPT(
 template<typename T, typename ReturnType>
-concept bool FragmentConsumerReturning() {
-    return requires(T t, static_row sr, clustering_row cr, range_tombstone rt, tombstone tomb) {
-        { t.consume(std::move(sr)) } -> ReturnType;
-        { t.consume(std::move(cr)) } -> ReturnType;
-        { t.consume(std::move(rt)) } -> ReturnType;
+concept FragmentConsumerReturning =
+    requires(T t, static_row sr, clustering_row cr, range_tombstone rt, tombstone tomb) {
+        { t.consume(std::move(sr)) } -> std::same_as<ReturnType>;
+        { t.consume(std::move(cr)) } -> std::same_as<ReturnType>;
+        { t.consume(std::move(rt)) } -> std::same_as<ReturnType>;
     };
-}
-)
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool FragmentConsumer() {
-    return FragmentConsumerReturning<T, stop_iteration >() || FragmentConsumerReturning<T, future<stop_iteration>>();
-}
-)
+concept FragmentConsumer =
+    FragmentConsumerReturning<T, stop_iteration> || FragmentConsumerReturning<T, future<stop_iteration>>;
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool StreamedMutationConsumer() {
-    return FragmentConsumer<T>() && requires(T t, static_row sr, clustering_row cr, range_tombstone rt, tombstone tomb) {
+concept StreamedMutationConsumer =
+    FragmentConsumer<T> && requires(T t, static_row sr, clustering_row cr, range_tombstone rt, tombstone tomb) {
         t.consume(tomb);
         t.consume_end_of_stream();
     };
-}
-)
 
-GCC6_CONCEPT(
 template<typename T, typename ReturnType>
-concept bool MutationFragmentVisitor() {
-    return requires(T t, const static_row& sr, const clustering_row& cr, const range_tombstone& rt, const partition_start& ph, const partition_end& eop) {
-        { t(sr) } -> ReturnType;
-        { t(cr) } -> ReturnType;
-        { t(rt) } -> ReturnType;
-        { t(ph) } -> ReturnType;
-        { t(eop) } -> ReturnType;
+concept MutationFragmentVisitor =
+    requires(T t, const static_row& sr, const clustering_row& cr, const range_tombstone& rt, const partition_start& ph, const partition_end& eop) {
+        { t(sr) } -> std::same_as<ReturnType>;
+        { t(cr) } -> std::same_as<ReturnType>;
+        { t(rt) } -> std::same_as<ReturnType>;
+        { t(ph) } -> std::same_as<ReturnType>;
+        { t(eop) } -> std::same_as<ReturnType>;
     };
-}
-)
 
 class mutation_fragment {
 public:
@@ -446,9 +430,7 @@ public:
     void apply(const schema& s, mutation_fragment&& mf);
 
     template<typename Consumer>
-    GCC6_CONCEPT(
-        requires MutationFragmentConsumer<Consumer, decltype(std::declval<Consumer>().consume(std::declval<range_tombstone>()))>()
-    )
+    requires MutationFragmentConsumer<Consumer, decltype(std::declval<Consumer>().consume(std::declval<range_tombstone>()))>
     decltype(auto) consume(Consumer& consumer) && {
         switch (_kind) {
         case kind::static_row:
@@ -466,9 +448,7 @@ public:
     }
 
     template<typename Visitor>
-    GCC6_CONCEPT(
-        requires MutationFragmentVisitor<Visitor, decltype(std::declval<Visitor>()(std::declval<static_row&>()))>()
-    )
+    requires MutationFragmentVisitor<Visitor, decltype(std::declval<Visitor>()(std::declval<static_row&>()))>
     decltype(auto) visit(Visitor&& visitor) const {
         switch (_kind) {
         case kind::static_row:
@@ -630,14 +610,11 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
 };
 
-GCC6_CONCEPT(
-    // F gets a stream element as an argument and returns the new value which replaces that element
-    // in the transformed stream.
-    template<typename F>
-    concept bool StreamedMutationTranformer() {
-        return requires(F f, mutation_fragment mf, schema_ptr s) {
-            { f(std::move(mf)) } -> mutation_fragment;
-            { f(s) } -> schema_ptr;
-        };
-    }
-)
+// F gets a stream element as an argument and returns the new value which replaces that element
+// in the transformed stream.
+template<typename F>
+concept StreamedMutationTranformer =
+    requires(F f, mutation_fragment mf, schema_ptr s) {
+        { f(std::move(mf)) } -> std::same_as<mutation_fragment>;
+        { f(s) } -> std::same_as<schema_ptr>;
+    };

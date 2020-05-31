@@ -29,7 +29,6 @@
 #include <seastar/net//byteorder.hh>
 #include <cstdint>
 #include <iosfwd>
-#include <seastar/util/gcc6-concepts.hh>
 #include "data/cell.hh"
 #include "data/schema_info.hh"
 #include "imr/utils.hh"

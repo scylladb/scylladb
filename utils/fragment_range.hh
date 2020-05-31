@@ -21,16 +21,14 @@
 
 #pragma once
 
+#include <concepts>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm/for_each.hpp>
 
-#include <seastar/util/gcc6-concepts.hh>
 
 #include "bytes.hh"
 
 enum class mutable_view { no, yes, };
-
-GCC6_CONCEPT(
 
 /// Fragmented buffer
 ///
@@ -39,17 +37,15 @@ GCC6_CONCEPT(
 /// size of the buffer. The interfaces accepting `FragmentedBuffer` will attempt
 /// to avoid unnecessary linearisation.
 template<typename T>
-concept bool FragmentRange = requires (T range) {
+concept FragmentRange = requires (T range) {
     typename T::fragment_type;
     requires std::is_same_v<typename T::fragment_type, bytes_view>
         || std::is_same_v<typename T::fragment_type, bytes_mutable_view>;
-    { *range.begin() } -> typename T::fragment_type;
-    { *range.end() } -> typename T::fragment_type;
-    { range.size_bytes() } -> size_t;
-    { range.empty() } -> bool; // returns true iff size_bytes() == 0.
+    { *range.begin() } -> std::convertible_to<const typename T::fragment_type&>;
+    { *range.end() } -> std::convertible_to<const typename T::fragment_type&>;
+    { range.size_bytes() } -> std::convertible_to<size_t>;
+    { range.empty() } -> std::same_as<bool>; // returns true iff size_bytes() == 0.
 };
-
-)
 
 template<typename T, typename = void>
 struct is_fragment_range : std::false_type { };
@@ -68,9 +64,7 @@ static constexpr bool is_fragment_range_v = is_fragment_range<T>::value;
 /// adaptors below, i.e. it allows treating all fragment ranges
 /// uniformly as views.
 template <typename T>
-GCC6_CONCEPT(
-    requires FragmentRange<T>
-)
+requires FragmentRange<T>
 class fragment_range_view {
     const T* _range;
 public:
@@ -127,16 +121,12 @@ struct empty_fragment_range {
     bool empty() const { return true; }
 };
 
-GCC6_CONCEPT(
-
 static_assert(FragmentRange<empty_fragment_range>);
 static_assert(FragmentRange<single_fragment_range<mutable_view::no>>);
 static_assert(FragmentRange<single_fragment_range<mutable_view::yes>>);
 
-)
-
 template<typename FragmentedBuffer>
-GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
+requires FragmentRange<FragmentedBuffer>
 bytes linearized(const FragmentedBuffer& buffer)
 {
     bytes b(bytes::initialized_later(), buffer.size_bytes());
@@ -149,9 +139,9 @@ bytes linearized(const FragmentedBuffer& buffer)
 }
 
 template<typename FragmentedBuffer, typename Function>
-GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer> && requires (Function fn, bytes_view bv) {
+requires FragmentRange<FragmentedBuffer> && requires (Function fn, bytes_view bv) {
     fn(bv);
-})
+}
 decltype(auto) with_linearized(const FragmentedBuffer& buffer, Function&& fn)
 {
     bytes b;

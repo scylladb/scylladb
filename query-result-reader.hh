@@ -136,9 +136,8 @@ struct result_visitor {
     void accept_partition_end(const result_row_view& static_row) {}
 };
 
-GCC6_CONCEPT(
 template<typename Visitor>
-concept bool ResultVisitor = requires(Visitor visitor, const partition_key& pkey,
+concept ResultVisitor = requires(Visitor visitor, const partition_key& pkey,
                                       uint32_t row_count, const clustering_key& ckey,
                                       const result_row_view& static_row, const result_row_view& row)
 {
@@ -148,7 +147,6 @@ concept bool ResultVisitor = requires(Visitor visitor, const partition_key& pkey
     visitor.accept_new_row(static_row, row);
     visitor.accept_partition_end(static_row);
 };
-)
 
 class result_view {
     ser::query_result_view _v;
@@ -170,7 +168,7 @@ public:
     }
 
     template <typename Visitor>
-    GCC6_CONCEPT(requires ResultVisitor<Visitor>)
+    requires ResultVisitor<Visitor>
     void consume(const partition_slice& slice, Visitor&& visitor) const {
         for (auto&& p : _v.partitions()) {
             auto rows = p.rows();

@@ -55,10 +55,8 @@
 
 namespace service {
 
-GCC6_CONCEPT(
-    template<typename M>
-    concept bool MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
-)
+template<typename M>
+concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
 
 class migration_manager : public seastar::async_sharded_service<migration_manager> {
 private:
@@ -100,7 +98,7 @@ public:
     future<> merge_schema_from(netw::msg_addr src, const std::vector<frozen_mutation>& mutations);
 
     template<typename M>
-    GCC6_CONCEPT(requires MergeableMutation<M>)
+    requires MergeableMutation<M>
     future<> merge_schema_in_background(netw::msg_addr src, const std::vector<M>& mutations) {
         return with_gate(_background_tasks, [this, src, &mutations] {
             return merge_schema_from(src, mutations);

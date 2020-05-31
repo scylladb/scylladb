@@ -26,13 +26,11 @@
 
 #include <boost/program_options/errors.hpp>
 #include <iostream>
-#include <seastar/util/gcc6-concepts.hh>
 #include <sstream>
 #include <type_traits>
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool HasMapInterface = requires(T t) {
+concept HasMapInterface = requires(T t) {
     typename std::remove_reference<T>::type::mapped_type;
     typename std::remove_reference<T>::type::key_type;
     typename std::remove_reference<T>::type::value_type;
@@ -42,7 +40,6 @@ concept bool HasMapInterface = requires(T t) {
     t.cbegin();
     t.cend();
 };
-)
 
 /// A Boost program option holding an enum value.
 ///
@@ -74,7 +71,7 @@ concept bool HasMapInterface = requires(T t) {
 ///     ("vec", po::value<vector<enum_option<Type>>>()->multitoken(), "Type vector");
 /// }
 template<typename Mapper>
-GCC6_CONCEPT(requires HasMapInterface<decltype(Mapper::map())>)
+requires HasMapInterface<decltype(Mapper::map())>
 class enum_option {
     using map_t = typename std::remove_reference<decltype(Mapper::map())>::type;
     typename map_t::mapped_type _value;

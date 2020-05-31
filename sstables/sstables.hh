@@ -85,26 +85,21 @@ struct foreign_sstable_open_info;
 struct sstable_open_info;
 class sstables_manager;
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool ConsumeRowsContext() {
-    return requires(T c, indexable_element el, size_t s) {
-        { c.consume_input() } -> future<>;
-        { c.reset(el) } -> void;
-        { c.fast_forward_to(s, s) } -> future<>;
-        { c.position() } -> uint64_t;
-        { c.skip_to(s) } -> future<>;
-        { c.reader_position() } -> const sstables::reader_position_tracker&;
-        { c.eof() } -> bool;
-        { c.close() } -> future<>;
+concept ConsumeRowsContext =
+    requires(T c, indexable_element el, size_t s) {
+        { c.consume_input() } -> std::same_as<future<>>;
+        { c.reset(el) } -> std::same_as<void>;
+        { c.fast_forward_to(s, s) } -> std::same_as<future<>>;
+        { c.position() } -> std::same_as<uint64_t>;
+        { c.skip_to(s) } -> std::same_as<future<>>;
+        { c.reader_position() } -> std::same_as<const sstables::reader_position_tracker&>;
+        { c.eof() } -> std::same_as<bool>;
+        { c.close() } -> std::same_as<future<>>;
     };
-}
-)
 
 template <typename DataConsumeRowsContext>
-GCC6_CONCEPT(
-    requires ConsumeRowsContext<DataConsumeRowsContext>()
-)
+requires ConsumeRowsContext<DataConsumeRowsContext>
 class data_consume_context;
 
 class index_reader;

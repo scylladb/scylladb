@@ -26,7 +26,6 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/util/optimized_optional.hh>
-#include <seastar/util/gcc6-concepts.hh>
 
 #include "shared_sstable.hh"
 #include "row.hh"
@@ -64,9 +63,7 @@ data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext
 // Moreover, the sstable object used for the sstable::data_consume_rows()
 // call which created this data_consume_context, must also be kept alive.
 template <typename DataConsumeRowsContext>
-GCC6_CONCEPT(
-    requires ConsumeRowsContext<DataConsumeRowsContext>()
-)
+requires ConsumeRowsContext<DataConsumeRowsContext>
 class data_consume_context {
     shared_sstable _sst;
     std::unique_ptr<DataConsumeRowsContext> _ctx;

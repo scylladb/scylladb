@@ -84,34 +84,26 @@ size_t partition_version::size_in_allocator(const schema& s, allocation_strategy
 
 namespace {
 
-GCC6_CONCEPT(
-
 // A functor which transforms objects from Domain into objects from CoDomain
 template<typename U, typename Domain, typename CoDomain>
-concept bool Mapper() {
-    return requires(U obj, const Domain& src) {
-        { obj(src) } -> const CoDomain&;
+concept Mapper =
+    requires(U obj, const Domain& src) {
+        { obj(src) } -> std::convertible_to<const CoDomain&>;
     };
-}
 
 // A functor which merges two objects from Domain into one. The result is stored in the first argument.
 template<typename U, typename Domain>
-concept bool Reducer() {
-    return requires(U obj, Domain& dst, const Domain& src) {
-        { obj(dst, src) } -> void;
+concept Reducer =
+    requires(U obj, Domain& dst, const Domain& src) {
+        { obj(dst, src) } -> std::same_as<void>;
     };
-}
-
-)
 
 // Calculates the value of particular part of mutation_partition represented by
 // the version chain starting from v.
 // |map| extracts the part from each version.
 // |reduce| Combines parts from the two versions.
 template <typename Result, typename Map, typename Initial, typename Reduce>
-GCC6_CONCEPT(
-requires Mapper<Map, mutation_partition, Result>() && Reducer<Reduce, Result>()
-)
+requires Mapper<Map, mutation_partition, Result> && Reducer<Reduce, Result>
 inline Result squashed(const partition_version_ref& v, Map&& map, Initial&& initial, Reduce&& reduce) {
     const partition_version* this_v = &*v;
     partition_version* it = v->last();
@@ -124,9 +116,7 @@ inline Result squashed(const partition_version_ref& v, Map&& map, Initial&& init
 }
 
 template <typename Result, typename Map, typename Reduce>
-GCC6_CONCEPT(
-requires Mapper<Map, mutation_partition, Result>() && Reducer<Reduce, Result>()
-)
+requires Mapper<Map, mutation_partition, Result> && Reducer<Reduce, Result>
 inline Result squashed(const partition_version_ref& v, Map&& map, Reduce&& reduce) {
     return squashed<Result>(v, map,
                             [] (auto&& o) -> decltype(auto) { return std::forward<decltype(o)>(o); },

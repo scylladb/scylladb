@@ -32,9 +32,7 @@ namespace utils {
 
 // Facilitates transparently reading from a fragmented range.
 template<typename T, typename Exception = std::runtime_error>
-GCC6_CONCEPT(
-    requires FragmentRange<T>
-)
+requires FragmentRange<T>
 class linearizing_input_stream {
     using iterator = typename T::iterator;
     using fragment_type = typename T::fragment_type;
@@ -111,9 +109,7 @@ public:
     }
 
     template <typename Type>
-    GCC6_CONCEPT(
-        requires std::is_trivial_v<Type>
-    )
+    requires std::is_trivial_v<Type>
     Type read_trivial() {
         auto [bv, linearized] = do_read(sizeof(Type));
         auto ret = net::ntoh(*reinterpret_cast<const net::packed<Type>*>(bv.begin()));

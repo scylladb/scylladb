@@ -156,10 +156,10 @@ private:
     // Shared logic for applying counter_shards and counter_shard_views.
     // T is either counter_shard or basic_counter_shard_view<U>.
     template<typename T>
-    GCC6_CONCEPT(requires requires(T shard) {
-        { shard.value() } -> int64_t;
-        { shard.logical_clock() } -> int64_t;
-    })
+    requires requires(T shard) {
+        { shard.value() } -> std::same_as<int64_t>;
+        { shard.logical_clock() } -> std::same_as<int64_t>;
+    }
     counter_shard& do_apply(T&& other) noexcept {
         auto other_clock = other.logical_clock();
         if (_logical_clock < other_clock) {

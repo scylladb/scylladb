@@ -28,7 +28,6 @@
 #include "unimplemented.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/byteorder.hh>
-#include <seastar/util/gcc6-concepts.hh>
 #include "index_reader.hh"
 #include "counters.hh"
 #include "utils/data_input.hh"
@@ -76,22 +75,19 @@ position_in_partition_view get_slice_upper_bound(const schema& s, const query::p
     return position_in_partition_view::for_range_end(ranges.back());
 }
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool RowConsumer() {
-    return requires(T t,
+concept RowConsumer =
+    requires(T t,
                     const partition_key& pk,
                     position_range cr,
                     db::timeout_clock::time_point timeout) {
-        { t.io_priority() } -> const io_priority_class&;
-        { t.is_mutation_end() } -> bool;
-        { t.setup_for_partition(pk) } -> void;
-        { t.push_ready_fragments() } -> void;
-        { t.maybe_skip() } -> std::optional<position_in_partition_view>;
-        { t.fast_forward_to(std::move(cr), timeout) } -> std::optional<position_in_partition_view>;
+        { t.io_priority() } -> std::convertible_to<const io_priority_class&>;
+        { t.is_mutation_end() } -> std::same_as<bool>;
+        { t.setup_for_partition(pk) } -> std::same_as<void>;
+        { t.push_ready_fragments() } -> std::same_as<void>;
+        { t.maybe_skip() } -> std::same_as<std::optional<position_in_partition_view>>;
+        { t.fast_forward_to(std::move(cr), timeout) } -> std::same_as<std::optional<position_in_partition_view>>;
     };
-}
-)
 
 /*
  * Helper method to set or reset the range tombstone start bound according to the
@@ -127,9 +123,7 @@ void set_range_tombstone_start_from_end_open_marker(Consumer& c, const schema& s
 }
 
 template <typename DataConsumeRowsContext = data_consume_rows_context, typename Consumer = mp_row_consumer_k_l>
-GCC6_CONCEPT(
-    requires RowConsumer<Consumer>()
-)
+requires RowConsumer<Consumer>
 class sstable_mutation_reader : public mp_row_consumer_reader {
     Consumer _consumer;
     bool _will_likely_slice = false;

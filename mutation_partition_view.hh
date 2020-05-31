@@ -32,9 +32,8 @@ class mutation_partition_view;
 class partition_builder;
 class converting_mutation_partition_applier;
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool MutationViewVisitor = requires (T& visitor, tombstone t, atomic_cell ac,
+concept MutationViewVisitor = requires (T& visitor, tombstone t, atomic_cell ac,
                                              collection_mutation_view cmv, range_tombstone rt,
                                              position_in_partition_view pipv, row_tombstone row_tomb,
                                              row_marker rm) {
@@ -47,7 +46,6 @@ concept bool MutationViewVisitor = requires (T& visitor, tombstone t, atomic_cel
     visitor.accept_row_cell(column_id(), std::move(ac));
     visitor.accept_row_cell(column_id(), cmv);
 };
-)
 
 class mutation_partition_view_virtual_visitor {
 public:
@@ -70,7 +68,7 @@ private:
     { }
 
     template<typename Visitor>
-    GCC6_CONCEPT(requires MutationViewVisitor<Visitor>)
+    requires MutationViewVisitor<Visitor>
     void do_accept(const column_mapping&, Visitor& visitor) const;
 public:
     static mutation_partition_view from_stream(utils::input_stream v) {

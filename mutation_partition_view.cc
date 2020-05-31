@@ -47,7 +47,7 @@
 
 using namespace db;
 
-GCC6_CONCEPT(static_assert(MutationViewVisitor<mutation_partition_view_virtual_visitor>);)
+static_assert(MutationViewVisitor<mutation_partition_view_virtual_visitor>);
 
 mutation_partition_view_virtual_visitor::~mutation_partition_view_virtual_visitor() = default;
 
@@ -208,7 +208,7 @@ row_marker read_row_marker(boost::variant<ser::live_marker_view, ser::expiring_m
 }
 
 template<typename Visitor>
-GCC6_CONCEPT(requires MutationViewVisitor<Visitor>)
+requires MutationViewVisitor<Visitor>
 void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visitor) const {
     auto in = _in;
     auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());

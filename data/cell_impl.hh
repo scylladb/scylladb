@@ -86,12 +86,10 @@ public:
     { }
 
     template<typename Serializer, typename Allocator>
-    GCC6_CONCEPT(
-        requires (imr::is_sizer_for_v<cell::variable_value::structure, Serializer>
-                && std::is_same_v<Allocator, imr::alloc::object_allocator::sizer>)
-            || (imr::is_serializer_for_v<cell::variable_value::structure, Serializer>
-                && std::is_same_v<Allocator, imr::alloc::object_allocator::serializer>)
-    )
+    requires (imr::is_sizer_for_v<cell::variable_value::structure, Serializer>
+            && std::is_same_v<Allocator, imr::alloc::object_allocator::sizer>)
+        || (imr::is_serializer_for_v<cell::variable_value::structure, Serializer>
+            && std::is_same_v<Allocator, imr::alloc::object_allocator::serializer>)
     auto operator()(Serializer serializer, Allocator allocations) {
         auto after_size = serializer.serialize(_value_size);
         if (_force_internal || _value_size <= cell::maximum_internal_storage_length) {
@@ -134,14 +132,14 @@ public:
 
 inline value_writer<empty_fragment_range> cell::variable_value::write(size_t value_size, bool force_internal) noexcept
 {
-    GCC6_CONCEPT(static_assert(imr::WriterAllocator<value_writer<empty_fragment_range>, structure>));
+    static_assert(imr::WriterAllocator<value_writer<empty_fragment_range>, structure>);
     return value_writer<empty_fragment_range>(empty_fragment_range(), value_size, force_internal);
 }
 
 template<typename FragmentRange>
 inline value_writer<std::decay_t<FragmentRange>> cell::variable_value::write(FragmentRange&& value, bool force_internal) noexcept
 {
-    GCC6_CONCEPT(static_assert(imr::WriterAllocator<value_writer<std::decay_t<FragmentRange>>, structure>));
+    static_assert(imr::WriterAllocator<value_writer<std::decay_t<FragmentRange>>, structure>);
     return value_writer<std::decay_t<FragmentRange>>(std::forward<FragmentRange>(value), value.size_bytes(), force_internal);
 }
 

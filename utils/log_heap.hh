@@ -26,7 +26,6 @@
 #include <boost/range/algorithm/max_element.hpp>
 #include <limits>
 #include <seastar/core/bitops.hh>
-#include <seastar/util/gcc6-concepts.hh>
 #include "seastarx.hh"
 
 namespace bi = boost::intrusive;
@@ -132,11 +131,9 @@ struct log_heap_element_traits<T, opts, false> {
  * precision decreasing as values get larger.
  */
 template<typename T, const log_heap_options& opts>
-GCC6_CONCEPT(
-    requires requires() {
-        typename log_heap_element_traits<T, opts>;
-    }
-)
+requires requires() {
+    typename log_heap_element_traits<T, opts>;
+}
 class log_heap final {
     // Ensure that (value << sub_bucket_index) in bucket_of() doesn't overflow
     static_assert(pow2_rank_constexpr(opts.max_size - opts.min_size + 1) + opts.sub_bucket_shift < std::numeric_limits<size_t>::digits, "overflow");

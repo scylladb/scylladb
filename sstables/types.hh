@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include <seastar/util/gcc6-concepts.hh>
 #include "disk_types.hh"
 #include <seastar/core/enum.hh>
 #include "bytes.hh"
@@ -49,14 +48,11 @@ static inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
 
 namespace sstables {
 
-GCC6_CONCEPT(
 template<typename T>
-concept bool Writer() {
-    return requires(T& wr, const char* data, size_t size) {
-        { wr.write(data, size) } -> void;
+concept Writer =
+    requires(T& wr, const char* data, size_t size) {
+        { wr.write(data, size) } -> std::same_as<void>;
     };
-}
-)
 
 struct commitlog_interval {
     db::replay_position start;
@@ -249,7 +245,7 @@ template <typename T>
 uint64_t serialized_size(sstable_version_types v, const T& object);
 
 template <class T, typename W>
-GCC6_CONCEPT(requires Writer<W>())
+requires Writer<W>
 typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
 write(sstable_version_types v, W& out, const T& t);
 

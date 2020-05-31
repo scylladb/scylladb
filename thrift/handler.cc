@@ -188,14 +188,12 @@ std::string bytes_to_string(query::result_bytes_view v) {
 }
 
 namespace thrift {
-GCC6_CONCEPT(
 template<typename T>
-concept bool Aggregator =
+concept Aggregator =
     requires() { typename T::type; }
     && requires(T aggregator, typename T::type* aggregation, const bytes& name, const query::result_atomic_cell_view& cell) {
-        { aggregator.on_column(aggregation, name, cell) } -> void;
+        { aggregator.on_column(aggregation, name, cell) } -> std::same_as<void>;
     };
-)
 }
 
 enum class query_order { no, yes };
@@ -1607,7 +1605,7 @@ private:
     };
 
     template<typename Aggregator, query_order QueryOrder>
-    GCC6_CONCEPT( requires thrift::Aggregator<Aggregator> )
+    requires thrift::Aggregator<Aggregator>
     class column_visitor : public Aggregator {
         const schema& _s;
         const query::partition_slice& _slice;

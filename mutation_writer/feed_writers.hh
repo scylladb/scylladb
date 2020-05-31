@@ -27,9 +27,7 @@ namespace mutation_writer {
 using reader_consumer = noncopyable_function<future<> (flat_mutation_reader)>;
 
 template <typename Writer>
-GCC6_CONCEPT(
-    requires MutationFragmentConsumer<Writer, future<>>()
-)
+requires MutationFragmentConsumer<Writer, future<>>
 future<> feed_writer(flat_mutation_reader&& rd, Writer&& wr) {
     return do_with(std::move(rd), std::move(wr), [] (flat_mutation_reader& rd, Writer& wr) {
         return rd.fill_buffer(db::no_timeout).then([&rd, &wr] {

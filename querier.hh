@@ -74,9 +74,7 @@ public:
 /// or std::nullopt if the last row wasn't a clustering row, and whatever the
 /// consumer's `consume_end_of_stream()` method returns.
 template <emit_only_live_rows OnlyLive, typename Consumer>
-GCC6_CONCEPT(
-    requires CompactedFragmentsConsumer<Consumer>
-)
+requires CompactedFragmentsConsumer<Consumer>
 auto consume_page(flat_mutation_reader& reader,
         lw_shared_ptr<compact_for_query_state<OnlyLive>> compaction_state,
         const query::partition_slice& slice,
@@ -175,9 +173,7 @@ public:
     }
 
     template <typename Consumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<Consumer>
-    )
+    requires CompactedFragmentsConsumer<Consumer>
     auto consume_page(Consumer&& consumer,
             uint32_t row_limit,
             uint32_t partition_limit,

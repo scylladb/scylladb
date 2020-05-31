@@ -41,19 +41,17 @@ enum class compact_for_sstables {
     yes,
 };
 
-GCC6_CONCEPT(
-    template<typename T>
-    concept bool CompactedFragmentsConsumer = requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
-            clustering_row cr, range_tombstone rt, tombstone current_tombstone, row_tombstone current_row_tombstone, bool is_alive) {
-        obj.consume_new_partition(dk);
-        obj.consume(t);
-        { obj.consume(std::move(sr), current_tombstone, is_alive) } -> stop_iteration;
-        { obj.consume(std::move(cr), current_row_tombstone, is_alive) } -> stop_iteration;
-        { obj.consume(std::move(rt)) } -> stop_iteration;
-        { obj.consume_end_of_partition() } -> stop_iteration;
-        obj.consume_end_of_stream();
-    };
-)
+template<typename T>
+concept CompactedFragmentsConsumer = requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
+        clustering_row cr, range_tombstone rt, tombstone current_tombstone, row_tombstone current_row_tombstone, bool is_alive) {
+    obj.consume_new_partition(dk);
+    obj.consume(t);
+    { obj.consume(std::move(sr), current_tombstone, is_alive) } -> std::same_as<stop_iteration>;
+    { obj.consume(std::move(cr), current_row_tombstone, is_alive) } -> std::same_as<stop_iteration>;
+    { obj.consume(std::move(rt)) } -> std::same_as<stop_iteration>;
+    { obj.consume_end_of_partition() } -> std::same_as<stop_iteration>;
+    obj.consume_end_of_stream();
+};
 
 struct detached_compaction_state {
     ::partition_start partition_start;
@@ -265,9 +263,7 @@ public:
     }
 
     template <typename Consumer, typename GCConsumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-    )
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     void consume(tombstone t, Consumer& consumer, GCConsumer& gc_consumer) {
         _range_tombstones.set_partition_tombstone(t);
         if (!only_live()) {
@@ -280,9 +276,7 @@ public:
     }
 
     template <typename Consumer, typename GCConsumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-    )
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(static_row&& sr, Consumer& consumer, GCConsumer& gc_consumer) {
         _last_static_row = static_row(_schema, sr);
         auto current_tombstone = _range_tombstones.get_partition_tombstone();
@@ -307,9 +301,7 @@ public:
     }
 
     template <typename Consumer, typename GCConsumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-    )
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(clustering_row&& cr, Consumer& consumer, GCConsumer& gc_consumer) {
         auto current_tombstone = _range_tombstones.tombstone_for_row(cr.key());
         auto t = cr.tomb();
@@ -365,9 +357,7 @@ public:
     }
 
     template <typename Consumer, typename GCConsumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-    )
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume(range_tombstone&& rt, Consumer& consumer, GCConsumer& gc_consumer) {
         _range_tombstones.apply(rt);
         // FIXME: drop tombstone if it is fully covered by other range tombstones
@@ -384,9 +374,7 @@ public:
     }
 
     template <typename Consumer, typename GCConsumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-    )
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     stop_iteration consume_end_of_partition(Consumer& consumer, GCConsumer& gc_consumer) {
         if (!_empty_partition_in_gc_consumer) {
             gc_consumer.consume_end_of_partition();
@@ -411,9 +399,7 @@ public:
     }
 
     template <typename Consumer, typename GCConsumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-    )
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     auto consume_end_of_stream(Consumer& consumer, GCConsumer& gc_consumer) {
         if (_dk) {
             _last_dk = *_dk;
@@ -437,9 +423,7 @@ public:
     /// partition-header and static row if there are clustering rows or range
     /// tombstones left in the partition.
     template <typename Consumer>
-    GCC6_CONCEPT(
-        requires CompactedFragmentsConsumer<Consumer>
-    )
+    requires CompactedFragmentsConsumer<Consumer>
     void start_new_page(uint32_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
@@ -480,9 +464,7 @@ public:
 };
 
 template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer, typename GCConsumer>
-GCC6_CONCEPT(
-    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-)
+requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
 class compact_mutation {
     lw_shared_ptr<compact_mutation_state<OnlyLive, SSTableCompaction>> _state;
     Consumer _consumer;
@@ -541,9 +523,7 @@ public:
 };
 
 template<emit_only_live_rows only_live, typename Consumer>
-GCC6_CONCEPT(
-    requires CompactedFragmentsConsumer<Consumer>
-)
+requires CompactedFragmentsConsumer<Consumer>
 struct compact_for_query : compact_mutation<only_live, compact_for_sstables::no, Consumer, noop_compacted_fragments_consumer> {
     using compact_mutation<only_live, compact_for_sstables::no, Consumer, noop_compacted_fragments_consumer>::compact_mutation;
 };
@@ -554,9 +534,7 @@ using compact_for_mutation_query_state = compact_for_query_state<emit_only_live_
 using compact_for_data_query_state = compact_for_query_state<emit_only_live_rows::yes>;
 
 template<typename Consumer, typename GCConsumer = noop_compacted_fragments_consumer>
-GCC6_CONCEPT(
-    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
-)
+requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
 struct compact_for_compaction : compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, Consumer, GCConsumer> {
     using compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, Consumer, GCConsumer>::compact_mutation;
 };

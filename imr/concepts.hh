@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <concepts>
 #include "imr/alloc.hh"
 #include "imr/compound.hh"
 #include "imr/fundamental.hh"
@@ -59,11 +60,9 @@ using default_sizer_t = decltype(Structure::get_sizer());
 template<typename Structure>
 using default_serializer_t = decltype(Structure::get_serializer(nullptr));
 
-GCC6_CONCEPT(
-
 /// A simple writer that accepts only sizer or serializer as an argument.
 template<typename Writer, typename Structure>
-concept bool WriterSimple = requires(Writer writer, default_sizer_t<Structure> sizer,
+concept WriterSimple = requires(Writer writer, default_sizer_t<Structure> sizer,
                                      default_serializer_t<Structure> serializer)
 {
     writer(sizer);
@@ -72,7 +71,7 @@ concept bool WriterSimple = requires(Writer writer, default_sizer_t<Structure> s
 
 /// A writer that accepts both sizer or serializer and a memory allocator.
 template<typename Writer, typename Structure>
-concept bool WriterAllocator = requires(Writer writer, default_sizer_t<Structure> sizer,
+concept WriterAllocator = requires(Writer writer, default_sizer_t<Structure> sizer,
                                         default_serializer_t<Structure> serializer,
                                         imr::alloc::object_allocator::sizer alloc_sizer,
                                         imr::alloc::object_allocator::serializer alloc_serializer)
@@ -80,7 +79,5 @@ concept bool WriterAllocator = requires(Writer writer, default_sizer_t<Structure
     writer(sizer, alloc_sizer);
     writer(serializer, alloc_serializer);
 };
-
-)
 
 }

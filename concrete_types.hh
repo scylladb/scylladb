@@ -152,41 +152,39 @@ struct uuid_type_impl final : public concrete_type<utils::UUID> {
 
 template <typename Func> using visit_ret_type = std::invoke_result_t<Func, const ascii_type_impl&>;
 
-GCC6_CONCEPT(
-template <typename Func> concept bool CanHandleAllTypes = requires(Func f) {
-    { f(*static_cast<const ascii_type_impl*>(nullptr)) }       -> visit_ret_type<Func>;
-    { f(*static_cast<const boolean_type_impl*>(nullptr)) }     -> visit_ret_type<Func>;
-    { f(*static_cast<const byte_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
-    { f(*static_cast<const bytes_type_impl*>(nullptr)) }       -> visit_ret_type<Func>;
-    { f(*static_cast<const counter_type_impl*>(nullptr)) }     -> visit_ret_type<Func>;
-    { f(*static_cast<const date_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
-    { f(*static_cast<const decimal_type_impl*>(nullptr)) }     -> visit_ret_type<Func>;
-    { f(*static_cast<const double_type_impl*>(nullptr)) }      -> visit_ret_type<Func>;
-    { f(*static_cast<const duration_type_impl*>(nullptr)) }    -> visit_ret_type<Func>;
-    { f(*static_cast<const empty_type_impl*>(nullptr)) }       -> visit_ret_type<Func>;
-    { f(*static_cast<const float_type_impl*>(nullptr)) }       -> visit_ret_type<Func>;
-    { f(*static_cast<const inet_addr_type_impl*>(nullptr)) }   -> visit_ret_type<Func>;
-    { f(*static_cast<const int32_type_impl*>(nullptr)) }       -> visit_ret_type<Func>;
-    { f(*static_cast<const list_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
-    { f(*static_cast<const long_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
-    { f(*static_cast<const map_type_impl*>(nullptr)) }         -> visit_ret_type<Func>;
-    { f(*static_cast<const reversed_type_impl*>(nullptr)) }    -> visit_ret_type<Func>;
-    { f(*static_cast<const set_type_impl*>(nullptr)) }         -> visit_ret_type<Func>;
-    { f(*static_cast<const short_type_impl*>(nullptr)) }       -> visit_ret_type<Func>;
-    { f(*static_cast<const simple_date_type_impl*>(nullptr)) } -> visit_ret_type<Func>;
-    { f(*static_cast<const time_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
-    { f(*static_cast<const timestamp_type_impl*>(nullptr)) }   -> visit_ret_type<Func>;
-    { f(*static_cast<const timeuuid_type_impl*>(nullptr)) }    -> visit_ret_type<Func>;
-    { f(*static_cast<const tuple_type_impl*>(nullptr)) }       -> visit_ret_type<Func>;
-    { f(*static_cast<const user_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
-    { f(*static_cast<const utf8_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
-    { f(*static_cast<const uuid_type_impl*>(nullptr)) }        -> visit_ret_type<Func>;
-    { f(*static_cast<const varint_type_impl*>(nullptr)) }      -> visit_ret_type<Func>;
+template <typename Func> concept CanHandleAllTypes = requires(Func f) {
+    { f(*static_cast<const ascii_type_impl*>(nullptr)) }       -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const boolean_type_impl*>(nullptr)) }     -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const byte_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const bytes_type_impl*>(nullptr)) }       -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const counter_type_impl*>(nullptr)) }     -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const date_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const decimal_type_impl*>(nullptr)) }     -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const double_type_impl*>(nullptr)) }      -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const duration_type_impl*>(nullptr)) }    -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const empty_type_impl*>(nullptr)) }       -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const float_type_impl*>(nullptr)) }       -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const inet_addr_type_impl*>(nullptr)) }   -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const int32_type_impl*>(nullptr)) }       -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const list_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const long_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const map_type_impl*>(nullptr)) }         -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const reversed_type_impl*>(nullptr)) }    -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const set_type_impl*>(nullptr)) }         -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const short_type_impl*>(nullptr)) }       -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const simple_date_type_impl*>(nullptr)) } -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const time_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const timestamp_type_impl*>(nullptr)) }   -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const timeuuid_type_impl*>(nullptr)) }    -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const tuple_type_impl*>(nullptr)) }       -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const user_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const utf8_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const uuid_type_impl*>(nullptr)) }        -> std::same_as<visit_ret_type<Func>>;
+    { f(*static_cast<const varint_type_impl*>(nullptr)) }      -> std::same_as<visit_ret_type<Func>>;
 };
-)
 
 template<typename Func>
-GCC6_CONCEPT(requires CanHandleAllTypes<Func>)
+requires CanHandleAllTypes<Func>
 static inline visit_ret_type<Func> visit(const abstract_type& t, Func&& f) {
     switch (t.get_kind()) {
     case abstract_type::kind::ascii:

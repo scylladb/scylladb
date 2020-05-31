@@ -83,11 +83,9 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
 template <typename MutationFilter>
-GCC6_CONCEPT(
-    requires requires(MutationFilter mf, const dht::decorated_key& dk) {
-        { mf(dk) } -> bool;
-    }
-)
+requires requires(MutationFilter mf, const dht::decorated_key& dk) {
+    { mf(dk) } -> std::same_as<bool>;
+}
 class filtering_reader : public flat_mutation_reader::impl {
     flat_mutation_reader _rd;
     MutationFilter _filter;

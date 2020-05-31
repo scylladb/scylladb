@@ -29,7 +29,6 @@
 #include "mutation_fragment.hh"
 #include "tracing/trace_state.hh"
 
-#include <seastar/util/gcc6-concepts.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/file.hh>
 #include "db/timeout_clock.hh"
@@ -41,31 +40,27 @@ using seastar::future;
 class mutation_source;
 class reader_permit;
 
-GCC6_CONCEPT(
-    template<typename Consumer>
-    concept bool FlatMutationReaderConsumer() {
-        return requires(Consumer c, mutation_fragment mf) {
-            { c(std::move(mf)) } -> stop_iteration;
-        };
-    }
-)
-
-GCC6_CONCEPT(
-    template<typename T>
-    concept bool FlattenedConsumer() {
-        return StreamedMutationConsumer<T>() && requires(T obj, const dht::decorated_key& dk) {
-            obj.consume_new_partition(dk);
-            obj.consume_end_of_partition();
-        };
-    }
-
-    template<typename T>
-    concept bool FlattenedConsumerFilter = requires(T filter, const dht::decorated_key& dk, const mutation_fragment& mf) {
-        { filter(dk) } -> bool;
-        { filter(mf) } -> bool;
-        { filter.on_end_of_stream() } -> void;
+template<typename Consumer>
+concept FlatMutationReaderConsumer =
+    requires(Consumer c, mutation_fragment mf) {
+        { c(std::move(mf)) } -> std::same_as<stop_iteration>;
     };
-)
+
+
+template<typename T>
+concept FlattenedConsumer =
+    StreamedMutationConsumer<T> && requires(T obj, const dht::decorated_key& dk) {
+        { obj.consume_new_partition(dk) };
+        { obj.consume_end_of_partition() };
+    };
+
+template<typename T>
+concept FlattenedConsumerFilter =
+    requires(T filter, const dht::decorated_key& dk, const mutation_fragment& mf) {
+        { filter(dk) } -> std::same_as<bool>;
+        { filter(mf) } -> std::same_as<bool>;
+        { filter.on_end_of_stream() } -> std::same_as<void>;
+    };
 
 /*
  * Allows iteration on mutations using mutation_fragments.
@@ -149,9 +144,7 @@ public:
         }
 
         template<typename Consumer>
-        GCC6_CONCEPT(
-            requires FlatMutationReaderConsumer<Consumer>()
-        )
+        requires FlatMutationReaderConsumer<Consumer>
         // Stops when consumer returns stop_iteration::yes or end of stream is reached.
         // Next call will start from the next mutation_fragment in the stream.
         future<> consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
@@ -169,9 +162,7 @@ public:
         }
 
         template<typename Consumer, typename Filter>
-        GCC6_CONCEPT(
-            requires FlatMutationReaderConsumer<Consumer>() && FlattenedConsumerFilter<Filter>
-        )
+        requires FlatMutationReaderConsumer<Consumer> && FlattenedConsumerFilter<Filter>
         // A variant of consume_pausable() that expects to be run in
         // a seastar::thread.
         // Partitions for which filter(decorated_key) returns false are skipped
@@ -246,9 +237,7 @@ public:
         };
     public:
         template<typename Consumer>
-        GCC6_CONCEPT(
-            requires FlattenedConsumer<Consumer>()
-        )
+        requires FlattenedConsumer<Consumer>
         // Stops when consumer returns stop_iteration::yes from consume_end_of_partition or end of stream is reached.
         // Next call will receive fragments from the next partition.
         // When consumer returns stop_iteration::yes from methods other than consume_end_of_partition then the read
@@ -270,9 +259,7 @@ public:
         }
 
         template<typename Consumer, typename Filter>
-        GCC6_CONCEPT(
-            requires FlattenedConsumer<Consumer>() && FlattenedConsumerFilter<Filter>
-        )
+        requires FlattenedConsumer<Consumer> && FlattenedConsumerFilter<Filter>
         // A variant of consumee() that expects to be run in a seastar::thread.
         // Partitions for which filter(decorated_key) returns false are skipped
         // entirely and never reach the consumer.
@@ -333,17 +320,13 @@ public:
     }
 
     template <typename Consumer>
-    GCC6_CONCEPT(
-        requires FlatMutationReaderConsumer<Consumer>()
-    )
+    requires FlatMutationReaderConsumer<Consumer>
     auto consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
         return _impl->consume_pausable(std::move(consumer), timeout);
     }
 
     template <typename Consumer>
-    GCC6_CONCEPT(
-        requires FlattenedConsumer<Consumer>()
-    )
+    requires FlattenedConsumer<Consumer>
     auto consume(Consumer consumer, db::timeout_clock::time_point timeout) {
         return _impl->consume(std::move(consumer), timeout);
     }
@@ -394,17 +377,13 @@ public:
     };
 
     template<typename Consumer, typename Filter>
-    GCC6_CONCEPT(
-        requires FlattenedConsumer<Consumer>() && FlattenedConsumerFilter<Filter>
-    )
+    requires FlattenedConsumer<Consumer> && FlattenedConsumerFilter<Filter>
     auto consume_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout) {
         return _impl->consume_in_thread(std::move(consumer), std::move(filter), timeout);
     }
 
     template<typename Consumer>
-    GCC6_CONCEPT(
-        requires FlattenedConsumer<Consumer>()
-    )
+    requires FlattenedConsumer<Consumer>
     auto consume_in_thread(Consumer consumer, db::timeout_clock::time_point timeout) {
         return consume_in_thread(std::move(consumer), no_filter{}, timeout);
     }
@@ -528,11 +507,11 @@ flat_mutation_reader make_flat_mutation_reader(Args &&... args) {
 // The consumer will stop iff StopCondition returns true, in particular
 // reaching the end of stream alone won't stop the reader.
 template<typename StopCondition, typename ConsumeMutationFragment, typename ConsumeEndOfStream>
-GCC6_CONCEPT(requires requires(StopCondition stop, ConsumeMutationFragment consume_mf, ConsumeEndOfStream consume_eos, mutation_fragment mf) {
-    { stop() } -> bool;
-    { consume_mf(std::move(mf)) } -> void;
-    { consume_eos() } -> future<>;
-})
+requires requires(StopCondition stop, ConsumeMutationFragment consume_mf, ConsumeEndOfStream consume_eos, mutation_fragment mf) {
+    { stop() } -> std::same_as<bool>;
+    { consume_mf(std::move(mf)) } -> std::same_as<void>;
+    { consume_eos() } -> std::same_as<future<>>;
+}
 future<> consume_mutation_fragments_until(
         flat_mutation_reader& r,
         StopCondition&& stop,
@@ -555,9 +534,7 @@ future<> consume_mutation_fragments_until(
 
 // Creates a stream which is like r but with transformation applied to the elements.
 template<typename T>
-GCC6_CONCEPT(
-    requires StreamedMutationTranformer<T>()
-)
+requires StreamedMutationTranformer<T>
 flat_mutation_reader transform(flat_mutation_reader r, T t) {
     class transforming_reader : public flat_mutation_reader::impl {
         flat_mutation_reader _reader;
