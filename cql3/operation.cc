@@ -87,10 +87,10 @@ operation::set_element::prepare(database& db, const sstring& keyspace, const col
 }
 
 bool
-operation::set_element::is_compatible_with(shared_ptr<raw_update> other) const {
+operation::set_element::is_compatible_with(const std::unique_ptr<raw_update>& other) const {
     // TODO: we could check that the other operation is not setting the same element
     // too (but since the index/key set may be a bind variables we can't always do it at this point)
-    return !dynamic_pointer_cast<set_value>(std::move(other));
+    return !dynamic_cast<const set_value*>(other.get());
 }
 
 sstring
@@ -120,13 +120,13 @@ operation::set_field::prepare(database& db, const sstring& keyspace, const colum
 }
 
 bool
-operation::set_field::is_compatible_with(shared_ptr<raw_update> other) const {
-    auto x = dynamic_pointer_cast<set_field>(other);
+operation::set_field::is_compatible_with(const std::unique_ptr<raw_update>& other) const {
+    auto x = dynamic_cast<const set_field*>(other.get());
     if (x) {
         return _field != x->_field;
     }
 
-    return !dynamic_pointer_cast<set_value>(std::move(other));
+    return !dynamic_cast<const set_value*>(other.get());
 }
 
 const column_identifier::raw&
@@ -185,8 +185,8 @@ operation::addition::prepare(database& db, const sstring& keyspace, const column
 }
 
 bool
-operation::addition::is_compatible_with(shared_ptr<raw_update> other) const {
-    return !dynamic_pointer_cast<set_value>(other);
+operation::addition::is_compatible_with(const std::unique_ptr<raw_update>& other) const {
+    return !dynamic_cast<const set_value*>(other.get());
 }
 
 sstring
@@ -227,8 +227,8 @@ operation::subtraction::prepare(database& db, const sstring& keyspace, const col
 }
 
 bool
-operation::subtraction::is_compatible_with(shared_ptr<raw_update> other) const {
-    return !dynamic_pointer_cast<set_value>(other);
+operation::subtraction::is_compatible_with(const std::unique_ptr<raw_update>& other) const {
+    return !dynamic_cast<const set_value*>(other.get());
 }
 
 sstring
@@ -250,8 +250,8 @@ operation::prepend::prepare(database& db, const sstring& keyspace, const column_
 }
 
 bool
-operation::prepend::is_compatible_with(shared_ptr<raw_update> other) const {
-    return !dynamic_pointer_cast<set_value>(other);
+operation::prepend::is_compatible_with(const std::unique_ptr<raw_update>& other) const {
+    return !dynamic_cast<const set_value*>(other.get());
 }
 
 
@@ -356,7 +356,7 @@ operation::set_counter_value_from_tuple_list::prepare(database& db, const sstrin
 };
 
 bool
-operation::set_value::is_compatible_with(::shared_ptr <raw_update> other) const {
+operation::set_value::is_compatible_with(const std::unique_ptr<raw_update>& other) const {
     // We don't allow setting multiple time the same column, because 1)
     // it's stupid and 2) the result would seem random to the user.
     return false;

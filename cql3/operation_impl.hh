@@ -65,7 +65,7 @@ public:
         }
 #endif
 
-    virtual bool is_compatible_with(::shared_ptr <raw_update> other) const override;
+    virtual bool is_compatible_with(const std::unique_ptr<raw_update>& other) const override;
 };
 
 class operation::set_counter_value_from_tuple_list : public set_value {

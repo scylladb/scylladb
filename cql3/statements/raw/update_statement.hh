@@ -62,7 +62,7 @@ namespace raw {
 class update_statement : public raw::modification_statement {
 private:
     // Provided for an UPDATE
-    std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> _updates;
+    std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> _updates;
     std::vector<relation_ptr> _where_clause;
 public:
     /**
@@ -76,7 +76,7 @@ public:
      */
     update_statement(::shared_ptr<cf_name> name,
         std::unique_ptr<attributes::raw> attrs,
-        std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
+        std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
         std::vector<relation_ptr> where_clause,
         conditions_vector conditions, bool if_exists);
 protected:

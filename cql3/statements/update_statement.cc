@@ -379,7 +379,7 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
 
 update_statement::update_statement(::shared_ptr<cf_name> name,
                                    std::unique_ptr<attributes::raw> attrs,
-                                   std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
+                                   std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
                                    std::vector<relation_ptr> where_clause,
                                    conditions_vector conditions, bool if_exists)
     : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)

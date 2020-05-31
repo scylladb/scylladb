@@ -106,7 +106,7 @@ using namespace cql3::statements;
 using namespace cql3::selection;
 using cql3::cql3_type;
 using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,lw_shared_ptr<cql3::column_condition::raw>>>;
-using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>;
+using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>>;
 
 // ANTLR forces us to define a default-initialized return value
 // for every rule (e.g. [returns ut_name name]), but not every type
@@ -255,8 +255,8 @@ struct uninitialized {
         return to_lower(s) == "true";
     }
 
-    void add_raw_update(std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>& operations,
-        ::shared_ptr<cql3::column_identifier::raw> key, ::shared_ptr<cql3::operation::raw_update> update)
+    void add_raw_update(std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>>& operations,
+        ::shared_ptr<cql3::column_identifier::raw> key, std::unique_ptr<cql3::operation::raw_update> update)
     {
         for (auto&& p : operations) {
             if (*p.first == *key && !p.second->is_compatible_with(update)) {
@@ -532,7 +532,7 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
     @init {
         bool if_exists = false;
         auto attrs = std::make_unique<cql3::attributes::raw>();
-        std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, ::shared_ptr<cql3::operation::raw_update>>> operations;
+        std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>> operations;
     }
     : K_UPDATE cf=columnFamilyName
       ( usingClause[attrs] )?
@@ -1416,12 +1416,12 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
     : t=term ('+' c=cident )?
       {
           if (!c) {
-              add_raw_update(operations, key, ::make_shared<cql3::operation::set_value>(t));
+              add_raw_update(operations, key, std::make_unique<cql3::operation::set_value>(t));
           } else {
               if (*key != *c) {
                 add_recognition_error("Only expressions of the form X = <value> + X are supported.");
               }
-              add_raw_update(operations, key, ::make_shared<cql3::operation::prepend>(t));
+              add_raw_update(operations, key, std::make_unique<cql3::operation::prepend>(t));
           }
       }
     | c=cident sig=('+' | '-') t=term
@@ -1429,11 +1429,11 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
           if (*key != *c) {
               add_recognition_error("Only expressions of the form X = X " + $sig.text + "<value> are supported.");
           }
-          shared_ptr<cql3::operation::raw_update> op;
+          std::unique_ptr<cql3::operation::raw_update> op;
           if ($sig.text == "+") {
-              op = make_shared<cql3::operation::addition>(t);
+              op = std::make_unique<cql3::operation::addition>(t);
           } else {
-              op = make_shared<cql3::operation::subtraction>(t);
+              op = std::make_unique<cql3::operation::subtraction>(t);
           }
           add_raw_update(operations, key, std::move(op));
       }
@@ -1444,11 +1444,11 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
               // We don't yet allow a '+' in front of an integer, but we could in the future really, so let's be future-proof in our error message
               add_recognition_error("Only expressions of the form X = X " + sstring($i.text[0] == '-' ? "-" : "+") + " <value> are supported.");
           }
-          add_raw_update(operations, key, make_shared<cql3::operation::addition>(cql3::constants::literal::integer($i.text)));
+          add_raw_update(operations, key, std::make_unique<cql3::operation::addition>(cql3::constants::literal::integer($i.text)));
       }
     | K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
       {
-          add_raw_update(operations, key, ::make_shared<cql3::operation::set_counter_value_from_tuple_list>(t));      
+          add_raw_update(operations, key, std::make_unique<cql3::operation::set_counter_value_from_tuple_list>(t));
       }
     ;
 
@@ -1458,7 +1458,7 @@ collectionColumnOperation[operations_type& operations,
                           bool by_uuid]
     : '=' t=term
       {
-          add_raw_update(operations, key, make_shared<cql3::operation::set_element>(k, t, by_uuid));
+          add_raw_update(operations, key, std::make_unique<cql3::operation::set_element>(k, t, by_uuid));
       }
     ;
 
@@ -1467,7 +1467,7 @@ udtColumnOperation[operations_type& operations,
                    shared_ptr<cql3::column_identifier> field]
     : '=' t=term
       {
-          add_raw_update(operations, std::move(key), make_shared<cql3::operation::set_field>(std::move(field), std::move(t)));
+          add_raw_update(operations, std::move(key), std::make_unique<cql3::operation::set_field>(std::move(field), std::move(t)));
       }
     ;
 
