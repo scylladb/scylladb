@@ -1925,22 +1925,19 @@ size_t tracker::impl::reclaim(size_t memory_to_release) {
     reclaiming_lock rl(*this);
     reclaim_timer timing_guard;
 
-    size_t mem_released;
-    {
-        reclaiming_lock rl(*this);
-        constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
-        auto segments_to_release = align_up(std::min(max_bytes, memory_to_release), segment::size) >> segment::size_shift;
-        auto nr_released = shard_segment_pool.reclaim_segments(segments_to_release);
-        mem_released = nr_released * segment::size;
-        if (mem_released >= memory_to_release) {
-            return memory_to_release;
-        }
+    constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
+    auto segments_to_release = align_up(std::min(max_bytes, memory_to_release), segment::size) >> segment::size_shift;
+    auto nr_released = shard_segment_pool.reclaim_segments(segments_to_release);
+    size_t mem_released = nr_released * segment::size;
+    if (mem_released >= memory_to_release) {
+        return memory_to_release;
     }
+
     auto compacted = compact_and_evict_locked(shard_segment_pool.current_emergency_reserve_goal(), memory_to_release - mem_released);
 
     // compact_and_evict_locked() will not return segments to the standard allocator,
     // so do it here:
-    auto nr_released = shard_segment_pool.reclaim_segments(compacted / segment::size);
+    nr_released = shard_segment_pool.reclaim_segments(compacted / segment::size);
 
     return mem_released + nr_released * segment::size;
 }
