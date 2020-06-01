@@ -339,6 +339,9 @@ public:
         // since repair may not include all replicas
         if (_handler) {
             if (_handler->learned(ep)) {
+                // It's OK to start PRUNE while LEARN is still in progress: LEARN
+                // doesn't read any data from system.paxos, and PRUNE tombstone
+                // will cover LEARNed value even if it arrives out of order.
                 _handler->prune(_proposal->ballot);
             }
         }
@@ -1271,9 +1274,11 @@ void paxos_response_handler::prune(utils::UUID ballot) {
 }
 
 bool paxos_response_handler::learned(gms::inet_address ep) {
-    if (boost::range::find(_live_endpoints, ep) != _live_endpoints.end()) {
-        _learned++;
-        return _learned == _required_participants;
+    if (_learned < _required_participants) {
+        if (boost::range::find(_live_endpoints, ep) != _live_endpoints.end()) {
+            _learned++;
+            return _learned == _required_participants;
+        }
     }
     return false;
 }

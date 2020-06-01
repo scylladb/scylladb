@@ -90,6 +90,7 @@ fedora_packages=(
     glibc-langpack-en
     lld
     xxhash-devel
+    rpm-build
     devscripts
     debhelper
     fakeroot
