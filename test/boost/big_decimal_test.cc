@@ -24,6 +24,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "utils/big_decimal.hh"
+#include "marshal_exception.hh"
 
 namespace {
 
@@ -70,6 +71,8 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_construct_from_string) {
     big_decimal x3{"0.000"};
     big_decimal x4{"0E3"};
     big_decimal x5{"0E10"};
+    big_decimal x6{"+12.34e5"};
+    big_decimal x7{"10e+3"};
 
     BOOST_REQUIRE_EQUAL(x0.unscaled_value(), 0);
     BOOST_REQUIRE_EQUAL(x0.scale(), 0);
@@ -88,6 +91,28 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_construct_from_string) {
 
     BOOST_REQUIRE_EQUAL(x5.unscaled_value(), 0);
     BOOST_REQUIRE_EQUAL(x5.scale(), -10);
+
+    BOOST_REQUIRE_EQUAL(x6.unscaled_value(), 1234);
+    BOOST_REQUIRE_EQUAL(x6.scale(), -3);
+
+    BOOST_REQUIRE_EQUAL(x7.unscaled_value(), 10);
+    BOOST_REQUIRE_EQUAL(x7.scale(), -3);
+
+    BOOST_REQUIRE_THROW(big_decimal(""), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("10.0.3"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("10.0e7.3"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("10.0e7e2"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("-"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("."), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal(".e"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal(".E0"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("10e"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("10.3e"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("10.3e+"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("-+5"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("+-5"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("++5"), marshal_exception);
+    BOOST_REQUIRE_THROW(big_decimal("--5"), marshal_exception);
 }
 
 BOOST_AUTO_TEST_CASE(test_big_decimal_div) {
@@ -156,6 +181,8 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_add) {
     test_add("0.0", "0.000", "0.000");
     test_add("1.0", "1.000", "2.000");
     test_add("-1.0", "-1.000", "-2.000");
+    test_add("0000123456789012345678901234", "19e3", "00123456789012345678920234");
+    test_add("000000000012345678901234.5678901234e-1", "0777.555555555555555555555e2", "1234567967879.0123445678955555555");
 }
 
 BOOST_AUTO_TEST_CASE(test_big_decimal_assignsub) {
@@ -180,4 +207,6 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_sub) {
     test_sub("0.0", "0.000", "0.000");
     test_sub("1.0", "1.000", "0.000");
     test_sub("-1.0", "1.000", "-2.000");
+    test_sub("9999999999999999999999999999999999999", "-1.000e0", "10000000000000000000000000000000000000.000");
+    test_sub("+10.", "1.e+1", "0");
 }
