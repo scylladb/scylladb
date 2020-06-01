@@ -93,6 +93,10 @@ fedora_packages=(
     xxhash-devel
     makeself
     libzstd-static libzstd-devel
+    devscripts
+    debhelper
+    fakeroot
+    file
 )
 
 centos_packages=(

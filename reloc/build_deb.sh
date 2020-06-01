@@ -9,17 +9,17 @@ print_usage() {
     exit 1
 }
 
+DIST="false"
 RELOC_PKG=build/release/scylla-package.tar.gz
 BUILDDIR=build/debian
 OPTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         "--dist")
-            OPTS="$OPTS $1"
+            DIST="true"
             shift 1
             ;;
         "--reloc-pkg")
-            OPTS="$OPTS $1 $(readlink -f $2)"
             RELOC_PKG=$2
             shift 2
             ;;
@@ -39,11 +39,20 @@ if [ ! -e $RELOC_PKG ]; then
     exit 1
 fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
-if [[ ! $OPTS =~ --reloc-pkg ]]; then
-    OPTS="$OPTS --reloc-pkg $RELOC_PKG"
-fi
 rm -rf $BUILDDIR
 mkdir -p $BUILDDIR/scylla-package
 tar -C $BUILDDIR/scylla-package -xpf $RELOC_PKG
 cd $BUILDDIR/scylla-package
-exec ./scylla/dist/debian/build_deb.sh $OPTS
+
+PRODUCT=$(cat scylla/SCYLLA-PRODUCT-FILE)
+SCYLLA_VERSION=$(cat scylla/SCYLLA-VERSION-FILE)
+SCYLLA_RELEASE=$(cat scylla/SCYLLA-RELEASE-FILE)
+
+ln -fv $RELOC_PKG ../$PRODUCT-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz
+
+if $DIST; then
+    export DEB_BUILD_OPTIONS="housekeeping"
+fi
+
+mv scylla/debian debian
+debuild -rfakeroot -us -uc
