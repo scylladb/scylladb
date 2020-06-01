@@ -23,6 +23,8 @@
 import os
 import sys
 import glob
+import platform
+
 from scylla_util import *
 
 def verify_cpu():
