@@ -620,6 +620,22 @@ class segment_pool {
     size_t _current_emergency_reserve_goal = 1;
     size_t _emergency_reserve_max = 30;
     bool _allocation_failure_flag = false;
+    bool _allocation_enabled = true;
+
+    struct allocation_lock {
+        segment_pool& _pool;
+        bool _prev;
+        allocation_lock(segment_pool& p)
+            : _pool(p)
+            , _prev(p._allocation_enabled)
+        {
+            _pool._allocation_enabled = false;
+        }
+        ~allocation_lock() {
+            _pool._allocation_enabled = _prev;
+        }
+    };
+
     size_t _non_lsa_memory_in_use = 0;
     // Invariants - a segment is in one of the following states:
     //   In use by some region
@@ -650,7 +666,7 @@ private:
         return _store.max_segments();
     }
     bool can_allocate_more_segments() {
-        return _store.can_allocate_more_segments();
+        return _allocation_enabled && _store.can_allocate_more_segments();
     }
 public:
     segment_pool();
