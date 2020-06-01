@@ -350,6 +350,9 @@ server::server(executor& exec)
         {"DeleteTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.delete_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
+        {"UpdateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.update_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        }},
         {"PutItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.put_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},

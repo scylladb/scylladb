@@ -932,7 +932,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     if (rjson::find(request, "SSESpecification")) {
         return make_ready_future<request_return_type>(api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported."));
     }
-
+    
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
         add_stream_options(*stream_specification, builder);
@@ -989,6 +989,54 @@ future<executor::request_return_type> executor::create_table(client_state& clien
                     api_error("ResourceInUseException",
                             format("Table {} already exists", table_name)));
         });
+    });
+}
+
+future<executor::request_return_type> executor::update_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+    _stats.api_operations.update_table++;
+    elogger.trace("Updating table {}", request);
+
+    std::string table_name = get_table_name(request);
+    if (table_name.find(INTERNAL_TABLE_PREFIX) == 0) {
+        return make_ready_future<request_return_type>(validation_exception(
+                format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
+    }
+    std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
+    tracing::add_table_name(trace_state, keyspace_name, table_name);
+
+    auto& db = _proxy.get_db().local();
+    auto& cf = db.find_column_family(keyspace_name, table_name);
+
+    schema_builder builder(cf.schema());
+
+    rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
+    if (stream_specification && stream_specification->IsObject()) {
+        add_stream_options(*stream_specification, builder);
+    }
+
+    static const std::vector<sstring> unsupported = {
+        "AttributeDefinitions", "BillingMode",
+        "GlobalSecondaryIndexUpdates", 
+        "ProvisionedThroughput",
+        "ReplicaUpdates",
+        "SSESpecification", 
+    };
+
+    for (auto& s : unsupported) {
+        if (rjson::find(request, s)) {
+            throw validation_exception(s + " not supported");
+        }
+    }
+
+    auto schema = builder.build();
+
+    return _mm.announce_column_family_update(schema, false, {}).then([this] {
+        return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
+    }).then([table_info = std::move(request), schema] () mutable {
+        rjson::value status = rjson::empty_object();
+        supplement_table_info(table_info, *schema);
+        rjson::set(status, "TableDescription", std::move(table_info));
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
     });
 }
 
