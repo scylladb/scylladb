@@ -26,31 +26,37 @@ logging::logger mdclogger("metadata_collector");
 
 namespace sstables {
 
+void metadata_collector::convert(disk_array<uint32_t, disk_string<uint16_t>>& to, const std::optional<clustering_key_prefix>& from) {
+    if (!from) {
+        mdclogger.trace("{}: convert: empty", _name);
+        return;
+    }
+    mdclogger.trace("{}: convert: {}", _name, clustering_key_prefix::with_schema_wrapper(_schema, *from));
+    for (auto& value : from->components()) {
+        to.elements.push_back(disk_string<uint16_t>{bytes(value.data(), value.size())});
+    }
+}
+
 void metadata_collector::do_update_min_max_components(const clustering_key_prefix& key) {
-    auto may_grow = [] (std::vector<bytes_opt>& v, size_t target_size) {
-        if (target_size > v.size()) {
-            v.resize(target_size);
-        }
-    };
+    if (!_min_clustering_key) {
+        mdclogger.trace("{}: initializing min/max clustering keys={}", _name, clustering_key_prefix::with_schema_wrapper(_schema, key));
+        _min_clustering_key.emplace(key);
+        _max_clustering_key.emplace(key);
+        return;
+    }
 
-    auto clustering_key_size = _schema.clustering_key_size();
-    auto& min_seen = min_column_names();
-    auto& max_seen = max_column_names();
-    may_grow(min_seen, clustering_key_size);
-    may_grow(max_seen, clustering_key_size);
+    const bound_view::tri_compare cmp(_schema);
 
-    auto& types = _schema.clustering_key_type()->types();
-    auto i = 0U;
-    for (auto& value : key.components()) {
-        auto& type = types[i];
+    auto res = cmp(bound_view(key, bound_kind::incl_start), bound_view(*_min_clustering_key, bound_kind::incl_start));
+    if (res < 0) {
+        mdclogger.trace("{}: setting min_clustering_key={}", _name, clustering_key_prefix::with_schema_wrapper(_schema, key));
+        _min_clustering_key.emplace(key);
+    }
 
-        if (!max_seen[i] || type->compare(value, max_seen[i].value()) > 0) {
-            max_seen[i] = bytes(value.data(), value.size());
-        }
-        if (!min_seen[i] || type->compare(value, min_seen[i].value()) < 0) {
-            min_seen[i] = bytes(value.data(), value.size());
-        }
-        i++;
+    res = cmp(bound_view(key, bound_kind::incl_end), bound_view(*_max_clustering_key, bound_kind::incl_end));
+    if (res > 0) {
+        mdclogger.trace("{}: setting max_clustering_key={}", _name, clustering_key_prefix::with_schema_wrapper(_schema, key));
+        _max_clustering_key.emplace(key);
     }
 }
 

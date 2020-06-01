@@ -2227,7 +2227,7 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
 void
 sstable::make_metadata_collector() {
     if (!_collector) {
-        _collector.emplace(*get_schema());
+        _collector.emplace(*get_schema(), get_filename());
     }
 }
 
