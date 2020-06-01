@@ -1240,7 +1240,10 @@ private:
         return seg;
     }
 
-    void compact(segment* seg, segment_descriptor& desc) {
+    void compact_segment_locked(segment* seg, segment_descriptor& desc) {
+        auto seg_occupancy = desc.occupancy();
+        llogger.debug("Compacting segment {} from region {}, {}", seg, id(), seg_occupancy);
+
         ++_invalidate_counter;
 
         for_each_live(seg, [this] (const object_descriptor* desc, void* obj, size_t size) {
@@ -1250,6 +1253,7 @@ private:
         });
 
         free_segment(seg, desc);
+        shard_segment_pool.on_segment_compaction(seg_occupancy.used_space());
     }
 
     void close_and_open() {
@@ -1524,21 +1528,14 @@ public:
         return _segment_descs.one_of_largest().occupancy();
     }
 
-    void compact_single_segment_locked() {
+    // Compacts a single segment, most appropriate for it
+    void compact() {
+        compaction_lock _(*this);
         auto& desc = _segment_descs.one_of_largest();
         _segment_descs.pop_one_of_largest();
         _closed_occupancy -= desc.occupancy();
         segment* seg = shard_segment_pool.segment_from(desc);
-        auto seg_occupancy = desc.occupancy();
-        llogger.debug("Compacting segment {} from region {}, {}", seg, id(), seg_occupancy);
-        compact(seg, desc);
-        shard_segment_pool.on_segment_compaction(seg_occupancy.used_space());
-    }
-
-    // Compacts a single segment
-    void compact() {
-        compaction_lock _(*this);
-        compact_single_segment_locked();
+        compact_segment_locked(seg, desc);
     }
 
     void migrate_segment(segment* src, segment_descriptor& src_desc, segment* dst, segment_descriptor& dst_desc) {
@@ -1590,7 +1587,7 @@ public:
         while (!all.empty()) {
             auto& desc = all.one_of_largest();
             all.pop_one_of_largest();
-            compact(shard_segment_pool.segment_from(desc), desc);
+            compact_segment_locked(shard_segment_pool.segment_from(desc), desc);
         }
         llogger.debug("Done, {}", occupancy());
     }
