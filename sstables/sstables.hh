@@ -104,6 +104,8 @@ class data_consume_context;
 
 class index_reader;
 
+extern bool use_binary_search_in_promoted_index;
+
 extern size_t summary_byte_cost(double summary_ratio);
 
 struct sstable_writer_config {

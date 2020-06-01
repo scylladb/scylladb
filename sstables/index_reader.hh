@@ -116,6 +116,7 @@ private:
     trust_promoted_index _trust_pi;
     const schema& _s;
     std::optional<column_values_fixed_lengths> _ck_values_fixed_lengths;
+    bool _use_binary_search;
 
     inline bool is_mc_format() const { return static_cast<bool>(_ck_values_fixed_lengths); }
 
@@ -229,7 +230,7 @@ public:
             std::unique_ptr<promoted_index> pi;
             if ((_trust_pi == trust_promoted_index::yes) && (promoted_index_size > 0)) {
                 std::unique_ptr<clustered_index_cursor> cursor;
-                if (is_mc_format()) {
+                if (_use_binary_search) {
                     cached_file f(_index_file, continuous_data_consumer::_permit, index_page_cache_metrics,
                         promoted_index_start, promoted_index_size);
                     if (promoted_index_size <= data_size) {
@@ -281,6 +282,7 @@ public:
         : continuous_data_consumer(std::move(permit), make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
         , _consumer(consumer), _index_file(index_file), _options(options)
         , _entry_offset(start), _trust_pi(trust_pi), _s(s), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
+        , _use_binary_search(is_mc_format() && use_binary_search_in_promoted_index)
     {}
 
     void reset(uint64_t offset) {

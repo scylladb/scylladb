@@ -88,6 +88,8 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
+bool use_binary_search_in_promoted_index = true;
+
 namespace bi = boost::intrusive;
 
 class sstable_tracker {

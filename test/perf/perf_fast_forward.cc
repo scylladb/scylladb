@@ -1775,6 +1775,7 @@ int main(int argc, char** argv) {
         ("data-directory", bpo::value<sstring>()->default_value("./perf_large_partition_data"), "Data directory")
         ("output-directory", bpo::value<sstring>()->default_value("./perf_fast_forward_output"), "Results output directory (for 'json')")
         ("sstable-format", bpo::value<std::string>()->default_value("mc"), "Sstable format version to use during population")
+        ("use-binary-search-in-promoted-index", bpo::value<bool>()->default_value(true), "Use binary search based variant of the promoted index cursor")
         ("dump-all-results", "Write results of all iterations of all tests to text files in the output directory")
         ;
 
@@ -1821,6 +1822,8 @@ int main(int argc, char** argv) {
         } else {
             throw std::runtime_error(format("Unsupported sstable format: {}", sstable_format_name));
         }
+
+        sstables::use_binary_search_in_promoted_index = app.configuration()["use-binary-search-in-promoted-index"].as<bool>();
 
         test_case_duration = app.configuration()["test-case-duration"].as<double>();
 
