@@ -98,6 +98,15 @@ static std::vector<utils::UUID> get_table_ids(const database& db, const sstring&
     return table_ids;
 }
 
+static std::vector<sstring> get_table_names(const database& db, const std::vector<utils::UUID>& table_ids) {
+    std::vector<sstring> table_names;
+    table_names.reserve(table_ids.size());
+    for (auto& table_id : table_ids) {
+        table_names.push_back(db.find_column_family(table_id).schema()->cf_name());
+    }
+    return table_names;
+}
+
 template<typename Collection, typename T>
 void remove_item(Collection& c, T& item) {
     auto it = std::find(c.begin(), c.end(), item);
@@ -652,14 +661,14 @@ future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstri
 
 static
 const dht::sharder&
-get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, const std::vector<sstring>& table_names, const std::vector<utils::UUID>& table_ids) {
+get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, const std::vector<utils::UUID>& table_ids) {
     schema_ptr last_s;
     for (size_t idx = 0 ; idx < table_ids.size(); idx++) {
         schema_ptr s;
         try {
             s = db.local().find_column_family(table_ids[idx]).schema();
         } catch(...) {
-            throw std::runtime_error(format("No column family '{}' in keyspace '{}'", table_names[idx], keyspace));
+            throw std::runtime_error(format("No column family '{}' in keyspace '{}'", table_ids[idx], keyspace));
         }
         if (last_s && last_s->get_sharder() != s->get_sharder()) {
             throw std::runtime_error(
@@ -672,7 +681,7 @@ get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, 
     }
     if (!last_s) {
         throw std::runtime_error(format("Failed to find sharder for keyspace={}, tables={}, no table in this keyspace",
-                keyspace, table_names));
+                keyspace, table_ids));
     }
     return last_s->get_sharder();
 }
@@ -680,17 +689,16 @@ get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, 
 repair_info::repair_info(seastar::sharded<database>& db_,
     const sstring& keyspace_,
     const dht::token_range_vector& ranges_,
-    const std::vector<sstring>& cfs_,
     std::vector<utils::UUID> table_ids_,
     int id_,
     const std::vector<sstring>& data_centers_,
     const std::vector<sstring>& hosts_,
     streaming::stream_reason reason_)
     : db(db_)
-    , sharder(get_sharder_for_tables(db_, keyspace_, cfs_, table_ids_))
+    , sharder(get_sharder_for_tables(db_, keyspace_, table_ids_))
     , keyspace(keyspace_)
     , ranges(ranges_)
-    , cfs(cfs_)
+    , cfs(get_table_names(db_.local(), table_ids_))
     , table_ids(std::move(table_ids_))
     , id(id_)
     , shard(this_shard_id())
@@ -1024,7 +1032,7 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
                 ri.nr_failed_ranges++;
                 auto status = format("failed: mandatory neighbor={} is not alive", node);
                 rlogger.error("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.cfs, range, neighbors, live_neighbors, status);
+                    ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.table_names(), range, neighbors, live_neighbors, status);
                 ri.abort();
                 return make_exception_future<>(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
                     node, ri.keyspace, mandatory_neighbors)));
@@ -1034,7 +1042,7 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
             ri.nr_failed_ranges++;
             auto status = live_neighbors.empty() ? "skipped" : "partial";
             rlogger.warn("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-            ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.cfs, range, neighbors, live_neighbors, status);
+            ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.table_names(), range, neighbors, live_neighbors, status);
             if (live_neighbors.empty()) {
                 return make_ready_future<>();
             }
@@ -1347,7 +1355,7 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                 ri->check_in_abort();
                 ri->ranges_index++;
                 rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
-                    ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->cfs, range);
+                    ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->table_names(), range);
                 return repair_range(*ri, range);
             });
         });
@@ -1357,7 +1365,7 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
             ri->check_in_abort();
             ri->ranges_index++;
             rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
-                ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->cfs, range);
+                ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->table_names(), range);
             return do_with(dht::selective_token_range_sharder(ri->sharder, range, ri->shard), [ri] (auto& sharder) {
                 return repeat([ri, &sharder] () {
                     check_in_shutdown();
@@ -1488,10 +1496,10 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = db.invoke_on(shard, [&db, keyspace, cfs, table_ids, id, ranges,
+            auto f = db.invoke_on(shard, [&db, keyspace, table_ids, id, ranges,
                     data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
                 auto ri = make_lw_shared<repair_info>(db,
-                        std::move(keyspace), std::move(ranges), std::move(cfs), std::move(table_ids),
+                        std::move(keyspace), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), streaming::stream_reason::repair);
                 return repair_ranges(ri);
             });
@@ -1572,11 +1580,11 @@ future<> sync_data_using_repair(seastar::sharded<database>& db,
             std::vector<future<>> repair_results;
             repair_results.reserve(smp::count);
             for (auto shard : boost::irange(unsigned(0), smp::count)) {
-                auto f = db.invoke_on(shard, [keyspace, cfs, table_ids, id, ranges, neighbors, reason] (database& localdb) mutable {
+                auto f = db.invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason] (database& localdb) mutable {
                     auto data_centers = std::vector<sstring>();
                     auto hosts = std::vector<sstring>();
                     auto ri = make_lw_shared<repair_info>(service::get_local_storage_service().db(),
-                            std::move(keyspace), std::move(ranges), std::move(cfs), std::move(table_ids),
+                            std::move(keyspace), std::move(ranges), std::move(table_ids),
                             id, std::move(data_centers), std::move(hosts), reason);
                     ri->neighbors = std::move(neighbors);
                     return repair_ranges(ri);

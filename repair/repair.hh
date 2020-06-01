@@ -211,7 +211,6 @@ public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
             const dht::token_range_vector& ranges_,
-            const std::vector<sstring>& cfs_,
             std::vector<utils::UUID> table_ids_,
             int id_,
             const std::vector<sstring>& data_centers_,
@@ -231,6 +230,9 @@ public:
     }
     bool row_level_repair() {
         return _row_level_repair;
+    }
+    const std::vector<sstring>& table_names() {
+        return cfs;
     }
 };
 
