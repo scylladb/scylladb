@@ -1,23 +1,21 @@
 #!/bin/bash -e
 
-. /etc/os-release
 print_usage() {
-    echo "build_deb.sh -target <codename> --dist --rebuild-dep --reloc-pkg build/release/scylla-package.tar.gz"
+    echo "build_deb.sh -target <codename> --dist --reloc-pkg build/release/scylla-package.tar.gz"
     echo "  --dist  create a public distribution package"
     echo "  --reloc-pkg specify relocatable package path"
     exit 1
 }
 
+DIST="false"
 RELOC_PKG=build/release/scylla-package.tar.gz
-OPTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         "--dist")
-            OPTS="$OPTS $1"
+            DIST="true"
             shift 1
             ;;
         "--reloc-pkg")
-            OPTS="$OPTS $1 $(readlink -f $2)"
             RELOC_PKG=$2
             shift 2
             ;;
@@ -33,10 +31,17 @@ if [ ! -e $RELOC_PKG ]; then
     exit 1
 fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
-if [[ ! $OPTS =~ --reloc-pkg ]]; then
-    OPTS="$OPTS --reloc-pkg $RELOC_PKG"
-fi
 mkdir -p build/debian/scylla-package
 tar -C build/debian/scylla-package -xpf $RELOC_PKG
 cd build/debian/scylla-package
-exec ./dist/debian/build_deb.sh $OPTS
+
+PRODUCT=$(cat SCYLLA-PRODUCT-FILE)
+SCYLLA_VERSION=$(cat SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/')
+SCYLLA_RELEASE=$(cat SCYLLA-RELEASE-FILE)
+
+ln -fv $RELOC_PKG ../$PRODUCT-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz
+
+if $DIST; then
+    export DEB_BUILD_OPTIONS="housekeeping"
+fi
+debuild -rfakeroot -us -uc
