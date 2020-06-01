@@ -82,6 +82,7 @@
 #include "cdc/generation.hh"
 #include "repair/repair.hh"
 #include "service/priority_manager.hh"
+#include "utils/generation-number.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -94,14 +95,6 @@ namespace service {
 static logging::logger slogger("storage_service");
 
 distributed<storage_service> _the_storage_service;
-
-
-int get_generation_number() {
-    using namespace std::chrono;
-    auto now = high_resolution_clock::now().time_since_epoch();
-    int generation_number = duration_cast<seconds>(now).count();
-    return generation_number;
-}
 
 storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, bool for_testing)
@@ -1949,7 +1942,7 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
                 ss.set_gossip_tokens(db::system_keyspace::get_local_tokens().get0(),
                         cdc_enabled ? std::make_optional(cdc::get_local_streams_timestamp().get0()) : std::nullopt);
                 ss._gossiper.force_newer_generation();
-                ss._gossiper.start_gossiping(get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
+                ss._gossiper.start_gossiping(utils::get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
                     ss._initialized = true;
                 }).get();
             }

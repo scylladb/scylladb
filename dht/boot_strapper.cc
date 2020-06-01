@@ -37,7 +37,6 @@
  */
 
 #include "dht/boot_strapper.hh"
-#include "service/storage_service.hh"
 #include "dht/range_streamer.hh"
 #include "gms/failure_detector.hh"
 #include "log.hh"

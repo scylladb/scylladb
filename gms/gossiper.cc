@@ -49,7 +49,6 @@
 #include "gms/failure_detector.hh"
 #include "gms/i_failure_detection_event_listener.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
-#include "service/storage_service.hh"
 #include "message/messaging_service.hh"
 #include "database.hh"
 #include "log.hh"
@@ -62,6 +61,7 @@
 #include "db/config.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/adaptors.hpp>
+#include "utils/generation-number.hh"
 
 namespace gms {
 
@@ -589,7 +589,7 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
                     int local_generation = local_ep_state_ptr.get_heart_beat_state().get_generation();
                     int remote_generation = remote_state.get_heart_beat_state().get_generation();
                     logger.trace("{} local generation {}, remote generation {}", ep, local_generation, remote_generation);
-                    if (remote_generation > service::get_generation_number() + MAX_GENERATION_DIFFERENCE) {
+                    if (remote_generation > utils::get_generation_number() + MAX_GENERATION_DIFFERENCE) {
                         // assume some peer has corrupted memory and is broadcasting an unbelievable generation about another peer (or itself)
                         logger.warn("received an invalid gossip generation for peer {}; local generation = {}, received generation = {}",
                             ep, local_generation, remote_generation);

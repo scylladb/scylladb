@@ -41,7 +41,7 @@
 #include "db/schema_tables.hh"
 
 #include "service/migration_manager.hh"
-#include "service/storage_service.hh"
+#include "gms/feature_service.hh"
 #include "partition_slice_builder.hh"
 #include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
@@ -89,7 +89,6 @@
 #include "user_types_metadata.hh"
 
 #include "index/target_parser.hh"
-#include "service/storage_service.hh"
 #include "lua.hh"
 
 using namespace db::system_keyspace;

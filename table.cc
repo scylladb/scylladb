@@ -32,7 +32,6 @@
 #include "sstables/progress_monitor.hh"
 #include "checked-file-impl.hh"
 #include "view_info.hh"
-#include "service/storage_service.hh"
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
 #include "sstables/compaction_manager.hh"

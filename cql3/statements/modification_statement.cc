@@ -51,7 +51,6 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "db/config.hh"
-#include "service/storage_service.hh"
 #include "transport/messages/result_message.hh"
 #include "database.hh"
 #include <seastar/core/execution_stage.hh>

@@ -99,8 +99,6 @@ inline storage_service& get_local_storage_service() {
     return _the_storage_service.local();
 }
 
-int get_generation_number();
-
 enum class disk_error { regular, commit };
 
 struct bind_messaging_port_tag {};
