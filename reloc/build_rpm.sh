@@ -10,26 +10,23 @@ print_usage() {
     echo "  --builddir specify rpmbuild directory"
     exit 1
 }
+DIST=0
 RELOC_PKG=build/release/scylla-package.tar.gz
 BUILDDIR=build/redhat
-OPTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         "--dist")
-            OPTS="$OPTS $1"
+            DIST=1
             shift 1
             ;;
-        "--target")
-            OPTS="$OPTS $1 $2"
+        "--target") # This is obsolete, but I keep this in order not to break people's scripts.
             shift 2
             ;;
         "--xtrace")
             set -o xtrace
-            OPTS="$OPTS $1"
             shift 1
             ;;
         "--reloc-pkg")
-            OPTS="$OPTS $1 $(readlink -f $2)"
             RELOC_PKG=$2
             shift 2
             ;;
@@ -49,11 +46,36 @@ if [ ! -e $RELOC_PKG ]; then
     exit 1
 fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
-if [[ ! $OPTS =~ --reloc-pkg ]]; then
-    OPTS="$OPTS --reloc-pkg $RELOC_PKG"
-fi
+RPMBUILD=$(readlink -f $BUILDDIR)
 mkdir -p $BUILDDIR/
 tar -C $BUILDDIR/ -xpf $RELOC_PKG scylla/SCYLLA-RELOCATABLE-FILE scylla/SCYLLA-RELEASE-FILE scylla/SCYLLA-VERSION-FILE scylla/SCYLLA-PRODUCT-FILE scylla/dist/redhat
 cd $BUILDDIR/scylla
-echo "Running './dist/redhat/build_rpm.sh $OPTS' under $BUILDDIR/scylla directory"
-exec ./dist/redhat/build_rpm.sh $OPTS
+
+RELOC_PKG_BASENAME=$(basename $RELOC_PKG)
+SCYLLA_VERSION=$(cat SCYLLA-VERSION-FILE)
+SCYLLA_RELEASE=$(cat SCYLLA-RELEASE-FILE)
+PRODUCT=$(cat SCYLLA-PRODUCT-FILE)
+
+mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+
+xz_thread_param=
+if xz --help | grep -q thread; then
+    # use as many threads as there are CPUs
+    xz_thread_param="T$(nproc)"
+fi
+
+rpm_payload_opts=(--define "_binary_payload w2${xz_thread_param}.xzdio")
+
+ln -fv $RELOC_PKG $RPMBUILD/SOURCES/
+
+parameters=(
+    -D"version $SCYLLA_VERSION"
+    -D"release $SCYLLA_RELEASE"
+    -D"housekeeping $DIST"
+    -D"product $PRODUCT"
+    -D"${PRODUCT/-/_} 1"
+    -D"reloc_pkg $RELOC_PKG_BASENAME"
+)
+
+ln -fv dist/redhat/scylla.spec $RPMBUILD/SPECS/
+rpmbuild "${parameters[@]}" -ba "${rpm_payload_opts[@]}" --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla.spec
