@@ -1412,8 +1412,6 @@ with open(buildfile_tmp, 'w') as f:
         rule copy
             command = cp $in $out
             description = COPY $out
-        rule package
-            command = scripts/create-relocatable-package.py --mode $mode $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
@@ -1654,9 +1652,6 @@ with open(buildfile_tmp, 'w') as f:
         f.write(textwrap.dedent('''\
             build build/{mode}/iotune: copy build/{mode}/seastar/apps/iotune/iotune
             ''').format(**locals()))
-        f.write('build build/{mode}/scylla-package.tar.gz: package build/{mode}/scylla build/{mode}/iotune build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE build/debian/debian | always\n'.format(**locals()))
-        f.write('  pool = submodule_pool\n')
-        f.write('  mode = {mode}\n'.format(**locals()))
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
         f.write('  command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc} ../build/{mode}/libdeflate//libdeflate.a\n'.format(**locals()))
         f.write('build build/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
@@ -1697,12 +1692,6 @@ with open(buildfile_tmp, 'w') as f:
         ''').format(modes_list=' '.join(default_modes), **globals()))
     f.write(textwrap.dedent('''\
         build always: phony
-        rule scylla_version_gen
-            command = ./SCYLLA-VERSION-GEN
-        build build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE: scylla_version_gen
-        rule debian_files_gen
-            command = ./dist/debian/debian_files_gen.py
-        build build/debian/debian: debian_files_gen | always
         ''').format(modes_list=' '.join(build_modes), **globals()))
 
 os.rename(buildfile_tmp, buildfile)
