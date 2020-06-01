@@ -413,6 +413,7 @@ perf_tests = set([
     'test/perf/perf_mutation_fragment',
     'test/perf/perf_idl',
     'test/perf/perf_vint',
+    'test/perf/perf_big_decimal',
 ])
 
 apps = set([

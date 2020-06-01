@@ -39,29 +39,46 @@ uint64_t from_varint_to_integer(const utils::multiprecision_int& varint) {
 
 big_decimal::big_decimal(sstring_view text)
 {
-    std::string str(text);
-    static const std::regex big_decimal_re("^([\\+\\-]?)([0-9]*)(\\.([0-9]*))?([eE]([\\+\\-]?[0-9]+))?");
-    std::smatch sm;
-    if (!std::regex_match(str, sm, big_decimal_re)) {
-        throw marshal_exception(format("big_decimal contains invalid characters: '{}'", str));
+    size_t e_pos = text.find_first_of("eE");
+    std::string_view base = text.substr(0, e_pos);
+    std::string_view exponent;
+    if (e_pos != std::string_view::npos) {
+        exponent = text.substr(e_pos + 1);
+        if (exponent.empty()) {
+            throw marshal_exception(format("big_decimal - incorrect empty exponent: {}", text));
+        }
     }
-    bool negative = sm[1] == "-";
-    auto integer = sm[2].str();
-    auto fraction = sm[4].str();
-    auto exponent = sm[6].str();
-    if (integer.empty() && fraction.empty()) {
-        throw marshal_exception(format("big_decimal - both integer and fraction are empty: '{}'", str));
+    size_t dot_pos = base.find_first_of(".");
+    std::string integer_str(base.substr(0, dot_pos));
+    std::string_view fraction;
+    if (dot_pos != std::string_view::npos) {
+        fraction = base.substr(dot_pos + 1);
+        integer_str.append(fraction);
     }
-    integer.append(fraction);
-    unsigned i;
-    for (i = 0; i < integer.size() - 1 && integer[i] == '0'; i++);
-    integer = integer.substr(i);
+    std::string_view integer(integer_str);
+    const bool negative = !integer.empty() && integer.front() == '-';
+    integer.remove_prefix(negative || (!integer.empty() && integer.front() == '+'));
 
-    _unscaled_value = boost::multiprecision::cpp_int(integer);
+    if (integer.empty()) {
+        throw marshal_exception(format("big_decimal - both integer and fraction are empty"));
+    } else if (!::isdigit(integer.front())) {
+        throw marshal_exception(format("big_decimal - incorrect integer: {}", text));
+    }
+
+    integer.remove_prefix(std::min(integer.find_first_not_of("0"), integer.size() - 1));
+    try {
+        _unscaled_value = boost::multiprecision::cpp_int(integer);
+    } catch (...) {
+        throw marshal_exception(format("big_decimal - failed to parse integer value: {}", integer));
+    }
     if (negative) {
         _unscaled_value *= -1;
     }
-    _scale = exponent.empty() ? 0 : -boost::lexical_cast<int32_t>(exponent);
+    try {
+        _scale = exponent.empty() ? 0 : -boost::lexical_cast<int32_t>(exponent);
+    } catch (...) {
+        throw marshal_exception(format("big_decimal - failed to parse exponent: {}", exponent));
+    }
     _scale += fraction.size();
 }
 
