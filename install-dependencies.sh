@@ -94,6 +94,10 @@ fedora_packages=(
     makeself
     libzstd-static libzstd-devel
     rpm-build
+    devscripts
+    debhelper
+    fakeroot
+    file
 )
 
 centos_packages=(
