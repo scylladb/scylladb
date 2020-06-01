@@ -325,10 +325,10 @@ named_semaphore& tracker::range_parallelism_semaphore() {
     return _range_parallelism_semaphores[this_shard_id()];
 }
 
-future<> tracker::run(int id, std::function<future<> ()> func) {
+future<> tracker::run(int id, std::function<void ()> func) {
     return seastar::with_gate(_gate, [this, id, func =std::move(func)] {
         start(id);
-        return func().then([this, id] {
+        return seastar::async([func = std::move(func)] { func(); }).then([this, id] {
             rlogger.info("repair id {} completed successfully", id);
             done(id, true);
         }).handle_exception([this, id] (std::exception_ptr ep) {
@@ -1482,7 +1482,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
             });
             repair_results.push_back(std::move(f));
         }
-        return when_all(repair_results.begin(), repair_results.end()).then([id] (std::vector<future<>> results) mutable {
+        when_all(repair_results.begin(), repair_results.end()).then([id] (std::vector<future<>> results) mutable {
             std::vector<sstring> errors;
             for (unsigned shard = 0; shard < results.size(); shard++) {
                 auto& f = results[shard];
@@ -1495,7 +1495,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
                 return make_exception_future<>(std::runtime_error(format("{}", errors)));
             }
             return make_ready_future<>();
-        });
+        }).get();
     }).handle_exception([id] (std::exception_ptr ep) {
         rlogger.info("repair_tracker run for repair id {} failed: {}", id, ep);
     });
@@ -1551,7 +1551,7 @@ future<> sync_data_using_repair(seastar::sharded<database>& db,
             auto cfs = list_column_families(db.local(), keyspace);
             if (cfs.empty()) {
                 rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
-                return make_ready_future<>();
+                return;
             }
             std::vector<future<>> repair_results;
             repair_results.reserve(smp::count);
@@ -1567,7 +1567,7 @@ future<> sync_data_using_repair(seastar::sharded<database>& db,
                 });
                 repair_results.push_back(std::move(f));
             }
-            return when_all(repair_results.begin(), repair_results.end()).then([id, keyspace] (std::vector<future<>> results) mutable {
+            when_all(repair_results.begin(), repair_results.end()).then([id, keyspace] (std::vector<future<>> results) mutable {
                 std::vector<sstring> errors;
                 for (unsigned shard = 0; shard < results.size(); shard++) {
                     auto& f = results[shard];
@@ -1580,7 +1580,7 @@ future<> sync_data_using_repair(seastar::sharded<database>& db,
                     return make_exception_future<>(std::runtime_error(format("{}", errors)));
                 }
                 return make_ready_future<>();
-            });
+            }).get();
         }).then([id, keyspace] {
             rlogger.info("repair id {} to sync data for keyspace={}, status=succeeded", id, keyspace);
         }).handle_exception([&db, id, keyspace] (std::exception_ptr ep) {

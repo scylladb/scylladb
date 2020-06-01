@@ -278,7 +278,7 @@ public:
     void abort_all_repairs();
     named_semaphore& range_parallelism_semaphore();
     static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
-    future<> run(int id, std::function<future<> ()> func);
+    future<> run(int id, std::function<void ()> func);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
