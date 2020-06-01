@@ -93,6 +93,7 @@ fedora_packages=(
     xxhash-devel
     makeself
     libzstd-static libzstd-devel
+    rpm-build
 )
 
 centos_packages=(
