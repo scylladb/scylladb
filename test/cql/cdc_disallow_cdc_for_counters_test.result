@@ -1,0 +1,25 @@
+create table tb1 (pk int primary key, c1 counter) with cdc = {'enabled': true};
+{
+	"message" : "exceptions::invalid_request_exception (Cannot create CDC log for table ks.tb1. Counter support not implemented)",
+	"status" : "error"
+}
+
+create table tb2 (pk int primary key, c1 counter);
+{
+	"status" : "ok"
+}
+alter table tb2 with cdc = {'enabled': true};
+{
+	"message" : "exceptions::invalid_request_exception (Cannot create CDC log for table ks.tb2. Counter support not implemented)",
+	"status" : "error"
+}
+
+create table tb3 (pk int primary key) with cdc = {'enabled': true};
+{
+	"status" : "ok"
+}
+alter table tb3 add (c1 counter);
+{
+	"message" : "exceptions::invalid_request_exception (Cannot create CDC log for table ks.tb3. Counter support not implemented)",
+	"status" : "error"
+}
