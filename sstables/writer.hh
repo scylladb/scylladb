@@ -43,7 +43,7 @@ class file_writer {
     output_stream<char> _out;
     writer_offset_tracker _offset;
 public:
-    file_writer(file f, file_output_stream_options options);
+    static future<file_writer> make(file f, file_output_stream_options options) noexcept;
 
     file_writer(output_stream<char>&& out)
         : _out(std::move(out)) {}

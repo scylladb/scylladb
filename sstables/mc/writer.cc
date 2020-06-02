@@ -840,7 +840,8 @@ void writer::init_file_writers() {
                 &_sst._components->compression,
                 _schema.get_compressor_params()));
     }
-    _index_writer = std::make_unique<file_writer>(std::move(_sst._index_file), options);
+    auto w = file_writer::make(std::move(_sst._index_file), options);
+    _index_writer = std::make_unique<file_writer>(w.get0());
 }
 
 std::unique_ptr<file_writer> writer::close_writer(std::unique_ptr<file_writer>& w) {
