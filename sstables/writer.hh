@@ -132,8 +132,8 @@ class checksummed_file_data_sink_impl : public data_sink_impl {
     struct checksum& _c;
     uint32_t& _full_checksum;
 public:
-    checksummed_file_data_sink_impl(file f, struct checksum& c, uint32_t& full_file_checksum, file_output_stream_options options)
-            : _out(make_file_data_sink(std::move(f), std::move(options)))
+    checksummed_file_data_sink_impl(data_sink out, struct checksum& c, uint32_t& full_file_checksum)
+            : _out(std::move(out))
             , _c(c)
             , _full_checksum(full_file_checksum)
             {}
@@ -167,16 +167,15 @@ template <typename ChecksumType>
 requires ChecksumUtils<ChecksumType>
 class checksummed_file_data_sink : public data_sink {
 public:
-    checksummed_file_data_sink(file f, struct checksum& cinfo, uint32_t& full_file_checksum, file_output_stream_options options)
-        : data_sink(std::make_unique<checksummed_file_data_sink_impl<ChecksumType>>(std::move(f), cinfo, full_file_checksum, std::move(options))) {}
+    checksummed_file_data_sink(data_sink out, struct checksum& cinfo, uint32_t& full_file_checksum)
+        : data_sink(std::make_unique<checksummed_file_data_sink_impl<ChecksumType>>(std::move(out), cinfo, full_file_checksum)) {}
 };
 
 template <typename ChecksumType>
 requires ChecksumUtils<ChecksumType>
 inline
-output_stream<char> make_checksummed_file_output_stream(file f, struct checksum& cinfo, uint32_t& full_file_checksum, file_output_stream_options options) {
-    auto buffer_size = options.buffer_size;
-    return output_stream<char>(checksummed_file_data_sink<ChecksumType>(std::move(f), cinfo, full_file_checksum, std::move(options)), buffer_size, true);
+output_stream<char> make_checksummed_file_output_stream(data_sink out, struct checksum& cinfo, uint32_t& full_file_checksum, size_t buffer_size) {
+    return output_stream<char>(checksummed_file_data_sink<ChecksumType>(std::move(out), cinfo, full_file_checksum), buffer_size, true);
 }
 
 template <typename ChecksumType>
@@ -185,9 +184,9 @@ class checksummed_file_writer : public file_writer {
     checksum _c;
     uint32_t _full_checksum;
 public:
-    checksummed_file_writer(file f, file_output_stream_options options)
-            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(f), _c, _full_checksum, options))
-            , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), size_t(options.buffer_size)))})
+    checksummed_file_writer(data_sink out, size_t buffer_size)
+            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(out), _c, _full_checksum, buffer_size))
+            , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size))})
             , _full_checksum(ChecksumType::init_checksum()) {}
 
     // Since we are exposing a reference to _full_checksum, we delete the move
