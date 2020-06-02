@@ -137,6 +137,9 @@ public:
         }
         return _key;
     }
+
+    friend dht::ring_position_view ring_position_view_to_compare(const cache_entry& ce) noexcept { return ce.position(); }
+
     const partition_entry& partition() const noexcept { return _pe; }
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const noexcept { return _schema; }

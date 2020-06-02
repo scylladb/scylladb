@@ -567,6 +567,12 @@ public:
 
 int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
 
+template <typename T>
+requires std::is_convertible<T, ring_position_view>::value
+ring_position_view ring_position_view_to_compare(const T& val) {
+    return val;
+}
+
 // Trichotomic comparator for ring order
 struct ring_position_comparator {
     const schema& s;
@@ -574,6 +580,21 @@ struct ring_position_comparator {
 
     int operator()(ring_position_view lh, ring_position_view rh) const {
         return ring_position_tri_compare(s, lh, rh);
+    }
+
+    template <typename T>
+    int operator()(const T& lh, ring_position_view rh) const {
+        return ring_position_tri_compare(s, ring_position_view_to_compare(lh), rh);
+    }
+
+    template <typename T>
+    int operator()(ring_position_view lh, const T& rh) const {
+        return ring_position_tri_compare(s, lh, ring_position_view_to_compare(rh));
+    }
+
+    template <typename T1, typename T2>
+    int operator()(const T1& lh, const T2& rh) const {
+        return ring_position_tri_compare(s, ring_position_view_to_compare(lh), ring_position_view_to_compare(rh));
     }
 };
 

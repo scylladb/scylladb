@@ -117,6 +117,7 @@ public:
         }
     };
 
+    friend dht::ring_position_view ring_position_view_to_compare(const memtable_entry& mt) { return mt._key; }
     friend std::ostream& operator<<(std::ostream&, const memtable_entry&);
 };
 

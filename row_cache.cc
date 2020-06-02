@@ -283,13 +283,14 @@ public:
     // Can be called on invalid cursor, in which case it brings it back to validity.
     // Strong exception guarantees.
     bool advance_to(dht::ring_position_view pos) {
-        auto cmp = cache_entry::compare(_cache.get()._schema);
-        if (cmp(_end_pos, pos)) { // next() may have moved _start_pos past the _end_pos.
+        auto lcmp = cache_entry::compare(_cache.get()._schema);
+        dht::ring_position_comparator cmp(*_cache.get()._schema);
+        if (cmp(_end_pos, pos) < 0) { // next() may have moved _start_pos past the _end_pos.
             _end_pos = pos;
         }
-        _end = _cache.get()._partitions.lower_bound(_end_pos, cmp);
-        _it = _cache.get()._partitions.lower_bound(pos, cmp);
-        auto same = !cmp(pos, _it->position());
+        _end = _cache.get()._partitions.lower_bound(_end_pos, lcmp);
+        _it = _cache.get()._partitions.lower_bound(pos, lcmp);
+        auto same = cmp(pos, _it->position()) >= 0;
         set_position(*_it);
         _last_reclaim_count = _cache.get().get_cache_tracker().allocator().invalidate_counter();
         return same;
@@ -754,10 +755,11 @@ row_cache::make_reader(schema_ptr s,
     if (!ctx->is_range_query() && !fwd_mr) {
         auto mr = _read_section(_tracker.region(), [&] {
             return with_linearized_managed_bytes([&] {
-                cache_entry::compare cmp(_schema);
+                cache_entry::compare lcmp(_schema);
+                dht::ring_position_comparator cmp(*_schema);
                 auto&& pos = ctx->range().start()->value();
-                auto i = _partitions.lower_bound(pos, cmp);
-                if (i != _partitions.end() && !cmp(pos, i->position())) {
+                auto i = _partitions.lower_bound(pos, lcmp);
+                if (i != _partitions.end() && cmp(pos, i->position()) >= 0) {
                     cache_entry& e = *i;
                     upgrade_entry(e);
                     on_partition_hit();
