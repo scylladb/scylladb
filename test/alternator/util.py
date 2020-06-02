@@ -78,8 +78,10 @@ def full_query_and_counts(table, **kwargs):
     items = []
     prefilter_count = 0
     postfilter_count = 0
+    pages = 0
     if 'Items' in response:
         items.extend(response['Items'])
+        pages = pages + 1
     if 'Count' in response:
         postfilter_count = postfilter_count + response['Count']
     if 'ScannedCount' in response:
@@ -88,11 +90,12 @@ def full_query_and_counts(table, **kwargs):
         response = table.query(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
         if 'Items' in response:
             items.extend(response['Items'])
+            pages = pages + 1
         if 'Count' in response:
             postfilter_count = postfilter_count + response['Count']
         if 'ScannedCount' in response:
             prefilter_count = prefilter_count + response['ScannedCount']
-    return (prefilter_count, postfilter_count, items)
+    return (prefilter_count, postfilter_count, pages, items)
 
 # To compare two lists of items (each is a dict) without regard for order,
 # "==" is not good enough because it will fail if the order is different.
