@@ -2504,7 +2504,8 @@ mutation_partition::fully_discontinuous(const schema& s, const position_range& r
 future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& source, reader_permit permit,
                                          const dht::decorated_key& dk,
                                          const query::partition_slice& slice,
-                                         tracing::trace_state_ptr trace_ptr)
+                                         tracing::trace_state_ptr trace_ptr,
+                                         db::timeout_clock::time_point timeout)
 {
     struct range_and_reader {
         dht::partition_range range;
@@ -2529,7 +2530,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
     auto cwqrb = counter_write_query_result_builder(*s);
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, counter_write_query_result_builder>>(
             *s, gc_clock::now(), slice, query::max_rows, query::max_rows, std::move(cwqrb));
-    auto f = r_a_r->reader.consume(std::move(cfq), db::no_timeout);
+    auto f = r_a_r->reader.consume(std::move(cfq), timeout);
     return f.finally([r_a_r = std::move(r_a_r)] { });
 }
 
