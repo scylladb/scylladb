@@ -65,8 +65,8 @@ Before=scylla-server.service
 After=local-fs.target
 
 [Mount]
-What=/var/lib/systemd/coredump
-Where=/var/lib/scylla/coredump
+What=/var/lib/scylla/coredump
+Where=/var/lib/systemd/coredump
 Type=none
 Options=bind
 
