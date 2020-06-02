@@ -3463,6 +3463,8 @@ sstable::sstable(schema_ptr schema,
     tracker.add(*this);
 }
 
+file_writer::file_writer(file f, file_output_stream_options options)
+    : _out(make_file_output_stream(std::move(f), std::move(options))) {}
 }
 
 std::ostream& operator<<(std::ostream& out, const sstables::component_type& comp_type) {
