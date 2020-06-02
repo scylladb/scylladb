@@ -1344,7 +1344,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
             // counter state for each modified cell...
 
             tracing::trace(trace_state, "Reading counter values from the CF");
-            return counter_write_query(m_schema, cf.as_mutation_source(), make_query_class_config().semaphore.make_permit(), m.decorated_key(), slice, trace_state)
+            return counter_write_query(m_schema, cf.as_mutation_source(), make_query_class_config().semaphore.make_permit(), m.decorated_key(), slice, trace_state, timeout)
                     .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
