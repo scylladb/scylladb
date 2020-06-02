@@ -22,17 +22,17 @@
 #pragma once
 
 #include <functional>
+#include <compare>
 
 #include "timestamp.hh"
 #include "gc_clock.hh"
 #include "hashing.hh"
-#include "utils/with_relational_operators.hh"
 
 /**
  * Represents deletion operation. Can be commuted with other tombstones via apply() method.
  * Can be empty.
  */
-struct tombstone final : public with_relational_operators<tombstone> {
+struct tombstone final {
     api::timestamp_type timestamp;
     gc_clock::time_point deletion_time;
 
@@ -45,19 +45,9 @@ struct tombstone final : public with_relational_operators<tombstone> {
         : tombstone(api::missing_timestamp, {})
     { }
 
-    int compare(const tombstone& t) const {
-        if (timestamp < t.timestamp) {
-            return -1;
-        } else if (timestamp > t.timestamp) {
-            return 1;
-        } else if (deletion_time < t.deletion_time) {
-            return -1;
-        } else if (deletion_time > t.deletion_time) {
-            return 1;
-        } else {
-            return 0;
-        }
-    }
+    std::strong_ordering operator<=>(const tombstone& t) const = default;
+    bool operator==(const tombstone&) const = default;
+    bool operator!=(const tombstone&) const = default;
 
     explicit operator bool() const {
         return timestamp != api::missing_timestamp;

@@ -41,7 +41,7 @@ private:
     static bool are_tombstones_mergeable(const schema& s, const range_tombstone& a, const range_tombstone& b) {
         const auto range_a = position_range(position_in_partition(a.position()), position_in_partition(a.end_position()));
         const auto tri_cmp = position_in_partition::tri_compare(s);
-        return a.tomb.compare(b.tomb) == 0 && (range_a.overlaps(s, b.position(), b.end_position()) ||
+        return (a.tomb <=> b.tomb) == 0 && (range_a.overlaps(s, b.position(), b.end_position()) ||
                 tri_cmp(a.end_position(), b.position()) == 0 ||
                 tri_cmp(b.end_position(), a.position()) == 0);
     }

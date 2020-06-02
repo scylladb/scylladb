@@ -114,7 +114,7 @@ void range_tombstone_list::insert_from(const schema& s,
             return;
         }
 
-        auto c = tomb.compare(it->tomb);
+        auto c = tomb <=> it->tomb;
         if (c == 0) {
             // same timestamp, overlapping or adjacent, so merge.
             if (less(it->start_bound(), start_bound)) {

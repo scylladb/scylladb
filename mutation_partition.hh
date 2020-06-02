@@ -45,7 +45,6 @@
 #include "range_tombstone_list.hh"
 #include "clustering_key_filter.hh"
 #include "intrusive_set_external_comparator.hh"
-#include "utils/with_relational_operators.hh"
 #include "utils/preempt.hh"
 #include "utils/managed_ref.hh"
 
@@ -762,7 +761,7 @@ struct appending_hash<row_marker> {
 
 class clustering_row;
 
-class shadowable_tombstone : public with_relational_operators<shadowable_tombstone> {
+class shadowable_tombstone {
     tombstone _tomb;
 public:
 
@@ -774,9 +773,12 @@ public:
             : _tomb(std::move(tomb)) {
     }
 
-    int compare(const shadowable_tombstone& t) const {
-        return _tomb.compare(t._tomb);
+    std::strong_ordering operator<=>(const shadowable_tombstone& t) const {
+        return _tomb <=> t._tomb;
     }
+
+    bool operator==(const shadowable_tombstone&) const = default;
+    bool operator!=(const shadowable_tombstone&) const = default;
 
     explicit operator bool() const {
         return bool(_tomb);
@@ -845,7 +847,7 @@ The rules for row_tombstones are as follows:
   - The shadowable tombstone can be erased or compacted away by a newer
     row marker.
 */
-class row_tombstone : public with_relational_operators<row_tombstone> {
+class row_tombstone {
     tombstone _regular;
     shadowable_tombstone _shadowable; // _shadowable is always >= _regular
 public:
@@ -860,8 +862,14 @@ public:
 
     row_tombstone() = default;
 
-    int compare(const row_tombstone& t) const {
-        return _shadowable.compare(t._shadowable);
+    std::strong_ordering operator<=>(const row_tombstone& t) const {
+        return _shadowable <=> t._shadowable;
+    }
+    bool operator==(const row_tombstone& t) const {
+        return _shadowable == t._shadowable;
+    }
+    bool operator!=(const row_tombstone& t) const {
+        return _shadowable != t._shadowable;
     }
 
     explicit operator bool() const {

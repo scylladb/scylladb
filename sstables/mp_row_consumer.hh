@@ -903,7 +903,7 @@ class mp_row_consumer_m : public consumer_m {
                     format("Closing range tombstone that wasn't opened: clustering {}, kind {}, tombstone {}",
                            ck, k, t));
         }
-        if (_opened_range_tombstone->tomb.compare(t) != 0) {
+        if (_opened_range_tombstone->tomb != t) {
             throw sstables::malformed_sstable_exception(
                     format("Range tombstone with ck {} and two different tombstones at ends: {}, {}",
                            ck, _opened_range_tombstone->tomb, t));
