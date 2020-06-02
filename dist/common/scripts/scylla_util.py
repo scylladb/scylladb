@@ -618,7 +618,7 @@ class systemd_unit:
         try:
             run('systemctl {} cat {}'.format(self.ctlparam, unit), silent=True)
         except subprocess.CalledProcessError:
-            raise SystemdException('unit {} not found'.format(unit))
+            raise SystemdException('unit {} is not found or invalid'.format(unit))
         self._unit = unit
 
     def start(self):
