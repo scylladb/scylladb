@@ -22,8 +22,7 @@
 import pytest
 from botocore.exceptions import ClientError, ParamValidationError
 import random
-from util import full_query, full_scan, random_string, random_bytes, multiset
-from decimal import Decimal
+from util import full_query, full_query_and_counts, random_string, random_bytes
 
 # The test_table_sn_with_data fixture is the regular test_table_sn fixture
 # with a partition inserted with 20 items. The sort key 'c' of the items
@@ -509,3 +508,26 @@ def test_query_filter_empty(test_table_sn_with_data):
         KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
         QueryFilter={ })
     assert(got_items == items)
+
+# Test Count and ScannedCount feature of Query, with and without a QueryFilter
+@pytest.mark.xfail(reason="ScannedCount fails to return pre-filter count of Query")
+def test_query_filter_counts(test_table_sn_with_data):
+    table, p, items = test_table_sn_with_data
+    # First test without a filter - both Count (postfilter_count) and
+    # ScannedCount (prefilter_count) should return the same count of items.
+    (prefilter_count, postfilter_count, got_items) = full_query_and_counts(table,
+            KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }})
+    assert(got_items == items)
+    assert(prefilter_count == len(items))
+    assert(postfilter_count == len(items))
+    # Now use a filter, on the "bool" attribute so the filter will match
+    # roughly half of the items. ScannedCount (prefilter_count) should still
+    # returns the full number of items, but Count (postfilter_count) returns
+    # should return just the number of matched items.
+    (prefilter_count, postfilter_count, got_items) = full_query_and_counts(table,
+            KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
+            QueryFilter={ 'bool': { 'AttributeValueList': [True], 'ComparisonOperator': 'EQ' }})
+    expected_items = [item for item in items if item['bool'] == True]
+    assert(got_items == expected_items)
+    assert(prefilter_count == len(items))
+    assert(postfilter_count == len(expected_items))

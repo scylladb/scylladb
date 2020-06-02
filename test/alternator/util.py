@@ -68,6 +68,32 @@ def full_query(table, **kwargs):
         items.extend(response['Items'])
     return items
 
+# full_query_and_counts returns both items and counts (pre-filter and
+# post-filter count) as returned by the server.
+# Note that count isn't simply len(items) - the server returns them
+# independently. e.g., with Select='COUNT' the items are not returned, but
+# count is.
+def full_query_and_counts(table, **kwargs):
+    response = table.query(**kwargs)
+    items = []
+    prefilter_count = 0
+    postfilter_count = 0
+    if 'Items' in response:
+        items.extend(response['Items'])
+    if 'Count' in response:
+        postfilter_count = postfilter_count + response['Count']
+    if 'ScannedCount' in response:
+        prefilter_count = prefilter_count + response['ScannedCount']
+    while 'LastEvaluatedKey' in response:
+        response = table.query(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
+        if 'Items' in response:
+            items.extend(response['Items'])
+        if 'Count' in response:
+            postfilter_count = postfilter_count + response['Count']
+        if 'ScannedCount' in response:
+            prefilter_count = prefilter_count + response['ScannedCount']
+    return (prefilter_count, postfilter_count, items)
+
 # To compare two lists of items (each is a dict) without regard for order,
 # "==" is not good enough because it will fail if the order is different.
 # The following function, multiset() converts the list into a multiset
