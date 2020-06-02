@@ -78,6 +78,7 @@ WantedBy=multi-user.target
             makedirs('/var/lib/scylla/coredump')
             systemd_unit.reload()
             systemd_unit('var-lib-systemd-coredump.mount').enable()
+            systemd_unit('var-lib-systemd-coredump.mount').start()
         if os.path.exists('/usr/lib/sysctl.d/50-coredump.conf'):
             run('sysctl -p /usr/lib/sysctl.d/50-coredump.conf')
         else:
