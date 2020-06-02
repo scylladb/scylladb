@@ -26,6 +26,7 @@
 #include "test/lib/log.hh"
 
 #include "seastarx.hh"
+#include <random>
 
 namespace tests {
 
@@ -58,4 +59,24 @@ void fail(std::string_view msg, std::experimental::source_location sl) {
     throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, false, sl, msg));
 }
 
+}
+
+sstring make_random_string(size_t size) {
+    static thread_local std::default_random_engine rng;
+    std::uniform_int_distribution<char> dist;
+    sstring str = uninitialized_string(size);
+    for (auto&& b : str) {
+        b = dist(rng);
+    }
+    return str;
+}
+
+sstring make_random_numeric_string(size_t size) {
+    static thread_local std::default_random_engine rng;
+    std::uniform_int_distribution<char> dist('0', '9');
+    sstring str = uninitialized_string(size);
+    for (auto&& b : str) {
+        b = dist(rng);
+    }
+    return str;
 }
