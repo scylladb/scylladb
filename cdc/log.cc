@@ -174,6 +174,7 @@ public:
             auto& db = _ctxt._proxy.get_db().local();
             auto logname = log_name(schema.cf_name());
             check_that_cdc_log_table_does_not_exist(db, schema, logname);
+            ensure_that_table_has_no_counter_columns(schema);
 
             // in seastar thread
             auto log_schema = create_log_schema(schema);
@@ -200,6 +201,7 @@ public:
             }
             if (is_cdc) {
                 check_for_attempt_to_create_nested_cdc_log(new_schema);
+                ensure_that_table_has_no_counter_columns(new_schema);
             }
 
             auto logname = log_name(old_schema.cf_name());
@@ -262,6 +264,13 @@ private:
             throw exceptions::invalid_request_exception(format("Cannot create CDC log table for table {}.{} because a table of name {}.{} already exists",
                     schema.ks_name(), schema.cf_name(),
                     schema.ks_name(), logname));
+        }
+    }
+
+    static void ensure_that_table_has_no_counter_columns(const schema& schema) {
+        if (schema.is_counter()) {
+            throw exceptions::invalid_request_exception(format("Cannot create CDC log for table {}.{}. Counter support not implemented",
+                    schema.ks_name(), schema.cf_name()));
         }
     }
 };
