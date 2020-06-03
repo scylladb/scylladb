@@ -305,3 +305,16 @@ def test_batch_get_item_projection_expression(test_table):
         got_items = reply['Responses'][test_table.name]
         expected_items = [{k: item[k] for k in wanted if k in item} for item in items]
         assert multiset(got_items) == multiset(expected_items)
+
+# Test that we return the required UnprocessedKeys/UnprocessedItems parameters
+def test_batch_unprocessed(test_table_s):
+    p = random_string()
+    write_reply = test_table_s.meta.client.batch_write_item(RequestItems = {
+        test_table_s.name: [{'PutRequest': {'Item': {'p': p, 'a': 'hi'}}}],
+    })
+    assert 'UnprocessedItems' in write_reply and write_reply['UnprocessedItems'] == dict()
+
+    read_reply = test_table_s.meta.client.batch_get_item(RequestItems = {
+        test_table_s.name: {'Keys': [{'p': p}], 'ProjectionExpression': 'p, a', 'ConsistentRead': True}
+    })
+    assert 'UnprocessedKeys' in read_reply and read_reply['UnprocessedKeys'] == dict()
