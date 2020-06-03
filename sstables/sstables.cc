@@ -955,7 +955,7 @@ void sstable::write_toc(const io_priority_class& pc) {
     file_output_stream_options options;
     options.buffer_size = 4096;
     options.io_priority_class = pc;
-    auto w = file_writer(std::move(f), std::move(options));
+    auto w = file_writer::make(std::move(f), std::move(options)).get0();
 
     for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
@@ -1011,7 +1011,7 @@ void sstable::write_crc(const checksum& c) {
 
     file_output_stream_options options;
     options.buffer_size = 4096;
-    auto w = file_writer(std::move(f), std::move(options));
+    auto w = file_writer::make(std::move(f), std::move(options)).get0();
     write(get_version(), w, c);
     w.close();
 }
@@ -1026,7 +1026,7 @@ void sstable::write_digest(uint32_t full_checksum) {
 
     file_output_stream_options options;
     options.buffer_size = 4096;
-    auto w = file_writer(std::move(f), std::move(options));
+    auto w = file_writer::make(std::move(f), std::move(options)).get0();
 
     auto digest = to_sstring<bytes>(full_checksum);
     write(get_version(), w, digest);
@@ -1074,7 +1074,7 @@ void sstable::do_write_simple(component_type type, const io_priority_class& pc,
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
-    auto w = file_writer(std::move(f), std::move(options));
+    auto w = file_writer::make(std::move(f), std::move(options)).get0();
     std::exception_ptr eptr;
     try {
         write_component(_version, w);
@@ -1247,7 +1247,7 @@ void sstable::rewrite_statistics(const io_priority_class& pc) {
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
-    auto w = file_writer(std::move(f), std::move(options));
+    auto w = file_writer::make(std::move(f), std::move(options)).get0();
     write(_version, w, _components->statistics);
     w.flush();
     w.close();
@@ -1987,7 +1987,7 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
     options.buffer_size = sst.sstable_buffer_size;
     options.io_priority_class = pc;
     options.write_behind = 10;
-    return file_writer(std::move(sst._index_file), std::move(options));
+    return file_writer::make(std::move(sst._index_file), std::move(options)).get0();
 }
 
 // Returns the cost for writing a byte to summary such that the ratio of summary
@@ -2265,10 +2265,12 @@ void sstable_writer_k_l::prepare_file_writer()
     options.write_behind = 10;
 
     if (!_compression_enabled) {
-        _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(_sst._data_file), std::move(options));
+        auto out = make_file_data_sink(std::move(_sst._data_file), options).get0();
+        _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(out), options.buffer_size);
     } else {
+        auto out = make_file_output_stream(std::move(_sst._data_file), std::move(options)).get0();
         _writer = std::make_unique<file_writer>(make_compressed_file_k_l_format_output_stream(
-                std::move(_sst._data_file), std::move(options), &_sst._components->compression, _schema.get_compressor_params()));
+                std::move(out), &_sst._components->compression, _schema.get_compressor_params()));
     }
 }
 
@@ -3306,7 +3308,7 @@ delete_atomically(std::vector<shared_sstable> ssts) {
             // Write all toc names into the log file.
             file_output_stream_options options;
             options.buffer_size = 4096;
-            auto w = file_writer(std::move(f), options);
+            auto w = file_writer::make(std::move(f), options).get0();
 
             for (const auto& sst : ssts) {
                 auto toc = sst->component_basename(component_type::TOC);
@@ -3470,6 +3472,12 @@ sstable::sstable(schema_ptr schema,
     tracker.add(*this);
 }
 
+future<file_writer> file_writer::make(file f, file_output_stream_options options) noexcept {
+    return make_file_output_stream(std::move(f), std::move(options))
+        .then([](output_stream<char>&& out) {
+            return file_writer(std::move(out));
+        });
+}
 }
 
 std::ostream& operator<<(std::ostream& out, const sstables::component_type& comp_type) {

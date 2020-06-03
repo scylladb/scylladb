@@ -379,8 +379,7 @@ input_stream<char> make_compressed_file_k_l_format_input_stream(file f,
                 sstables::compression* cm, uint64_t offset, size_t len,
                 class file_input_stream_options options);
 
-output_stream<char> make_compressed_file_k_l_format_output_stream(file f,
-                file_output_stream_options options,
+output_stream<char> make_compressed_file_k_l_format_output_stream(output_stream<char> out,
                 sstables::compression* cm,
                 const compression_parameters& cp);
 
@@ -388,8 +387,7 @@ input_stream<char> make_compressed_file_m_format_input_stream(file f,
                 sstables::compression* cm, uint64_t offset, size_t len,
                 class file_input_stream_options options);
 
-output_stream<char> make_compressed_file_m_format_output_stream(file f,
-                file_output_stream_options options,
+output_stream<char> make_compressed_file_m_format_output_stream(output_stream<char> out,
                 sstables::compression* cm,
                 const compression_parameters& cp);
 

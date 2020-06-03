@@ -1196,7 +1196,8 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
 
         sstables::compression c;
         // this initializes "c"
-        auto out = make_compressed_file_k_l_format_output_stream(f, file_output_stream_options(), &c, cp);
+        auto os = make_file_output_stream(f, file_output_stream_options()).get0();
+        auto out = make_compressed_file_k_l_format_output_stream(std::move(os), &c, cp);
 
         // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
         temporary_buffer<char> buf1(c.uncompressed_chunk_length());

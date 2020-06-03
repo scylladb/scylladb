@@ -492,8 +492,8 @@ class compressed_file_data_sink_impl : public data_sink_impl {
     size_t _pos = 0;
     uint32_t _full_checksum;
 public:
-    compressed_file_data_sink_impl(file f, sstables::compression* cm, sstables::local_compression lc, file_output_stream_options options)
-            : _out(make_file_output_stream(std::move(f), options))
+    compressed_file_data_sink_impl(output_stream<char> out, sstables::compression* cm, sstables::local_compression lc)
+            : _out(std::move(out))
             , _compression_metadata(cm)
             , _offsets(_compression_metadata->offsets.get_writer())
             , _compression(lc)
@@ -550,14 +550,14 @@ template <typename ChecksumType, compressed_checksum_mode mode>
 requires ChecksumUtils<ChecksumType>
 class compressed_file_data_sink : public data_sink {
 public:
-    compressed_file_data_sink(file f, sstables::compression* cm, sstables::local_compression lc, file_output_stream_options options)
+    compressed_file_data_sink(output_stream<char> out, sstables::compression* cm, sstables::local_compression lc)
         : data_sink(std::make_unique<compressed_file_data_sink_impl<ChecksumType, mode>>(
-                std::move(f), cm, std::move(lc), options)) {}
+                std::move(out), cm, std::move(lc))) {}
 };
 
 template <typename ChecksumType, compressed_checksum_mode mode>
 requires ChecksumUtils<ChecksumType>
-inline output_stream<char> make_compressed_file_output_stream(file f, file_output_stream_options options,
+inline output_stream<char> make_compressed_file_output_stream(output_stream<char> out,
          sstables::compression* cm,
          const compression_parameters& cp) {
     // buffer of output stream is set to chunk length, because flush must
@@ -572,7 +572,7 @@ inline output_stream<char> make_compressed_file_output_stream(file f, file_outpu
     cm->options.elements.push_back({"crc_check_chance", "1.0"});
 
     auto outer_buffer_size = cm->uncompressed_chunk_length();
-    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(f), cm, p, options), outer_buffer_size, true);
+    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm, p), outer_buffer_size, true);
 }
 
 input_stream<char> sstables::make_compressed_file_k_l_format_input_stream(file f,
@@ -582,12 +582,11 @@ input_stream<char> sstables::make_compressed_file_k_l_format_input_stream(file f
     return make_compressed_file_input_stream<adler32_utils>(std::move(f), cm, offset, len, std::move(options));
 }
 
-output_stream<char> sstables::make_compressed_file_k_l_format_output_stream(file f,
-        file_output_stream_options options,
+output_stream<char> sstables::make_compressed_file_k_l_format_output_stream(output_stream<char> out,
         sstables::compression* cm,
         const compression_parameters& cp) {
     return make_compressed_file_output_stream<adler32_utils, compressed_checksum_mode::checksum_chunks_only>(
-            std::move(f), std::move(options), cm, cp);
+            std::move(out), cm, cp);
 }
 
 input_stream<char> sstables::make_compressed_file_m_format_input_stream(file f,
@@ -596,11 +595,10 @@ input_stream<char> sstables::make_compressed_file_m_format_input_stream(file f,
     return make_compressed_file_input_stream<crc32_utils>(std::move(f), cm, offset, len, std::move(options));
 }
 
-output_stream<char> sstables::make_compressed_file_m_format_output_stream(file f,
-        file_output_stream_options options,
+output_stream<char> sstables::make_compressed_file_m_format_output_stream(output_stream<char> out,
         sstables::compression* cm,
         const compression_parameters& cp) {
     return make_compressed_file_output_stream<crc32_utils, compressed_checksum_mode::checksum_all>(
-            std::move(f), std::move(options), cm, cp);
+            std::move(out), cm, cp);
 }
 

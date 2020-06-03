@@ -1641,11 +1641,13 @@ seal_snapshot(sstring jsondir) {
 
     return io_check([jsondir] { return recursive_touch_directory(jsondir); }).then([jsonfile, json = std::move(json)] {
         return open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
-            return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
-                return out.write(json.c_str(), json.size()).then([&out] {
-                   return out.flush();
-                }).then([&out] {
-                   return out.close();
+            return make_file_output_stream(std::move(f)).then([json](output_stream<char>&& out) {
+                return do_with(std::move(out), [json] (output_stream<char>& out) {
+                    return out.write(json.c_str(), json.size()).then([&out] {
+                       return out.flush();
+                    }).then([&out] {
+                       return out.close();
+                    });
                 });
             });
         });
@@ -1667,11 +1669,13 @@ future<> table::write_schema_as_cql(sstring dir) const {
     auto schema_description = ss.str();
     auto schema_file_name = dir + "/schema.cql";
     return open_checked_file_dma(general_disk_error_handler, schema_file_name, open_flags::wo | open_flags::create | open_flags::truncate).then([schema_description = std::move(schema_description)](file f) {
-        return do_with(make_file_output_stream(std::move(f)), [schema_description  = std::move(schema_description)] (output_stream<char>& out) {
-            return out.write(schema_description.c_str(), schema_description.size()).then([&out] {
-               return out.flush();
-            }).then([&out] {
-               return out.close();
+        return make_file_output_stream(std::move(f)).then([schema_description  = std::move(schema_description)] (output_stream<char>&& out) mutable {
+            return do_with(std::move(out), [schema_description  = std::move(schema_description)] (output_stream<char>& out) {
+                return out.write(schema_description.c_str(), schema_description.size()).then([&out] {
+                   return out.flush();
+                }).then([&out] {
+                   return out.close();
+                });
             });
         });
     });
