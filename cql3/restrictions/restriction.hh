@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include <variant>
 #include <vector>
 
 #include <seastar/core/shared_ptr.hh>
@@ -57,6 +58,38 @@ namespace restrictions {
 
 struct allow_local_index_tag {};
 using allow_local_index = bool_class<allow_local_index_tag>;
+
+class binary_operator;
+class conjunction;
+
+/// A restriction expression -- union of all possible restriction types.  bool means a Boolean constant.
+using expression = std::variant<bool, conjunction, binary_operator>;
+
+/// A column, optionally subscripted by a term (eg, c1 or c2['abc']).
+struct column_value {
+    const column_definition* col;
+    ::shared_ptr<term> sub; ///< If present, this LHS is col[sub], otherwise just col.
+    /// For easy creation of vector<column_value> from vector<column_definition*>.
+    column_value(const column_definition* col) : col(col) {}
+    /// The compiler doesn't auto-generate this due to the other constructor's existence.
+    column_value(const column_definition* col, ::shared_ptr<term> sub) : col(col), sub(sub) {}
+};
+
+/// Represents token function on LHS of an operator relation.  No need to list column definitions
+/// here -- token takes exactly the partition key as its argument.
+struct token {};
+
+/// Operator restriction: LHS op RHS.
+struct binary_operator {
+    std::variant<std::vector<column_value>, token> lhs;
+    const operator_type* op; // Pointer because operator_type isn't copyable or assignable.
+    ::shared_ptr<term> rhs;
+};
+
+/// A conjunction of restrictions.
+struct conjunction {
+    std::vector<expression> children;
+};
 
 /**
  * Base class for <code>Restriction</code>s
