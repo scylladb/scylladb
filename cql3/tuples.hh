@@ -127,6 +127,9 @@ public:
         virtual const std::vector<bytes_opt>& get_elements() const override {
             return _elements;
         }
+        size_t size() const {
+            return _elements.size();
+        }
         virtual sstring to_string() const override {
             return format("({})", join(", ", _elements));
         }
