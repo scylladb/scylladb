@@ -72,7 +72,7 @@ schema_ptr view_build_status() {
 }
 
 /* An internal table used by nodes to exchange CDC generation data. */
-schema_ptr cdc_topology_description() {
+schema_ptr cdc_generations() {
     thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION);
         return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION, {id})
@@ -108,7 +108,7 @@ schema_ptr cdc_desc() {
 static std::vector<schema_ptr> all_tables() {
     return {
         view_build_status(),
-        cdc_topology_description(),
+        cdc_generations(),
         cdc_desc(),
     };
 }
@@ -204,7 +204,7 @@ future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_
             false).discard_result();
 }
 
-/* We want to make sure that writes/reads to/from cdc_topology_description and cdc_description
+/* We want to make sure that writes/reads to/from cdc_generations and cdc_streams
  * are consistent: a read following an acknowledged write to the same partition should contact
  * at least one of the replicas that the write contacted.
  * Normally we would achieve that by always using CL = QUORUM,

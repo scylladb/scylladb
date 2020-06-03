@@ -670,11 +670,11 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("8182496e-4baf-3a07-91e6-caa140388846"),
-        utils::UUID("a65ea746-4d8a-3e5c-8fbf-5f70c14dbcbc"),
-        utils::UUID("a65ea746-4d8a-3e5c-8fbf-5f70c14dbcbc"),
-        utils::UUID("4c138336-4677-3520-8556-4aab007cfedb"),
-        utils::UUID("4c138336-4677-3520-8556-4aab007cfedb"),
+        utils::UUID("2fb5d448-c537-39d1-9384-5166bcdcaa9a"),
+        utils::UUID("7786dd34-2256-38f8-881e-79b062397069"),
+        utils::UUID("7786dd34-2256-38f8-881e-79b062397069"),
+        utils::UUID("5ca0cc9b-3651-3651-96ab-2324cdc07300"),
+        utils::UUID("5ca0cc9b-3651-3651-96ab-2324cdc07300"),
         utils::UUID("62e1e586-6eec-3ff5-882a-89386664694b"),
         utils::UUID("daf6ded5-c294-3b07-b6a0-1b318a3c2e17"),
         utils::UUID("370c7d8e-0a4a-394d-b627-318805c64584"),
@@ -685,11 +685,11 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("a33bc2a7-33b7-335d-8644-ecfdd23d1ca6"),
-        utils::UUID("8ec3169e-33f9-356e-9a20-172ddf4261dc"),
-        utils::UUID("8ec3169e-33f9-356e-9a20-172ddf4261dc"),
-        utils::UUID("6d3a2294-0e82-33b8-943a-459cc9f3bf76"),
-        utils::UUID("6d3a2294-0e82-33b8-943a-459cc9f3bf76"),
+        utils::UUID("72d2ee27-a675-397d-85e1-1c49d3dcba13"),
+        utils::UUID("e5a2ec93-1f1a-33b2-ad2e-9795f4b6b229"),
+        utils::UUID("e5a2ec93-1f1a-33b2-ad2e-9795f4b6b229"),
+        utils::UUID("6f1f5e2a-834a-37f8-ae05-ef4a1f406996"),
+        utils::UUID("6f1f5e2a-834a-37f8-ae05-ef4a1f406996"),
         utils::UUID("e4c2bd0d-5f02-3d6f-9a43-de38b152b1fd"),
         utils::UUID("3b2c4957-4434-3078-ae42-fedcd81ac8cd"),
         utils::UUID("90518efe-88e6-39bd-a0a6-d32efc80777a"),
@@ -700,11 +700,11 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("e8879c0e-a731-3ac5-9b43-d2ed33b331f2"),
-        utils::UUID("4a20c241-583c-334e-9fe9-b906280f724f"),
-        utils::UUID("4a20c241-583c-334e-9fe9-b906280f724f"),
-        utils::UUID("9711e6c4-dfcd-3c09-bf8b-f02811f73730"),
-        utils::UUID("9711e6c4-dfcd-3c09-bf8b-f02811f73730"),
+        utils::UUID("f169e77d-8ee1-3994-9379-065bcb9d1646"),
+        utils::UUID("7185d744-0038-37ff-9770-04764feedbb7"),
+        utils::UUID("7185d744-0038-37ff-9770-04764feedbb7"),
+        utils::UUID("6d285eda-8963-3687-9ba6-a00764324b67"),
+        utils::UUID("6d285eda-8963-3687-9ba6-a00764324b67"),
         utils::UUID("e96eb4ca-4f90-3b47-bfed-81e4a441734c"),
         utils::UUID("14f6c60f-8ba3-3141-8958-dd74366ee1ca"),
         utils::UUID("987a3386-83d1-3436-b3fc-1d2a3cfdd659"),
@@ -724,11 +724,11 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("07d3ffb8-b7f5-367d-b128-d34b2033b788"),
-        utils::UUID("9500fd95-abeb-32ea-b7af-568021eee217"),
-        utils::UUID("9500fd95-abeb-32ea-b7af-568021eee217"),
-        utils::UUID("9bd2ee49-f6db-37c7-a81f-1c2524dec3bf"),
-        utils::UUID("9bd2ee49-f6db-37c7-a81f-1c2524dec3bf"),
+        utils::UUID("fd939d2a-41fc-33e8-aa65-7d7b1678b307"),
+        utils::UUID("87f0a70e-9dcd-34ae-8b72-bb23addab551"),
+        utils::UUID("87f0a70e-9dcd-34ae-8b72-bb23addab551"),
+        utils::UUID("4c8bf5c8-4823-3f35-9e34-275978f130c9"),
+        utils::UUID("4c8bf5c8-4823-3f35-9e34-275978f130c9"),
         utils::UUID("549d0735-3087-3cf5-b4b6-23518a803246"),
         utils::UUID("612eaafb-27a4-3c01-b292-5d4424585ff7"),
         utils::UUID("01ea7d67-6f30-3215-aaf0-b7e2266daec5"),
