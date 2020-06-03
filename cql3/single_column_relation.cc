@@ -69,15 +69,15 @@ single_column_relation::to_term(const std::vector<lw_shared_ptr<column_specifica
 single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, variable_specifications& bound_names) {
     const column_definition& column_def = to_column_definition(*schema, *_entity);
     if (!_map_key) {
+        auto r = ::make_shared<single_column_restriction>(column_def);
         auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
-        auto r = ::make_shared<single_column_restriction::EQ>(column_def, term);
         r->expression = make_column_op(&column_def, operator_type::EQ, std::move(term));
         return r;
     }
     auto&& receivers = to_receivers(*schema, column_def);
     auto&& entry_key = to_term({receivers[0]}, *_map_key, db, schema->ks_name(), bound_names);
     auto&& entry_value = to_term({receivers[1]}, *_value, db, schema->ks_name(), bound_names);
-    auto r = make_shared<single_column_restriction::contains>(column_def, entry_key, entry_value);
+    auto r = make_shared<single_column_restriction>(column_def);
     r->expression = binary_operator{
         std::vector{column_value(&column_def, std::move(entry_key))}, &operator_type::EQ, std::move(entry_value)};
     return r;
@@ -91,18 +91,18 @@ single_column_relation::new_IN_restriction(database& db, schema_ptr schema, vari
     assert(_in_values.empty() || !_value);
     if (_value) {
         auto term = to_term(receivers, *_value, db, schema->ks_name(), bound_names);
-        auto r = ::make_shared<single_column_restriction::IN_with_marker>(column_def, dynamic_pointer_cast<lists::marker>(term));
+        auto r = ::make_shared<single_column_restriction>(column_def);
         r->expression = make_column_op(&column_def, operator_type::IN, std::move(term));
         return r;
     }
     auto terms = to_terms(receivers, _in_values, db, schema->ks_name(), bound_names);
     // Convert a single-item IN restriction to an EQ restriction
     if (terms.size() == 1) {
-        auto r = ::make_shared<single_column_restriction::EQ>(column_def, terms[0]);
+        auto r = ::make_shared<single_column_restriction>(column_def);
         r->expression = make_column_op(&column_def, operator_type::EQ, std::move(terms[0]));
         return r;
     }
-    auto r = ::make_shared<single_column_restriction::IN_with_values>(column_def, terms);
+    auto r = ::make_shared<single_column_restriction>(column_def);
     r->expression = make_column_op(
             &column_def, operator_type::IN, ::make_shared<lists::delayed_value>(std::move(terms)));
     return r;
@@ -117,7 +117,7 @@ single_column_relation::new_LIKE_restriction(
                 format("LIKE is allowed only on string types, which {} is not", column_def.name_as_text()));
     }
     auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
-    auto r = ::make_shared<single_column_restriction::LIKE>(column_def, term);
+    auto r = ::make_shared<single_column_restriction>(column_def);
     r->expression = make_column_op(&column_def, operator_type::LIKE, std::move(term));
     return r;
 }

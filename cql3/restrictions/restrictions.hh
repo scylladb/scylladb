@@ -58,9 +58,6 @@ namespace restrictions {
  * Sets of restrictions
  */
 class restrictions {
-protected:
-    using op_enum = super_enum<restriction::op, restriction::op::EQ, restriction::op::SLICE, restriction::op::IN, restriction::op::CONTAINS, restriction::op::LIKE>;
-    enum_set<op_enum> _ops;
 public:
     virtual ~restrictions() {}
 

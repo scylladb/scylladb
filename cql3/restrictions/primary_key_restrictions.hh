@@ -68,14 +68,14 @@ public:
     using bounds_range_type = dht::partition_range;
 
     partition_key_restrictions() = default;
-    partition_key_restrictions(op op, target target) : restriction(op, target) {}
+
+    virtual void merge_with(::shared_ptr<restriction> other) = 0;
 
     virtual ::shared_ptr<partition_key_restrictions> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
         merge_with(restriction);
         return this->shared_from_this();
     }
 
-    virtual std::vector<partition_key> values_as_keys(const query_options& options) const = 0;
     virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const = 0;
 
     using restrictions::uses_function;
@@ -121,14 +121,14 @@ public:
     using bounds_range_type = query::clustering_range;
 
     clustering_key_restrictions() = default;
-    clustering_key_restrictions(op op, target target) : restriction(op, target) {}
+
+    virtual void merge_with(::shared_ptr<restriction> other) = 0;
 
     virtual ::shared_ptr<clustering_key_restrictions> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
         merge_with(restriction);
         return this->shared_from_this();
     }
 
-    virtual std::vector<clustering_key> values_as_keys(const query_options& options) const = 0;
     virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const = 0;
 
     using restrictions::uses_function;

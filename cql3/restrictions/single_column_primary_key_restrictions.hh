@@ -48,7 +48,6 @@
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"
 #include "cql3/cql_config.hh"
-#include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
@@ -119,8 +118,7 @@ public:
             if (!this_cdef) {
                 throw exceptions::invalid_request_exception(format("Base column {} not found in view index schema", other_cdef->name_as_text()));
             }
-            // Make a(ny) concrete subclass, since single_column_restriction is still abstract for now.
-            auto r = ::make_shared<single_column_restriction::EQ>(*this_cdef, nullptr);
+            auto r = ::make_shared<single_column_restriction>(*this_cdef);
             r->expression = replace_column_def(entry.second->expression, this_cdef);
             _restrictions->add_restriction(r);
         }
@@ -128,14 +126,6 @@ public:
 
     virtual bool is_all_eq() const override {
         return _restrictions->is_all_eq();
-    }
-
-    virtual bool has_bound(statements::bound b) const override {
-        return boost::algorithm::all_of(_restrictions->restrictions(), [b] (auto&& r) { return r.second->has_bound(b); });
-    }
-
-    virtual bool is_inclusive(statements::bound b) const override {
-        return boost::algorithm::all_of(_restrictions->restrictions(), [b] (auto&& r) { return r.second->is_inclusive(b); });
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
@@ -159,7 +149,6 @@ public:
                 }
             }
         }
-        restriction::_ops.add(restriction->get_ops());
         _restrictions->add_restriction(restriction);
         this->expression = make_conjunction(std::move(this->expression), restriction->expression);
     }
@@ -199,7 +188,7 @@ public:
         do_merge_with(::static_pointer_cast<single_column_restriction>(restriction));
     }
 
-    virtual std::vector<ValueType> values_as_keys(const query_options& options) const override {
+    std::vector<ValueType> values_as_keys(const query_options& options) const {
         std::vector<std::vector<bytes_opt>> value_vector;
         value_vector.reserve(_restrictions->size());
         for (auto&& e : restrictions()) {
@@ -333,7 +322,7 @@ private:
 public:
     std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override;
 
-    std::vector<bytes_opt> values(const query_options& options) const override {
+    std::vector<bytes_opt> values(const query_options& options) const {
         auto src = values_as_keys(options);
         std::vector<bytes_opt> res;
         for (const ValueType& r : src) {
@@ -346,11 +335,6 @@ public:
 
     virtual bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
         return _restrictions->value_for(cdef, options);
-    }
-
-    std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
-        // TODO: if this proved to be required.
-        fail(unimplemented::cause::LEGACY_COMPOSITE_KEYS); // not 100% correct...
     }
 
     const single_column_restrictions::restrictions_map& restrictions() const {
@@ -377,20 +361,6 @@ public:
 
     virtual uint32_t size() const override {
         return _restrictions->size();
-    }
-    sstring to_string() const override {
-        return format("Restrictions({})", join(", ", get_column_defs()));
-    }
-
-    virtual bool is_satisfied_by(const schema& schema,
-                                 const partition_key& key,
-                                 const clustering_key_prefix& ckey,
-                                 const row& cells,
-                                 const query_options& options,
-                                 gc_clock::time_point now) const override {
-        return boost::algorithm::all_of(
-            _restrictions->restrictions() | boost::adaptors::map_values,
-            [&] (auto&& r) { return r->is_satisfied_by(schema, key, ckey, cells, options, now); });
     }
 
     virtual bool needs_filtering(const schema& schema) const override;

@@ -62,8 +62,8 @@ private:
      */
     std::vector<const column_definition *> _column_definitions;
 public:
-    token_restriction(op op, std::vector<const column_definition *> c)
-            : partition_key_restrictions(op, target::TOKEN), _column_definitions(std::move(c)) {
+    token_restriction(std::vector<const column_definition *> c)
+            : _column_definitions(std::move(c)) {
     }
 
     std::vector<const column_definition*> get_column_defs() const override {
@@ -88,10 +88,6 @@ public:
         throw exceptions::unsupported_operation_exception();
     }
 #endif
-
-    std::vector<partition_key> values_as_keys(const query_options& options) const override {
-        throw exceptions::unsupported_operation_exception();
-    }
 
     std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
         auto values = possible_lhs_values(nullptr, expression, options);
@@ -130,70 +126,6 @@ public:
 
         return { bounds_range_type(std::move(start), std::move(end)) };
     }
-
-    class EQ;
-    class slice;
-};
-
-
-class token_restriction::EQ final : public token_restriction {
-private:
-    ::shared_ptr<term> _value;
-public:
-    EQ(std::vector<const column_definition*> column_defs, ::shared_ptr<term> value)
-        : token_restriction(op::EQ, column_defs)
-        , _value(std::move(value))
-    {}
-
-    std::vector<bytes_opt> values(const query_options& options) const override {
-        return { to_bytes_opt(_value->bind_and_get(options)) };
-    }
-
-    sstring to_string() const override {
-        return format("EQ({})", _value->to_string());
-    }
-
-    virtual bool is_satisfied_by(const schema& schema,
-                                 const partition_key& key,
-                                 const clustering_key_prefix& ckey,
-                                 const row& cells,
-                                 const query_options& options,
-                                 gc_clock::time_point now) const override;
-};
-
-class token_restriction::slice final : public token_restriction {
-private:
-    term_slice _slice;
-public:
-    slice(std::vector<const column_definition*> column_defs, statements::bound bound, bool inclusive, ::shared_ptr<term> term)
-        : token_restriction(op::SLICE, column_defs)
-        , _slice(term_slice::new_instance(bound, inclusive, std::move(term)))
-    {}
-    bool has_bound(statements::bound b) const override {
-        return _slice.has_bound(b);
-    }
-
-    std::vector<bytes_opt> values(const query_options& options) const override {
-        throw exceptions::unsupported_operation_exception();
-    }
-
-    std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
-        return { to_bytes_opt(_slice.bound(b)->bind_and_get(options)) };
-    }
-
-    bool is_inclusive(statements::bound b) const override {
-        return _slice.is_inclusive(b);
-    }
-    sstring to_string() const override {
-        return format("SLICE{}", _slice);
-    }
-
-    virtual bool is_satisfied_by(const schema& schema,
-                                 const partition_key& key,
-                                 const clustering_key_prefix& ckey,
-                                 const row& cells,
-                                 const query_options& options,
-                                 gc_clock::time_point now) const override;
 };
 
 }
