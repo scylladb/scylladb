@@ -1077,3 +1077,42 @@ def test_put_item_expected(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 2}
     with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
         test_table_s.put_item(Item={'p': p, 'a': 3}, Expected={'a': {'Value': 1}})
+
+# Reproducer for issue #6573: binary strings should be ordered as unsigned
+# bytes, i.e., byte 128 comes after 127, not before as with signed bytes.
+# Test the five ordering operators: LT, LE, GT, GE, BETWEEN
+def test_update_expected_unsigned_bytes(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'b': bytearray([127])})
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 1, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'LT',
+                        'AttributeValueList': [bytearray([128])]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 1
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'LE',
+                        'AttributeValueList': [bytearray([128])]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 3, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'BETWEEN',
+                        'AttributeValueList': [bytearray([126]), bytearray([128])]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+
+    test_table_s.put_item(Item={'p': p, 'b': bytearray([128])})
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 4, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'GT',
+                        'AttributeValueList': [bytearray([127])]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'z': {'Value': 5, 'Action': 'PUT'}},
+        Expected={'b': {'ComparisonOperator': 'GE',
+                        'AttributeValueList': [bytearray([127])]}}
+    )
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
