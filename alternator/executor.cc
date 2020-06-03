@@ -2848,6 +2848,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             [] (std::vector<std::tuple<std::string, std::optional<rjson::value>>> responses) {
         rjson::value response = rjson::empty_object();
         rjson::set(response, "Responses", rjson::empty_object());
+        rjson::set(response, "UnprocessedKeys", rjson::empty_object());
         for (auto& t : responses) {
             if (!response["Responses"].HasMember(std::get<0>(t).c_str())) {
                 rjson::set_with_string_name(response["Responses"], std::get<0>(t), rjson::empty_array());
