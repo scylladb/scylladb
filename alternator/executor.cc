@@ -2849,21 +2849,119 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     });
 }
 
+// "filter" represents a condition that can be applied to individual items
+// read by a Query or Scan operation, to decide whether to keep the item.
+// A filter is constructed from a Query or Scan request. This uses the
+// relevant fields in the query (FilterExpression or QueryFilter/ScanFilter +
+// ConditionalOperator). These fields are pre-checked and pre-parsed as much
+// as possible, to ensure that later checking of many items is efficient.
+class filter {
+private:
+    // Holding QueryFilter/ScanFilter + ConditionalOperator:
+    struct conditions_filter {
+        bool require_all;
+        rjson::value conditions;
+    };
+    // Holding a parsed FilterExpression:
+    struct expression_filter {
+        parsed::condition_expression expression;
+    };
+    std::optional<std::variant<conditions_filter, expression_filter>> _imp;
+public:
+    // Filtering for Scan and Query are very similar, but there are some
+    // small differences, especially the names of the request attributes.
+    enum class request_type { SCAN, QUERY };
+    // Note that a filter does not store pointers to the query used to
+    // construct it.
+    filter(const rjson::value& request, request_type rt);
+    bool check(const rjson::value& item) const;
+    bool filters_on(std::string_view attribute) const;
+    operator bool() const { return bool(_imp); }
+};
+
+filter::filter(const rjson::value& request, request_type rt) {
+    const rjson::value* expression = rjson::find(request, "FilterExpression");
+    const char* conditions_attribute = (rt == request_type::SCAN) ? "ScanFilter" : "QueryFilter";
+    const rjson::value* conditions = rjson::find(request, conditions_attribute);
+    if (expression && conditions) {
+        throw api_error("ValidationException",
+                format("FilterExpression and {} are not allowed together", conditions_attribute));
+    }
+    if (expression) {
+        // FIXME: implement FilterExpression support (issue #5038).
+        throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
+    }
+    auto conditional_operator = get_conditional_operator(request);
+    if (conditional_operator != conditional_operator_type::MISSING &&
+        (!conditions || (conditions->IsObject() && conditions->GetObject().ObjectEmpty()))) {
+            throw api_error("ValidationException",
+                    format("'ConditionalOperator' parameter cannot be specified for missing or empty {}",
+                            conditions_attribute));
+    }
+    if (conditions) {
+        bool require_all = conditional_operator != conditional_operator_type::OR;
+        _imp = conditions_filter { require_all, rjson::copy(*conditions) };
+    }
+}
+
+bool filter::check(const rjson::value& item) const {
+    if (!_imp) {
+        return true;
+    }
+    return std::visit(overloaded_functor {
+        [&] (const conditions_filter& f) -> bool {
+            return verify_condition(f.conditions, f.require_all, &item);
+        },
+        [&] (const expression_filter& f) -> bool {
+            // FIXME: need to implement expression filter (FilterExpression).
+            // Right now filter's constructor never sets expression_filter so
+            // we won't reach this.
+            throw std::logic_error("unexpected case in filter::check");
+        }
+    }, *_imp);
+}
+
+bool filter::filters_on(std::string_view attribute) const {
+    if (!_imp) {
+        return false;
+    }
+    return std::visit(overloaded_functor {
+        [&] (const conditions_filter& f) -> bool {
+            for (auto it = f.conditions.MemberBegin(); it != f.conditions.MemberEnd(); ++it) {
+                if (rjson::to_string_view(it->name) == attribute) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        [&] (const expression_filter& f) -> bool {
+            // FIXME: need to implement expression filter (FilterExpression).
+            // Right now filter's constructor never sets expression_filter so
+            // we won't reach this.
+            throw std::logic_error("unexpected case in filter::filters_on");
+        }
+    }, *_imp);
+}
+
 class describe_items_visitor {
     typedef std::vector<const column_definition*> columns_t;
     const columns_t& _columns;
     const std::unordered_set<std::string>& _attrs_to_get;
+    const filter& _filter;
     typename columns_t::const_iterator _column_it;
     rjson::value _item;
     rjson::value _items;
+    size_t _scanned_count;
 
 public:
-    describe_items_visitor(const columns_t& columns, const std::unordered_set<std::string>& attrs_to_get)
+    describe_items_visitor(const columns_t& columns, const std::unordered_set<std::string>& attrs_to_get, filter& filter)
             : _columns(columns)
             , _attrs_to_get(attrs_to_get)
+            , _filter(filter)
             , _column_it(columns.begin())
             , _item(rjson::empty_object())
             , _items(rjson::empty_array())
+            , _scanned_count(0)
     { }
 
     void start_row() {
@@ -2901,22 +2999,30 @@ public:
     }
 
     void end_row() {
-        rjson::push_back(_items, std::move(_item));
+        if (_filter.check(_item)) {
+            rjson::push_back(_items, std::move(_item));
+        }
         _item = rjson::empty_object();
+        ++_scanned_count;
     }
 
     rjson::value get_items() && {
         return std::move(_items);
     }
+
+    size_t get_scanned_count() {
+        return _scanned_count;
+    }
 };
 
-static rjson::value describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::unordered_set<std::string>&& attrs_to_get) {
-    describe_items_visitor visitor(selection.get_columns(), attrs_to_get);
+static rjson::value describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::unordered_set<std::string>&& attrs_to_get, filter&& filter) {
+    describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
     result_set->visit(visitor);
+    auto scanned_count = visitor.get_scanned_count();
     rjson::value items = std::move(visitor).get_items();
     rjson::value items_descr = rjson::empty_object();
     rjson::set(items_descr, "Count", rjson::value(items.Size()));
-    rjson::set(items_descr, "ScannedCount", rjson::value(items.Size())); // TODO(sarna): Update once filtering is implemented
+    rjson::set(items_descr, "ScannedCount", rjson::value(scanned_count));
     rjson::set(items_descr, "Items", std::move(items));
     return items_descr;
 }
@@ -2952,7 +3058,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
         std::unordered_set<std::string>&& attrs_to_get,
         uint32_t limit,
         db::consistency_level cl,
-        ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions,
+        filter&& filter,
         query::partition_slice::option_set custom_opts,
         service::client_state& client_state,
         cql3::cql_stats& cql_stats,
@@ -2986,23 +3092,26 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
-    auto p = service::pager::query_pagers::pager(schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), cql_stats, filtering_restrictions);
+    auto p = service::pager::query_pagers::pager(schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), cql_stats, nullptr);
 
     return p->fetch_page(limit, gc_clock::now(), default_timeout()).then(
             [p, schema, cql_stats, partition_slice = std::move(partition_slice),
              selection = std::move(selection), query_state_ptr = std::move(query_state_ptr),
              attrs_to_get = std::move(attrs_to_get),
              query_options = std::move(query_options),
-             filtering_restrictions = std::move(filtering_restrictions)] (std::unique_ptr<cql3::result_set> rs) mutable {
+             filter = std::move(filter)] (std::unique_ptr<cql3::result_set> rs) mutable {
         if (!p->is_exhausted()) {
             rs->get_metadata().set_paging_state(p->state());
         }
-
-        cql_stats.filtered_rows_matched_total += (filtering_restrictions ? rs->size() : 0);
         auto paging_state = rs->get_metadata().paging_state();
-        auto items = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get));
+        bool has_filter = filter;
+        auto items = describe_items(schema, partition_slice, *selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
         if (paging_state) {
             rjson::set(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
+        }
+        if (has_filter){
+            // update our "filtered_row_matched_total" for all the rows matched, despited the filter
+            cql_stats.filtered_rows_matched_total += items["Items"].Size();
         }
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(items)));
     });
@@ -3038,7 +3147,6 @@ static dht::partition_range get_range_for_segment(int segment, int total_segment
 
 // TODO(sarna):
 // 1. Paging must have 1MB boundary according to the docs. IIRC we do have a replica-side reply size limit though - verify.
-// 2. Filtering - by passing appropriately created restrictions to pager as a last parameter
 // 3. Proper timeouts instead of gc_clock::now() and db::no_timeout
 future<executor::request_return_type> executor::scan(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.scan++;
@@ -3046,10 +3154,6 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
 
-    if (rjson::find(request, "FilterExpression")) {
-        return make_ready_future<request_return_type>(api_error("ValidationException",
-                "FilterExpression is not yet implemented in alternator"));
-    }
     auto segment = get_int_attribute(request, "Segment");
     auto total_segments = get_int_attribute(request, "TotalSegments");
     if (segment || total_segments) {
@@ -3068,13 +3172,6 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     }
 
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
-
-    rjson::value* scan_filter = rjson::find(request, "ScanFilter");
-    auto conditional_operator = get_conditional_operator(request);
-    if (conditional_operator != conditional_operator_type::MISSING &&
-        (!scan_filter || (scan_filter->IsObject() && scan_filter->GetObject().ObjectEmpty()))) {
-            throw api_error("ValidationException", "'ConditionalOperator' parameter cannot be specified for missing or empty ScanFilter");
-    }
 
     db::consistency_level cl = get_read_consistency(request);
     if (table_type == table_or_view_type::gsi && cl != db::consistency_level::LOCAL_ONE) {
@@ -3097,16 +3194,15 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     }
     std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
 
-    ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions;
-    if (scan_filter) {
-        const cql3::query_options query_options = cql3::query_options(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
-        bool require_all = conditional_operator != conditional_operator_type::OR;
-        filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *scan_filter, require_all);
-        partition_ranges = filtering_restrictions->get_partition_key_ranges(query_options);
-        ck_bounds = filtering_restrictions->get_clustering_bounds(query_options);
-    }
+    filter filter(request, filter::request_type::SCAN);
+    // Note: Unlike Query, Scan does allow a filter on the key attributes.
+    // For some *specific* cases of key filtering, such an equality test on
+    // partition key or comparison operator for the sort key, we could have
+    // optimized the filtering by modifying partition_ranges and/or
+    // ck_bounds. We haven't done this optimization yet.
+
     return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filtering_restrictions), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit));
+            std::move(filter), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit));
 }
 
 static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_definition& pk_cdef, const rjson::value& comp_definition, const rjson::value& attrs) {
@@ -3524,7 +3620,6 @@ calculate_bounds_condition_expression(schema_ptr schema,
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
-
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.query++;
     elogger.trace("Querying {}", request);
@@ -3545,9 +3640,6 @@ future<executor::request_return_type> executor::query(client_state& client_state
         return make_ready_future<request_return_type>(api_error("ValidationException", "Limit must be greater than 0"));
     }
 
-    if (rjson::find(request, "FilterExpression")) {
-        return make_ready_future<request_return_type>(api_error("ValidationException", "FilterExpression is not yet implemented in alternator"));
-    }
     const bool forward = get_bool_attribute(request, "ScanIndexForward", true);
 
     rjson::value* key_conditions = rjson::find(request, "KeyConditions");
@@ -3570,36 +3662,34 @@ future<executor::request_return_type> executor::query(client_state& client_state
                         rjson::find(request, "ExpressionAttributeNames"),
                         used_attribute_names);
 
-    rjson::value* query_filter = rjson::find(request, "QueryFilter");
-    auto conditional_operator = get_conditional_operator(request);
-    if (conditional_operator != conditional_operator_type::MISSING &&
-        (!query_filter || (query_filter->IsObject() && query_filter->GetObject().ObjectEmpty()))) {
-            throw api_error("ValidationException", "'ConditionalOperator' parameter cannot be specified for missing or empty QueryFilter");
+    filter filter(request, filter::request_type::QUERY);
+
+    // A query is not allowed to filter on the partition key or the sort key.
+    for (const column_definition& cdef : schema->partition_key_columns()) { // just one
+        if (filter.filters_on(cdef.name_as_text())) {
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    format("QueryFilter can only contain non-primary key attributes: Partition key attribute: {}", cdef.name_as_text())));
+        }
+    }
+    for (const column_definition& cdef : schema->clustering_key_columns()) {
+        if (filter.filters_on(cdef.name_as_text())) {
+            return make_ready_future<request_return_type>(api_error("ValidationException",
+                    format("QueryFilter can only contain non-primary key attributes: Sort key attribute: {}", cdef.name_as_text())));
+        }
+        // FIXME: this "break" can avoid listing some clustering key columns
+        // we added for GSIs just because they existed in the base table -
+        // but not in all cases. We still have issue #5320.
+        break;
     }
 
     auto attrs_to_get = calculate_attrs_to_get(request);
 
-    ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions;
-    if (query_filter) {
-        bool require_all = conditional_operator != conditional_operator_type::OR;
-        filtering_restrictions = get_filtering_restrictions(schema, attrs_column(*schema), *query_filter, require_all);
-        auto pk_defs = filtering_restrictions->get_partition_key_restrictions()->get_column_defs();
-        auto ck_defs = filtering_restrictions->get_clustering_columns_restrictions()->get_column_defs();
-        if (!pk_defs.empty()) {
-            return make_ready_future<request_return_type>(api_error("ValidationException",
-                    format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", pk_defs.front()->name_as_text())));
-        }
-        if (!ck_defs.empty()) {
-            return make_ready_future<request_return_type>(api_error("ValidationException",
-                    format("QueryFilter can only contain non-primary key attributes: Primary key attribute: {}", ck_defs.front()->name_as_text())));
-        }
-    }
     verify_all_are_used(request, "ExpressionAttributeValues", used_attribute_values, "KeyConditionExpression");
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "KeyConditionExpression");
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
     return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filtering_restrictions), opts, client_state, _stats.cql_stats, std::move(trace_state), std::move(permit));
+            std::move(filter), opts, client_state, _stats.cql_stats, std::move(trace_state), std::move(permit));
 }
 
 future<executor::request_return_type> executor::list_tables(client_state& client_state, service_permit permit, rjson::value request) {

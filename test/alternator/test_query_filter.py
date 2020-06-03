@@ -157,7 +157,6 @@ def test_query_filter_r_eq(test_table_sn_with_data):
 
 # Test the NE operator on different types of attributes (numeric, string,
 # bytes, list, map, set, bool):
-@pytest.mark.xfail(reason="QueryFilter: NE operator not implemented")
 def test_query_filter_ne(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b', 'l', 'm', 'ns', 'bool']:
@@ -171,7 +170,6 @@ def test_query_filter_ne(test_table_sn_with_data):
 # Test the NE operator on the 'r' attribute, which only exists for some
 # of the items and has different types when it does. If an attribute doesn't
 # exist at all, or has the wrong type, it is considered "not equal".
-@pytest.mark.xfail(reason="QueryFilter: NE operator not implemented")
 def test_query_filter_r_ne(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     # note that random_item() guarantees the first item has an 'r':
@@ -186,10 +184,10 @@ def test_query_filter_r_ne(test_table_sn_with_data):
 # Note that the DynamoDB documentation specifies that bytes are considered
 # unsigned (0...255) and sorted as such. This is the same order that
 # Python guarantees, the Python's "<" operator does exactly what we want.
-@pytest.mark.xfail(reason="QueryFilter: LT operator not implemented")
 def test_query_filter_lt(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
+        print("testing {}".format(xn))
         xv = items[2][xn]
         got_items = full_query(table,
             KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
@@ -199,7 +197,6 @@ def test_query_filter_lt(test_table_sn_with_data):
 
 # Other types - lists, maps, sets and bool - cannot be used as a parameter
 # to LT - or any of the other comparison operators - LE, GT and GE.
-@pytest.mark.xfail(reason="QueryFilter: operators not implemented")
 def test_query_filter_uncomparable_types(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for op in ['LT', 'LE', 'GT', 'GE']:
@@ -211,7 +208,6 @@ def test_query_filter_uncomparable_types(test_table_sn_with_data):
                     QueryFilter={ xn: { 'AttributeValueList': [xv], 'ComparisonOperator': op }})
 
 # Test the LE operator on a numeric, string and bytes attributes:
-@pytest.mark.xfail(reason="QueryFilter: LE operator not implemented")
 def test_query_filter_le(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -223,7 +219,6 @@ def test_query_filter_le(test_table_sn_with_data):
         assert(got_items == expected_items)
 
 # Test the GT operator on a numeric, string and bytes attributes:
-@pytest.mark.xfail(reason="QueryFilter: GT operator not implemented")
 def test_query_filter_gt(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -235,7 +230,6 @@ def test_query_filter_gt(test_table_sn_with_data):
         assert(got_items == expected_items)
 
 # Test the GE operator on a numeric, string and bytes attributes:
-@pytest.mark.xfail(reason="QueryFilter: GE operator not implemented")
 def test_query_filter_ge(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -247,7 +241,6 @@ def test_query_filter_ge(test_table_sn_with_data):
         assert(got_items == expected_items)
 
 # Test the "BETWEEN" operator on a numeric, string and bytes attributes:
-@pytest.mark.xfail(reason="QueryFilter: BETWEEN operator not implemented")
 def test_query_filter_between(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -262,7 +255,6 @@ def test_query_filter_between(test_table_sn_with_data):
         assert(got_items == expected_items)
 
 # BETWEEN requires the upper bound to be greater than or equal to the lower bound.
-@pytest.mark.xfail(reason="QueryFilter: BETWEEN operator not implemented")
 def test_query_filter_num_between_reverse(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i1 = items[2]['i']
@@ -278,7 +270,6 @@ def test_query_filter_num_between_reverse(test_table_sn_with_data):
 
 # If the two arguments to BETWEEN have different types, this is an error
 # (not just matching nothing)
-@pytest.mark.xfail(reason="QueryFilter: BETWEEN operator not implemented")
 def test_query_filter_between_different_types(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.* type'):
@@ -288,7 +279,6 @@ def test_query_filter_between_different_types(test_table_sn_with_data):
 
 # Other types - lists, maps, sets and bool - cannot be used as parameters
 # to BETWEEN, just like we tested above they cannot be used for LT, GT, etc.
-@pytest.mark.xfail(reason="QueryFilter: BETWEEN operator not implemented")
 def test_query_filter_between_uncomparable_types(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['l', 'm', 'ns', 'bool']:
@@ -300,11 +290,10 @@ def test_query_filter_between_uncomparable_types(test_table_sn_with_data):
                 QueryFilter={ xn: { 'AttributeValueList': [xv1, xv2], 'ComparisonOperator': 'BETWEEN' }})
 
 # The BETWEEN operator needs exactly two parameters
-@pytest.mark.xfail(reason="QueryFilter: BETWEEN operator not implemented")
 def test_query_filter_between_needs_two(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for params in [[], [2], [2,3,4]]:
-        with pytest.raises(ClientError, match='ValidationException.* BETWEEN'):
+        with pytest.raises(ClientError, match='ValidationException.*BETWEEN'):
             full_query(table,
                 KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
                 QueryFilter={ 'i': { 'AttributeValueList': params, 'ComparisonOperator': 'BETWEEN' }})
@@ -312,7 +301,6 @@ def test_query_filter_between_needs_two(test_table_sn_with_data):
 # Test the IN operator on different types of attributes. Interestingly,
 # only numeric, string, and bytes are supported - list, map, set, or bool
 # are not supported - I don't know why.
-@pytest.mark.xfail(reason="QueryFilter: IN operator not implemented")
 def test_query_filter_in(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -326,10 +314,9 @@ def test_query_filter_in(test_table_sn_with_data):
         assert(got_items == expected_items)
 
 # The IN operator can have any number of parameters, but *not* zero.
-@pytest.mark.xfail(reason="QueryFilter: IN operator not implemented")
 def test_query_filter_in_empty(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
-    with pytest.raises(ClientError, match='ValidationException.* IN'):
+    with pytest.raises(ClientError, match='ValidationException.*IN'):
         full_query(table,
             KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
             QueryFilter={ 'i': { 'AttributeValueList': [], 'ComparisonOperator': 'IN' }})
@@ -337,7 +324,6 @@ def test_query_filter_in_empty(test_table_sn_with_data):
 # If the arguments to IN have different types, this is considered an error.
 # Unlike BETWEEN which has the same requirement, in IN different types could
 # have been supported - but they are not.
-@pytest.mark.xfail(reason="QueryFilter: IN operator not implemented")
 def test_query_filter_in_different_types(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.* type'):
@@ -347,7 +333,6 @@ def test_query_filter_in_different_types(test_table_sn_with_data):
 
 # Test the BEGINS_WITH operator on the two types it supports - strings and
 # byte, and that it fails on all other types.
-@pytest.mark.xfail(reason="QueryFilter: BEGINS_WITH operator not implemented")
 def test_query_filter_begins(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['s', 'b']:
@@ -376,7 +361,6 @@ def test_query_filter_begins(test_table_sn_with_data):
 # NOTE: Don't confuse this definition of CONTAINS for other things (equality
 # check, subset check, etc.) which contains() does not do.
 
-@pytest.mark.xfail(reason="QueryFilter: CONTAINS operator not implemented")
 def test_query_filter_contains_member(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for op in ['CONTAINS', 'NOT_CONTAINS']:
@@ -394,7 +378,6 @@ def test_query_filter_contains_member(test_table_sn_with_data):
                 expected_items = [item for item in items if not xv in item[xn]]
             assert(got_items == expected_items)
 
-@pytest.mark.xfail(reason="QueryFilter: CONTAINS operator not implemented")
 def test_query_filter_contains_substring(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for op in ['CONTAINS', 'NOT_CONTAINS']:
@@ -413,7 +396,6 @@ def test_query_filter_contains_substring(test_table_sn_with_data):
 # Test the NULL and NOT_NULL operators. Note that despite the operator's
 # name, these do *not* check for the "NULL" value - rather they just check
 # for items that have (or don't have) the given attribute.
-@pytest.mark.xfail(reason="QueryFilter: NULL operator not implemented")
 def test_query_filter_null(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for op in ['NULL', 'NOT_NULL']:
@@ -475,7 +457,6 @@ def test_query_filter_and(test_table_sn_with_data):
         ConditionalOperator='AND')
     assert(got_items == expected_items)
 
-@pytest.mark.xfail(reason="QueryFilter: OR ConditionalOperator not implemented")
 def test_query_filter_or(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i = items[2]['i']
@@ -490,7 +471,6 @@ def test_query_filter_or(test_table_sn_with_data):
 
 # Check that an unknown ConditionalOperator causes error. The only two allowed
 # values are "AND" and "OR" (case sensitive).
-@pytest.mark.xfail(reason="QueryFilter: ConditionalOperator not checked")
 def test_query_filter_invalid_conditional_operator(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for conditional_operator in ['DOG', 'and']:
@@ -510,7 +490,6 @@ def test_query_filter_empty(test_table_sn_with_data):
     assert(got_items == items)
 
 # Test Count and ScannedCount feature of Query, with and without a QueryFilter
-@pytest.mark.xfail(reason="ScannedCount fails to return pre-filter count of Query")
 def test_query_filter_counts(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     # First test without a filter - both Count (postfilter_count) and

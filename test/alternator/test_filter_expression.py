@@ -91,7 +91,6 @@ def test_table_sn_with_data(test_table_sn):
 # Query always needing one. In the second test we do have a KeyCondition plus
 # a (redundent) FilterExpression on the key attribute, and that isn't allowed
 # either.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_partition_key_1(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.*Condition'):

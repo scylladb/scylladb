@@ -67,55 +67,6 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
     return it->second;
 }
 
-static ::shared_ptr<cql3::restrictions::single_column_restriction::contains> make_map_element_restriction(const column_definition& cdef, std::string_view key, const rjson::value& value) {
-    bytes raw_key = utf8_type->from_string(sstring_view(key.data(), key.size()));
-    auto key_value = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(std::move(raw_key)));
-    bytes raw_value = serialize_item(value);
-    auto entry_value = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(std::move(raw_value)));
-    return make_shared<cql3::restrictions::single_column_restriction::contains>(cdef, std::move(key_value), std::move(entry_value));
-}
-
-static ::shared_ptr<cql3::restrictions::single_column_restriction::EQ> make_key_eq_restriction(const column_definition& cdef, const rjson::value& value) {
-    bytes raw_value = get_key_from_typed_value(value, cdef);
-    auto restriction_value = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(std::move(raw_value)));
-    return make_shared<cql3::restrictions::single_column_restriction::EQ>(cdef, std::move(restriction_value));
-}
-
-// Convert a QueryFilter or ScanFilter parameter into an equivalent set of
-// Scylla statement_restrictions which can be used in filtering a query.
-::shared_ptr<cql3::restrictions::statement_restrictions> get_filtering_restrictions(schema_ptr schema, const column_definition& attrs_col, const rjson::value& query_filter, bool require_all) {
-    clogger.trace("Getting filtering restrictions for: {}", rjson::print(query_filter));
-    auto filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(schema, true);
-    if (!require_all) {
-        // FIXME: Need to implement ConditionalOperator=OR case
-        throw api_error("ValidationException", "QueryFilter or ScanFilter with ConditionalOperator=OR not yet implemented");
-    }
-    for (auto it = query_filter.MemberBegin(); it != query_filter.MemberEnd(); ++it) {
-        std::string_view column_name(it->name.GetString(), it->name.GetStringLength());
-        const rjson::value& condition = it->value;
-
-        const rjson::value& comp_definition = rjson::get(condition, "ComparisonOperator");
-        const rjson::value& attr_list = rjson::get(condition, "AttributeValueList");
-        comparison_operator_type op = get_comparison_operator(comp_definition);
-
-        if (op != comparison_operator_type::EQ) {
-            throw api_error("ValidationException", "Filtering is currently implemented for EQ operator only");
-        }
-        if (attr_list.Size() != 1) {
-            throw api_error("ValidationException", format("EQ restriction needs exactly 1 attribute value: {}", rjson::print(attr_list)));
-        }
-        if (const column_definition* cdef = schema->get_column_definition(to_bytes(column_name.data()))) {
-            // Primary key restriction
-            filtering_restrictions->add_restriction(make_key_eq_restriction(*cdef, attr_list[0]), false, true);
-        } else {
-            // Regular column restriction
-            filtering_restrictions->add_restriction(make_map_element_restriction(attrs_col, column_name, attr_list[0]), false, true);
-        }
-
-    }
-    return filtering_restrictions;
-}
-
 namespace {
 
 struct size_check {
@@ -212,7 +163,7 @@ static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
     }
     auto it2 = v2.MemberBegin();
     if (it2->name != "S" && it2->name != "B") {
-        throw api_error("ValidationException", format("BEGINS_WITH operator requires String or Binary in AttributeValue, got {}", it2->name));
+        throw api_error("ValidationException", format("BEGINS_WITH operator requires String or Binary type in AttributeValue, got {}", it2->name));
     }
 
 
@@ -537,7 +488,8 @@ conditional_operator_type get_conditional_operator(const rjson::value& req) {
     } else if (s == "OR") {
         return conditional_operator_type::OR;
     } else {
-        throw api_error("ValidationException", "'ConditionalOperator' parameter must be AND, OR or missing");
+        throw api_error("ValidationException",
+                format("'ConditionalOperator' parameter must be AND, OR or missing. Found {}.", s));
     }
 }
 
@@ -559,13 +511,21 @@ bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value
     if (!expected->IsObject()) {
         throw api_error("ValidationException", "'Expected' parameter, if given, must be an object");
     }
-
     bool require_all = conditional_operator != conditional_operator_type::OR;
+    // previous_item has just an "Item" attribute. We need to pass into
+    // verify_condition() just the contents of this attribute.
+    rjson::value* previous_item_contents = nullptr;
+    if (previous_item && previous_item->IsObject()) {
+        previous_item_contents = rjson::find(*previous_item, "Item");
+    }
+    return verify_condition(*expected, require_all, previous_item_contents);
+}
 
-    for (auto it = expected->MemberBegin(); it != expected->MemberEnd(); ++it) {
+bool verify_condition(const rjson::value& condition, bool require_all, const rjson::value* previous_item_contents) {
+    for (auto it = condition.MemberBegin(); it != condition.MemberEnd(); ++it) {
         const rjson::value* got = nullptr;
-        if (previous_item && previous_item->IsObject() && previous_item->HasMember("Item")) {
-            got = rjson::find((*previous_item)["Item"], rjson::to_string_view(it->name));
+        if (previous_item_contents) {
+            got = rjson::find(*previous_item_contents, rjson::to_string_view(it->name));
         }
         bool success = verify_expected_one(it->value, got);
         if (success && !require_all) {
