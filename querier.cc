@@ -160,7 +160,7 @@ static bool ranges_match(const schema& s, dht::partition_ranges_view original_ra
 
 template <typename Querier>
 static can_use can_be_used_for_page(const Querier& q, const schema& s, const dht::partition_range& range, const query::partition_slice& slice) {
-    if (s.version() != q.schema()->version()) {
+    if (s.version() != q.schema().version()) {
         return can_use::no_schema_version_mismatch;
     }
 
@@ -191,7 +191,7 @@ void querier_cache::scan_cache_entries() {
     while (it != end && it->is_expired(now)) {
         ++_stats.time_based_evictions;
         --_stats.population;
-        it->permit().semaphore().unregister_inactive_read(std::move(*it).get_inactive_handle());
+        it->value().permit().semaphore().unregister_inactive_read(std::move(*it).get_inactive_handle());
         it = _entries.erase(it);
     }
 }
@@ -206,7 +206,7 @@ static querier_cache::entries::iterator find_querier(querier_cache::entries& ent
     }
 
     const auto it = std::find_if(queriers.first, queriers.second, [&] (const querier_cache::entry& e) {
-        return ranges_match(e.schema(), e.ranges(), ranges);
+        return ranges_match(e.value().schema(), e.value().ranges(), ranges);
     });
 
     if (it == queriers.second) {
@@ -264,7 +264,8 @@ static void insert_querier(
 
     tracing::trace(trace_state, "Caching querier with key {}", key);
 
-    auto memory_usage = boost::accumulate(entries | boost::adaptors::transformed(std::mem_fn(&querier_cache::entry::memory_usage)), size_t(0));
+    auto memory_usage = boost::accumulate(entries | boost::adaptors::transformed(
+                [] (const querier_cache::entry& e) { return e.value().memory_usage(); }), size_t(0));
 
     // We add the memory-usage of the to-be added querier to the memory-usage
     // of all the cached queriers. We now need to makes sure this number is
@@ -276,8 +277,8 @@ static void insert_querier(
     if (memory_usage >= max_queriers_memory_usage) {
         auto it = entries.begin();
         while (it != entries.end() && memory_usage >= max_queriers_memory_usage) {
-            memory_usage -= it->memory_usage();
-            it->permit().semaphore().unregister_inactive_read(std::move(*it).get_inactive_handle());
+            memory_usage -= it->value().memory_usage();
+            it->value().permit().semaphore().unregister_inactive_read(std::move(*it).get_inactive_handle());
             it = entries.erase(it);
             --stats.population;
             ++stats.memory_based_evictions;
@@ -328,7 +329,11 @@ static std::optional<Querier> lookup_querier(
         return std::nullopt;
     }
 
-    auto q = std::move(*it).template value<Querier>();
+    auto* q_ptr = dynamic_cast<Querier*>(&it->value());
+    if (!q_ptr) {
+        throw std::runtime_error("lookup_querier(): found querier is not of the expected type");
+    }
+    auto q = std::move(*q_ptr);
     q.permit().semaphore().unregister_inactive_read(std::move(*it).get_inactive_handle());
     entries.erase(it);
     --stats.population;
@@ -381,7 +386,7 @@ bool querier_cache::evict_one() {
 
     ++_stats.resource_based_evictions;
     --_stats.population;
-    auto& sem = _entries.front().permit().semaphore();
+    auto& sem = _entries.front().value().permit().semaphore();
     sem.unregister_inactive_read(std::move(_entries.front()).get_inactive_handle());
     _entries.pop_front();
 
@@ -392,9 +397,9 @@ void querier_cache::evict_all_for_table(const utils::UUID& schema_id) {
     auto it = _entries.begin();
     const auto end = _entries.end();
     while (it != end) {
-        if (it->schema().id() == schema_id) {
+        if (it->value().schema().id() == schema_id) {
             --_stats.population;
-            it->permit().semaphore().unregister_inactive_read(std::move(*it).get_inactive_handle());
+            it->value().permit().semaphore().unregister_inactive_read(std::move(*it).get_inactive_handle());
             it = _entries.erase(it);
         } else {
             ++it;
