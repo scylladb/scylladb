@@ -104,10 +104,7 @@ SEASTAR_TEST_CASE(test_like_operator_conjunction) {
         require_rows(e, "select s1 from t where s1 like 'a%' and s1 like '%' allow filtering", {{T("a")}, {T("abc")}});
         require_rows(e, "select s1 from t where s1 like 'a%' and s1 like '_b_' and s1 like '%c' allow filtering",
                      {{T("abc")}});
-        BOOST_REQUIRE_EXCEPTION(
-                e.execute_cql("select * from t where s1 like 'a%' and s1 = 'abc' allow filtering").get(),
-                exceptions::invalid_request_exception,
-                exception_predicate::message_contains("LIKE and non-LIKE"));
+        require_rows(e, "select s1 from t where s1 like 'a%' and s1 = 'abc' allow filtering", {{T("abc")}});
     });
 }
 

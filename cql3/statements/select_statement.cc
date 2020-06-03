@@ -765,8 +765,8 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
     if (_ks_sel == ks_selector::NONSYSTEM) {
         if (_restrictions->need_filtering() ||
                 _restrictions->get_partition_key_restrictions()->empty() ||
-                (_restrictions->get_partition_key_restrictions()->is_on_token() &&
-                     !_restrictions->get_partition_key_restrictions()->is_EQ())) {
+                (has_token(_restrictions->get_partition_key_restrictions()->expression) &&
+                 !find(_restrictions->get_partition_key_restrictions()->expression, operator_type::EQ))) {
             _range_scan = true;
             if (!_parameters->bypass_cache())
                 _range_scan_no_bypass_cache = true;
@@ -1066,7 +1066,7 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
             auto clustering_restrictions = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, *single_pk_restrictions);
             // Computed token column needs to be added to index view restrictions
             const column_definition& token_cdef = *_view_schema->clustering_key_columns().begin();
-            auto base_pk = partition_key::from_optional_exploded(*_schema, _restrictions->get_partition_key_restrictions()->values(options));
+            auto base_pk = partition_key::from_optional_exploded(*_schema, single_pk_restrictions->values(options));
             bytes token_value = dht::get_token(*_schema, base_pk).data();
             auto token_restriction = ::make_shared<restrictions::single_column_restriction::EQ>(token_cdef, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value)));
             token_restriction->expression = restrictions::make_column_op(

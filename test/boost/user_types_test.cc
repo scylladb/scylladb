@@ -507,11 +507,6 @@ SEASTAR_TEST_CASE(test_nonfrozen_user_types_prepared) {
             e.execute_prepared(id, vs).discard_result().get();
         };
 
-        auto query_prepared = [&] (const sstring& cql, const std::vector<cql3::raw_value>& vs) {
-            auto id = e.prepare(cql).get0();
-            return e.execute_prepared(id, vs).get0();
-        };
-
         auto mk_int = [] (int x) {
             return cql3::raw_value::make_value(int32_type->decompose(x));
         };
@@ -523,17 +518,6 @@ SEASTAR_TEST_CASE(test_nonfrozen_user_types_prepared) {
         auto mk_tuple = [&] (const std::vector<data_value>& vs) {
             auto type = static_pointer_cast<const tuple_type_impl>(ut);
             return cql3::raw_value::make_value(type->decompose(make_tuple_value(type, vs)));
-        };
-
-        auto mk_ut_list = [&] (const std::vector<std::vector<data_value>>& vss) {
-            std::vector<data_value> ut_vs;
-            for (const auto& vs: vss) {
-                ut_vs.push_back(make_user_value(ut, vs));
-            }
-
-            const auto& ut_list_type = list_type_impl::get_instance(ut, true);
-            return cql3::raw_value::make_value(
-                    ut_list_type->decompose(make_list_value(ut_list_type, list_type_impl::native_type(ut_vs))));
         };
 
         auto text_null = data_value::make_null(utf8_type);
@@ -560,11 +544,29 @@ SEASTAR_TEST_CASE(test_nonfrozen_user_types_prepared) {
             mk_null_row(3),
         });
 
+#if 0 // TODO: fix dependence on #6369 incorrect behaviour.
+        auto query_prepared = [&] (const sstring& cql, const std::vector<cql3::raw_value>& vs) {
+            auto id = e.prepare(cql).get0();
+            return e.execute_prepared(id, vs).get0();
+        };
+
+        auto mk_ut_list = [&] (const std::vector<std::vector<data_value>>& vss) {
+            std::vector<data_value> ut_vs;
+            for (const auto& vs: vss) {
+                ut_vs.push_back(make_user_value(ut, vs));
+            }
+
+            const auto& ut_list_type = list_type_impl::get_instance(ut, true);
+            return cql3::raw_value::make_value(
+                    ut_list_type->decompose(make_list_value(ut_list_type, list_type_impl::native_type(ut_vs))));
+        };
+
         assert_that(query_prepared("select * from cf where b in ? allow filtering", {mk_ut_list({{1, "text1", long_null}, {}})}))
                 .is_rows().with_rows_ignore_order({
             mk_row(1, {1, "text1", long_null}),
-            mk_null_row(3),
+            mk_null_row(3), // TODO: drop this element, due to #6369 fix.
         });
+#endif // 0
 
         execute_prepared("insert into cf (a, b) values (?, ?)", {mk_int(4), mk_tuple({4, "text4", int64_t(4)})});
         assert_that(e.execute_cql("select * from cf where a = 4").get0()).is_rows().with_rows_ignore_order({

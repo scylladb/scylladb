@@ -39,9 +39,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/range/adaptors.hpp>
+
+#include "cql3/tuples.hh"
+#include "database.hh"
 #include "delete_statement.hh"
 #include "raw/delete_statement.hh"
-#include "database.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace cql3 {
 
@@ -79,6 +84,60 @@ void delete_statement::add_update_for_key(mutation& m, const query::clustering_r
 
 namespace raw {
 
+namespace {
+
+using namespace restrictions;
+
+/// True iff parameters indicate a multi-column comparison.
+bool is_multi_column(size_t column_count, const term* t) {
+    return column_count > 1 || dynamic_cast<const tuples::value*>(t) || dynamic_cast<const tuples::marker*>(t)
+            || dynamic_cast<const tuples::delayed_value*>(t);
+}
+
+/// True iff expr bounds clustering key from both above and below OR it has no clustering-key bounds at all.
+/// See #6493.
+bool bounded_ck(const expression& expr) {
+    return std::visit(overloaded_functor{
+            [] (bool b) { return !b; },
+            [] (const binary_operator& oper) {
+                return *oper.op == operator_type::EQ; // Without EQ, one side must be unbounded.
+            },
+            [] (const conjunction& conj) {
+                using bounds_bitvector = int; // Combined using binary OR.
+                static constexpr bounds_bitvector UPPER=1, LOWER=2;
+                std::unordered_map<const column_definition*, bounds_bitvector> found_bounds;
+                for (const auto& child : conj.children) {
+                    std::visit(overloaded_functor{
+                            [&] (const binary_operator& oper) {
+                                if (auto cvs = std::get_if<std::vector<column_value>>(&oper.lhs)) {
+                                    // The rules of multi-column comparison imply that any multi-column
+                                    // expression sets a bound for the entire clustering key.  Therefore, we
+                                    // represent any such expression with special pointer value nullptr.
+                                    auto col = is_multi_column(cvs->size(), oper.rhs.get()) ? nullptr : cvs->front().col;
+                                    if (col && !col->is_clustering_key()) {
+                                        return;
+                                    }
+                                    if (*oper.op == operator_type::EQ) {
+                                        found_bounds[col] = UPPER | LOWER;
+                                    } else if (*oper.op == operator_type::LT || *oper.op == operator_type::LTE) {
+                                        found_bounds[col] |= UPPER;
+                                    } else if (*oper.op == operator_type::GTE || *oper.op == operator_type::GT) {
+                                        found_bounds[col] |= LOWER;
+                                    }
+                                }
+                            },
+                            [] (const auto& default_case) {}, // Assumes conjunctions are flattened.
+                        }, child);
+                }
+                // Since multi-column comparisons can't be mixed with single-column ones, found_bounds will
+                // either have a single entry with key nullptr or one entry per restricted column.
+                return boost::algorithm::all_of_equal(found_bounds | boost::adaptors::map_values, UPPER | LOWER);
+            },
+        }, expr);
+}
+
+} // anonymous namespace
+
 ::shared_ptr<cql3::statements::modification_statement>
 delete_statement::prepare_internal(database& db, schema_ptr schema, variable_specifications& bound_names,
         std::unique_ptr<attributes> attrs, cql_stats& stats) const {
@@ -103,13 +162,12 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, variable_spe
     }
     prepare_conditions(db, *schema, bound_names, *stmt);
     stmt->process_where_clause(db, _where_clause, bound_names);
-    if (!db.supports_infinite_bound_range_deletions()) {
-        if (!stmt->restrictions().get_clustering_columns_restrictions()->has_bound(bound::START)
-                || !stmt->restrictions().get_clustering_columns_restrictions()->has_bound(bound::END)) {
-            throw exceptions::invalid_request_exception("A range deletion operation needs to specify both bounds for clusters without sstable mc format support");
-        }
+    if (!db.supports_infinite_bound_range_deletions() &&
+        !bounded_ck(stmt->restrictions().get_clustering_columns_restrictions()->expression)) {
+        throw exceptions::invalid_request_exception(
+                "A range deletion operation needs to specify both bounds for clusters without sstable mc format support");
     }
-    if (stmt->restrictions().get_clustering_columns_restrictions()->is_slice()) {
+    if (has_slice(stmt->restrictions().get_clustering_columns_restrictions()->expression)) {
         if (!schema->is_compound()) {
             throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
         }

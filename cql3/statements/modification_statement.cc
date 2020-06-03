@@ -466,9 +466,9 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
             _has_regular_column_conditions = true;
         }
     }
-    if (_restrictions->get_partition_key_restrictions()->is_on_token()) {
+    if (has_token(_restrictions->get_partition_key_restrictions()->expression)) {
         throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
-                _restrictions->get_partition_key_restrictions()->to_string()));
+                to_string(_restrictions->get_partition_key_restrictions()->expression)));
     }
     if (!_restrictions->get_non_pk_restriction().empty()) {
         auto column_names = ::join(", ", _restrictions->get_non_pk_restriction()
@@ -478,8 +478,9 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
         throw exceptions::invalid_request_exception(format("Invalid where clause contains non PRIMARY KEY columns: {}", column_names));
     }
     auto ck_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (ck_restrictions->is_slice() && !allow_clustering_key_slices()) {
-        throw exceptions::invalid_request_exception(format("Invalid operator in where clause {}", ck_restrictions->to_string()));
+    if (has_slice(ck_restrictions->expression) && !allow_clustering_key_slices()) {
+        throw exceptions::invalid_request_exception(
+                format("Invalid operator in where clause {}", to_string(ck_restrictions->expression)));
     }
     if (_restrictions->has_unrestricted_clustering_columns() && !applies_only_to_static_columns() && !s->is_dense()) {
         // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
@@ -497,7 +498,7 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
         }
         // In general, we can't modify specific columns if not all clustering columns have been specified.
         // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
-        if (!ck_restrictions->is_slice()) {
+        if (!has_slice(ck_restrictions->expression)) {
             auto& col = s->column_at(column_kind::clustering_key, ck_restrictions->size());
             for (auto&& op : _column_operations) {
                 if (!op->column.is_static()) {

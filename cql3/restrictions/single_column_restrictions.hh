@@ -104,7 +104,13 @@ public:
 
     virtual bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
         auto it = _restrictions.find(std::addressof(cdef));
-        return (it != _restrictions.end()) ? it->second->value(options) : bytes_opt{};
+        if (it == _restrictions.end()) {
+            return bytes_opt{};
+        } else {
+            const auto values = std::get<value_list>(possible_lhs_values(&cdef, it->second->expression, options));
+            assert(values.size() == 1);
+            return values.front();
+        }
     }
 
     /**
@@ -123,7 +129,7 @@ public:
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         for (auto&& e : _restrictions) {
-            if (e.second->uses_function(ks_name, function_name)) {
+            if (cql3::restrictions::uses_function(e.second->expression, ks_name, function_name)) {
                 return true;
             }
         }
@@ -145,19 +151,22 @@ public:
      * @throws InvalidRequestException if the new restriction cannot be added
      */
     void add_restriction(::shared_ptr<single_column_restriction> restriction) {
-        _is_all_eq &= restriction->is_EQ();
+        if (!find(restriction->expression, operator_type::EQ)) {
+            _is_all_eq = false;
+        }
 
         auto i = _restrictions.find(&restriction->get_column_def());
         if (i == _restrictions.end()) {
             _restrictions.emplace_hint(i, &restriction->get_column_def(), std::move(restriction));
         } else {
-            i->second->merge_with(restriction);
+            auto& e = i->second->expression;
+            e = make_conjunction(std::move(e), restriction->expression);
         }
     }
 
     virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const override {
         for (auto&& e : _restrictions) {
-            if (e.second->has_supporting_index(index_manager, allow_local)) {
+            if (cql3::restrictions::has_supporting_index(e.second->expression, index_manager, allow_local)) {
                 return true;
             }
         }
@@ -223,11 +232,9 @@ public:
     bool has_multiple_contains() const {
         uint32_t number_of_contains = 0;
         for (auto&& e : _restrictions) {
-            if (e.second->is_contains()) {
-                auto contains_ = static_pointer_cast<single_column_restriction::contains>(e.second);
-                number_of_contains += contains_->number_of_values();
-                number_of_contains += contains_->number_of_keys();
-                number_of_contains += contains_->number_of_entries();
+            number_of_contains += count_if(e.second->expression, is_on_collection);
+            if (number_of_contains > 1) {
+                return true;
             }
         }
         return number_of_contains > 1;

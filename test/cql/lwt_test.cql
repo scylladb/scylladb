@@ -767,4 +767,6 @@ update lwt set c = 1 where a = 1 and b = 1 and a < 0 if c = 1;
 update lwt set c = 1 where a > 0 and a < 0 and b = 1 if c = 1;
 -- error: partition key and IN is not supported 
 update lwt set c = 1 where a in () and b = 1 if c = 1;
+update lwt set c = 1 where a = 1 and b IN (1, 2) if c = 1;
+update lwt set c = 1 where a = 1 and (b) IN ((1), (2)) if c = 1;
 drop table lwt;
