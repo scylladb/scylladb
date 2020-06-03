@@ -48,10 +48,10 @@ public:
     static constexpr auto VIEW_BUILD_STATUS = "view_build_status";
 
     /* Nodes use this table to communicate new CDC stream generations to other nodes. */
-    static constexpr auto CDC_TOPOLOGY_DESCRIPTION = "cdc_topology_description";
+    static constexpr auto CDC_TOPOLOGY_DESCRIPTION = "cdc_generations";
 
     /* This table is used by CDC clients to learn about avaliable CDC streams. */
-    static constexpr auto CDC_DESC = "cdc_description";
+    static constexpr auto CDC_DESC = "cdc_streams";
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
     struct context {
