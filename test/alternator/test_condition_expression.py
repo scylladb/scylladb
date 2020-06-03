@@ -1351,3 +1351,37 @@ def test_condition_expression_with_forbidden_rmw(scylla_only, dynamodb, test_tab
     assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'regular': 'write'}
     test_table_s.update_item(Key={'p': s}, AttributeUpdates={'write': {'Value': 'regular', 'Action': 'PUT'}})
     assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'regular': 'write', 'write': 'regular'}
+
+# Reproducer for issue #6573: binary strings should be ordered as unsigned
+# bytes, i.e., byte 128 comes after 127, not before as with signed bytes.
+# Test the five ordering operators: <, <=, >, >=, between
+def test_condition_expression_unsigned_bytes(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'b': bytearray([127])})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :newval',
+        ConditionExpression='b < :oldval',
+        ExpressionAttributeValues={':newval': 1, ':oldval': bytearray([128])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 1
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :newval',
+        ConditionExpression='b <= :oldval',
+        ExpressionAttributeValues={':newval': 2, ':oldval': bytearray([128])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :newval',
+        ConditionExpression='b between :oldval1 and :oldval2',
+        ExpressionAttributeValues={':newval': 3, ':oldval1': bytearray([126]), ':oldval2': bytearray([128])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+
+    test_table_s.put_item(Item={'p': p, 'b': bytearray([128])})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :newval',
+        ConditionExpression='b > :oldval',
+        ExpressionAttributeValues={':newval': 4, ':oldval': bytearray([127])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 4
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :newval',
+        ConditionExpression='b >= :oldval',
+        ExpressionAttributeValues={':newval': 5, ':oldval': bytearray([127])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
