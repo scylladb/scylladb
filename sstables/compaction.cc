@@ -1181,7 +1181,6 @@ flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_co
 }
 
 class resharding_compaction final : public compaction {
-    std::vector<std::pair<shared_sstable, std::optional<sstable_writer>>> _output_sstables;
     shard_id _shard; // shard of current sstable writer
     compaction_backlog_tracker _resharding_backlog_tracker;
 
@@ -1213,7 +1212,6 @@ private:
 public:
     resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor)
         : compaction(cf, std::move(descriptor))
-        , _output_sstables(smp::count)
         , _resharding_backlog_tracker(std::make_unique<resharding_backlog_tracker>())
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
