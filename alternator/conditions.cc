@@ -370,31 +370,35 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
 
 struct cmp_lt {
     template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs < rhs; }
+    // We cannot use the normal comparison operators like "<" on the bytes
+    // type, because they treat individual bytes as signed but we need to
+    // compare them as *unsigned*. So we need a specialization for bytes.
+    bool operator()(const bytes& lhs, const bytes& rhs) const { return compare_unsigned(lhs, rhs) < 0; }
     static constexpr const char* diagnostic = "LT operator";
 };
 
 struct cmp_le {
-    // bytes only has <, so we cannot use <=.
-    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs < rhs || lhs == rhs; }
+    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs <= rhs; }
+    bool operator()(const bytes& lhs, const bytes& rhs) const { return compare_unsigned(lhs, rhs) <= 0; }
     static constexpr const char* diagnostic = "LE operator";
 };
 
 struct cmp_ge {
-    // bytes only has <, so we cannot use >=.
-    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs || lhs == rhs; }
+    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs >= rhs; }
+    bool operator()(const bytes& lhs, const bytes& rhs) const { return compare_unsigned(lhs, rhs) >= 0; }
     static constexpr const char* diagnostic = "GE operator";
 };
 
 struct cmp_gt {
-    // bytes only has <, so we cannot use >.
-    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return rhs < lhs; }
+    template <typename T> bool operator()(const T& lhs, const T& rhs) const { return lhs > rhs; }
+    bool operator()(const bytes& lhs, const bytes& rhs) const { return compare_unsigned(lhs, rhs) > 0; }
     static constexpr const char* diagnostic = "GT operator";
 };
 
 // True if v is between lb and ub, inclusive.  Throws if lb > ub.
 template <typename T>
 bool check_BETWEEN(const T& v, const T& lb, const T& ub) {
-    if (ub < lb) {
+    if (cmp_lt()(ub, lb)) {
         throw api_error("ValidationException",
                         format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
     }
