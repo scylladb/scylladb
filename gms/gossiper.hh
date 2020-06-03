@@ -175,6 +175,7 @@ public:
         versioned_value::STATUS_LEFT,
         versioned_value::HIBERNATE,
         versioned_value::STATUS_BOOTSTRAPPING,
+        versioned_value::STATUS_UNKNOWN,
     };
     static constexpr std::chrono::milliseconds INTERVAL{1000};
     static constexpr std::chrono::hours A_VERY_LONG_TIME{24 * 3};
