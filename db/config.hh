@@ -305,6 +305,7 @@ public:
     named_value<uint32_t> max_clustering_key_restrictions_per_query;
     named_value<uint64_t> max_memory_for_unlimited_query;
     named_value<bool> enable_3_1_0_compatibility_mode;
+    named_value<bool> enable_write_blocking_during_truncate;
     named_value<bool> enable_user_defined_functions;
     named_value<unsigned> user_defined_function_time_limit_ms;
     named_value<unsigned> user_defined_function_allocation_limit_bytes;

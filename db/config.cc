@@ -728,6 +728,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Set to true if the cluster was initially installed from 3.1.0. If it was upgraded from an earlier version,"
         " or installed from a later version, leave this set to false. This adjusts the communication protocol to"
         " work around a bug in Scylla 3.1.0")
+    , enable_write_blocking_during_truncate(this, "enable_write_blocking_during_truncate", liveness::LiveUpdate, value_status::Used, true, "Enables waiting for ongoing writes before performing TRUNCATE operation, and rejecting new writes for the duration of the TRUNCATE operation")
     , enable_user_defined_functions(this, "enable_user_defined_functions", value_status::Used, false,  "Enable user defined functions. You must also set experimental-features=udf")
     , user_defined_function_time_limit_ms(this, "user_defined_function_time_limit_ms", value_status::Used, 10, "The time limit for each UDF invocation")
     , user_defined_function_allocation_limit_bytes(this, "user_defined_function_allocation_limit_bytes", value_status::Used, 1024*1024, "How much memory each UDF invocation can allocate")
