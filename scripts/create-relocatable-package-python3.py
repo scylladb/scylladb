@@ -60,13 +60,24 @@ def should_copy(f):
     if f == "": # package with no files
         return False
 
+    # Filtering out files, below, won't work if we copy the directories
+    # they are in. So filter them out. Tar files are perfectly happy
+    # to carry a file without the directory it is in.
+    if os.path.isdir(f):
+        return False
+
+    parts = list(pathlib.PurePath(f).parts)
+
+    # files in __pycache__ are optimizations, and confuse build_deb
+    if "__pycache__" in parts:
+        return False
+
     if f.startswith("/usr/bin/python3."):
         return f[-1] != "m" # python ships with two binaries, one of them with a specialized malloc (python 3.xm). No need.
 
     if f.startswith("/lib64/ld-linux"): # the interpreter is copied by the binary fixup process
         return False
 
-    parts = list(pathlib.PurePath(f).parts)
     el = parts.pop(0)
     if el != "/":
         raise RuntimeError("unexpected path: not absolute! {}".format(f))
