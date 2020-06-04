@@ -1274,9 +1274,9 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
 // optionally return Attributes if requested via the ReturnValues option.
 static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes) {
     // As an optimization, in the simple and common case that nothing is to be
-    // returned, quickly return an empty result:
+    // returned, quickly return an empty json object as string:
     if (attributes.IsNull()) {
-        return make_ready_future<executor::request_return_type>(json_string(""));
+        return make_ready_future<executor::request_return_type>(json_string("{}"));
     }
     rjson::value ret = rjson::empty_object();
     if (!attributes.IsNull()) {
