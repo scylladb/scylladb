@@ -1154,14 +1154,6 @@ static std::optional<rjson::value> describe_single_item(schema_ptr schema,
         const cql3::selection::selection& selection,
         const query::result& query_result,
         std::unordered_set<std::string>&& attrs_to_get);
-static future<std::unique_ptr<rjson::value>> get_previous_item(
-        service::storage_proxy& proxy,
-        service::client_state& client_state,
-        schema_ptr schema,
-        const partition_key& pk,
-        const clustering_key& ck,
-        service_permit permit,
-        alternator::stats& stats);
 
 static lw_shared_ptr<query::read_command> previous_item_read_command(schema_ptr schema,
         const clustering_key& ck,
@@ -1279,6 +1271,31 @@ static future<executor::request_return_type> rmw_operation_return(rjson::value&&
         rjson::set(ret, "Attributes", std::move(attributes));
     }
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+}
+
+static future<std::unique_ptr<rjson::value>> get_previous_item(
+        service::storage_proxy& proxy,
+        service::client_state& client_state,
+        schema_ptr schema,
+        const partition_key& pk,
+        const clustering_key& ck,
+        service_permit permit,
+        alternator::stats& stats)
+{
+    stats.reads_before_write++;
+    auto selection = cql3::selection::selection::wildcard(schema);
+    auto command = previous_item_read_command(schema, ck, selection);
+    auto cl = db::consistency_level::LOCAL_QUORUM;
+
+    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
+            [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
+        auto previous_item = describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
+        if (previous_item) {
+            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
+        } else {
+            return make_ready_future<std::unique_ptr<rjson::value>>();
+        }
+    });
 }
 
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
@@ -1401,10 +1418,10 @@ public:
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) override {
         std::unordered_set<std::string> used_attribute_values;
         std::unordered_set<std::string> used_attribute_names;
-        if (!verify_expected(_request, previous_item) ||
+        if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression,
                     used_attribute_values, used_attribute_names,
-                    _request, _schema, previous_item)) {
+                    _request, _schema, previous_item.get())) {
             // If the update is to be cancelled because of an unfulfilled Expected
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
@@ -1474,10 +1491,10 @@ public:
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) override {
         std::unordered_set<std::string> used_attribute_values;
         std::unordered_set<std::string> used_attribute_names;
-        if (!verify_expected(_request, previous_item) ||
+        if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression,
                                 used_attribute_values, used_attribute_names,
-                                _request, _schema, previous_item)) {
+                                _request, _schema, previous_item.get())) {
             // If the update is to be cancelled because of an unfulfilled Expected
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
@@ -1958,7 +1975,7 @@ rjson::value calculate_value(const parsed::value& v,
         std::unordered_set<std::string>& used_attribute_values,
         const rjson::value& update_info,
         schema_ptr schema,
-        const std::unique_ptr<rjson::value>& previous_item) {
+        const rjson::value* previous_item) {
     return std::visit(overloaded_functor {
         [&] (const std::string& valref) -> rjson::value {
             if (!expression_attribute_values) {
@@ -2142,7 +2159,7 @@ rjson::value calculate_value(const parsed::value& v,
                 return rjson::null_value();
             }
             std::string update_path = resolve_update_path(p, update_info, schema, used_attribute_names, allow_key_columns::yes);
-            rjson::value* previous_value = rjson::find(*previous_item, update_path);
+            const rjson::value* previous_value = rjson::find(*previous_item, update_path);
             return previous_value ? rjson::copy(*previous_value) : rjson::null_value();
         }
     }, v._value);
@@ -2156,7 +2173,7 @@ static rjson::value calculate_value(const parsed::set_rhs& rhs,
         std::unordered_set<std::string>& used_attribute_values,
         const rjson::value& update_info,
         schema_ptr schema,
-        const std::unique_ptr<rjson::value>& previous_item) {
+        const rjson::value* previous_item) {
     switch(rhs._op) {
     case 'v':
         return calculate_value(rhs._v1, calculate_value_caller::UpdateExpression, expression_attribute_values, used_attribute_names, used_attribute_values, update_info, schema, previous_item);
@@ -2332,31 +2349,6 @@ static bool check_needs_read_before_write(const parsed::update_expression& updat
     });
 }
 
-static future<std::unique_ptr<rjson::value>> get_previous_item(
-        service::storage_proxy& proxy,
-        service::client_state& client_state,
-        schema_ptr schema,
-        const partition_key& pk,
-        const clustering_key& ck,
-        service_permit permit,
-        alternator::stats& stats)
-{
-    stats.reads_before_write++;
-    auto selection = cql3::selection::selection::wildcard(schema);
-    auto command = previous_item_read_command(schema, ck, selection);
-    auto cl = db::consistency_level::LOCAL_QUORUM;
-
-    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
-            [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
-        if (previous_item) {
-            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
-        } else {
-            return make_ready_future<std::unique_ptr<rjson::value>>();
-        }
-    });
-}
-
 class update_item_operation  : public rmw_operation {
 public:
     // Some information parsed during the constructor to check for input
@@ -2434,10 +2426,10 @@ std::optional<mutation>
 update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) {
     std::unordered_set<std::string> used_attribute_values;
     std::unordered_set<std::string> used_attribute_names;
-    if (!verify_expected(_request, previous_item) ||
+    if (!verify_expected(_request, previous_item.get()) ||
         !verify_condition_expression(_condition_expression,
                 used_attribute_values, used_attribute_names,
-                _request, _schema, previous_item)) {
+                _request, _schema, previous_item.get())) {
         // If the update is to be cancelled because of an unfulfilled
         // condition, return an empty optional mutation, which is more
         // efficient than throwing an exception.
@@ -2456,7 +2448,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     to_sstring_view(column_name), rjson::copy(json_value));
         } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
             std::string_view cn =  to_sstring_view(column_name);
-            rjson::value* col = rjson::find(*previous_item, cn);
+            const rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
                 rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
@@ -2476,7 +2468,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             rjson::remove_member(_return_attributes, to_sstring_view(column_name));
         } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
             std::string_view cn =  to_sstring_view(column_name);
-            rjson::value* col = rjson::find(*previous_item, cn);
+            const rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
                 rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
@@ -2500,7 +2492,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     // can just move previous_item later, when we don't need it any more.
     if (_returnvalues == returnvalues::ALL_NEW) {
         if (previous_item) {
-            _return_attributes = rjson::copy(*previous_item);
+            _return_attributes = std::move(*previous_item);
         } else {
             // If there is no previous item, usually a new item is created
             // and contains they given key. This may be cancelled at the end
@@ -2529,7 +2521,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             }
             std::visit(overloaded_functor {
                 [&] (const parsed::update_expression::action::set& a) {
-                    auto value = calculate_value(a._rhs, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    auto value = calculate_value(a._rhs, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item.get());
                     do_update(to_bytes(column_name), value);
                 },
                 [&] (const parsed::update_expression::action::remove& a) {
@@ -2540,8 +2532,8 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     parsed::value addition;
                     base.set_path(action._path);
                     addition.set_valref(a._valref);
-                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
-                    rjson::value v2 = calculate_value(addition, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item.get());
+                    rjson::value v2 = calculate_value(addition, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item.get());
                     rjson::value result;
                     std::string v1_type = get_item_type_string(v1);
                     if (v1_type == "N") {
@@ -2564,8 +2556,8 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     parsed::value subset;
                     base.set_path(action._path);
                     subset.set_valref(a._valref);
-                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
-                    rjson::value v2 = calculate_value(subset, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item);
+                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item.get());
+                    rjson::value v2 = calculate_value(subset, calculate_value_caller::UpdateExpression, attr_values, used_attribute_names, used_attribute_values, _request, _schema, previous_item.get());
                     if (!v1.IsNull()) {
                         std::optional<rjson::value> result  = set_diff(v1, v2);
                         if (result) {

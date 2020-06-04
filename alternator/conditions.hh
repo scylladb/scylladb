@@ -47,7 +47,7 @@ enum class conditional_operator_type {
 };
 conditional_operator_type get_conditional_operator(const rjson::value& req);
 
-bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value>& previous_item);
-bool verify_condition(const rjson::value& condition, bool require_all, const rjson::value* previous_item_contents);
+bool verify_expected(const rjson::value& req, const rjson::value* previous_item);
+bool verify_condition(const rjson::value& condition, bool require_all, const rjson::value* previous_item);
 
 }

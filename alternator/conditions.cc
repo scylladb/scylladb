@@ -498,7 +498,7 @@ conditional_operator_type get_conditional_operator(const rjson::value& req) {
 // (if they exist) in the request (an UpdateItem, PutItem or DeleteItem).
 // This function can throw an ValidationException API error if there
 // are errors in the format of the condition itself.
-bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value>& previous_item) {
+bool verify_expected(const rjson::value& req, const rjson::value* previous_item) {
     const rjson::value* expected = rjson::find(req, "Expected");
     auto conditional_operator = get_conditional_operator(req);
     if (conditional_operator != conditional_operator_type::MISSING &&
@@ -512,7 +512,7 @@ bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value
         throw api_error("ValidationException", "'Expected' parameter, if given, must be an object");
     }
     bool require_all = conditional_operator != conditional_operator_type::OR;
-    return verify_condition(*expected, require_all, previous_item.get());
+    return verify_condition(*expected, require_all, previous_item);
 }
 
 bool verify_condition(const rjson::value& condition, bool require_all, const rjson::value* previous_item) {
@@ -540,7 +540,7 @@ bool calculate_primitive_condition(const parsed::primitive_condition& cond,
         std::unordered_set<std::string>& used_attribute_names,
         const rjson::value& req,
         schema_ptr schema,
-        const std::unique_ptr<rjson::value>& previous_item) {
+        const rjson::value* previous_item) {
     std::vector<rjson::value> calculated_values;
     calculated_values.reserve(cond._values.size());
     for (const parsed::value& v : cond._values) {
@@ -610,7 +610,7 @@ bool verify_condition_expression(
         std::unordered_set<std::string>& used_attribute_names,
         const rjson::value& req,
         schema_ptr schema,
-        const std::unique_ptr<rjson::value>& previous_item) {
+        const rjson::value* previous_item) {
     if (condition_expression.empty()) {
         return true;
     }

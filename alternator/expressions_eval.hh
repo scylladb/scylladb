@@ -65,7 +65,7 @@ rjson::value calculate_value(const parsed::value& v,
         std::unordered_set<std::string>& used_attribute_values,
         const rjson::value& update_info,
         schema_ptr schema,
-        const std::unique_ptr<rjson::value>& previous_item);
+        const rjson::value* previous_item);
 
 bool verify_condition_expression(
         const parsed::condition_expression& condition_expression,
@@ -73,6 +73,6 @@ bool verify_condition_expression(
         std::unordered_set<std::string>& used_attribute_names,
         const rjson::value& req,
         schema_ptr schema,
-        const std::unique_ptr<rjson::value>& previous_item);
+        const rjson::value* previous_item);
 
 } /* namespace alternator */
