@@ -135,3 +135,14 @@ def test_put_item_return_type(dynamodb, test_table):
     assert response.text
     # json::loads throws on invalid input
     json.loads(response.text)
+
+# Test that TagResource and UntagResource requests return empty HTTP body on success
+def test_tags_return_empty_body(dynamodb, test_table):
+    descr = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+    arn =  descr['TableArn']
+    req = get_signed_request(dynamodb, 'TagResource', '{"ResourceArn": "' + arn + '", "Tags": [{"Key": "k", "Value": "v"}]}')
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert not response.text
+    req = get_signed_request(dynamodb, 'UntagResource', '{"ResourceArn": "' + arn + '", "TagKeys": ["k"]}')
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert not response.text
