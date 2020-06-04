@@ -1149,7 +1149,7 @@ static db::timeout_clock::time_point default_timeout() {
     return db::timeout_clock::now() + 10s;
 }
 
-static rjson::value describe_item(schema_ptr schema,
+static std::optional<rjson::value> describe_single_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
@@ -1229,11 +1229,12 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
 std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) {
     if (qr->row_count()) {
         auto selection = cql3::selection::selection::wildcard(_schema);
-        auto previous_item = describe_item(_schema, slice, *selection, *qr, {});
-        return apply(std::make_unique<rjson::value>(std::move(previous_item)), ts);
-    } else {
-        return apply(std::unique_ptr<rjson::value>(), ts);
+        auto previous_item = describe_single_item(_schema, slice, *selection, *qr, {});
+        if (previous_item) {
+            return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts);
+        }
     }
+    return apply(std::unique_ptr<rjson::value>(), ts);
 }
 
 rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(schema_ptr schema) {
@@ -1410,12 +1411,7 @@ public:
             return {};
         }
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
-            // previous_item is supposed to have been created with
-            // describe_item(), so has the "Item" attribute:
-            rjson::value* item = rjson::find(*previous_item, "Item");
-            if (item) {
-                _return_attributes = std::move(*item);
-            }
+            _return_attributes = std::move(*previous_item);
         }
         if (!_condition_expression.empty()) {
             verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
@@ -1488,10 +1484,7 @@ public:
             return {};
         }
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
-            rjson::value* item = rjson::find(*previous_item, "Item");
-            if (item) {
-                _return_attributes = std::move(*item);
-            }
+            _return_attributes = std::move(*previous_item);
         }
         if (!_condition_expression.empty()) {
             verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
@@ -2145,11 +2138,11 @@ rjson::value calculate_value(const parsed::value& v,
             }
         },
         [&] (const parsed::path& p) -> rjson::value {
-            if (!previous_item || previous_item->IsNull() || previous_item->ObjectEmpty()) {
+            if (!previous_item) {
                 return rjson::null_value();
             }
             std::string update_path = resolve_update_path(p, update_info, schema, used_attribute_names, allow_key_columns::yes);
-            rjson::value* previous_value = rjson::find((*previous_item)["Item"], update_path);
+            rjson::value* previous_value = rjson::find(*previous_item, update_path);
             return previous_value ? rjson::copy(*previous_value) : rjson::null_value();
         }
     }, v._value);
@@ -2304,22 +2297,6 @@ static std::optional<rjson::value> describe_single_item(schema_ptr schema,
     return item;
 }
 
-static rjson::value describe_item(schema_ptr schema,
-        const query::partition_slice& slice,
-        const cql3::selection::selection& selection,
-        const query::result& query_result,
-        std::unordered_set<std::string>&& attrs_to_get) {
-    std::optional<rjson::value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), std::move(attrs_to_get));
-    if (!opt_item) {
-        // If there is no matching item, we're supposed to return an empty
-        // object without an Item member - not one with an empty Item member
-        return rjson::empty_object();
-    }
-    rjson::value item_descr = rjson::empty_object();
-    rjson::set(item_descr, "Item", std::move(*opt_item));
-    return item_descr;
-}
-
 static bool check_needs_read_before_write(const parsed::value& v) {
     return std::visit(overloaded_functor {
         [&] (const std::string& valref) -> bool {
@@ -2355,8 +2332,6 @@ static bool check_needs_read_before_write(const parsed::update_expression& updat
     });
 }
 
-// FIXME: Getting the previous item does not offer any synchronization guarantees nor linearizability.
-// It should be overridden once we can leverage a consensus protocol.
 static future<std::unique_ptr<rjson::value>> get_previous_item(
         service::storage_proxy& proxy,
         service::client_state& client_state,
@@ -2373,8 +2348,12 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
 
     return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
             [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = describe_item(schema, command->slice, *selection, *qr.query_result, {});
-        return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(previous_item)));
+        auto previous_item = describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
+        if (previous_item) {
+            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
+        } else {
+            return make_ready_future<std::unique_ptr<rjson::value>>();
+        }
     });
 }
 
@@ -2465,9 +2444,6 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
         return {};
     }
 
-    // previous_item was created by describe_item() so has an "Item" member.
-    rjson::value* item = previous_item ? rjson::find(*previous_item, "Item") : nullptr;
-
     mutation m(_schema, _pk);
     auto& row = m.partition().clustered_row(*_schema, _ck);
     attribute_collector attrs_collector;
@@ -2478,9 +2454,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             _returnvalues == returnvalues::UPDATED_NEW) {
             rjson::set_with_string_name(_return_attributes,
                     to_sstring_view(column_name), rjson::copy(json_value));
-        } else if (_returnvalues == returnvalues::UPDATED_OLD && item) {
+        } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
             std::string_view cn =  to_sstring_view(column_name);
-            rjson::value* col = rjson::find(*item, cn);
+            rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
                 rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
@@ -2498,9 +2474,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
         any_deletes = true;
         if (_returnvalues == returnvalues::ALL_NEW) {
             rjson::remove_member(_return_attributes, to_sstring_view(column_name));
-        } else if (_returnvalues == returnvalues::UPDATED_OLD && item) {
+        } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
             std::string_view cn =  to_sstring_view(column_name);
-            rjson::value* col = rjson::find(*item, cn);
+            rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
                 rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
             }
@@ -2523,8 +2499,8 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     // Note that for ReturnValues=ALL_OLD, we don't need to copy here, and
     // can just move previous_item later, when we don't need it any more.
     if (_returnvalues == returnvalues::ALL_NEW) {
-        if (item) {
-            _return_attributes = rjson::copy(*item);
+        if (previous_item) {
+            _return_attributes = rjson::copy(*previous_item);
         } else {
             // If there is no previous item, usually a new item is created
             // and contains they given key. This may be cancelled at the end
@@ -2602,8 +2578,8 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             }, action._action);
         }
     }
-    if (_returnvalues == returnvalues::ALL_OLD && item) {
-        _return_attributes = std::move(*item);
+    if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
+        _return_attributes = std::move(*previous_item);
     }
     if (!_update_expression.empty() || !_condition_expression.empty()) {
         verify_all_are_used(_request, "ExpressionAttributeNames", used_attribute_names, "UpdateExpression");
@@ -2650,7 +2626,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     // (this was issue #5862) but any other update, even an empty one, should.
     if (any_updates || !any_deletes) {
         row.apply(row_marker(ts));
-    } else if (_returnvalues == returnvalues::ALL_NEW && !item) {
+    } else if (_returnvalues == returnvalues::ALL_NEW && !previous_item) {
         // There was no pre-existing item, and we're not creating one, so
         // don't report the new item in the returned Attributes.
         _return_attributes = rjson::null_value();
@@ -2712,6 +2688,25 @@ static db::consistency_level get_read_consistency(const rjson::value& request) {
         }
     }
     return consistent_read ? db::consistency_level::LOCAL_QUORUM : db::consistency_level::LOCAL_ONE;
+}
+
+// describe_item() wraps the result of describe_single_item() by a map
+// as needed by the GetItem request. It should not be used for other purposes,
+// use describe_single_item() instead.
+static rjson::value describe_item(schema_ptr schema,
+        const query::partition_slice& slice,
+        const cql3::selection::selection& selection,
+        const query::result& query_result,
+        std::unordered_set<std::string>&& attrs_to_get) {
+    std::optional<rjson::value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), std::move(attrs_to_get));
+    if (!opt_item) {
+        // If there is no matching item, we're supposed to return an empty
+        // object without an Item member - not one with an empty Item member
+        return rjson::empty_object();
+    }
+    rjson::value item_descr = rjson::empty_object();
+    rjson::set(item_descr, "Item", std::move(*opt_item));
+    return item_descr;
 }
 
 future<executor::request_return_type> executor::get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {

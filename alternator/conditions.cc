@@ -512,20 +512,14 @@ bool verify_expected(const rjson::value& req, const std::unique_ptr<rjson::value
         throw api_error("ValidationException", "'Expected' parameter, if given, must be an object");
     }
     bool require_all = conditional_operator != conditional_operator_type::OR;
-    // previous_item has just an "Item" attribute. We need to pass into
-    // verify_condition() just the contents of this attribute.
-    rjson::value* previous_item_contents = nullptr;
-    if (previous_item && previous_item->IsObject()) {
-        previous_item_contents = rjson::find(*previous_item, "Item");
-    }
-    return verify_condition(*expected, require_all, previous_item_contents);
+    return verify_condition(*expected, require_all, previous_item.get());
 }
 
-bool verify_condition(const rjson::value& condition, bool require_all, const rjson::value* previous_item_contents) {
+bool verify_condition(const rjson::value& condition, bool require_all, const rjson::value* previous_item) {
     for (auto it = condition.MemberBegin(); it != condition.MemberEnd(); ++it) {
         const rjson::value* got = nullptr;
-        if (previous_item_contents) {
-            got = rjson::find(*previous_item_contents, rjson::to_string_view(it->name));
+        if (previous_item) {
+            got = rjson::find(*previous_item, rjson::to_string_view(it->name));
         }
         bool success = verify_expected_one(it->value, got);
         if (success && !require_all) {
