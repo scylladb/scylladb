@@ -92,9 +92,8 @@ progresses and compatibility continues to improve.
 ### Scans
 Scan and Query are mostly supported, with the following limitations:
 * As above, projection expressions only support top-level attributes.
-* Filter expressions (to filter some of the items) are only partially
-  supported: The ScanFilter syntax is currently only supports the equality
-  operator, and the FilterExpression syntax is not yet supported at all.
+* The ScanFilter/QueryFilter parameter for filtering results is fully
+  supported, but the newer FilterExpression syntax is not yet supported.
 * The "Select" options which allows to count items instead of returning them
   is not yet supported.
 ### Secondary Indexes
