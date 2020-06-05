@@ -424,6 +424,11 @@ protected:
     std::optional<compaction_weight_registration> _weight_registration;
     utils::UUID _run_identifier;
     ::io_priority_class _io_priority;
+    // optional clone of sstable set to be used for expiration purposes, so it will be set if expiration is enabled.
+    std::optional<sstable_set> _sstable_set;
+    // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
+    std::optional<sstable_set::incremental_selector> _selector;
+    std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
 protected:
     compaction(column_family& cf, compaction_descriptor descriptor)
         : _cf(cf)
@@ -438,6 +443,9 @@ protected:
         , _weight_registration(std::move(descriptor.weight_registration))
         , _run_identifier(descriptor.run_identifier)
         , _io_priority(descriptor.io_priority)
+        , _sstable_set(std::move(descriptor.all_sstables_snapshot))
+        , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
+        , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
     {
         _info->cf = &cf;
         for (auto& sst : _sstables) {
@@ -487,6 +495,12 @@ protected:
     get_compaction_completion_desc(std::vector<shared_sstable> input_sstables, std::vector<shared_sstable> output_sstables) {
         return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables)};
     }
+
+    // Tombstone expiration is enabled based on the presence of sstable set.
+    // If it's not present, we cannot purge tombstones without the risk of resurrecting data.
+    bool tombstone_expiration_enabled() const {
+        return bool(_sstable_set);
+    }
 public:
     compaction& operator=(const compaction&) = delete;
     compaction(const compaction&) = delete;
@@ -524,7 +538,7 @@ private:
 
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
-            if (fully_expired.count(sst)) {
+            if (tombstone_expiration_enabled() && fully_expired.count(sst)) {
                 continue;
             }
 
@@ -609,9 +623,14 @@ private:
     virtual void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const = 0;
     virtual void backlog_tracker_adjust_charges() = 0;
 
-    virtual std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() {
-        return [] (const dht::decorated_key& dk) {
-            return api::min_timestamp;
+    std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() {
+        if (!tombstone_expiration_enabled()) {
+            return [] (const dht::decorated_key& dk) {
+                return api::min_timestamp;
+            };
+        }
+        return [this] (const dht::decorated_key& dk) {
+            return get_max_purgeable_timestamp(_cf, *_selector, _compacting_for_max_purgeable_func, dk);
         };
     }
 
@@ -725,20 +744,12 @@ void garbage_collected_sstable_writer::data::finish_sstable_writer() {
 }
 
 class regular_compaction : public compaction {
-    std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
-    // store a clone of sstable set for column family, which needs to be alive for incremental selector.
-    sstable_set _set;
-    // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
-    std::optional<sstable_set::incremental_selector> _selector;
     // sstable being currently written.
     mutable compaction_read_monitor_generator _monitor_generator;
     std::deque<compaction_write_monitor> _active_write_monitors = {};
 public:
     regular_compaction(column_family& cf, compaction_descriptor descriptor)
         : compaction(cf, std::move(descriptor))
-        , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
-        , _set(cf.get_sstable_set())
-        , _selector(_set.make_incremental_selector())
         , _monitor_generator(_cf.get_compaction_manager(), _cf)
     {
         _info->run_identifier = _run_identifier;
@@ -778,12 +789,6 @@ public:
         for (auto& wm : _active_write_monitors) {
             wm.add_sstable();
         }
-    }
-
-    virtual std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() override {
-        return [this] (const dht::decorated_key& dk) {
-            return get_max_purgeable_timestamp(_cf, *_selector, _compacting_for_max_purgeable_func, dk);
-        };
     }
 
     virtual flat_mutation_reader::filter make_partition_filter() const override {
@@ -891,10 +896,10 @@ private:
     }
 
     void update_pending_ranges() {
-        if (_set.all()->empty() || _info->pending_replacements.empty()) { // set can be empty for testing scenario.
+        if (_sstable_set->all()->empty() || _info->pending_replacements.empty()) { // set can be empty for testing scenario.
             return;
         }
-        auto set = _set;
+        auto set = *_sstable_set;
         // Releases reference to sstables compacted by this compaction or another, both of which belongs
         // to the same column family
         for (auto& pending_replacement : _info->pending_replacements) {
@@ -910,8 +915,8 @@ private:
                 set.insert(sst);
             }
         }
-        _set = std::move(set);
-        _selector.emplace(_set.make_incremental_selector());
+        _sstable_set = std::move(set);
+        _selector.emplace(_sstable_set->make_incremental_selector());
         _info->pending_replacements.clear();
     }
 };

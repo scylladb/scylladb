@@ -59,7 +59,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
         auto& sst = *std::max_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
             return i->estimate_droppable_tombstone_ratio(gc_before) < j->estimate_droppable_tombstone_ratio(gc_before);
         });
-        return sstables::compaction_descriptor({ sst }, service::get_local_compaction_priority(), sst->get_sstable_level());
+        return sstables::compaction_descriptor({ sst }, cfs.get_sstable_set(), service::get_local_compaction_priority(), sst->get_sstable_level());
     }
     return {};
 }
@@ -72,7 +72,8 @@ compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(colu
     auto& sst = *std::max_element(candidates.begin(), candidates.end(), [&] (sstables::shared_sstable& sst1, sstables::shared_sstable& sst2) {
         return sst1->get_sstable_level() < sst2->get_sstable_level();
     });
-    return compaction_descriptor(std::move(candidates), service::get_local_compaction_priority(), sst->get_sstable_level(), _max_sstable_size_in_mb*1024*1024);
+    return compaction_descriptor(std::move(candidates), cf.get_sstable_set(), service::get_local_compaction_priority(),
+                                 sst->get_sstable_level(), _max_sstable_size_in_mb*1024*1024);
 }
 
 std::vector<resharding_descriptor> leveled_compaction_strategy::get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates) {

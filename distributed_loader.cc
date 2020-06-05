@@ -414,7 +414,11 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
 
                 return invoke_all_resharding_jobs(cf, directory, std::move(jobs), [directory, &cf] (auto sstables, auto level, auto max_sstable_bytes) {
                     // FIXME: run it in maintenance priority.
-                    sstables::compaction_descriptor descriptor(sstables, service::get_local_compaction_priority(), level, max_sstable_bytes);
+                    // Resharding, currently, cannot provide compaction with a snapshot of the sstable set
+                    // which spans all shards that input sstables belong to, so expiration is disabled.
+                    std::optional<sstables::sstable_set> sstable_set = std::nullopt;
+                    sstables::compaction_descriptor descriptor(sstables, std::move(sstable_set), service::get_local_compaction_priority(),
+                                                               level, max_sstable_bytes);
                     descriptor.options = sstables::compaction_options::make_reshard();
                     descriptor.creator = [&cf, directory] (shard_id shard) mutable {
                         // we need generation calculated by instance of cf at requested shard,

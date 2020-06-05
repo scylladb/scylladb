@@ -24,6 +24,7 @@
 
 #include "database_fwd.hh"
 #include "shared_sstable.hh"
+#include "sstable_set.hh"
 #include "gc_clock.hh"
 #include "compaction_weight_registration.hh"
 #include "utils/UUID.hh"
@@ -108,6 +109,9 @@ namespace sstables {
     struct compaction_descriptor {
         // List of sstables to be compacted.
         std::vector<sstables::shared_sstable> sstables;
+        // This is a snapshot of the table's sstable set, used only for the purpose of expiring tombstones.
+        // If this sstable set cannot be provided, expiration will be disabled to prevent data from being resurrected.
+        std::optional<sstables::sstable_set> all_sstables_snapshot;
         // Level of sstable(s) created by compaction procedure.
         int level;
         // Threshold size for sstable(s) to be created.
@@ -131,12 +135,15 @@ namespace sstables {
         static constexpr int default_level = 0;
         static constexpr uint64_t default_max_sstable_bytes = std::numeric_limits<uint64_t>::max();
 
-        explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables, ::io_priority_class io_priority,
+        explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables,
+                                       std::optional<sstables::sstable_set> all_sstables_snapshot,
+                                       ::io_priority_class io_priority,
                                        int level = default_level,
                                        uint64_t max_sstable_bytes = default_max_sstable_bytes,
                                        utils::UUID run_identifier = utils::make_random_uuid(),
                                        compaction_options options = compaction_options::make_regular())
             : sstables(std::move(sstables))
+            , all_sstables_snapshot(std::move(all_sstables_snapshot))
             , level(level)
             , max_sstable_bytes(max_sstable_bytes)
             , run_identifier(run_identifier)

@@ -178,7 +178,7 @@ public:
         if (!expired.empty()) {
             compaction_candidates.insert(compaction_candidates.end(), expired.begin(), expired.end());
         }
-        return compaction_descriptor(std::move(compaction_candidates), service::get_local_compaction_priority());
+        return compaction_descriptor(std::move(compaction_candidates), cf.get_sstable_set(), service::get_local_compaction_priority());
     }
 private:
     static timestamp_type
