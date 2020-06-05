@@ -576,6 +576,15 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
 
 // We don't want schema digest to change between Scylla versions because that results in a schema disagreement
 // during rolling upgrade.
+// This test is *not* supposed to check that the schema does not change.
+// It only checks that the digest itself does not change *given* that the schema does not change.
+// If the schema changes, the digest will change too (as expected), which will cause the test
+// to fail unless you regenerate the test data. That's by design of the test.
+// Note that changing the schema may introduce rolling upgrade problems, e.g. if changing the schema
+// on an upgraded node doesn't force other nodes to follow-up. This test is not intended to catch such bugs.
+// To test that rolling upgrade works in case of schema changes, we need to actually run two different
+// versions of Scylla, and that cannot be done in a unit test.
+// See also #6582.
 future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_dir,
         std::set<sstring> disabled_features, std::vector<utils::UUID> expected_digests,
         std::function<void(cql_test_env& e)> extra_schema_changes,
@@ -588,6 +597,10 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
     // This test uses pre-generated sstables and relies on the fact that they are up to date
     // with the current system schema. If it is not, the schema will be updated, which will cause
     // new timestamps to appear and schema digests will not match anymore.
+    // Warning: if you regenerate the data (and digests), please make sure that you don't accidentally
+    // hide a digest calculation bug. Separate commits that touch the schema from commits which
+    // could potentially modify the digest calculation algorithm (for example). And DO test whether
+    // rolling upgrade works.
     const bool regenerate = false;
 
     auto db_cfg_ptr = ::make_shared<db::config>(std::move(extensions));
