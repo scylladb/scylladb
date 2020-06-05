@@ -3478,6 +3478,11 @@ future<file_writer> file_writer::make(file f, file_output_stream_options options
             return file_writer(std::move(out));
         });
 }
+
+std::ostream& operator<<(std::ostream& out, const deletion_time& dt) {
+    return out << "{timestamp=" << dt.marked_for_delete_at << ", deletion_time=" << dt.marked_for_delete_at << "}";
+}
+
 }
 
 std::ostream& operator<<(std::ostream& out, const sstables::component_type& comp_type) {

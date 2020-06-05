@@ -81,6 +81,7 @@ struct deletion_time {
     explicit operator tombstone() {
         return !live() ? tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time))) : tombstone();
     }
+    friend std::ostream& operator<<(std::ostream&, const deletion_time&);
 };
 
 struct option {
