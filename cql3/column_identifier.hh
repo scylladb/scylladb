@@ -139,16 +139,6 @@ static inline
     return def.column_specification->name;
 }
 
-static inline
-std::vector<::shared_ptr<column_identifier>> to_identifiers(const std::vector<const column_definition*>& defs) {
-    std::vector<::shared_ptr<column_identifier>> r;
-    r.reserve(defs.size());
-    for (auto&& def : defs) {
-        r.push_back(to_identifier(*def));
-    }
-    return r;
-}
-
 }
 
 namespace std {

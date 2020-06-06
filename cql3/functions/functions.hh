@@ -69,7 +69,6 @@ private:
 public:
     static lw_shared_ptr<column_specification> make_arg_spec(const sstring& receiver_ks, const sstring& receiver_cf,
             const function& fun, size_t i);
-    static int get_overload_count(const function_name& name);
 public:
     static shared_ptr<function> get(database& db,
                                     const sstring& keyspace,

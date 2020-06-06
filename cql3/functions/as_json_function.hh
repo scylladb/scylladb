@@ -144,10 +144,6 @@ public:
         return false;
     }
 
-    virtual bool has_reference_to(function& f) const override {
-        return false;
-    }
-
     virtual sstring column_name(const std::vector<sstring>& column_names) const override {
         return "[json]";
     }

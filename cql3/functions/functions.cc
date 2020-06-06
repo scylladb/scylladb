@@ -158,11 +158,6 @@ functions::make_arg_spec(const sstring& receiver_ks, const sstring& receiver_cf,
                                    fun.arg_types()[i]);
 }
 
-int
-functions::get_overload_count(const function_name& name) {
-    return _declared.count(name);
-}
-
 inline
 shared_ptr<function>
 make_to_json_function(data_type t) {

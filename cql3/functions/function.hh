@@ -82,7 +82,6 @@ public:
 
     virtual void print(std::ostream& os) const = 0;
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
-    virtual bool has_reference_to(function& f) const = 0;
 
     /**
      * Returns the name of the function to use within a ResultSet.

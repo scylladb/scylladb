@@ -108,10 +108,6 @@ public:
         return _entity;
     }
 
-    ::shared_ptr<term::raw> get_map_key() {
-        return _map_key;
-    }
-
     ::shared_ptr<term::raw> get_value() {
         return _value;
     }
