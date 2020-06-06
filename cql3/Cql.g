@@ -563,7 +563,7 @@ updateConditions returns [conditions_type conditions]
 deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
     @init {
         auto attrs = std::make_unique<cql3::attributes::raw>();
-        std::vector<::shared_ptr<cql3::operation::raw_deletion>> column_deletions;
+        std::vector<std::unique_ptr<cql3::operation::raw_deletion>> column_deletions;
         bool if_exists = false;
     }
     : K_DELETE ( dels=deleteSelection { column_deletions = std::move(dels); } )?
@@ -581,15 +581,15 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
       }
     ;
 
-deleteSelection returns [std::vector<::shared_ptr<cql3::operation::raw_deletion>> operations]
+deleteSelection returns [std::vector<std::unique_ptr<cql3::operation::raw_deletion>> operations]
     : t1=deleteOp { $operations.emplace_back(std::move(t1)); }
       (',' tN=deleteOp { $operations.emplace_back(std::move(tN)); })*
     ;
 
-deleteOp returns [::shared_ptr<cql3::operation::raw_deletion> op]
-    : c=cident                { $op = ::make_shared<cql3::operation::column_deletion>(std::move(c)); }
-    | c=cident '[' t=term ']' { $op = ::make_shared<cql3::operation::element_deletion>(std::move(c), std::move(t)); }
-    | c=cident '.' field=ident { $op = ::make_shared<cql3::operation::field_deletion>(std::move(c), std::move(field)); }
+deleteOp returns [std::unique_ptr<cql3::operation::raw_deletion> op]
+    : c=cident                { $op = std::make_unique<cql3::operation::column_deletion>(std::move(c)); }
+    | c=cident '[' t=term ']' { $op = std::make_unique<cql3::operation::element_deletion>(std::move(c), std::move(t)); }
+    | c=cident '.' field=ident { $op = std::make_unique<cql3::operation::field_deletion>(std::move(c), std::move(field)); }
     ;
 
 usingClauseDelete[std::unique_ptr<cql3::attributes::raw>& attrs]

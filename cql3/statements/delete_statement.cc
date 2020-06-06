@@ -122,7 +122,7 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, variable_spe
 
 delete_statement::delete_statement(::shared_ptr<cf_name> name,
                                  std::unique_ptr<attributes::raw> attrs,
-                                 std::vector<::shared_ptr<operation::raw_deletion>> deletions,
+                                 std::vector<std::unique_ptr<operation::raw_deletion>> deletions,
                                  std::vector<::shared_ptr<relation>> where_clause,
                                  conditions_vector conditions,
                                  bool if_exists)
