@@ -72,10 +72,16 @@
 #include "view_update_checks.hh"
 #include "types/user.hh"
 #include "types/list.hh"
+#include "utils/error_injection.hh"
 
 using namespace std::chrono_literals;
 
 static logging::logger vlogger("view");
+
+static inline void inject_failure(std::string_view operation) {
+    utils::get_local_injector().inject(operation,
+            [operation] { throw std::runtime_error(std::string(operation)); });
+}
 
 view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
         : _schema(schema)
@@ -1667,6 +1673,7 @@ public:
     }
 
     void load_views_to_build() {
+        inject_failure("view_builder_load_views");
         for (auto&& vs : _step.build_status) {
             if (_step.current_token() >= vs.next_token) {
                 if (partition_key_matches(*_step.reader.schema(), *vs.view->view_info(), _step.current_key, _now)) {
@@ -1682,6 +1689,7 @@ public:
     }
 
     void check_for_built_views() {
+        inject_failure("view_builder_check_for_built_views");
         for (auto it = _step.build_status.begin(); it != _step.build_status.end();) {
             // A view starts being built at token t1. Due to resharding, that may not necessarily be a
             // shard-owned token. We finish building the view when the next_token to build is just before
@@ -1698,6 +1706,7 @@ public:
     }
 
     stop_iteration consume_new_partition(const dht::decorated_key& dk) {
+        inject_failure("view_builder_consume_new_partition");
         _step.current_key = std::move(dk);
         check_for_built_views();
         _views_to_build.clear();
@@ -1706,14 +1715,17 @@ public:
     }
 
     stop_iteration consume(tombstone) {
+        inject_failure("view_builder_consume_tombstone");
         return stop_iteration::no;
     }
 
     stop_iteration consume(static_row&&, tombstone, bool) {
+        inject_failure("view_builder_consume_static_row");
         return stop_iteration::no;
     }
 
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
+        inject_failure("view_builder_consume_clustering_row");
         if (_views_to_build.empty() || _builder._as.abort_requested()) {
             return stop_iteration::yes;
         }
@@ -1731,10 +1743,12 @@ public:
     }
 
     stop_iteration consume(range_tombstone&&) {
+        inject_failure("view_builder_consume_range_tombstone");
         return stop_iteration::no;
     }
 
     void flush_fragments() {
+        inject_failure("view_builder_flush_fragments");
         _builder._as.check();
         if (!_fragments.empty()) {
             _fragments.push_front(partition_start(_step.current_key, tombstone()));
@@ -1749,11 +1763,13 @@ public:
     }
 
     stop_iteration consume_end_of_partition() {
+        inject_failure("view_builder_consume_end_of_partition");
         flush_fragments();
         return stop_iteration(_step.build_status.empty());
     }
 
     built_views consume_end_of_stream() {
+        inject_failure("view_builder_consume_end_of_stream");
         if (vlogger.is_enabled(log_level::debug)) {
             auto view_names = boost::copy_range<std::vector<sstring>>(
                     _views_to_build | boost::adaptors::transformed([](auto v) {
@@ -1819,6 +1835,7 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
                 return result && shard_complete;
             }).then([this, view, next_token = std::move(next_token)] (bool built) {
         if (built) {
+            inject_failure("view_builder_mark_view_as_built");
             return container().invoke_on_all([view_id = view->id()] (view_builder& builder) {
                 if (builder._built_views.erase(view_id) == 0 || this_shard_id() != 0) {
                     return make_ready_future<>();
