@@ -37,8 +37,23 @@ def verify_cpu():
                     print('Scylla requires the sse4.2 and clmul instruction sets, check your processor and hypervisor')
                     sys.exit(1)
 
+#XXX: RequiresMountFor does not refuse service startup when mountpoint
+#     commented out on /etc/fstab, run manual check
+MOUNTS_CONF='/etc/systemd/system/scylla-server.service.d/mounts.conf'
+def verify_mount():
+    if os.path.exists(MOUNTS_CONF):
+        with open(MOUNTS_CONF) as f:
+            for l in f:
+                m = re.search(r'RequiresMountsFor=(.*)\n', l)
+                if m:
+                    mount_at = m.group(1)
+        if not os.path.ismount(mount_at):
+            print('data partition {} not mounted'.format(mount_at))
+            sys.exit(1)
+
 if __name__ == '__main__':
     verify_cpu()
+    verify_mount()
 
     if os.getuid() > 0:
         print('Requires root permission.')
