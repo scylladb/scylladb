@@ -453,8 +453,8 @@ arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='gcc'
                         help='C compiler path')
 arg_parser.add_argument('--with-osv', action='store', dest='with_osv', default='',
                         help='Shortcut for compile for OSv')
-arg_parser.add_argument('--enable-dpdk', action='store_true', dest='dpdk', default=False,
-                        help='Enable dpdk (from seastar dpdk sources)')
+add_tristate(arg_parser, name='enable-dpdk', dest='dpdk',
+                        help='Use dpdk (from seastar dpdk sources) (default=True for release builds)')
 arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
                         help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action='store', dest='debuginfo', type=int, default=1,
@@ -1247,7 +1247,10 @@ def configure_seastar(build_dir, mode):
         stack_guards = 'ON' if args.stack_guards else 'OFF'
         seastar_cmake_args += ['-DSeastar_STACK_GUARDS={}'.format(stack_guards)]
 
-    if args.dpdk:
+    dpdk = args.dpdk
+    if dpdk is None:
+        dpdk = mode == 'release'
+    if dpdk:
         seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=wsm']
     if args.split_dwarf:
         seastar_cmake_args += ['-DSeastar_SPLIT_DWARF=ON']
@@ -1256,7 +1259,7 @@ def configure_seastar(build_dir, mode):
 
     seastar_cmd = ['cmake', '-G', 'Ninja', os.path.relpath(args.seastar_path, seastar_build_dir)] + seastar_cmake_args
     cmake_dir = seastar_build_dir
-    if args.dpdk:
+    if dpdk:
         # need to cook first
         cmake_dir = args.seastar_path # required by cooking.sh
         relative_seastar_build_dir = os.path.join('..', seastar_build_dir)  # relative to seastar/
