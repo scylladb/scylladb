@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2019 ScyllaDB
+#
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+import os
+import sys
+import argparse
+from pathlib import Path
+from scylla_util import *
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Configure swap for Scylla.')
+    parser.add_argument('--swap-directory',
+                        help='specify swapfile directory', default='/')
+    args = parser.parse_args()
+
+    if swap_exists():
+        print('swap already configured, exiting setup')
+        sys.exit(1)
+
+    memtotal = get_memtotal_gb()
+    # Scylla document says 'swap size should be set to either total_mem/3 or
+    # 16GB - lower of the two', so we need to compare 16g vs memtotal/3 and
+    # choose lower one
+    # see: https://docs.scylladb.com/faq/#do-i-need-to-configure-swap-on-a-scylla-node
+    swapsize = 16 if 16 < int(memtotal / 3) else int(memtotal / 3)
+    diskfree = get_disk_free_gb(args.swap_directory)
+    if swapsize > diskfree:
+        print('swap directory {} does not have enough disk space. {}GB space required.'.format(args.swap_directory, swapsize))
+        sys.exit(1)
+
+    swapfile = Path(args.swap_directory) / 'swapfile'
+    if swapfile.exists():
+        print('swapfile {} already exists'.format(swapfile))
+        sys.exit(1)
+    run('fallocate -v -l {}GB {}'.format(swapsize, swapfile))
+    swapfile.chmod(0o600)
+    run('mkswap -f {}'.format(swapfile))
+    swapunit_bn = out('/usr/bin/systemd-escape -p --suffix=swap {}'.format(swapfile))
+    swapunit = Path('/etc/systemd/system/{}'.format(swapunit_bn))
+    if swapunit.exists():
+        print('swap unit {} already exists'.format(swapunit))
+        sys.exit(1)
+    unit_data = '''
+[Unit]
+Description=swapfile
+
+[Swap]
+What={}
+
+[Install]
+WantedBy=multi-user.target
+'''[1:-1].format(swapfile)
+    with swapunit.open('w') as f:
+        f.write(unit_data)
+    systemd_unit.reload()
+    swap = systemd_unit(swapunit_bn)
+    swap.enable()
+    swap.start()
