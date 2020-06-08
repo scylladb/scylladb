@@ -30,7 +30,7 @@
 
 #include "service/storage_service.hh"
 
-#include <utils/error_injection.hh>
+#include "utils/error_injection.hh"
 
 namespace service::paxos {
 

@@ -26,8 +26,8 @@
 #include <seastar/http/httpd.hh>
 #include <seastar/net/tls.hh>
 #include <optional>
-#include <alternator/auth.hh>
-#include <utils/small_vector.hh>
+#include "alternator/auth.hh"
+#include "utils/small_vector.hh"
 #include <seastar/core/units.hh>
 
 namespace alternator {

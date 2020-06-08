@@ -24,7 +24,7 @@
 #include "alternator/expressionsParser.hpp"
 #include "utils/overloaded_functor.hh"
 
-#include <seastarx.hh>
+#include "seastarx.hh"
 
 #include <seastar/core/print.hh>
 #include <seastar/util/log.hh>

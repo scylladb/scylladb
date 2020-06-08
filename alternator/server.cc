@@ -23,7 +23,7 @@
 #include "log.hh"
 #include <seastar/http/function_handlers.hh>
 #include <seastar/json/json_elements.hh>
-#include <seastarx.hh>
+#include "seastarx.hh"
 #include "error.hh"
 #include "rjson.hh"
 #include "auth.hh"

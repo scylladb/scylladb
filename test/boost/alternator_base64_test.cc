@@ -22,7 +22,7 @@
 #define BOOST_TEST_MODULE alternator
 #include <boost/test/included/unit_test.hpp>
 
-#include <alternator/base64.hh>
+#include "alternator/base64.hh"
 
 static bytes_view to_bytes_view(const std::string& s) {
     return bytes_view(reinterpret_cast<const signed char*>(s.c_str()), s.size());

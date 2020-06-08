@@ -25,8 +25,8 @@
 #include <boost/range/algorithm_ext/push_back.hpp>
 
 #include <boost/test/unit_test.hpp>
-#include <query-result-set.hh>
-#include <query-result-writer.hh>
+#include "query-result-set.hh"
+#include "query-result-writer.hh"
 
 #include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>

@@ -69,7 +69,7 @@
 #include "serializer.hh"
 #include <seastar/core/enum.hh>
 #include <seastar/net/inet_address.hh>
-#include <index/secondary_index.hh>
+#include "index/secondary_index.hh"
 #include "service/storage_proxy.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"

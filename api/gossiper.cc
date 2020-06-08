@@ -21,7 +21,7 @@
 
 #include "gossiper.hh"
 #include "api/api-doc/gossiper.json.hh"
-#include <gms/gossiper.hh>
+#include "gms/gossiper.hh"
 
 namespace api {
 using namespace json;

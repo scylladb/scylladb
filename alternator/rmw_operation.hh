@@ -21,9 +21,9 @@
 
 #pragma once
 
-#include <seastarx.hh>
-#include <service/storage_proxy.hh>
-#include <service/storage_proxy.hh>
+#include "seastarx.hh"
+#include "service/storage_proxy.hh"
+#include "service/storage_proxy.hh"
 #include "rjson.hh"
 #include "executor.hh"
 

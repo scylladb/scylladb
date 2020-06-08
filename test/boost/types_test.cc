@@ -21,7 +21,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/net/inet_address.hh>
-#include <utils/UUID_gen.hh>
+#include "utils/UUID_gen.hh"
 #include <boost/asio/ip/address_v4.hpp>
 #include <seastar/net/ip.hh>
 #include <boost/multiprecision/cpp_int.hpp>

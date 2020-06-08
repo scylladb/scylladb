@@ -49,7 +49,7 @@
 #include <random>
 #include <utility>
 #include <vector>
-#include <range.hh>
+#include "range.hh"
 #include <byteswap.h>
 #include "dht/token.hh"
 #include "dht/token-sharding.hh"
