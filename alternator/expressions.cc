@@ -293,4 +293,53 @@ void resolve_projection_expression(std::vector<parsed::path>& pe,
     }
 }
 
+// condition_expression_on() checks whether a condition_expression places any
+// condition on the given attribute. It can be useful, for example, for
+// checking whether the condition tries to restrict a key column.
+
+static bool value_on(const parsed::value& v, std::string_view attribute) {
+    return std::visit(overloaded_functor {
+        [&] (const parsed::constant& c) {
+            return false;
+        },
+        [&] (const parsed::value::function_call& f) {
+            for (const parsed::value& value : f._parameters) {
+                if (value_on(value, attribute)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        [&] (const parsed::path& p) {
+            return p.root() == attribute;
+        }
+    }, v._value);
+}
+
+static bool primitive_condition_on(const parsed::primitive_condition& pc, std::string_view attribute) {
+    for (const parsed::value& value : pc._values) {
+        if (value_on(value, attribute)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool condition_expression_on(const parsed::condition_expression& ce, std::string_view attribute) {
+    return std::visit(overloaded_functor {
+        [&] (const parsed::primitive_condition& cond) {
+            return primitive_condition_on(cond, attribute);
+        },
+        [&] (const parsed::condition_expression::condition_list& list) {
+            for (const parsed::condition_expression& cond : list.conditions) {
+                if (condition_expression_on(cond, attribute)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }, ce._expression);
+}
+
+
 } // namespace alternator

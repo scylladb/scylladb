@@ -2849,30 +2849,51 @@ public:
     enum class request_type { SCAN, QUERY };
     // Note that a filter does not store pointers to the query used to
     // construct it.
-    filter(const rjson::value& request, request_type rt);
+    filter(const rjson::value& request, request_type rt,
+            std::unordered_set<std::string>& used_attribute_names,
+            std::unordered_set<std::string>& used_attribute_values);
     bool check(const rjson::value& item) const;
     bool filters_on(std::string_view attribute) const;
     operator bool() const { return bool(_imp); }
 };
 
-filter::filter(const rjson::value& request, request_type rt) {
+filter::filter(const rjson::value& request, request_type rt,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values) {
     const rjson::value* expression = rjson::find(request, "FilterExpression");
     const char* conditions_attribute = (rt == request_type::SCAN) ? "ScanFilter" : "QueryFilter";
     const rjson::value* conditions = rjson::find(request, conditions_attribute);
-    if (expression && conditions) {
-        throw api_error("ValidationException",
-                format("FilterExpression and {} are not allowed together", conditions_attribute));
-    }
-    if (expression) {
-        // FIXME: implement FilterExpression support (issue #5038).
-        throw api_error("ValidationException", "FilterExpression is not yet implemented in alternator");
-    }
     auto conditional_operator = get_conditional_operator(request);
     if (conditional_operator != conditional_operator_type::MISSING &&
         (!conditions || (conditions->IsObject() && conditions->GetObject().ObjectEmpty()))) {
             throw api_error("ValidationException",
                     format("'ConditionalOperator' parameter cannot be specified for missing or empty {}",
                             conditions_attribute));
+    }
+    if (expression && conditions) {
+        throw api_error("ValidationException",
+                format("FilterExpression and {} are not allowed together", conditions_attribute));
+    }
+    if (expression) {
+        if (!expression->IsString()) {
+            throw api_error("ValidationException", "FilterExpression must be a string");
+        }
+        if (expression->GetStringLength() == 0) {
+            throw api_error("ValidationException", "FilterExpression must not be empty");
+        }
+        try {
+            // FIXME: make parse_condition_expression take string_view, get
+            // rid of the silly conversion to std::string.
+            auto parsed = parse_condition_expression(std::string(rjson::to_string_view(*expression)));
+            const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
+            const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
+            resolve_condition_expression(parsed,
+                    expression_attribute_names, expression_attribute_values,
+                    used_attribute_names, used_attribute_values);
+            _imp = expression_filter { std::move(parsed) };
+        } catch(expressions_syntax_error& e) {
+            throw api_error("ValidationException", e.what());
+        }
     }
     if (conditions) {
         bool require_all = conditional_operator != conditional_operator_type::OR;
@@ -2889,10 +2910,7 @@ bool filter::check(const rjson::value& item) const {
             return verify_condition(f.conditions, f.require_all, &item);
         },
         [&] (const expression_filter& f) -> bool {
-            // FIXME: need to implement expression filter (FilterExpression).
-            // Right now filter's constructor never sets expression_filter so
-            // we won't reach this.
-            throw std::logic_error("unexpected case in filter::check");
+            return verify_condition_expression(f.expression, &item);
         }
     }, *_imp);
 }
@@ -2911,10 +2929,7 @@ bool filter::filters_on(std::string_view attribute) const {
             return false;
         },
         [&] (const expression_filter& f) -> bool {
-            // FIXME: need to implement expression filter (FilterExpression).
-            // Right now filter's constructor never sets expression_filter so
-            // we won't reach this.
-            throw std::logic_error("unexpected case in filter::filters_on");
+            return condition_expression_on(f.expression, attribute);
         }
     }, *_imp);
 }
@@ -3172,7 +3187,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     }
     std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
 
-    filter filter(request, filter::request_type::SCAN);
+    filter filter(request, filter::request_type::SCAN, used_attribute_names, used_attribute_values);
     // Note: Unlike Query, Scan does allow a filter on the key attributes.
     // For some *specific* cases of key filtering, such an equality test on
     // partition key or comparison operator for the sort key, we could have
@@ -3630,7 +3645,8 @@ future<executor::request_return_type> executor::query(client_state& client_state
                         rjson::find(request, "ExpressionAttributeNames"),
                         used_attribute_names);
 
-    filter filter(request, filter::request_type::QUERY);
+    filter filter(request, filter::request_type::QUERY,
+            used_attribute_names, used_attribute_values);
 
     // A query is not allowed to filter on the partition key or the sort key.
     for (const column_definition& cdef : schema->partition_key_columns()) { // just one

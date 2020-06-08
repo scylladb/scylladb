@@ -138,7 +138,6 @@ def test_query_filtering_attributes_equality(filled_test_table):
     assert multiset([item for item in items if item['p'] == 'long' and item['attribute'] == 'xxxx' and item['another'] == 'yy']) == multiset(got_items)
 
 # Test that FilterExpression works as expected
-@pytest.mark.xfail(reason="FilterExpression not supported yet")
 def test_query_filter_expression(filled_test_table):
     test_table, items = filled_test_table
 

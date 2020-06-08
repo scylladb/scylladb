@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <vector>
 #include <unordered_set>
+#include <string_view>
 
 #include "expressions_types.hh"
 #include "rjson.hh"
@@ -55,5 +56,7 @@ void resolve_condition_expression(parsed::condition_expression& ce,
         std::unordered_set<std::string>& used_attribute_values);
 
 void validate_value(const rjson::value& v, const char* caller);
+
+bool condition_expression_on(const parsed::condition_expression& ce, std::string_view attribute);
 
 } /* namespace alternator */
