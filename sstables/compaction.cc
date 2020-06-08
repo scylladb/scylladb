@@ -899,23 +899,21 @@ private:
         if (_sstable_set->all()->empty() || _info->pending_replacements.empty()) { // set can be empty for testing scenario.
             return;
         }
-        auto set = *_sstable_set;
         // Releases reference to sstables compacted by this compaction or another, both of which belongs
         // to the same column family
         for (auto& pending_replacement : _info->pending_replacements) {
             for (auto& sst : pending_replacement.removed) {
                 // Set may not contain sstable to be removed because this compaction may have started
                 // before the creation of that sstable.
-                if (!set.all()->count(sst)) {
+                if (!_sstable_set->all()->count(sst)) {
                     continue;
                 }
-                set.erase(sst);
+                _sstable_set->erase(sst);
             }
             for (auto& sst : pending_replacement.added) {
-                set.insert(sst);
+                _sstable_set->insert(sst);
             }
         }
-        _sstable_set = std::move(set);
         _selector.emplace(_sstable_set->make_incremental_selector());
         _info->pending_replacements.clear();
     }
