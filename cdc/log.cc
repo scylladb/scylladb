@@ -1253,7 +1253,7 @@ public:
                     if (r.row().deleted_at()) {
                         touched_parts.set<stats::part_type::ROW_DELETE>();
                         cdc_op = operation::row_delete;
-                        if (pirow) {
+                        if (pirow && pikey) {
                             for (const column_definition& column: _schema->regular_columns()) {
                                 assert(pirow->has(column.name_as_text()));
                                 auto& cdef = *_log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
