@@ -1133,7 +1133,7 @@ future<> mutate_MV(
 
         // First, find the local endpoint and ensure that if it exists,
         // it will be the target endpoint. That way, all endpoints in the
-        // pending_endpoints list are guaranteed to be remote.
+        // remote_endpoints list are guaranteed to be remote.
         auto my_address = utils::fb_utilities::get_broadcast_address();
         auto remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), my_address);
         if (remote_it != remote_endpoints.end()) {
@@ -1177,7 +1177,7 @@ future<> mutate_MV(
             remote_endpoints.pop_back();
         }
 
-        // If paired_endpoint is engaged by this point, then either the update
+        // If target_endpoint is engaged by this point, then either the update
         // is not local, or the local update was already applied but we still
         // have pending endpoints to send to.
         if (target_endpoint) {
