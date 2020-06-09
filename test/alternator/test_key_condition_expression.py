@@ -221,14 +221,9 @@ def test_key_condition_expression_multi(test_table_sn_with_sorted_partition):
     with pytest.raises(ClientError, match='ValidationException'):
         full_query(table, KeyConditionExpression='p=:p AND c>=:c1 AND c>=:c1',
             ExpressionAttributeValues={':p': p, ':c1': 3})
-    # DynamoDB's produces a somewhat confusing error message for the
-    # following. Before complaining on too many conditions on c, it ignores
-    # the second - and then complains that the attribute value c2 isn't used.
-    # But the details are less important, as long as we consider this an
-    # error and use the word "syntax" in the error message, like Dynamo.
-    with pytest.raises(ClientError, match='ValidationException.*yntax'):
+    with pytest.raises(ClientError, match='ValidationException'):
         full_query(table, KeyConditionExpression='p=:p AND c>=:c1 AND c<=:c2',
-            ExpressionAttributeValues={':p': p, ':c1': 3, 'c2': 7})
+            ExpressionAttributeValues={':p': p, ':c1': 3, ':c2': 7})
 
 # Although the syntax for KeyConditionExpression is only a subset of that
 # of ConditionExpression, it turns out that DynamoDB actually use the same
