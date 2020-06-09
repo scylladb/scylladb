@@ -1,9 +1,0 @@
-{
-    "access_key": "",
-    "secret_key": "",
-    "subnet_id": "",
-    "security_group_id": "",
-    "region": "us-east-1",
-    "associate_public_ip_address": "true",
-    "instance_type": "c4.xlarge"
-}
