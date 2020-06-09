@@ -89,6 +89,7 @@
 #include "db/consistency_level_validations.hh"
 #include "cdc/log.hh"
 #include "cdc/stats.hh"
+#include "utils/histogram_metrics_helper.hh"
 
 namespace bi = boost::intrusive;
 
@@ -1452,7 +1453,7 @@ void storage_proxy_stats::write_stats::register_stats() {
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
             sm::make_histogram("write_latency", sm::description("The general write latency histogram"),
                     {storage_proxy_stats::current_scheduling_group_label()},
-                    [this]{return estimated_write.get_histogram(16, 20);}),
+                    [this]{return to_metrics_histogram(estimated_write);}),
 
             sm::make_queue_length("foreground_writes", [this] { return writes - background_writes; },
                            sm::description("number of currently pending foreground write requests"),
@@ -1528,7 +1529,7 @@ void storage_proxy_stats::stats::register_stats() {
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"),
                 {storage_proxy_stats::current_scheduling_group_label()},
-                [this]{ return estimated_read.get_histogram(16, 20);}),
+                [this]{ return to_metrics_histogram(estimated_read);}),
 
         sm::make_queue_length("foreground_reads", foreground_reads,
                 sm::description("number of currently pending foreground read requests"),
@@ -1580,11 +1581,11 @@ void storage_proxy_stats::stats::register_stats() {
 
         sm::make_histogram("cas_read_latency", sm::description("Transactional read latency histogram"),
                 {storage_proxy_stats::current_scheduling_group_label()},
-                [this]{ return estimated_cas_read.get_histogram(16, 20);}),
+                [this]{ return to_metrics_histogram(estimated_cas_read);}),
 
         sm::make_histogram("cas_write_latency", sm::description("Transactional write latency histogram"),
                 {storage_proxy_stats::current_scheduling_group_label()},
-                [this]{return estimated_cas_write.get_histogram(16, 20);}),
+                [this]{return to_metrics_histogram(estimated_cas_write);}),
 
         sm::make_total_operations("cas_write_timeouts", cas_write_timeouts._count,
                        sm::description("number of transactional write request failed due to a timeout"),
@@ -2078,7 +2079,7 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
     assert(mutate_result.available());
     stats.write.mark(lc.stop().latency());
     if (lc.is_start()) {
-        stats.estimated_write.add(lc.latency(), stats.write.hist.count);
+        stats.estimated_write.add(lc.latency());
     }
     try {
         mutate_result.get();
@@ -4262,7 +4263,7 @@ storage_proxy::do_query(schema_ptr s,
                         std::move(query_options)).finally([lc, p] () mutable {
                     p->get_stats().read.mark(lc.stop().latency());
                     if (lc.is_start()) {
-                        p->get_stats().estimated_read.add(lc.latency(), p->get_stats().read.hist.count);
+                        p->get_stats().estimated_read.add(lc.latency());
                     }
                 });
             } catch (const no_such_column_family&) {
@@ -4277,7 +4278,7 @@ storage_proxy::do_query(schema_ptr s,
                 std::move(query_options)).finally([lc, p] () mutable {
             p->get_stats().range.mark(lc.stop().latency());
             if (lc.is_start()) {
-                p->get_stats().estimated_range.add(lc.latency(), p->get_stats().range.hist.count);
+                p->get_stats().estimated_range.add(lc.latency());
             }
         });
     }
@@ -4502,8 +4503,8 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
             get_stats().cas_foreground--;
             write ? get_stats().cas_write.mark(lc.stop().latency()) : get_stats().cas_read.mark(lc.stop().latency());
             if (lc.is_start()) {
-                write ? get_stats().estimated_cas_write.add(lc.latency(), get_stats().cas_write.hist.count) :
-                        get_stats().estimated_cas_read.add(lc.latency(), get_stats().cas_read.hist.count);
+                write ? get_stats().estimated_cas_write.add(lc.latency()) :
+                        get_stats().estimated_cas_read.add(lc.latency());
             }
             if (contentions > 0) {
                 write ? get_stats().cas_write_contention.add(contentions) : get_stats().cas_read_contention.add(contentions);
