@@ -290,7 +290,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
 
     // We want to reshard many SSTables at a time for efficiency. However if we have to many we may
     // be risking OOM.
-    auto num_jobs = shared_info.size() / max_sstables_per_job + 1;
+    auto num_jobs = (shared_info.size() + max_sstables_per_job - 1) / max_sstables_per_job;
     auto sstables_per_job = shared_info.size() / num_jobs;
 
     using reshard_buckets = std::vector<std::vector<sstables::shared_sstable>>;
