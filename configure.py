@@ -510,7 +510,6 @@ scylla_core = (['database.cc',
                 'frozen_mutation.cc',
                 'memtable.cc',
                 'schema_mutations.cc',
-                'supervisor.cc',
                 'utils/logalloc.cc',
                 'utils/large_bitset.cc',
                 'utils/buffer_input_stream.cc',
@@ -1087,34 +1086,14 @@ else:
 # a list element means a list of alternative packages to consider
 # the first element becomes the HAVE_pkg define
 # a string element is a package name with no alternatives
-optional_packages = [['libsystemd', 'libsystemd-daemon']]
+optional_packages = [[]]
 pkgs = []
 
 # Lua can be provided by lua53 package on Debian-like
 # systems and by Lua on others.
 pkgs.append('lua53' if have_pkg('lua53') else 'lua')
 
-
-def setup_first_pkg_of_list(pkglist):
-    # The HAVE_pkg symbol is taken from the first alternative
-    upkg = pkglist[0].upper().replace('-', '_')
-    for pkg in pkglist:
-        if have_pkg(pkg):
-            pkgs.append(pkg)
-            defines.append('HAVE_{}=1'.format(upkg))
-            return True
-    return False
-
-
-for pkglist in optional_packages:
-    if isinstance(pkglist, str):
-        pkglist = [pkglist]
-    if not setup_first_pkg_of_list(pkglist):
-        if len(pkglist) == 1:
-            print('Missing optional package {pkglist[0]}'.format(**locals()))
-        else:
-            alternatives = ':'.join(pkglist[1:])
-            print('Missing optional package {pkglist[0]} (or alteratives {alternatives})'.format(**locals()))
+pkgs.append('libsystemd')
 
 
 compiler_test_src = '''
