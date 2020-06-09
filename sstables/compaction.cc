@@ -402,7 +402,7 @@ public:
 class compaction {
 protected:
     column_family& _cf;
-    creator_fn _sstable_creator;
+    compaction_sstable_creator_fn _sstable_creator;
     schema_ptr _schema;
     reader_permit _permit;
     std::vector<shared_sstable> _sstables;
@@ -420,7 +420,7 @@ protected:
     bool _contains_multi_fragment_runs = false;
     mutation_source_metadata _ms_metadata = {};
     garbage_collected_sstable_writer::data _gc_sstable_writer_data;
-    replacer_fn _replacer;
+    compaction_sstable_replacer_fn _replacer;
     std::optional<compaction_weight_registration> _weight_registration;
     utils::UUID _run_identifier;
     ::io_priority_class _io_priority;
