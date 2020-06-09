@@ -394,7 +394,7 @@ public:
         clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
         auto slice = query::partition_slice(std::move(clustering_ranges), { }, std::move(regular_columns), opts,
                 std::move(specific_ranges), cql_serialization_format::internal());
-        return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), row_limit, partition_limit);
+        return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), query::row_limit(row_limit), query::partition_limit(partition_limit));
     }
 
     static future<> do_get_paged_slice(
@@ -664,7 +664,7 @@ public:
                 }
             }
             auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts, nullptr);
-            auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), row_limit);
+            auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), query::row_limit(row_limit));
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, dk = std::move(dk), cmd, schema, column_limit = request.count, cl = request.consistency_level] {
                 auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;

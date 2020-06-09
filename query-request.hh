@@ -206,6 +206,10 @@ public:
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
 
+// Tagged integers to disambiguate constructor arguments.
+enum class row_limit : uint32_t { max = max_rows };
+enum class partition_limit : uint32_t { max = max_partitions };
+
 using is_first_page = bool_class<class is_first_page_tag>;
 
 // Full specification of a query to the database.
@@ -260,8 +264,8 @@ public:
     read_command(utils::UUID cf_id,
             table_schema_version schema_version,
             partition_slice slice,
-            uint32_t row_limit = max_rows,
-            uint32_t partition_limit = max_partitions,
+            query::row_limit row_limit = query::row_limit::max,
+            query::partition_limit partition_limit = query::partition_limit::max,
             gc_clock::time_point now = gc_clock::now(),
             std::optional<tracing::trace_info> ti = std::nullopt,
             utils::UUID query_uuid = utils::UUID(),
@@ -270,10 +274,10 @@ public:
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
-        , row_limit(row_limit)
+        , row_limit(static_cast<uint32_t>(row_limit))
         , timestamp(now)
         , trace_info(std::move(ti))
-        , partition_limit(partition_limit)
+        , partition_limit(static_cast<uint32_t>(partition_limit))
         , query_uuid(query_uuid)
         , is_first_page(is_first_page)
         , read_timestamp(rt)

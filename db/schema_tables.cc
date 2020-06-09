@@ -778,7 +778,7 @@ read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, sche
     auto slice = partition_slice_builder(*schema)
             .with_range(std::move(clustering_range))
             .build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), query::max_rows);
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), query::row_limit(query::max_rows));
     return query_partition_mutation(proxy.local(), std::move(schema), std::move(cmd), std::move(keyspace_key)).then([&proxy] (mutation mut) {
          return redact_columns_for_missing_features(std::move(mut), proxy.local().get_db().local().features().cluster_schema_features());
     });
