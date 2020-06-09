@@ -54,7 +54,31 @@ if __name__ == '__main__':
         else:
             run('rc-update add cpupower default')
             run('rc-service cpupower start')
-    if is_redhat_variant():
+    if is_amzn2():
+        run('yum install -y cpupowerutils')
+        cfg = sysconfig_parser('/etc/sysconfig/scylla-cpupower')
+        cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
+        cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
+        cfg.commit()
+        unit_data = '''
+[Unit]
+Description=Scylla cpupower service
+After=syslog.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/sysconfig/scylla-cpupower
+ExecStart=/usr/bin/cpupower $CPUPOWER_START_OPTS
+ExecStop=/usr/bin/cpupower $CPUPOWER_STOP_OPTS
+'''[1:-1]
+        with open('/usr/lib/systemd/system/scylla-cpupower.service', 'w') as f:
+            f.write(unit_data)
+        systemd_unit.reload()
+        cpupwr = systemd_unit('scylla-cpupower.service')
+        cpupwr.enable()
+        cpupwr.restart()
+    elif is_redhat_variant():
         run('yum install -y cpupowerutils')
         cfg = sysconfig_parser('/etc/sysconfig/cpupower')
         cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')

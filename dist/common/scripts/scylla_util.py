@@ -371,6 +371,9 @@ def is_redhat_variant():
     d = os_release['ID_LIKE'] if 'ID_LIKE' in os_release else os_release['ID']
     return ('rhel' in d) or ('fedora' in d) or ('ol') in d
 
+def is_amzn2():
+    return ('amzn' in os_release['ID']) and ('2' in os_release['VERSION_ID'])
+
 def is_gentoo_variant():
     return ('gentoo' in os_release['ID'])
 
