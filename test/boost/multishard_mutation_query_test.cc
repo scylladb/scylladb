@@ -82,7 +82,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
         (void)_;
 
         auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), 7, gc_clock::now(), std::nullopt, query::max_partitions,
-                utils::make_random_uuid(), query::is_first_page::yes);
+                utils::make_random_uuid(), query::is_first_page::yes, query::max_result_size(query::result_memory_limiter::unlimited_result_size));
 
         query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, std::numeric_limits<uint64_t>::max(), db::no_timeout).get();
 
@@ -104,7 +104,8 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
     for (const auto& pkey : pkeys) {
         const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey] (database& db) {
             return async([s = gs.get(), &pkey, &db] () mutable {
-                const auto cmd = query::read_command(s->id(), s->version(), s->full_slice());
+                const auto cmd = query::read_command(s->id(), s->version(), s->full_slice(),
+                        query::max_result_size(query::result_memory_limiter::unlimited_result_size));
                 const auto range = dht::partition_range::make_singular(pkey);
                 return make_foreign(std::make_unique<reconcilable_result>(
                     std::get<0>(db.query_mutations(std::move(s), cmd, range, std::numeric_limits<size_t>::max(), nullptr, db::no_timeout).get0())));
@@ -125,7 +126,8 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
         const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
     std::vector<mutation> results;
-    auto cmd = query::read_command(s->id(), s->version(), slice, page_size, gc_clock::now(), std::nullopt, query::max_partitions, query_uuid, query::is_first_page::yes);
+    auto cmd = query::read_command(s->id(), s->version(), slice, page_size, gc_clock::now(), std::nullopt, query::max_partitions, query_uuid,
+            query::is_first_page::yes, query::max_result_size(max_size));
 
     bool has_more = true;
 

@@ -237,7 +237,8 @@ private:
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
 
     lw_shared_ptr<query::read_command>
-    prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now, bool use_paging) const;
+    prepare_command_for_base_query(service::storage_proxy& proxy, const query_options& options, service::query_state& state, gc_clock::time_point now,
+            bool use_paging) const;
 
     future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>
     do_execute_base_query(

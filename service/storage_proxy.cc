@@ -4345,7 +4345,8 @@ static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr s
     // Note that because this read-nothing command has an empty slice,
     // storage_proxy::query() returns immediately - without any networking.
     auto partition_slice = query::partition_slice({}, {}, {}, query::partition_slice::option_set());
-    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice);
+    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice,
+            query::max_result_size(query::result_memory_limiter::unlimited_result_size));
 }
 
 static read_timeout_exception write_timeout_to_read(schema_ptr s, mutation_write_timeout_exception& ex) {

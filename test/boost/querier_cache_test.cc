@@ -667,7 +667,8 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 std::nullopt,
                 1,
                 utils::make_random_uuid(),
-                query::is_first_page::yes);
+                query::is_first_page::yes,
+                query::max_result_size(1024 * 1024));
 
         // Should save the querier in cache.
         db.query_mutations(s,
@@ -702,7 +703,8 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 std::nullopt,
                 1,
                 utils::make_random_uuid(),
-                query::is_first_page::no);
+                query::is_first_page::no,
+                query::max_result_size(1024 * 1024));
 
         // Should evict the already cached querier.
         db.query_mutations(s,

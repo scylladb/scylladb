@@ -84,9 +84,14 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
     future<service::storage_proxy::coordinator_query_result> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
         auto state = _options.get_paging_state();
 
+        auto& proxy = get_local_storage_proxy();
+
         // Most callers should set this but we want to make sure, as results
         // won't be paged without it.
         _cmd->slice.options.set<query::partition_slice::option::allow_short_read>();
+        // Override this, to make sure we use the value appropriate for paging
+        // (with allow_short_read set).
+        _cmd->max_result_size = proxy.get_max_result_size(_cmd->slice);
 
         if (!_last_pkey && state) {
             _max = state->get_remaining();
@@ -191,7 +196,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
 
         auto ranges = _ranges;
         auto command = ::make_lw_shared<query::read_command>(*_cmd);
-        return get_local_storage_proxy().query(_schema,
+        return proxy.query(_schema,
                 std::move(command),
                 std::move(ranges),
                 _options.get_consistency(),
