@@ -319,8 +319,17 @@ select_statement::do_execute(service::storage_proxy& proxy,
     _stats.select_partition_range_scan += _range_scan;
     _stats.select_partition_range_scan_no_bypass_cache += _range_scan_no_bypass_cache;
 
-    auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, utils::UUID(), query::is_first_page::no, options.get_timestamp(state));
+    auto command = ::make_lw_shared<query::read_command>(
+            _schema->id(),
+            _schema->version(),
+            make_partition_slice(options),
+            limit,
+            query::max_partitions,
+            now,
+            tracing::make_trace_info(state.get_trace_state()),
+            utils::UUID(),
+            query::is_first_page::no,
+            options.get_timestamp(state));
 
     int32_t page_size = options.get_page_size();
 
@@ -477,9 +486,9 @@ indexed_table_select_statement::prepare_command_for_base_query(const query_optio
             _schema->version(),
             make_partition_slice(options),
             get_limit(options),
+            query::max_partitions,
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            query::max_partitions,
             utils::UUID(),
             query::is_first_page::no,
             options.get_timestamp(state));
@@ -1147,9 +1156,9 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
             _view_schema->version(),
             partition_slice,
             limit,
+            query::max_partitions,
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            query::max_partitions,
             utils::UUID(),
             query::is_first_page::no,
             options.get_timestamp(state));

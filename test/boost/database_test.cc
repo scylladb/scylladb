@@ -112,14 +112,14 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(),
-                        query::max_rows, gc_clock::now(), std::nullopt, 5);
+                        query::max_rows, 5);
                 auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0());
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(5);
             }
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(),
-                        query::max_rows, gc_clock::now(), std::nullopt, 3);
+                        query::max_rows, 3);
                 auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0());
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
             }

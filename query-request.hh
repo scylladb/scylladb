@@ -235,16 +235,38 @@ public:
     query::is_first_page is_first_page;
     api::timestamp_type read_timestamp; // not serialized
 public:
+    // IDL constructor
     read_command(utils::UUID cf_id,
                  table_schema_version schema_version,
                  partition_slice slice,
-                 uint32_t row_limit = max_rows,
-                 gc_clock::time_point now = gc_clock::now(),
-                 std::optional<tracing::trace_info> ti = std::nullopt,
-                 uint32_t partition_limit = max_partitions,
-                 utils::UUID query_uuid = utils::UUID(),
-                 query::is_first_page is_first_page = is_first_page::no,
-                 api::timestamp_type rt = api::new_timestamp())
+                 uint32_t row_limit,
+                 gc_clock::time_point now,
+                 std::optional<tracing::trace_info> ti,
+                 uint32_t partition_limit,
+                 utils::UUID query_uuid,
+                 query::is_first_page is_first_page)
+        : cf_id(std::move(cf_id))
+        , schema_version(std::move(schema_version))
+        , slice(std::move(slice))
+        , row_limit(row_limit)
+        , timestamp(now)
+        , trace_info(std::move(ti))
+        , partition_limit(partition_limit)
+        , query_uuid(query_uuid)
+        , is_first_page(is_first_page)
+        , read_timestamp(api::new_timestamp())
+    { }
+
+    read_command(utils::UUID cf_id,
+            table_schema_version schema_version,
+            partition_slice slice,
+            uint32_t row_limit = max_rows,
+            uint32_t partition_limit = max_partitions,
+            gc_clock::time_point now = gc_clock::now(),
+            std::optional<tracing::trace_info> ti = std::nullopt,
+            utils::UUID query_uuid = utils::UUID(),
+            query::is_first_page is_first_page = query::is_first_page::no,
+            api::timestamp_type rt = api::new_timestamp())
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
