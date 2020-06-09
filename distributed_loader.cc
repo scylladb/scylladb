@@ -376,7 +376,7 @@ distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<d
     return collect_all_shared_sstables(dir).then([] (sstables::sstable_directory::sstable_info_vector all_jobs) mutable {
         return distribute_reshard_jobs(std::move(all_jobs));
     }).then([&dir, &db, ks_name, table_name, creator = std::move(creator)] (std::vector<reshard_shard_descriptor> destinations) mutable {
-        return run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, creator = std::move(creator));
+        return run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator));
     });
 }
 
