@@ -249,7 +249,7 @@
                  "MIGRATION_REQUEST",
                  "PREPARE_MESSAGE",
                  "PREPARE_DONE_MESSAGE",
-                 "STREAM_MUTATION",
+                 "UNUSED__STREAM_MUTATION",
                  "STREAM_MUTATION_DONE",
                  "COMPLETE_MESSAGE",
                  "REPAIR_CHECKSUM_RANGE",

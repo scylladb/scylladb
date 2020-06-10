@@ -416,24 +416,6 @@ private:
 
     lw_shared_ptr<memtable_list> _memtables;
 
-    // In older incarnations, we simply commited the mutations to memtables.
-    // However, doing that makes it harder for us to provide QoS within the
-    // disk subsystem. Keeping them in separate memtables allow us to properly
-    // classify those streams into its own I/O class
-    //
-    // We could write those directly to disk, but we still want the mutations
-    // coming through the wire to go to a memtable staging area.  This has two
-    // major advantages:
-    //
-    // first, it will allow us to properly order the partitions. They are
-    // hopefuly sent in order but we can't really guarantee that without
-    // sacrificing sender-side parallelism.
-    //
-    // second, we will be able to coalesce writes from multiple plan_id's and
-    // even multiple senders, as well as automatically tapping into the dirty
-    // memory throttling mechanism, guaranteeing we will not overload the
-    // server.
-    lw_shared_ptr<memtable_list> _streaming_memtables;
     utils::phased_barrier _streaming_flush_phaser;
 
     // If mutations are fragmented during streaming the sstables cannot be made
@@ -448,21 +430,8 @@ private:
         sstables::shared_sstable sstable;
     };
 
-    struct streaming_memtable_big {
-        lw_shared_ptr<memtable_list> memtables;
-        std::vector<monitored_sstable> sstables;
-        seastar::gate flush_in_progress;
-    };
-    std::unordered_map<utils::UUID, lw_shared_ptr<streaming_memtable_big>> _streaming_memtables_big;
-
-    future<std::vector<monitored_sstable>> flush_streaming_big_mutations(utils::UUID plan_id);
-    void apply_streaming_big_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m);
-    future<> seal_active_streaming_memtable_big(streaming_memtable_big& smb, flush_permit&&);
-
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list();
-    lw_shared_ptr<memtable_list> make_streaming_memtable_list();
-    lw_shared_ptr<memtable_list> make_streaming_memtable_big_list(streaming_memtable_big& smb);
 
     sstables::compaction_strategy _compaction_strategy;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
@@ -590,7 +559,6 @@ private:
         int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
     void load_sstable(sstables::shared_sstable& sstable, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
-    lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.
     future<> update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable sst);
@@ -812,7 +780,6 @@ public:
     future<> stop();
     future<> flush();
     future<> flush_streaming_mutations(utils::UUID plan_id, dht::partition_range_vector ranges = dht::partition_range_vector{});
-    future<> fail_streaming_mutations(utils::UUID plan_id);
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
@@ -1049,28 +1016,6 @@ private:
     // waiting on this future. This is useful in situations where we want to
     // synchronously flush data to disk.
     future<> seal_active_memtable(flush_permit&&);
-
-    // I am assuming here that the repair process will potentially send ranges containing
-    // few mutations, definitely not enough to fill a memtable. It wants to know whether or
-    // not each of those ranges individually succeeded or failed, so we need a future for
-    // each.
-    //
-    // One of the ways to fix that, is changing the repair itself to send more mutations at
-    // a single batch. But relying on that is a bad idea for two reasons:
-    //
-    // First, the goals of the SSTable writer and the repair sender are at odds. The SSTable
-    // writer wants to write as few SSTables as possible, while the repair sender wants to
-    // break down the range in pieces as small as it can and checksum them individually, so
-    // it doesn't have to send a lot of mutations for no reason.
-    //
-    // Second, even if the repair process wants to process larger ranges at once, some ranges
-    // themselves may be small. So while most ranges would be large, we would still have
-    // potentially some fairly small SSTables lying around.
-    //
-    // The best course of action in this case is to coalesce the incoming streams write-side.
-    // repair can now choose whatever strategy - small or big ranges - it wants, resting assure
-    // that the incoming memtables will be coalesced together.
-    future<> seal_active_streaming_memtable_immediate(flush_permit&&);
 
     void check_valid_rp(const db::replay_position&) const;
 public:
@@ -1527,7 +1472,6 @@ public:
     // Throws timed_out_error when timeout is reached.
     future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout);
     future<> apply_hint(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout);
-    future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
     future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;

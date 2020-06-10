@@ -112,7 +112,7 @@ enum class messaging_verb : int32_t {
     // Used by streaming
     PREPARE_MESSAGE = 15,
     PREPARE_DONE_MESSAGE = 16,
-    STREAM_MUTATION = 17,
+    UNUSED__STREAM_MUTATION = 17,
     STREAM_MUTATION_DONE = 18,
     COMPLETE_MESSAGE = 19,
     // end of streaming verbs
@@ -301,10 +301,6 @@ public:
     // Wrapper for PREPARE_DONE_MESSAGE verb
     void register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func);
     future<> send_prepare_done_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id);
-
-    // Wrapper for STREAM_MUTATION verb
-    void register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool>, rpc::optional<streaming::stream_reason>)>&& func);
-    future<> send_stream_mutation(msg_addr id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, bool fragmented, streaming::stream_reason reason);
 
     // Wrapper for STREAM_MUTATION_FRAGMENTS
     // The receiver of STREAM_MUTATION_FRAGMENTS sends status code to the sender to notify any error on the receiver side. The status code is of type int32_t. 0 means successful, -1 means error, other status code value are reserved for future use.

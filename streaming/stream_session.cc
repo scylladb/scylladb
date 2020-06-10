@@ -125,43 +125,6 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<>();
         });
     });
-    ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool> fragmented_opt, rpc::optional<stream_reason> reason_opt) {
-        auto from = netw::messaging_service::get_source(cinfo);
-        auto src_cpu_id = from.cpu_id;
-        auto fragmented = fragmented_opt && *fragmented_opt;
-        auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
-        sslog.trace("Got stream_mutation from {} reason {}", from, int(reason));
-        return smp::submit_to(src_cpu_id % smp::count, [fm = std::move(fm), plan_id, from, fragmented] () mutable {
-            return do_with(std::move(fm), [plan_id, from, fragmented] (const auto& fm) {
-                auto fm_size = fm.representation().size();
-                get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, fm_size);
-                return service::get_schema_for_write(fm.schema_version(), from).then([plan_id, from, &fm, fragmented] (schema_ptr s) {
-                    auto cf_id = fm.column_family_id();
-                    sslog.debug("[Stream #{}] GOT STREAM_MUTATION from {}: cf_id={}", plan_id, from.addr, cf_id);
-
-                    auto& db = service::get_local_storage_proxy().get_db().local();
-                    if (!db.column_family_exists(cf_id)) {
-                        sslog.warn("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
-                                   plan_id, from.addr, cf_id);
-                        return make_ready_future<>();
-                    }
-                    return service::get_storage_proxy().local().mutate_streaming_mutation(std::move(s), plan_id, fm, fragmented).then_wrapped([plan_id, cf_id, from] (auto&& f) {
-                        try {
-                            f.get();
-                            return make_ready_future<>();
-                        } catch (no_such_column_family&) {
-                            sslog.warn("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
-                                       plan_id, from.addr, cf_id);
-                            return make_ready_future<>();
-                        } catch (...) {
-                            throw;
-                        }
-                        return make_ready_future<>();
-                    });
-                });
-            });
-        });
-    });
     ms().register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
@@ -598,14 +561,7 @@ void stream_session::add_transfer_ranges(sstring keyspace, dht::token_range_vect
 
 future<> stream_session::receiving_failed(UUID cf_id)
 {
-    return get_db().invoke_on_all([cf_id, plan_id = plan_id()] (database& db) {
-        try {
-            auto& cf = db.find_column_family(cf_id);
-            return cf.fail_streaming_mutations(plan_id);
-        } catch (no_such_column_family&) {
-            return make_ready_future<>();
-        }
-    });
+    return make_ready_future<>();
 }
 
 void stream_session::close_session(stream_session_state final_state) {
