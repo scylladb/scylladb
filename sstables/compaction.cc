@@ -896,7 +896,7 @@ private:
     }
 
     void update_pending_ranges() {
-        if (_sstable_set->all()->empty() || _info->pending_replacements.empty()) { // set can be empty for testing scenario.
+        if (!_sstable_set || _sstable_set->all()->empty() || _info->pending_replacements.empty()) { // set can be empty for testing scenario.
             return;
         }
         // Releases reference to sstables compacted by this compaction or another, both of which belongs
