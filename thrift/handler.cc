@@ -995,7 +995,7 @@ public:
         }
         virtual void visit(const cql_transport::messages::result_message::prepared::thrift& m) override {
             _result.__set_itemId(m.get_id());
-            auto& names = m.metadata()->names();
+            auto& names = m.metadata().names();
             _result.__set_count(names.size());
             std::vector<std::string> variable_types;
             std::vector<std::string> variable_names;

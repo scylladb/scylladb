@@ -38,12 +38,12 @@ namespace messages {
 class result_message::prepared : public result_message {
 private:
     cql3::statements::prepared_statement::checked_weak_ptr _prepared;
-    ::shared_ptr<cql3::prepared_metadata> _metadata;
+    cql3::prepared_metadata _metadata;
     ::shared_ptr<const cql3::metadata> _result_metadata;
 protected:
     prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared)
         : _prepared(std::move(prepared))
-        , _metadata{::make_shared<cql3::prepared_metadata>(_prepared->bound_names, _prepared->partition_key_bind_indices)}
+        , _metadata(_prepared->bound_names, _prepared->partition_key_bind_indices)
         , _result_metadata{extract_result_metadata(_prepared->statement)}
     { }
 public:
@@ -51,7 +51,7 @@ public:
         return _prepared;
     }
 
-    ::shared_ptr<cql3::prepared_metadata> metadata() const {
+    const cql3::prepared_metadata& metadata() const {
         return _metadata;
     }
 
