@@ -973,7 +973,11 @@ void storage_service::bootstrap() {
     } else {
         dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, _token_metadata);
         // Does the actual streaming of newly replicated token ranges.
-        bs.bootstrap().get();
+        if (db().local().is_replacing()) {
+            bs.bootstrap(streaming::stream_reason::replace).get();
+        } else {
+            bs.bootstrap(streaming::stream_reason::bootstrap).get();
+        }
     }
     _db.invoke_on_all([this] (database& db) {
         for (auto& cf : db.get_non_system_column_families()) {

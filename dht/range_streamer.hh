@@ -146,7 +146,7 @@ private:
      *                      here, we always exclude ourselves.
      * @return
      */
-    static std::unordered_map<inet_address, dht::token_range_vector>
+    std::unordered_map<inet_address, dht::token_range_vector>
     get_range_fetch_map(const std::unordered_map<dht::token_range, std::vector<inet_address>>& ranges_with_sources,
                         const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
                         const sstring& keyspace);
