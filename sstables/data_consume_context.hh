@@ -27,6 +27,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/util/optimized_optional.hh>
 
+#include "db/background.hh"
 #include "shared_sstable.hh"
 #include "row.hh"
 #include "sstables.hh"
@@ -124,8 +125,7 @@ public:
     ~data_consume_context() {
         if (_ctx) {
             auto f = _ctx->close();
-            //FIXME: discarded future.
-            (void)f.handle_exception([ctx = std::move(_ctx), sst = std::move(_sst)](auto) {});
+            (void)f.handle_exception([ctx = std::move(_ctx), sst = std::move(_sst), op = db::start_background_job()](auto) {});
         }
     }
 
