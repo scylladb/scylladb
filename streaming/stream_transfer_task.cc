@@ -130,47 +130,6 @@ struct send_info {
     }
 };
 
-future<stop_iteration> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mutation fm, bool fragmented) {
-    return get_local_stream_manager().mutation_send_limiter().wait().then([si, fragmented, fm = std::move(fm)] () mutable {
-        sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", si->plan_id, si->id, si->cf_id);
-        auto fm_size = fm.representation().size();
-        // Do it in the background.
-        (void)netw::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id, fragmented, si->reason).then([si, fm_size] {
-            sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", si->plan_id, si->id.addr);
-            get_local_stream_manager().update_progress(si->plan_id, si->id.addr, progress_info::direction::OUT, fm_size);
-            si->mutations_done.signal();
-        }).handle_exception([si] (auto ep) {
-            // There might be larger number of STREAM_MUTATION inflight.
-            // Log one error per column_family per range
-            if (!si->error_logged) {
-                si->error_logged = true;
-                sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, ep);
-            }
-            si->mutations_done.broken();
-        }).finally([] {
-            get_local_stream_manager().mutation_send_limiter().signal();
-        });
-        return stop_iteration::no;
-    });
-}
-
-future<> send_mutations(lw_shared_ptr<send_info> si) {
-    size_t fragment_size = default_frozen_fragment_size;
-    // Mutations cannot be sent fragmented if the receiving side doesn't support that.
-    if (!si->db.features().cluster_supports_large_partitions()) {
-        fragment_size = std::numeric_limits<size_t>::max();
-    }
-    return fragment_and_freeze(std::move(si->reader), [si] (auto fm, bool fragmented) {
-        if (!si->db.column_family_exists(si->cf_id)) {
-            return make_ready_future<stop_iteration>(stop_iteration::yes);
-        }
-        si->mutations_nr++;
-        return do_send_mutations(si, std::move(fm), fragmented);
-    }, fragment_size).then([si] {
-        return si->mutations_done.wait(si->mutations_nr);
-    });
-}
-
 future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
  return si->reader.peek(db::no_timeout).then([si] (mutation_fragment* mfp) {
   if (!mfp) {
@@ -270,7 +229,7 @@ future<> stream_transfer_task::execute() {
             if (si->db.features().cluster_supports_stream_with_rpc_stream()) {
                 return send_mutation_fragments(std::move(si));
             } else {
-                return send_mutations(std::move(si));
+                throw std::runtime_error("cluster does not support STREAM_WITH_RPC_STREAM feature");
             }
         });
     }).then([this, plan_id, cf_id, id] {

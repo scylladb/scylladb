@@ -476,7 +476,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
         return 0;
     case messaging_verb::PREPARE_MESSAGE:
     case messaging_verb::PREPARE_DONE_MESSAGE:
-    case messaging_verb::STREAM_MUTATION:
+    case messaging_verb::UNUSED__STREAM_MUTATION:
     case messaging_verb::STREAM_MUTATION_DONE:
     case messaging_verb::COMPLETE_MESSAGE:
     case messaging_verb::REPLICATION_FINISHED:
@@ -951,15 +951,6 @@ void messaging_service::register_prepare_done_message(std::function<future<> (co
 future<> messaging_service::send_prepare_done_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id) {
     return send_message<void>(this, messaging_verb::PREPARE_DONE_MESSAGE, id,
         plan_id, dst_cpu_id);
-}
-
-// STREAM_MUTATION
-void messaging_service::register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool> fragmented, rpc::optional<streaming::stream_reason> reason)>&& func) {
-    register_handler(this, messaging_verb::STREAM_MUTATION, std::move(func));
-}
-future<> messaging_service::send_stream_mutation(msg_addr id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, bool fragmented, streaming::stream_reason reason) {
-    return send_message<void>(this, messaging_verb::STREAM_MUTATION, id,
-        plan_id, std::move(fm), dst_cpu_id, fragmented, reason);
 }
 
 // STREAM_MUTATION_DONE
