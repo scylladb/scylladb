@@ -86,13 +86,13 @@ void assert_that_failed(future<T...>&& f)
 /// \note Should be called from a seastar::thread context, as it awaits the CQL result.
 shared_ptr<cql_transport::messages::result_message> cquery_nofail(
         cql_test_env& env,
-        const seastar::sstring& query,
+        sstring_view query,
         std::unique_ptr<cql3::query_options>&& qo = nullptr,
         const std::experimental::source_location& loc = std::experimental::source_location::current());
 
 /// Asserts that cquery_nofail(e, qstr) contains expected rows, in any order.
 void require_rows(cql_test_env& e,
-                  const char* qstr,
+                  sstring_view qstr,
                   const std::vector<std::vector<bytes_opt>>& expected,
                   const std::experimental::source_location& loc = std::experimental::source_location::current());
 

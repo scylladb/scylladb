@@ -198,7 +198,7 @@ rows_assertions rows_assertions::with_serialized_columns_count(size_t columns_co
 }
 
 shared_ptr<cql_transport::messages::result_message> cquery_nofail(
-        cql_test_env& env, const seastar::sstring& query, std::unique_ptr<cql3::query_options>&& qo, const std::experimental::source_location& loc) {
+        cql_test_env& env, sstring_view query, std::unique_ptr<cql3::query_options>&& qo, const std::experimental::source_location& loc) {
     try {
         if (qo) {
             return env.execute_cql(query, std::move(qo)).get0();
@@ -213,7 +213,7 @@ shared_ptr<cql_transport::messages::result_message> cquery_nofail(
 }
 
 void require_rows(cql_test_env& e,
-                  const char* qstr,
+                  sstring_view qstr,
                   const std::vector<std::vector<bytes_opt>>& expected,
                   const std::experimental::source_location& loc) {
     try {

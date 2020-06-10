@@ -159,13 +159,13 @@ public:
             , _mnotifier(mnotifier)
     { }
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) override {
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
         auto qs = make_query_state();
         return local_qp().execute_direct(text, *qs, cql3::query_options::DEFAULT).finally([qs] {});
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
-        const sstring& text,
+        sstring_view text,
         std::unique_ptr<cql3::query_options> qo) override
     {
         auto qs = make_query_state();
