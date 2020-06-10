@@ -58,6 +58,8 @@ class migration_manager;
 
 class distributed_loader {
 public:
+    static future<> reshape(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstables::reshape_mode mode,
+            sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator);
     static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator);
     static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir);
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring cf_name);

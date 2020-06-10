@@ -397,6 +397,25 @@ highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstabl
 }
 
 future<>
+distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstables::reshape_mode mode,
+        sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
+
+    auto start = std::chrono::steady_clock::now();
+    return dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode] (sstables::sstable_directory& d) {
+        auto& table = db.local().find_column_family(ks_name, table_name);
+        auto& cm = table.get_compaction_manager();
+        auto& iop = service::get_local_streaming_read_priority();
+        return d.reshape(cm, table, creator, iop, mode);
+    }, uint64_t(0), std::plus<uint64_t>()).then([start] (uint64_t total_size) {
+        if (total_size > 0) {
+            auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
+            dblog.info("{}", fmt::format("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
+        }
+        return make_ready_future<>();
+    });
+}
+
+future<>
 distributed_loader::process_upload_dir(distributed<database>& db, sstring ks, sstring cf) {
     seastar::thread_attributes attr;
     attr.sched_group = db.local().get_streaming_scheduling_group();
