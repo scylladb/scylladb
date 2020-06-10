@@ -84,6 +84,10 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
     future<service::storage_proxy::coordinator_query_result> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
         auto state = _options.get_paging_state();
 
+        // Most callers should set this but we want to make sure, as results
+        // won't be paged without it.
+        _cmd->slice.options.set<query::partition_slice::option::allow_short_read>();
+
         if (!_last_pkey && state) {
             _max = state->get_remaining();
             _last_pkey = state->get_partition_key();
