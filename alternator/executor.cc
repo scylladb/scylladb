@@ -1950,6 +1950,13 @@ static const rjson::value& calculate_value(const parsed::constant& c) {
     }, c._value);
 }
 
+static bool known_type(std::string_view type) {
+    static thread_local const std::unordered_set<std::string> types = {
+            "N", "S", "B", "NS", "SS", "BS", "L", "M", "NULL", "BOOL"
+    };
+    return types.count(std::string(type));
+}
+
 // Given a parsed::value, which can refer either to a constant value from
 // ExpressionAttributeValues, to the value of some attribute, or to a function
 // of other values, this function calculates the resulting value.
@@ -2054,6 +2061,13 @@ rjson::value calculate_value(const parsed::value& v,
                 rjson::value v0 = calculate_value(f._parameters[0], caller, previous_item);
                 rjson::value v1 = calculate_value(f._parameters[1], caller, previous_item);
                 if (v1.IsObject() && v1.MemberCount() == 1 && v1.MemberBegin()->name == "S") {
+                    // If the type parameter is not one of the legal types
+                    // we should generate an error, not a failed condition:
+                    if (!known_type(rjson::to_string_view(v1.MemberBegin()->value))) {
+                        throw api_error("ValidationException",
+                                format("{}: attribute_types()'s second parameter, {}, is not a known type",
+                                        caller, v1.MemberBegin()->value));
+                    }
                     if (v0.IsObject() && v0.MemberCount() == 1) {
                         return to_bool_json(v1.MemberBegin()->value == v0.MemberBegin()->name);
                     } else {

@@ -727,6 +727,17 @@ def test_update_condition_attribute_type_second_arg(test_table_s):
                 ConditionExpression='attribute_type (a, b)',
                 ExpressionAttributeValues={':val': 1})
 
+# If the attribute_type() parameter is not one of the known types
+# (N,NS,BS,L,SS,NULL,B,BOOL,S,M), an error is generated. We should
+# not get a failed condition.
+def test_update_condition_attribute_type_unknown(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*DOG'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = :val',
+                ConditionExpression='attribute_type (a, :type)',
+                ExpressionAttributeValues={':val': 1, ':type': 'DOG'})
+
 def test_update_condition_begins_with(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
