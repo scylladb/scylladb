@@ -779,7 +779,8 @@ def test_update_condition_contains(test_table_s):
         AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'},
                           'b': {'Value': set([2, 4, 7]), 'Action': 'PUT'},
                           'c': {'Value': [2, 4, 7], 'Action': 'PUT'},
-                          'd': {'Value': b'hi there', 'Action': 'PUT'}})
+                          'd': {'Value': b'hi there', 'Action': 'PUT'},
+                          'e': {'Value': ['hi', set([1,2]), [3, 4]], 'Action': 'PUT'}})
     test_table_s.update_item(Key={'p': p},
         UpdateExpression='SET z = :val',
             ConditionExpression='contains(a, :arg)',
@@ -808,6 +809,24 @@ def test_update_condition_contains(test_table_s):
             UpdateExpression='SET z = :val',
                 ConditionExpression='contains(d, :arg)',
                 ExpressionAttributeValues={':val': 4, ':arg': b'dog'})
+    # Moreover, the second parameter to contains() may be *any* type, and
+    # contains checks if perhaps the first parameter is a list or a set
+    # containing that value!
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression='contains(d, :arg)',
+                ExpressionAttributeValues={':val': 4, ':arg': set([1, 2])})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+        ConditionExpression='contains(e, :arg)',
+        ExpressionAttributeValues={':val': 5, ':arg': set([1, 2])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+        ConditionExpression='contains(e, :arg)',
+        ExpressionAttributeValues={':val': 6, ':arg': [3, 4]})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 6
 
 
 # While both operands of contains() may be item attributes, strangely

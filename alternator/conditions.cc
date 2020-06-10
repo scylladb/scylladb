@@ -192,11 +192,6 @@ bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
     }
     const auto& kv1 = *v1->MemberBegin();
     const auto& kv2 = *v2.MemberBegin();
-    if (kv2.name != "S" && kv2.name != "N" &&  kv2.name != "B") {
-        throw api_error("ValidationException",
-                        format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
-                               "got {} instead", kv2.name));
-    }
     if (kv1.name == "S" && kv2.name == "S") {
         return rjson::to_string_view(kv1.value).find(rjson::to_string_view(kv2.value)) != std::string_view::npos;
     } else if (kv1.name == "B" && kv2.name == "B") {
@@ -464,11 +459,33 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
             verify_operand_count(attribute_value_list, exact_size(2), *comparison_operator);
             return check_BETWEEN(got, (*attribute_value_list)[0], (*attribute_value_list)[1]);
         case comparison_operator_type::CONTAINS:
-            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_CONTAINS(got, (*attribute_value_list)[0]);
+            {
+                verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+                // Expected's "CONTAINS" has this artificial limitation.
+                // ConditionExpression's "contains()" does not...
+                const rjson::value& arg = (*attribute_value_list)[0];
+                const auto& argtype = (*arg.MemberBegin()).name;
+                if (argtype != "S" && argtype != "N" && argtype != "B") {
+                    throw api_error("ValidationException",
+                            format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
+                                    "got {} instead", argtype));
+                }
+                return check_CONTAINS(got, arg);
+            }
         case comparison_operator_type::NOT_CONTAINS:
-            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_NOT_CONTAINS(got, (*attribute_value_list)[0]);
+            {
+                verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+                // Expected's "NOT_CONTAINS" has this artificial limitation.
+                // ConditionExpression's "contains()" does not...
+                const rjson::value& arg = (*attribute_value_list)[0];
+                const auto& argtype = (*arg.MemberBegin()).name;
+                if (argtype != "S" && argtype != "N" && argtype != "B") {
+                    throw api_error("ValidationException",
+                            format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
+                                    "got {} instead", argtype));
+                }
+                return check_NOT_CONTAINS(got, arg);
+            }
         }
         throw std::logic_error(format("Internal error: corrupted operator enum: {}", int(op)));
     }
