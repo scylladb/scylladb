@@ -187,7 +187,7 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop) {
                 return std::max<int64_t>(a, b);
             });
 
-            dirlog.debug("{} After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
+            dirlog.debug("After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
                     _sstable_dir, _max_generation_seen, state.descriptors.size(), state.generations_found.size());
 
             // _descriptors is everything with a TOC. So after we remove this, what's left is
@@ -232,7 +232,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
         }
         // Should be empty, since an SSTable that belongs to this shard is not remote.
         assert(shard_id != this_shard_id());
-        dirlog.debug("{} Moving {} unshared SSTables to shard {} ", info_vec.size(), shard_id);
+        dirlog.debug("Moving {} unshared SSTables to shard {} ", info_vec.size(), shard_id);
         return source_directory.invoke_on(shard_id, &sstables::sstable_directory::load_foreign_sstables, std::move(info_vec));
     });
 }
