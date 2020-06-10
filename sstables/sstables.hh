@@ -488,6 +488,7 @@ private:
 
     lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
     lw_shared_ptr<file_input_stream_history> _partition_range_history = make_lw_shared<file_input_stream_history>();
+    lw_shared_ptr<file_input_stream_history> _index_history = make_lw_shared<file_input_stream_history>();
 
     //FIXME: Set by sstable_writer to influence sstable writing behavior.
     //       Remove when doing #3012

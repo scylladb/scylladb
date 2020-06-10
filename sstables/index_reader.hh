@@ -360,6 +360,7 @@ class index_reader {
             options.buffer_size = sst->sstable_buffer_size;
             options.read_ahead = 2;
             options.io_priority_class = pc;
+            options.dynamic_adjustments = sst->_index_history;
             return options;
         }
 
