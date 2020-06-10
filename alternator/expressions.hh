@@ -24,8 +24,10 @@
 #include <string>
 #include <stdexcept>
 #include <vector>
+#include <unordered_set>
 
 #include "expressions_types.hh"
+#include "rjson.hh"
 
 namespace alternator {
 
@@ -37,5 +39,21 @@ public:
 parsed::update_expression parse_update_expression(std::string query);
 std::vector<parsed::path> parse_projection_expression(std::string query);
 parsed::condition_expression parse_condition_expression(std::string query);
+
+void resolve_update_expression(parsed::update_expression& ue,
+        const rjson::value* expression_attribute_names,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values);
+void resolve_projection_expression(std::vector<parsed::path>& pe,
+        const rjson::value* expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names);
+void resolve_condition_expression(parsed::condition_expression& ce,
+        const rjson::value* expression_attribute_names,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values);
+
+void validate_value(const rjson::value& v, const char* caller);
 
 } /* namespace alternator */

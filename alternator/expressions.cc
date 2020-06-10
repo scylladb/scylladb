@@ -23,6 +23,7 @@
 #include "alternator/expressionsLexer.hpp"
 #include "alternator/expressionsParser.hpp"
 #include "utils/overloaded_functor.hh"
+#include "error.hh"
 
 #include "seastarx.hh"
 
@@ -122,6 +123,174 @@ void condition_expression::append(condition_expression&& a, char op) {
     }, _expression);
 }
 
-
 } // namespace parsed
+
+// The following resolve_*() functions resolve references in parsed
+// expressions of different types. Resolving a parsed expression means
+// replacing:
+//  1. In parsed::path objects, replace references like "#name" with the
+//     attribute name from ExpressionAttributeNames,
+//  2. In parsed::constant objects, replace references like ":value" with
+//     the value from ExpressionAttributeValues.
+// These function also track which name and value references were used, to
+// allow complaining if some remain unused.
+// Note that the resolve_*() functions modify the expressions in-place,
+// so if we ever intend to cache parsed expression, we need to pass a copy
+// into this function.
+//
+// Doing the "resolving" stage before the evaluation stage has two benefits.
+// First, it allows us to be compatible with DynamoDB in catching unused
+// names and values (see issue #6572). Second, in the FilterExpression case,
+// we need to resolve the expression just once but then use it many times
+// (once for each item to be filtered).
+
+static void resolve_path(parsed::path& p,
+        const rjson::value* expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names) {
+    const std::string& column_name = p.root();
+    if (column_name.size() > 0 && column_name.front() == '#') {
+        if (!expression_attribute_names) {
+            throw api_error("ValidationException",
+                    format("ExpressionAttributeNames missing, entry '{}' required by expression", column_name));
+        }
+        const rjson::value* value = rjson::find(*expression_attribute_names, column_name);
+        if (!value || !value->IsString()) {
+            throw api_error("ValidationException",
+                    format("ExpressionAttributeNames missing entry '{}' required by expression", column_name));
+        }
+        used_attribute_names.emplace(column_name);
+        p.set_root(std::string(rjson::to_string_view(*value)));
+    }
+}
+
+static void resolve_constant(parsed::constant& c,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_values) {
+    std::visit(overloaded_functor {
+        [&] (const std::string& valref) {
+            if (!expression_attribute_values) {
+                throw api_error("ValidationException",
+                        format("ExpressionAttributeValues missing, entry '{}' required by expression", valref));
+            }
+            const rjson::value* value = rjson::find(*expression_attribute_values, valref);
+            if (!value) {
+                throw api_error("ValidationException",
+                        format("ExpressionAttributeValues missing entry '{}' required by expression", valref));
+            }
+            if (value->IsNull()) {
+                throw api_error("ValidationException",
+                        format("ExpressionAttributeValues null value for entry '{}' required by expression", valref));
+            }
+            validate_value(*value, "ExpressionAttributeValues");
+            used_attribute_values.emplace(valref);
+            c.set(*value);
+        },
+        [&] (const parsed::constant::literal& lit) {
+            // Nothing to do, already resolved
+        }
+    }, c._value);
+
+}
+
+void resolve_value(parsed::value& rhs,
+        const rjson::value* expression_attribute_names,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values) {
+    std::visit(overloaded_functor {
+        [&] (parsed::constant& c) {
+            resolve_constant(c, expression_attribute_values, used_attribute_values);
+        },
+        [&] (parsed::value::function_call& f) {
+            for (parsed::value& value : f._parameters) {
+                resolve_value(value, expression_attribute_names, expression_attribute_values,
+                        used_attribute_names, used_attribute_values);
+            }
+        },
+        [&] (parsed::path& p) {
+            resolve_path(p, expression_attribute_names, used_attribute_names);
+        }
+    }, rhs._value);
+}
+
+void resolve_set_rhs(parsed::set_rhs& rhs,
+        const rjson::value* expression_attribute_names,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values) {
+    resolve_value(rhs._v1, expression_attribute_names, expression_attribute_values,
+            used_attribute_names, used_attribute_values);
+    if (rhs._op != 'v') {
+        resolve_value(rhs._v2, expression_attribute_names, expression_attribute_values,
+                used_attribute_names, used_attribute_values);
+    }
+}
+
+void resolve_update_expression(parsed::update_expression& ue,
+        const rjson::value* expression_attribute_names,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values) {
+    for (parsed::update_expression::action& action : ue.actions()) {
+        resolve_path(action._path, expression_attribute_names, used_attribute_names);
+        std::visit(overloaded_functor {
+            [&] (parsed::update_expression::action::set& a) {
+                resolve_set_rhs(a._rhs, expression_attribute_names, expression_attribute_values,
+                        used_attribute_names, used_attribute_values);
+            },
+            [&] (parsed::update_expression::action::remove& a) {
+                // nothing to do
+            },
+            [&] (parsed::update_expression::action::add& a) {
+                resolve_constant(a._valref, expression_attribute_values, used_attribute_values);
+            },
+            [&] (parsed::update_expression::action::del& a) {
+                resolve_constant(a._valref, expression_attribute_values, used_attribute_values);
+            }
+        }, action._action);
+    }
+}
+
+static void resolve_primitive_condition(parsed::primitive_condition& pc,
+        const rjson::value* expression_attribute_names,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values) {
+    for (parsed::value& value : pc._values) {
+        resolve_value(value,
+                expression_attribute_names, expression_attribute_values,
+                used_attribute_names, used_attribute_values);
+    }
+}
+
+void resolve_condition_expression(parsed::condition_expression& ce,
+        const rjson::value* expression_attribute_names,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values) {
+    std::visit(overloaded_functor {
+        [&] (parsed::primitive_condition& cond) {
+            resolve_primitive_condition(cond,
+                    expression_attribute_names, expression_attribute_values,
+                    used_attribute_names, used_attribute_values);
+        },
+        [&] (parsed::condition_expression::condition_list& list) {
+            for (parsed::condition_expression& cond : list.conditions) {
+                resolve_condition_expression(cond,
+                        expression_attribute_names, expression_attribute_values,
+                            used_attribute_names, used_attribute_values);
+
+            }
+        }
+    }, ce._expression);
+}
+
+void resolve_projection_expression(std::vector<parsed::path>& pe,
+        const rjson::value* expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names) {
+    for (parsed::path& p : pe) {
+        resolve_path(p, expression_attribute_names, used_attribute_names);
+    }
+}
+
 } // namespace alternator

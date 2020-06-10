@@ -1235,9 +1235,6 @@ def test_put_item_condition(test_table_s):
 # during parsing, or during evaluation? The stage we check this changes
 # our behavior when the condition was supposed to fail. So we have two
 # separate tests here, one for failed condition and one for successful.
-# Because Alternator does this check at a different stage from DynamoDB,
-# this test currently fails.
-@pytest.mark.xfail(reason="unused entries are checked too late")
 def test_update_condition_unused_entries_failed(test_table_s):
     p = random_string()
     # unused val3:
@@ -1321,7 +1318,6 @@ def test_update_condition_unused_entries_succeeded(test_table_s):
 # either by dropping short-circuit evaluation (i.e., evaluate all parts
 # of the expression even if the first OR succeeds), or by testing for
 # unused references before evaluating anything.
-@pytest.mark.xfail(reason="unused entries are checked too late")
 def test_update_condition_unused_entries_short_circuit(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},

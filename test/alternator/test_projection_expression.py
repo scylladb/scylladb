@@ -199,3 +199,19 @@ def test_projection_expression_and_attributes_to_get(test_table_s):
         full_scan(test_table_s,  ProjectionExpression='a', AttributesToGet=['a'])
     with pytest.raises(ClientError, match='ValidationException.*both'):
         full_query(test_table_s, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ProjectionExpression='a', AttributesToGet=['a'])
+
+# above in test_projection_expression_toplevel_syntax among other things
+# we noted how spurious entries in ExpressionAttributeNames, not needed
+# the the ProjectionExpression, cause an error. Sometimes we have two
+# expressions in the same request, for example, both a ProjectionExpression
+# and a KeyConditionExpression. It's only an error if a name is not
+# needed by both of these expressions
+def test_projection_expression_and_key_condition_expression(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hello', 'b': 'hi'})
+    got_items = full_query(test_table_s,
+        KeyConditionExpression='#name1 = :val1',
+        ProjectionExpression='#name2',
+        ExpressionAttributeNames={'#name1': 'p', '#name2': 'a'},
+        ExpressionAttributeValues={':val1': p});
+    assert got_items == [{'a': 'hello'}]

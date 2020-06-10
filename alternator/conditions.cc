@@ -535,11 +535,7 @@ bool verify_condition(const rjson::value& condition, bool require_all, const rjs
     return require_all;
 }
 
-bool calculate_primitive_condition(const parsed::primitive_condition& cond,
-        std::unordered_set<std::string>& used_attribute_values,
-        std::unordered_set<std::string>& used_attribute_names,
-        const rjson::value& req,
-        schema_ptr schema,
+static bool calculate_primitive_condition(const parsed::primitive_condition& cond,
         const rjson::value* previous_item) {
     std::vector<rjson::value> calculated_values;
     calculated_values.reserve(cond._values.size());
@@ -548,9 +544,7 @@ bool calculate_primitive_condition(const parsed::primitive_condition& cond,
                 cond._op == parsed::primitive_condition::type::VALUE ?
                         calculate_value_caller::ConditionExpressionAlone :
                         calculate_value_caller::ConditionExpression,
-                rjson::find(req, "ExpressionAttributeValues"),
-                used_attribute_names, used_attribute_values,
-                req, schema, previous_item));
+                previous_item));
     }
     switch (cond._op) {
     case parsed::primitive_condition::type::BETWEEN:
@@ -606,23 +600,17 @@ bool calculate_primitive_condition(const parsed::primitive_condition& cond,
 // conditions given by the given parsed ConditionExpression.
 bool verify_condition_expression(
         const parsed::condition_expression& condition_expression,
-        std::unordered_set<std::string>& used_attribute_values,
-        std::unordered_set<std::string>& used_attribute_names,
-        const rjson::value& req,
-        schema_ptr schema,
         const rjson::value* previous_item) {
     if (condition_expression.empty()) {
         return true;
     }
     bool ret = std::visit(overloaded_functor {
         [&] (const parsed::primitive_condition& cond) -> bool {
-            return calculate_primitive_condition(cond, used_attribute_values,
-                    used_attribute_names, req, schema, previous_item);
+            return calculate_primitive_condition(cond, previous_item);
         },
         [&] (const parsed::condition_expression::condition_list& list) -> bool {
             auto verify_condition = [&] (const parsed::condition_expression& e) {
-                return verify_condition_expression(e, used_attribute_values,
-                        used_attribute_names, req, schema, previous_item);
+                return verify_condition_expression(e, previous_item);
             };
             switch (list.op) {
             case '&':

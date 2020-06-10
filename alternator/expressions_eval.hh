@@ -60,19 +60,10 @@ bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2);
 
 rjson::value calculate_value(const parsed::value& v,
         calculate_value_caller caller,
-        const rjson::value* expression_attribute_values,
-        std::unordered_set<std::string>& used_attribute_names,
-        std::unordered_set<std::string>& used_attribute_values,
-        const rjson::value& update_info,
-        schema_ptr schema,
         const rjson::value* previous_item);
 
 bool verify_condition_expression(
         const parsed::condition_expression& condition_expression,
-        std::unordered_set<std::string>& used_attribute_values,
-        std::unordered_set<std::string>& used_attribute_names,
-        const rjson::value& req,
-        schema_ptr schema,
         const rjson::value* previous_item);
 
 } /* namespace alternator */
