@@ -2076,35 +2076,46 @@ rjson::value calculate_value(const parsed::value& v,
                 rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
                 // TODO: There's duplication here with check_BEGINS_WITH().
                 // But unfortunately, the two functions differ a bit.
-                bool ret = false;
+
+                // If one of v1 or v2 is malformed or has an unsupported type
+                // (not B or S), what we do depends on whether it came from
+                // the user's query (is_constant()), or the item. Unsupported
+                // values in the query result in an error, but if they are in
+                // the item, we silently return false (no match).
+                bool bad = false;
                 if (!v1.IsObject() || v1.MemberCount() != 1) {
+                    bad = true;
                     if (f._parameters[0].is_constant()) {
                         throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v1));
                     }
                 } else if (v1.MemberBegin()->name != "S" && v1.MemberBegin()->name != "B") {
+                    bad = true;
                     if (f._parameters[0].is_constant()) {
                         throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v1));
                     }
-                } else {
+                }
+                if (!v2.IsObject() || v2.MemberCount() != 1) {
+                    bad = true;
+                    if (f._parameters[1].is_constant()) {
+                        throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v2));
+                    }
+                } else if (v2.MemberBegin()->name != "S" && v2.MemberBegin()->name != "B") {
+                    bad = true;
+                    if (f._parameters[1].is_constant()) {
+                        throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v2));
+                    }
+                }
+                bool ret = false;
+                if (!bad) {
                     auto it1 = v1.MemberBegin();
-                    if (!v2.IsObject() || v2.MemberCount() != 1) {
-                        if (f._parameters[1].is_constant()) {
-                            throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v2));
-                        }
-                    } else if (v2.MemberBegin()->name != "S" && v2.MemberBegin()->name != "B") {
-                        if (f._parameters[1].is_constant()) {
-                            throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v2));
-                        }
-                    } else {
-                        auto it2 = v2.MemberBegin();
-                        if (it1->name == it2->name) {
-                            if (it2->name == "S") {
-                                std::string_view val1 = rjson::to_string_view(it1->value);
-                                std::string_view val2 = rjson::to_string_view(it2->value);
-                                ret = val1.starts_with(val2);
-                            } else /* it2->name == "B" */ {
-                                ret = base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
-                            }
+                    auto it2 = v2.MemberBegin();
+                    if (it1->name == it2->name) {
+                        if (it2->name == "S") {
+                            std::string_view val1 = rjson::to_string_view(it1->value);
+                            std::string_view val2 = rjson::to_string_view(it2->value);
+                            ret = val1.starts_with(val2);
+                        } else /* it2->name == "B" */ {
+                            ret = base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
                         }
                     }
                 }

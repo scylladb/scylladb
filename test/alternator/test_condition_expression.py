@@ -755,6 +755,11 @@ def test_update_condition_begins_with(test_table_s):
             UpdateExpression='SET c = :val',
                 ConditionExpression='begins_with(a, :arg)',
                 ExpressionAttributeValues={':val': 3, ':arg': 2})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = :val',
+                ConditionExpression='begins_with(c, :arg)',
+                ExpressionAttributeValues={':val': 3, ':arg': 2})
     # However, that extra type check is only done on values inside the
     # expression. It isn't done on values from an item attributes - in that
     # case we got a normal failed condition.
@@ -768,6 +773,21 @@ def test_update_condition_begins_with(test_table_s):
             UpdateExpression='SET c = :val',
                 ConditionExpression='begins_with(c, a)',
                 ExpressionAttributeValues={':val': 3})
+    # Although the DynamoDB documentation suggests that begins_with()
+    # can only take a path as the first parameter and a constant as
+    # the second, this isn't actually true - begins_with() works
+    # as expected also to compare two attributes, or in reverse order:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET c = :val',
+            ConditionExpression='begins_with(:str, a)',
+            ExpressionAttributeValues={':val': 'he', ':str': 'hellohi'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 'he'
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET c = :val',
+            ConditionExpression='begins_with(a, c)',
+            ExpressionAttributeValues={':val': 5})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 5
+
 
 def test_update_condition_contains(test_table_s):
     p = random_string()
