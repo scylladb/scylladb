@@ -30,6 +30,7 @@
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 #include "schema_builder.hh"
+#include "db/background.hh"
 #include "database.hh"
 #include "release.hh"
 #include "db/config.hh"
@@ -1178,13 +1179,21 @@ public:
     }
 };
 
+void quiesce() {
+    db::await_background_jobs().get();
+}
+
 void run_test_case(std::function<std::vector<test_result>()> fn) {
     result_collector rc;
 
     auto do_run = [&] {
         on_test_case();
-        return fn();
+        auto r = fn();
+        quiesce();
+        return r;
     };
+
+    quiesce();
 
     auto t1 = std::chrono::steady_clock::now();
     rc.add(do_run());
