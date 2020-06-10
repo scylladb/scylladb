@@ -33,6 +33,47 @@ struct key_compare {
     bool operator()(const per_key_t& a, const per_key_t& b) const noexcept { return a < b; }
 };
 
+struct key_tri_compare {
+    int operator()(const per_key_t& a, const per_key_t& b) const noexcept {
+        if (a > b) {
+            return 1;
+        } else if (a < b) {
+            return -1;
+        } else {
+            return 0;
+        }
+    }
+};
+
+#include "utils/bptree.hh"
+
+using namespace seastar;
+
+/* On node size 32 and less linear search works better */
+using test_bplus_tree = bplus::tree<per_key_t, unsigned long, key_compare, 4, bplus::key_search::linear>;
+
+#include "utils/intrusive_btree.hh"
+
+class perf_intrusive_key {
+    per_key_t _k;
+public:
+    intrusive_b::member_hook hook;
+
+    explicit perf_intrusive_key(per_key_t v) noexcept : _k(v) {}
+    perf_intrusive_key(perf_intrusive_key&&) noexcept = default;
+    perf_intrusive_key(const perf_intrusive_key&) = delete;
+
+    struct tri_compare {
+        key_tri_compare _cmp;
+        int operator()(const per_key_t a, const per_key_t b) const noexcept { return _cmp(a, b); }
+        int operator()(const perf_intrusive_key& a, const perf_intrusive_key& b) const noexcept { return _cmp(a._k, b._k); }
+        int operator()(const per_key_t a, const perf_intrusive_key& b) const noexcept { return _cmp(a, b._k); }
+        int operator()(const perf_intrusive_key& a, const per_key_t b) const noexcept { return _cmp(a._k, b); }
+    };
+};
+
+using test_b_tree = intrusive_b::tree<perf_intrusive_key, &perf_intrusive_key::hook, perf_intrusive_key::tri_compare, 12, 18, intrusive_b::key_search::linear>;
+
 class collection_tester {
 public:
     virtual void insert(per_key_t k) = 0;
@@ -176,6 +217,54 @@ public:
     virtual ~isec_tester() { clear(); }
 };
 
+class btree_tester : public collection_tester {
+    test_b_tree _t;
+    perf_intrusive_key::tri_compare _cmp;
+public:
+    btree_tester() : _t() {}
+    virtual void insert(per_key_t k) override { _t.insert(std::make_unique<perf_intrusive_key>(k), _cmp); }
+    virtual void lower_bound(per_key_t k) override {
+        auto i = _t.lower_bound(k, _cmp);
+        assert(i != _t.end());
+    }
+    virtual void erase(per_key_t k) override { _t.erase_and_dispose(k, _cmp, [] (perf_intrusive_key* k) noexcept { delete k; }); }
+    virtual void drain(int batch) override {
+        int x = 0;
+        perf_intrusive_key* k;
+        while ((k = _t.unlink_leftmost_without_rebalance()) != nullptr) {
+            delete k;
+            if (++x % batch == 0) {
+                seastar::thread::yield();
+            }
+        }
+    }
+    virtual void scan(int batch) override {
+        scan_collection(_t, batch);
+    }
+    virtual void clear() override {
+        _t.clear_and_dispose([] (perf_intrusive_key* k) noexcept { delete k; });
+    }
+    virtual void insert_and_erase(per_key_t k) override {
+        perf_intrusive_key key(k);
+        auto i = _t.insert_before(_t.end(), key);
+        i.erase();
+    }
+    virtual void show_stats() {
+        struct intrusive_b::stats st = _t.get_stats();
+        fmt::print("nodes:     {}\n", st.nodes);
+        for (int i = 0; i < (int)st.nodes_filled.size(); i++) {
+            fmt::print("   {}: {} ({}%)\n", i, st.nodes_filled[i], st.nodes_filled[i] * 100 / st.nodes);
+        }
+        fmt::print("leaves:    {}\n", st.leaves);
+        for (int i = 0; i < (int)st.leaves_filled.size(); i++) {
+            fmt::print("   {}: {} ({}%)\n", i, st.leaves_filled[i], st.leaves_filled[i] * 100 / st.leaves);
+        }
+    }
+    virtual ~btree_tester() {
+        _t.clear();
+    }
+};
+
 class set_tester : public collection_tester {
     std::set<per_key_t> _s;
 public:
@@ -264,6 +353,8 @@ int main(int argc, char **argv) {
 
             if (col == "bptree") {
                 c = std::make_unique<bptree_tester>();
+            } else if (col == "btree") {
+                c = std::make_unique<btree_tester>();
             } else if (col == "set") {
                 c = std::make_unique<set_tester>();
             } else if (col == "map") {
