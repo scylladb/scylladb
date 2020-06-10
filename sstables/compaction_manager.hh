@@ -109,7 +109,7 @@ private:
     // Prevents column family from running major and minor compaction at same time.
     std::unordered_map<column_family*, rwlock> _compaction_locks;
 
-    semaphore _resharding_sem{1};
+    semaphore _custom_job_sem{1};
 
     std::function<void()> compaction_submission_callback();
     // all registered column families are submitted for compaction at a constant interval.
@@ -216,15 +216,13 @@ public:
     // Submit a column family for major compaction.
     future<> submit_major_compaction(column_family* cf);
 
-    // Run a resharding job for a given column family.
+
+    // Run a custom job for a given column family, defined by a function
     // it completes when future returned by job is ready or returns immediately
     // if manager was asked to stop.
     //
-    // parameter job is a function that will carry the reshard operation on a set
-    // of sstables that belong to different shards for this column family using
-    // sstables::reshard_sstables(), and in the end, it will forward unshared
-    // sstables created by the process to their owner shards.
-    future<> run_resharding_job(column_family* cf, std::function<future<>()> job);
+    // parameter job is a function that will carry the operation
+    future<> run_custom_job(column_family* cf, sstring name, noncopyable_function<future<>()> job);
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.

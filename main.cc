@@ -937,10 +937,17 @@ int main(int ac, char** av) {
             // we will have races between the compaction and loading processes
             // We also want to trigger regular compaction on boot.
 
+            // FIXME: temporary as this code is being replaced. I am keeping the scheduling
+            // group that was effectively used in the bulk of it (compaction). Soon it will become
+            // streaming
+
+            with_scheduling_group(dbcfg.compaction_scheduling_group, [&db] {
             for (auto& x : db.local().get_column_families()) {
                 column_family& cf = *(x.second);
                 distributed_loader::reshard(db, cf.schema()->ks_name(), cf.schema()->cf_name());
             }
+            }).get();
+
             db.invoke_on_all([&proxy] (database& db) {
                 for (auto& x : db.get_column_families()) {
                     column_family& cf = *(x.second);

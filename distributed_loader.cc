@@ -565,7 +565,7 @@ static future<> invoke_all_resharding_jobs(global_column_family_ptr cf, sstring 
             auto job = [func, sstables = std::move(sstables), level, max_sstable_bytes] () mutable {
                 return func(std::move(sstables), level, max_sstable_bytes);
             };
-            return cf->get_compaction_manager().run_resharding_job(&*cf, std::move(job));
+            return cf->get_compaction_manager().run_custom_job(&*cf, "resharding", std::move(job));
         });
     });
 }
