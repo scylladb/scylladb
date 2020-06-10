@@ -1958,7 +1958,7 @@ future<> rebuild_with_repair(seastar::sharded<database>& db, locator::token_meta
 future<> replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> replacing_tokens) {
     auto op = sstring("replace_with_repair");
     auto source_dc = get_local_dc();
-    auto reason = streaming::stream_reason::bootstrap;
+    auto reason = streaming::stream_reason::replace;
     tm.update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
     return do_rebuild_replace_with_repair(db, std::move(tm), std::move(op), std::move(source_dc), reason);
 }

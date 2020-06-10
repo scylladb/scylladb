@@ -32,6 +32,7 @@ enum class stream_reason : uint8_t {
     removenode,
     rebuild,
     repair,
+    replace,
 };
 
 }
