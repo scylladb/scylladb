@@ -79,6 +79,10 @@ static io_error_handler error_handler_for_upload_dir() {
     };
 }
 
+io_error_handler error_handler_gen_for_upload_dir(disk_error_signal_type& dummy) {
+    return error_handler_for_upload_dir();
+}
+
 // TODO: possibly move it to seastar
 template <typename Service, typename PtrType, typename Func>
 static future<> invoke_shards_with_ptr(std::unordered_set<shard_id> shards, distributed<Service>& s, PtrType ptr, Func&& func) {
@@ -396,7 +400,7 @@ distributed_loader::process_upload_dir(distributed<database>& db, sstring ks, ss
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
             sstables::sstable_directory::allow_loading_materialized_view::no,
             [&global_table] (fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-                return global_table->make_sstable(dir.native(), gen, v, f);
+                return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
 
         }).get();
 
@@ -427,7 +431,7 @@ distributed_loader::process_upload_dir(distributed<database>& db, sstring ks, ss
 
             return global_table->make_sstable(upload.native(), gen,
                     global_table->get_sstables_manager().get_highest_supported_format(),
-                    sstables::sstable::format_types::big);
+                    sstables::sstable::format_types::big, &error_handler_gen_for_upload_dir);
         }).get();
     });
 }
@@ -465,8 +469,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::
             auto descriptors = db.invoke_on(column_family::calculate_shard_from_sstable_generation(generation), [&sys_dist_ks, ks_name, cf_name, comps] (database& db) {
                 return seastar::async([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name), comps = std::move(comps)] () mutable {
                     auto& cf = db.find_column_family(ks_name, cf_name);
-                    auto sst = cf.make_sstable(cf._config.datadir + "/upload", comps.generation, comps.version, comps.format,
-                        [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
+                    auto sst = cf.make_sstable(cf._config.datadir + "/upload", comps.generation, comps.version, comps.format, &error_handler_gen_for_upload_dir);
                     auto gen = cf.calculate_generation_for_new_table();
 
                     sst->read_toc().get();
