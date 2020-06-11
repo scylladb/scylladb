@@ -58,8 +58,6 @@
 #include "time_window_compaction_strategy.hh"
 #include "sstables/compaction_backlog_manager.hh"
 #include "sstables/size_tiered_backlog_tracker.hh"
-#include "mutation_source_metadata.hh"
-#include "mutation_writer/timestamp_based_splitting_writer.hh"
 
 logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
 logging::logger leveled_manifest::logger("LeveledManifest");
@@ -783,65 +781,6 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
         clogger.debug("Enabling tombstone compactions for TWCS");
     }
     _use_clustering_key_filter = true;
-}
-
-uint64_t time_window_compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
-    if (!ms_meta.min_timestamp || !ms_meta.max_timestamp) {
-        // Not enough information, we assume the worst
-        return partition_estimate / max_data_segregation_window_count;
-    }
-    const auto min_window = get_window_for(_options, *ms_meta.min_timestamp);
-    const auto max_window = get_window_for(_options, *ms_meta.max_timestamp);
-    const auto window_size = get_window_size(_options);
-
-    auto estimated_window_count = (max_window + (window_size - 1) - min_window) / window_size;
-
-    return partition_estimate / std::max(1UL, uint64_t(estimated_window_count));
-}
-
-namespace {
-
-class classify_by_timestamp {
-    time_window_compaction_strategy_options _options;
-    std::vector<int64_t> _known_windows;
-
-public:
-    explicit classify_by_timestamp(time_window_compaction_strategy_options options) : _options(std::move(options)) { }
-    int64_t operator()(api::timestamp_type ts) {
-        const auto window = time_window_compaction_strategy::get_window_for(_options, ts);
-        if (const auto it = boost::find(_known_windows, window); it != _known_windows.end()) {
-            std::swap(*it, _known_windows.front());
-            return window;
-        }
-        if (_known_windows.size() < time_window_compaction_strategy::max_data_segregation_window_count) {
-            _known_windows.push_back(window);
-            return window;
-        }
-        int64_t closest_window;
-        int64_t min_diff = std::numeric_limits<int64_t>::max();
-        for (const auto known_window : _known_windows) {
-            if (const auto diff = std::abs(known_window - window); diff < min_diff) {
-                min_diff = diff;
-                closest_window = known_window;
-            }
-        }
-        return closest_window;
-    };
-};
-
-} // anonymous namespace
-
-reader_consumer time_window_compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer) {
-    if (ms_meta.min_timestamp && ms_meta.max_timestamp
-            && get_window_for(_options, *ms_meta.min_timestamp) == get_window_for(_options, *ms_meta.max_timestamp)) {
-        return end_consumer;
-    }
-    return [options = _options, end_consumer = std::move(end_consumer)] (flat_mutation_reader rd) mutable -> future<> {
-        return mutation_writer::segregate_by_timestamp(
-                std::move(rd),
-                classify_by_timestamp(std::move(options)),
-                std::move(end_consumer));
-    };
 }
 
 } // namespace sstables
