@@ -169,7 +169,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
 
     // Create incomplete sstables in test data directory
     sstring ks = "system";
-    sstring cf = "local-7ad54392bcdd35a684174e047860b377";
+    sstring cf = "peers-37f71aca7dc2383ba70672528af04d4f";
     sstring sst_dir = (data_dir.path() / std::string_view(ks) / std::string_view(cf)).string();
 
     auto require_exist = [] (const sstring& name, bool should_exist) {
@@ -223,7 +223,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 
     // Create incomplete sstables in test data directory
     sstring ks = "system";
-    sstring cf = "local-7ad54392bcdd35a684174e047860b377";
+    sstring cf = "peers-37f71aca7dc2383ba70672528af04d4f";
     sstring sst_dir = (data_dir.path() / std::string_view(ks) / std::string_view(cf)).string();
     sstring pending_delete_dir = sst_dir + "/" + sst::pending_delete_dir_basename();
 
