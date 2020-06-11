@@ -275,4 +275,93 @@ const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value&
     return std::make_pair(it_key, &(it->value));
 }
 
+const rjson::value* unwrap_list(const rjson::value& v) {
+    if (!v.IsObject() || v.MemberCount() != 1) {
+        return nullptr;
+    }
+    auto it = v.MemberBegin();
+    if (it->name != std::string("L")) {
+        return nullptr;
+    }
+    return &(it->value);
+}
+
+// Take two JSON-encoded numeric values ({"N": "thenumber"}) and return the
+// sum, again as a JSON-encoded number.
+rjson::value number_add(const rjson::value& v1, const rjson::value& v2) {
+    auto n1 = unwrap_number(v1, "UpdateExpression");
+    auto n2 = unwrap_number(v2, "UpdateExpression");
+    rjson::value ret = rjson::empty_object();
+    std::string str_ret = std::string((n1 + n2).to_string());
+    rjson::set(ret, "N", rjson::from_string(str_ret));
+    return ret;
+}
+
+rjson::value number_subtract(const rjson::value& v1, const rjson::value& v2) {
+    auto n1 = unwrap_number(v1, "UpdateExpression");
+    auto n2 = unwrap_number(v2, "UpdateExpression");
+    rjson::value ret = rjson::empty_object();
+    std::string str_ret = std::string((n1 - n2).to_string());
+    rjson::set(ret, "N", rjson::from_string(str_ret));
+    return ret;
+}
+
+// Take two JSON-encoded set values (e.g. {"SS": [...the actual set]}) and
+// return the sum of both sets, again as a set value.
+rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
+    auto [set1_type, set1] = unwrap_set(v1);
+    auto [set2_type, set2] = unwrap_set(v2);
+    if (set1_type != set2_type) {
+        throw api_error("ValidationException", format("Mismatched set types: {} and {}", set1_type, set2_type));
+    }
+    if (!set1 || !set2) {
+        throw api_error("ValidationException", "UpdateExpression: ADD operation for sets must be given sets as arguments");
+    }
+    rjson::value sum = rjson::copy(*set1);
+    std::set<rjson::value, rjson::single_value_comp> set1_raw;
+    for (auto it = sum.Begin(); it != sum.End(); ++it) {
+        set1_raw.insert(rjson::copy(*it));
+    }
+    for (const auto& a : set2->GetArray()) {
+        if (set1_raw.count(a) == 0) {
+            rjson::push_back(sum, rjson::copy(a));
+        }
+    }
+    rjson::value ret = rjson::empty_object();
+    rjson::set_with_string_name(ret, set1_type, std::move(sum));
+    return ret;
+}
+
+// Take two JSON-encoded set values (e.g. {"SS": [...the actual list]}) and
+// return the difference of s1 - s2, again as a set value.
+// DynamoDB does not allow empty sets, so if resulting set is empty, return
+// an unset optional instead.
+std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value& v2) {
+    auto [set1_type, set1] = unwrap_set(v1);
+    auto [set2_type, set2] = unwrap_set(v2);
+    if (set1_type != set2_type) {
+        throw api_error("ValidationException", format("Mismatched set types: {} and {}", set1_type, set2_type));
+    }
+    if (!set1 || !set2) {
+        throw api_error("ValidationException", "UpdateExpression: DELETE operation can only be performed on a set");
+    }
+    std::set<rjson::value, rjson::single_value_comp> set1_raw;
+    for (auto it = set1->Begin(); it != set1->End(); ++it) {
+        set1_raw.insert(rjson::copy(*it));
+    }
+    for (const auto& a : set2->GetArray()) {
+        set1_raw.erase(a);
+    }
+    if (set1_raw.empty()) {
+        return std::nullopt;
+    }
+    rjson::value ret = rjson::empty_object();
+    rjson::set_with_string_name(ret, set1_type, rjson::empty_array());
+    rjson::value& result_set = ret[set1_type];
+    for (const auto& a : set1_raw) {
+        rjson::push_back(result_set, rjson::copy(a));
+    }
+    return ret;
+}
+
 }

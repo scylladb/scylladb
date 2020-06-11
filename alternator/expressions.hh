@@ -59,4 +59,37 @@ void validate_value(const rjson::value& v, const char* caller);
 
 bool condition_expression_on(const parsed::condition_expression& ce, std::string_view attribute);
 
+// calculate_value() behaves slightly different (especially, different
+// functions supported) when used in different types of expressions, as
+// enumerated in this enum:
+enum class calculate_value_caller {
+    UpdateExpression, ConditionExpression, ConditionExpressionAlone
+};
+
+inline std::ostream& operator<<(std::ostream& out, calculate_value_caller caller) {
+    switch (caller) {
+        case calculate_value_caller::UpdateExpression:
+            out << "UpdateExpression";
+            break;
+        case calculate_value_caller::ConditionExpression:
+            out << "ConditionExpression";
+            break;
+        case calculate_value_caller::ConditionExpressionAlone:
+            out << "ConditionExpression";
+            break;
+        default:
+            out << "unknown type of expression";
+            break;
+    }
+    return out;
+}
+
+rjson::value calculate_value(const parsed::value& v,
+        calculate_value_caller caller,
+        const rjson::value* previous_item);
+
+rjson::value calculate_value(const parsed::set_rhs& rhs,
+        const rjson::value* previous_item);
+
+
 } /* namespace alternator */

@@ -34,7 +34,7 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "utils/overloaded_functor.hh"
 
-#include "expressions_eval.hh"
+#include "expressions.hh"
 
 namespace alternator {
 
@@ -338,7 +338,7 @@ struct cmp_gt {
 
 // True if v is between lb and ub, inclusive.  Throws if lb > ub.
 template <typename T>
-bool check_BETWEEN(const T& v, const T& lb, const T& ub) {
+static bool check_BETWEEN(const T& v, const T& lb, const T& ub) {
     if (cmp_lt()(ub, lb)) {
         throw api_error("ValidationException",
                         format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
