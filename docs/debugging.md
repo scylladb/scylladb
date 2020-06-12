@@ -356,9 +356,39 @@ Unable to access thread-local variables. Example:
     Cannot find thread-local storage for LWP 22604, executable file /usr/lib/debug/usr/bin/scylla.debug:
     Cannot find thread-local variables on this target
 
+The first step in finding out why thread debugging doesn't work is enabling
+additional information about why thread debugging is not working:
+
+    (gdb) set debug libthread 1
+
+This has to be done right after starting GDB, *before* the core and the
+executable are loaded.
+
 The usual cause is that GDB failed to find some libraries or that the library
 versions of those libraries GDB loaded don't match those the core was generated
-with. To see which libraries GDB found do:
+with.
+
+Of special note is the `libthread_db.so` library, which is crucial for
+thread debugging to work. This library will not appear in any library listing
+(see below) and GDB requires the path it can be found at to be declared safe to
+load from. You might see a message like this:
+
+    warning: File "/opt/scylladb/libreloc/libthread_db.so.1" auto-loading has been declined by your `auto-load safe-path' set to "$debugdir:$datadir/auto-load"
+    thread_db_load_search returning 0
+
+To declare the directory this library is found at as safe to load from, do:
+
+    set auto-load safe-path /opt/scylladb/libreloc
+
+Use the path that is appropriate for your setup. Alternatively you can use `/`
+as the path to declare your entire file-system as safe to load stuff from.
+Note that `libthread_db.so` is packaged together with `libc`. So if you have the
+build-id appropriate `libc` package, you can be sure you have the correct
+`libthread_db.so` too.
+
+If you ensured `libthread_db.so` is present and is successfully loaded by GDB
+but thread debugging still doesn't work, inspect the other libraries loaded by
+GDB:
 
     (gdb) info sharedlibrary
 
@@ -374,22 +404,16 @@ from the core can be obtained with:
     eu-unstrip -n --core=/path/to/core
 
 In general you can get away some non-core libraries missing or having the wrong
-version, but the core libraries `libc`, `libgcc`, etc. must have the correct
-version. Best to ensure all libraries are correct to minimize the chance of
-something not working. Also, make sure the build-id of the executable matches
+version, but the core libraries like `libc.so`, `libgcc_s.so`, `librt.so` and
+`ld.so` (often called something like `ld-linux-x86-64.so.2`) etc. must have the
+correct version. Best to ensure all libraries are correct to minimize the chance
+of something not working. Also, make sure the build-id of the executable matches
 that the core was generated with. Again, you can use `file` to obtain the
 build-id of the executable, then compare it with the build-id obtained from the
 `eu-unstrip` listing.
 For more information on how to obtain the correct version of libraries and how
 to override the path GDB loads them from, see [Collecting libraries](#collecting-libraries)
 and [Opening the core on another OS](#opening-the-core-on-another-os).
-
-It is also possible to make GDB print additional information about why thread
-debugging is not working. To enable execute:
-
-    (gdb) set debug libthread 1
-
-Right after starting GDB, *before* the core and the executable are loaded.
 
 #### GDB crashes when priting the backtrace or some variable
 
