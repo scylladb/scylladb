@@ -87,6 +87,7 @@ private:
 
     stats _stats;
     seastar::metrics::metric_groups _metrics;
+    float _last_backlog = 0.0f;
 
     std::list<lw_shared_ptr<sstables::compaction_info>> _compactions;
 

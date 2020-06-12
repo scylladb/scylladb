@@ -359,7 +359,8 @@ future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> t
 
 compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, abort_source& as)
     : _compaction_controller(sg, iop, 250ms, [this, available_memory] () -> float {
-        auto b = backlog() / available_memory;
+        _last_backlog = backlog();
+        auto b = _last_backlog / available_memory;
         // This means we are using an unimplemented strategy
         if (compaction_controller::backlog_disabled(b)) {
             // returning the normalization factor means that we'll return the maximum
@@ -415,6 +416,8 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the number of currently active compactions.")),
         sm::make_gauge("pending_compactions", [this] { return _stats.pending_tasks; },
                        sm::description("Holds the number of compaction tasks waiting for an opportunity to run.")),
+        sm::make_gauge("backlog", [this] { return _last_backlog; },
+                       sm::description("Holds the sum of compaction backlog for all tables in the system.")),
     });
 }
 
