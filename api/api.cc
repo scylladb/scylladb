@@ -93,6 +93,22 @@ static future<> register_api(http_context& ctx, const sstring& api_name,
     });
 }
 
+future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl) {
+    return ctx.http_server.set_routes([&ctx, &ctl] (routes& r) { set_transport_controller(ctx, r, ctl); });
+}
+
+future<> unset_transport_controller(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_transport_controller(ctx, r); });
+}
+
+future<> set_rpc_controller(http_context& ctx, thrift_controller& ctl) {
+    return ctx.http_server.set_routes([&ctx, &ctl] (routes& r) { set_rpc_controller(ctx, r, ctl); });
+}
+
+future<> unset_rpc_controller(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_rpc_controller(ctx, r); });
+}
+
 future<> set_server_storage_service(http_context& ctx) {
     return register_api(ctx, "storage_service", "The storage service API", set_storage_service);
 }

@@ -62,7 +62,6 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
 #include "service/load_broadcaster.hh"
-#include "thrift/server.hh"
 #include "transport/server.hh"
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
@@ -75,7 +74,6 @@
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
-#include "auth/common.hh"
 #include "distributed_loader.hh"
 #include "database.hh"
 #include <seastar/core/metrics.hh>
@@ -96,13 +94,12 @@ static logging::logger slogger("storage_service");
 
 distributed<storage_service> _the_storage_service;
 
-storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, bool for_testing)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
         , _gossiper(gossiper)
-        , _auth_service(auth_service)
         , _mnotifier(mn)
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
@@ -113,10 +110,10 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator) {
     register_metrics();
-    sstable_read_error.connect([this] { isolate_on_error(); });
-    sstable_write_error.connect([this] { isolate_on_error(); });
-    general_disk_error.connect([this] { isolate_on_error(); });
-    commit_error.connect([this] { isolate_on_commit_error(); });
+    sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); });
+    sstable_write_error.connect([this] { do_isolate_on_error(disk_error::regular); });
+    general_disk_error.connect([this] { do_isolate_on_error(disk_error::regular); });
+    commit_error.connect([this] { do_isolate_on_error(disk_error::commit); });
 }
 
 void storage_service::enable_all_features() {
@@ -163,16 +160,6 @@ void storage_service::register_metrics() {
                 return static_cast<std::underlying_type_t<node_external_status>>(map_operation_mode(_operation_mode));
             }),
     });
-}
-
-void
-storage_service::isolate_on_error() {
-    do_isolate_on_error(disk_error::regular);
-}
-
-void
-storage_service::isolate_on_commit_error() {
-    do_isolate_on_error(disk_error::commit);
 }
 
 bool storage_service::is_auto_bootstrap() const {
@@ -399,28 +386,6 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     if (do_bind) {
         gms::get_local_gossiper().wait_for_gossip_to_settle().get();
     }
-}
-
-static auth::permissions_cache_config permissions_cache_config_from_db_config(const db::config& dc) {
-    auth::permissions_cache_config c;
-    c.max_entries = dc.permissions_cache_max_entries();
-    c.validity_period = std::chrono::milliseconds(dc.permissions_validity_in_ms());
-    c.update_period = std::chrono::milliseconds(dc.permissions_update_interval_in_ms());
-
-    return c;
-}
-
-static auth::service_config auth_service_config_from_db_config(const db::config& dc) {
-    const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, dc.authorizer());
-    const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, dc.authenticator());
-    const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, dc.role_manager());
-
-    auth::service_config c;
-    c.authorizer_java_name = qualified_authorizer_name;
-    c.authenticator_java_name = qualified_authenticator_name;
-    c.role_manager_java_name = qualified_role_manager_name;
-
-    return c;
 }
 
 void storage_service::maybe_start_sys_dist_ks() {
@@ -655,17 +620,6 @@ void storage_service::join_token_ring(int delay) {
 
     // Retrieve the latest CDC generation seen in gossip (if any).
     scan_cdc_generations();
-
-    _auth_service.start(
-            permissions_cache_config_from_db_config(_db.local().get_config()),
-            std::ref(cql3::get_query_processor()),
-            std::ref(_mnotifier),
-            std::ref(service::get_migration_manager()),
-            auth_service_config_from_db_config(_db.local().get_config())).get();
-
-    _auth_service.invoke_on_all([] (auth::service& auth) {
-        return auth.start(service::get_local_migration_manager());
-    }).get();
 
     supervisor::notify("starting tracing");
     tracing::tracing::start_tracing().get();
@@ -1479,27 +1433,22 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
 static std::optional<future<>> drain_in_progress;
 
 future<> storage_service::stop_transport() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return seastar::async([&ss] {
-            slogger.info("Stop transport: starts");
+    return seastar::async([this] {
+        slogger.info("Stop transport: starts");
 
-            ss.shutdown_client_servers();
-            slogger.info("Stop transport: shutdown rpc and cql server done");
+        shutdown_client_servers();
+        slogger.info("Stop transport: shutdown rpc and cql server done");
 
-            gms::stop_gossiping().get();
-            slogger.info("Stop transport: stop_gossiping done");
+        gms::stop_gossiping().get();
+        slogger.info("Stop transport: stop_gossiping done");
 
-            ss.do_stop_ms().get();
-            slogger.info("Stop transport: shutdown messaging_service done");
+        do_stop_ms().get();
+        slogger.info("Stop transport: shutdown messaging_service done");
 
-            ss.do_stop_stream_manager().get();
-            slogger.info("Stop transport: shutdown stream_manager done");
+        do_stop_stream_manager().get();
+        slogger.info("Stop transport: shutdown stream_manager done");
 
-            ss._auth_service.stop().get();
-            slogger.info("Stop transport: auth shutdown");
-
-            slogger.info("Stop transport: done");
-        });
+        slogger.info("Stop transport: done");
     });
 }
 
@@ -2196,165 +2145,6 @@ future<int64_t> storage_service::true_snapshots_size() {
   });
 }
 
-static std::atomic<bool> isolated = { false };
-
-future<> storage_service::start_rpc_server() {
-    return run_with_api_lock(sstring("start_rpc_server"), [] (storage_service& ss) {
-        if (ss._thrift_server || isolated.load()) {
-            return make_ready_future<>();
-        }
-
-        ss._thrift_server = std::make_unique<distributed<thrift_server>>();
-        auto tserver = &*ss._thrift_server;
-
-        auto& cfg = ss._db.local().get_config();
-        auto port = cfg.rpc_port();
-        auto addr = cfg.rpc_address();
-        auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
-        auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-        auto keepalive = cfg.rpc_keepalive();
-        thrift_server_config tsc;
-        tsc.timeout_config = make_timeout_config(cfg);
-        tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
-        return gms::inet_address::lookup(addr, family, preferred).then([&ss, tserver, addr, port, keepalive, tsc] (gms::inet_address ip) {
-            return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), tsc).then([tserver, port, addr, ip, keepalive] {
-                // #293 - do not stop anything
-                //engine().at_exit([tserver] {
-                //    return tserver->stop();
-                //});
-                return tserver->invoke_on_all(&thrift_server::listen, socket_address{ip, port}, keepalive);
-            });
-        }).then([addr, port] {
-            slogger.info("Thrift server listening on {}:{} ...", addr, port);
-        });
-    });
-}
-
-future<> storage_service::do_stop_rpc_server() {
-    return do_with(std::move(_thrift_server), [this] (std::unique_ptr<distributed<thrift_server>>& tserver) {
-        if (tserver) {
-            return tserver->stop().then([] {
-                slogger.info("Thrift server stopped");
-            });
-        }
-        return make_ready_future<>();
-    });
-}
-
-future<> storage_service::stop_rpc_server() {
-    return run_with_api_lock(sstring("stop_rpc_server"), [] (storage_service& ss) {
-        return ss.do_stop_rpc_server();
-    });
-}
-
-future<bool> storage_service::is_rpc_server_running() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return bool(ss._thrift_server);
-    });
-}
-
-future<> storage_service::start_native_transport() {
-    return run_with_api_lock(sstring("start_native_transport"), [] (storage_service& ss) {
-        if (ss._cql_server || isolated.load()) {
-            return make_ready_future<>();
-        }
-        return seastar::async([&ss] {
-            ss._cql_server = std::make_unique<distributed<cql_transport::cql_server>>();
-            auto cserver = &*ss._cql_server;
-
-            auto& cfg = ss._db.local().get_config();
-            auto addr = cfg.rpc_address();
-            auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
-            auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-            auto ceo = cfg.client_encryption_options();
-            auto keepalive = cfg.rpc_keepalive();
-            cql_transport::cql_server_config cql_server_config;
-            cql_server_config.timeout_config = make_timeout_config(cfg);
-            cql_server_config.max_request_size = ss._service_memory_total;
-            cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
-            cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
-            cql_server_config.sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits();
-            cql_server_config.partitioner_name = cfg.partitioner();
-            smp_service_group_config cql_server_smp_service_group_config;
-            cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
-            cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
-            seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
-            cserver->start(std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), std::ref(ss._mnotifier), cql_server_config).get();
-            struct listen_cfg {
-                socket_address addr;
-                std::shared_ptr<seastar::tls::credentials_builder> cred;
-            };
-
-            std::vector<listen_cfg> configs({ { socket_address{ip, cfg.native_transport_port()} }});
-
-            // main should have made sure values are clean and neatish
-            if (ceo.at("enabled") == "true") {
-                auto cred = std::make_shared<seastar::tls::credentials_builder>();
-
-                cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
-                cred->set_priority_string(db::config::default_tls_priority);
-
-                if (ceo.count("priority_string")) {
-                    cred->set_priority_string(ceo.at("priority_string"));
-                }
-                if (ceo.count("require_client_auth") && ceo.at("require_client_auth") == "true") {
-                    cred->set_client_auth(seastar::tls::client_auth::REQUIRE);
-                }
-
-                cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM).get();
-
-                if (ceo.count("truststore")) {
-                    cred->set_x509_trust_file(ceo.at("truststore"), seastar::tls::x509_crt_format::PEM).get();
-                }
-
-                slogger.info("Enabling encrypted CQL connections between client and server");
-
-                if (cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() != cfg.native_transport_port()) {
-                    configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, std::move(cred)});
-                } else {
-                    configs.back().cred = std::move(cred);
-                }
-            }
-
-            parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
-                return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, keepalive).then([cfg] {
-                    slogger.info("Starting listening for CQL clients on {} ({})"
-                            , cfg.addr, cfg.cred ? "encrypted" : "unencrypted"
-                    );
-                });
-            }).get();
-
-            ss.set_cql_ready(true).get();
-        });
-    });
-}
-
-future<> storage_service::do_stop_native_transport() {
-    return do_with(std::move(_cql_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
-        if (cserver) {
-            // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return set_cql_ready(false).then([&cserver] {
-                return cserver->stop().then([] {
-                    slogger.info("CQL server stopped");
-                });
-            });
-        }
-        return make_ready_future<>();
-    });
-}
-
-future<> storage_service::stop_native_transport() {
-    return run_with_api_lock(sstring("stop_native_transport"), [] (storage_service& ss) {
-        return ss.do_stop_native_transport();
-    });
-}
-
-future<bool> storage_service::is_native_transport_running() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return bool(ss._cql_server);
-    });
-}
-
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
@@ -3024,8 +2814,6 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
 }
 
 void storage_service::shutdown_client_servers() {
-    do_stop_rpc_server().get();
-    do_stop_native_transport().get();
     for (auto& [name, hook] : _client_shutdown_hooks) {
         slogger.info("Shutting down {}", name);
         try {
@@ -3202,13 +2990,21 @@ future<> storage_service::uninit_messaging_service() {
 
 void storage_service::do_isolate_on_error(disk_error type)
 {
+    static std::atomic<bool> isolated = { false };
+
     if (!isolated.exchange(true)) {
         slogger.warn("Shutting down communications due to I/O errors until operator intervention");
         slogger.warn("{} error: {}", type == disk_error::commit ? "Commitlog" : "Disk", std::current_exception());
         // isolated protect us against multiple stops
         //FIXME: discarded future.
-        (void)service::get_local_storage_service().stop_transport();
+        (void)isolate();
     }
+}
+
+future<> storage_service::isolate() {
+    return run_with_no_api_lock([] (storage_service& ss) {
+        return ss.stop_transport();
+    });
 }
 
 future<sstring> storage_service::get_removal_status() {
@@ -3383,19 +3179,15 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
     });
 }
 
-future<> init_storage_service(sharded<abort_source>& abort_source, distributed<database>& db, sharded<gms::gossiper>& gossiper, sharded<auth::service>& auth_service,
+future<> init_storage_service(sharded<abort_source>& abort_source, distributed<database>& db, sharded<gms::gossiper>& gossiper,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
         storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm) {
-    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(auth_service), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(tm));
+    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(tm));
 }
 
 future<> deinit_storage_service() {
     return service::get_storage_service().stop();
-}
-
-future<> storage_service::set_cql_ready(bool ready) {
-    return _gossiper.add_local_application_state(application_state::RPC_READY, versioned_value::cql_ready(ready));
 }
 
 void storage_service::notify_down(inet_address endpoint) {

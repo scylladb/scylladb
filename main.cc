@@ -47,6 +47,7 @@
 #include "log.hh"
 #include "utils/directories.hh"
 #include "debug.hh"
+#include "auth/common.hh"
 #include "init.hh"
 #include "release.hh"
 #include "repair/repair.hh"
@@ -73,6 +74,8 @@
 #include "distributed_loader.hh"
 #include "cql3/cql_config.hh"
 #include "connection_notifier.hh"
+#include "transport/controller.hh"
+#include "thrift/controller.hh"
 
 #include "alternator/server.hh"
 #include "redis/service.hh"
@@ -726,7 +729,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, auth_service, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata).get();
             supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
@@ -1021,6 +1024,32 @@ int main(int ac, char** av) {
             startlog.info("SSTable data integrity checker is {}.",
                     cfg->enable_sstable_data_integrity_check() ? "enabled" : "disabled");
 
+
+            supervisor::notify("starting auth service");
+            auth::permissions_cache_config perm_cache_config;
+            perm_cache_config.max_entries = cfg->permissions_cache_max_entries();
+            perm_cache_config.validity_period = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
+            perm_cache_config.update_period = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+
+            const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
+            const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
+            const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
+
+            auth::service_config auth_config;
+            auth_config.authorizer_java_name = qualified_authorizer_name;
+            auth_config.authenticator_java_name = qualified_authenticator_name;
+            auth_config.role_manager_java_name = qualified_role_manager_name;
+
+            auth_service.start(perm_cache_config, std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config).get();
+
+            auth_service.invoke_on_all([&mm] (auth::service& auth) {
+                return auth.start(mm.local());
+            }).get();
+
+            auto stop_auth_service = defer_verbose_shutdown("auth service", [] {
+                auth_service.stop().get();
+            });
+
             api::set_server_snapshot(ctx).get();
             auto stop_snapshots = defer_verbose_shutdown("snapshots", [] {
                 service::get_storage_service().invoke_on_all(&service::storage_service::snapshots_close).get();
@@ -1086,17 +1115,52 @@ int main(int ac, char** av) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
 
+            cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local());
+
+            ss.register_client_shutdown_hook("native transport", [&cql_server_ctl] {
+                cql_server_ctl.stop().get();
+            });
+
+            std::any stop_cql;
             if (cfg->start_native_transport()) {
                 supervisor::notify("starting native transport");
-                with_scheduling_group(dbcfg.statement_scheduling_group, [] {
-                    return service::get_local_storage_service().start_native_transport();
+                with_scheduling_group(dbcfg.statement_scheduling_group, [&cql_server_ctl] {
+                    return cql_server_ctl.start_server();
                 }).get();
+
+                // FIXME -- this should be done via client hooks instead
+                stop_cql = ::make_shared(defer_verbose_shutdown("native transport", [&cql_server_ctl] {
+                    cql_server_ctl.stop().get();
+                }));
             }
+
+            api::set_transport_controller(ctx, cql_server_ctl).get();
+            auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {
+                api::unset_transport_controller(ctx).get();
+            });
+
+            ::thrift_controller thrift_ctl(db, auth_service);
+
+            ss.register_client_shutdown_hook("rpc server", [&thrift_ctl] {
+                thrift_ctl.stop().get();
+            });
+
+            std::any stop_rpc;
             if (cfg->start_rpc()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [] {
-                    return service::get_local_storage_service().start_rpc_server();
+                with_scheduling_group(dbcfg.statement_scheduling_group, [&thrift_ctl] {
+                    return thrift_ctl.start_server();
                 }).get();
+
+                // FIXME -- this should be done via client hooks instead
+                stop_rpc = ::make_shared(defer_verbose_shutdown("rpc server", [&thrift_ctl] {
+                    thrift_ctl.stop().get();
+                }));
             }
+
+            api::set_rpc_controller(ctx, thrift_ctl).get();
+            auto stop_rpc_controller = defer_verbose_shutdown("rpc controller API", [&ctx] {
+                api::unset_rpc_controller(ctx).get();
+            });
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 alternator::rmw_operation::set_default_write_isolation(cfg->alternator_write_isolation());
