@@ -94,6 +94,7 @@
 #include "utils/updateable_value.hh"
 #include "user_types_metadata.hh"
 #include "query_class_config.hh"
+#include "absl-flat_hash_map.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -1287,6 +1288,12 @@ struct database_config {
     size_t available_memory;
 };
 
+struct string_pair_eq {
+    using is_transparent = void;
+    using spair = std::pair<std::string_view, std::string_view>;
+    bool operator()(spair lhs, spair rhs) const;
+};
+
 // Policy for distributed<database>:
 //   broadcast metadata writes
 //   local metadata reads
@@ -1377,9 +1384,11 @@ private:
             db::timeout_clock::time_point,
             db::commitlog::force_sync> _apply_stage;
 
-    std::unordered_map<sstring, keyspace> _keyspaces;
+    flat_hash_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
-    std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
+    using ks_cf_to_uuid_t =
+        flat_hash_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash, string_pair_eq>;
+    ks_cf_to_uuid_t _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
     utils::UUID _version;
     uint32_t _schema_change_count = 0;
@@ -1477,7 +1486,7 @@ public:
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
     /* throws std::out_of_range if missing */
-    const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const;
+    const utils::UUID& find_uuid(std::string_view ks, std::string_view cf) const;
     const utils::UUID& find_uuid(const schema_ptr&) const;
 
     /**
@@ -1489,15 +1498,15 @@ public:
     /* below, find_keyspace throws no_such_<type> on fail */
     keyspace& find_keyspace(const sstring& name);
     const keyspace& find_keyspace(const sstring& name) const;
-    bool has_keyspace(const sstring& name) const;
+    bool has_keyspace(std::string_view name) const;
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
     future<> update_keyspace(const sstring& name);
     void drop_keyspace(const sstring& name);
     const auto& keyspaces() const { return _keyspaces; }
     std::vector<sstring> get_non_system_keyspaces() const;
-    column_family& find_column_family(const sstring& ks, const sstring& name);
-    const column_family& find_column_family(const sstring& ks, const sstring& name) const;
+    column_family& find_column_family(std::string_view ks, std::string_view name);
+    const column_family& find_column_family(std::string_view ks, std::string_view name) const;
     column_family& find_column_family(const utils::UUID&);
     const column_family& find_column_family(const utils::UUID&) const;
     column_family& find_column_family(const schema_ptr&);
@@ -1505,7 +1514,7 @@ public:
     bool column_family_exists(const utils::UUID& uuid) const;
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const;
     schema_ptr find_schema(const utils::UUID&) const;
-    bool has_schema(const sstring& ks_name, const sstring& cf_name) const;
+    bool has_schema(std::string_view ks_name, std::string_view cf_name) const;
     std::set<sstring> existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude = sstring()) const;
     sstring get_available_index_name(const sstring& ks_name, const sstring& cf_name,
                                      std::optional<sstring> index_name_root) const;
@@ -1549,11 +1558,11 @@ public:
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name);
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
-    const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
+    const flat_hash_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
     }
 
-    std::unordered_map<sstring, keyspace>& get_keyspaces() {
+    flat_hash_map<sstring, keyspace>& get_keyspaces() {
         return _keyspaces;
     }
 
@@ -1569,7 +1578,7 @@ public:
 
     std::vector<view_ptr> get_views() const;
 
-    const std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash>&
+    const ks_cf_to_uuid_t&
     get_column_families_mapping() const {
         return _ks_cf_to_uuid;
     }

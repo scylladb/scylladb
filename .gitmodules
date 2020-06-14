@@ -9,3 +9,6 @@
 [submodule "libdeflate"]
 	path = libdeflate
 	url = ../libdeflate
+[submodule "abseil"]
+	path = abseil
+	url = ../abseil-cpp

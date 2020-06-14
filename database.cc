@@ -159,6 +159,10 @@ void keyspace::remove_user_type(const user_type ut) {
     _metadata->remove_user_type(ut);
 }
 
+bool string_pair_eq::operator()(spair lhs, spair rhs) const {
+    return lhs == rhs;
+}
+
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::token_metadata& tm, abort_source& as)
@@ -770,7 +774,7 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     }).finally([cf] {});
 }
 
-const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const {
+const utils::UUID& database::find_uuid(std::string_view ks, std::string_view cf) const {
     try {
         return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
     } catch (...) {
@@ -798,7 +802,7 @@ const keyspace& database::find_keyspace(const sstring& name) const {
     }
 }
 
-bool database::has_keyspace(const sstring& name) const {
+bool database::has_keyspace(std::string_view name) const {
     return _keyspaces.count(name) != 0;
 }
 
@@ -821,7 +825,7 @@ std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_famili
             }));
 }
 
-column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) {
+column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) {
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
@@ -829,7 +833,7 @@ column_family& database::find_column_family(const sstring& ks_name, const sstrin
     }
 }
 
-const column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) const {
+const column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) const {
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
@@ -1075,7 +1079,7 @@ schema_ptr database::find_schema(const utils::UUID& uuid) const {
     return find_column_family(uuid).schema();
 }
 
-bool database::has_schema(const sstring& ks_name, const sstring& cf_name) const {
+bool database::has_schema(std::string_view ks_name, std::string_view cf_name) const {
     return _ks_cf_to_uuid.count(std::make_pair(ks_name, cf_name)) > 0;
 }
 
