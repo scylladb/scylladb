@@ -454,7 +454,7 @@ arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='gcc'
                         help='C compiler path')
 arg_parser.add_argument('--with-osv', action='store', dest='with_osv', default='',
                         help='Shortcut for compile for OSv')
-add_tristate(arg_parser, name='enable-dpdk', dest='dpdk',
+add_tristate(arg_parser, name='dpdk', dest='dpdk',
                         help='Use dpdk (from seastar dpdk sources) (default=True for release builds)')
 arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
                         help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
