@@ -25,6 +25,10 @@
 #include <string>
 #include <variant>
 
+#include <seastar/core/shared_ptr.hh>
+
+#include "rjson.hh"
+
 /*
  * Parsed representation of expressions and their components.
  *
@@ -63,10 +67,27 @@ public:
     }
 };
 
+// When an expression is first parsed, all constants are references, like
+// ":val1", into ExpressionAttributeValues. This uses std::string() variant.
+// The resolve_value() function replaces these constants by the JSON item
+// extracted from the ExpressionAttributeValues.
+struct constant {
+    // We use lw_shared_ptr<rjson::value> just to make rjson::value copyable,
+    // to make this entire object copyable as ANTLR needs.
+    using literal = lw_shared_ptr<rjson::value>;
+    std::variant<std::string, literal> _value;
+    void set(const rjson::value& v) {
+        _value = make_lw_shared<rjson::value>(rjson::copy(v));
+    }
+    void set(std::string& s) {
+        _value = s;
+    }
+};
+
 // "value" is is a value used in the right hand side of an assignment
-// expression, "SET a = ...". It can be a reference to a value included in
-// the request (":val"), a path to an attribute from the existing item
-// (e.g., "a.b[3].c"), or a function of other such values.
+// expression, "SET a = ...". It can be a constant (a reference to a value
+// included in the request, e.g., ":val"), a path to an attribute from the
+// existing item (e.g., "a.b[3].c"), or a function of other such values.
 // Note that the real right-hand-side of an assignment is actually a bit
 // more general - it allows either a value, or a value+value or value-value -
 // see class set_rhs below.
@@ -75,9 +96,12 @@ struct value {
         std::string _function_name;
         std::vector<value> _parameters;
     };
-    std::variant<std::string, path, function_call> _value;
+    std::variant<constant, path, function_call> _value;
+    void set_constant(constant c) {
+        _value = std::move(c);
+    }
     void set_valref(std::string s) {
-        _value = std::move(s);
+        _value = constant { std::move(s) };
     }
     void set_path(path p) {
         _value = std::move(p);
@@ -88,8 +112,8 @@ struct value {
     void add_func_parameter(value v) {
         std::get<function_call>(_value)._parameters.emplace_back(std::move(v));
     }
-    bool is_valref() const {
-        return std::holds_alternative<std::string>(_value);
+    bool is_constant() const {
+        return std::holds_alternative<constant>(_value);
     }
     bool is_path() const {
         return std::holds_alternative<path>(_value);
@@ -130,10 +154,10 @@ public:
         struct remove {
         };
         struct add {
-            std::string _valref;
+            constant _valref;
         };
         struct del {
-            std::string _valref;
+            constant _valref;
         };
         std::variant<set, remove, add, del> _action;
 
@@ -147,11 +171,11 @@ public:
         }
         void assign_add(path p, std::string v) {
             _path = std::move(p);
-            _action = add { std::move(v) };
+            _action = add { constant { std::move(v) } };
         }
         void assign_del(path p, std::string v) {
             _path = std::move(p);
-            _action = del { std::move(v) };
+            _action = del { constant { std::move(v) } };
         }
     };
 private:
@@ -167,6 +191,9 @@ public:
         return _actions.empty();
     }
     const std::vector<action>& actions() const {
+        return _actions;
+    }
+    std::vector<action>& actions() {
         return _actions;
     }
 };

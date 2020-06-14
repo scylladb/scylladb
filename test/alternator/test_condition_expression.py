@@ -727,6 +727,17 @@ def test_update_condition_attribute_type_second_arg(test_table_s):
                 ConditionExpression='attribute_type (a, b)',
                 ExpressionAttributeValues={':val': 1})
 
+# If the attribute_type() parameter is not one of the known types
+# (N,NS,BS,L,SS,NULL,B,BOOL,S,M), an error is generated. We should
+# not get a failed condition.
+def test_update_condition_attribute_type_unknown(test_table_s):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*DOG'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = :val',
+                ConditionExpression='attribute_type (a, :type)',
+                ExpressionAttributeValues={':val': 1, ':type': 'DOG'})
+
 def test_update_condition_begins_with(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -755,6 +766,11 @@ def test_update_condition_begins_with(test_table_s):
             UpdateExpression='SET c = :val',
                 ConditionExpression='begins_with(a, :arg)',
                 ExpressionAttributeValues={':val': 3, ':arg': 2})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = :val',
+                ConditionExpression='begins_with(c, :arg)',
+                ExpressionAttributeValues={':val': 3, ':arg': 2})
     # However, that extra type check is only done on values inside the
     # expression. It isn't done on values from an item attributes - in that
     # case we got a normal failed condition.
@@ -768,6 +784,21 @@ def test_update_condition_begins_with(test_table_s):
             UpdateExpression='SET c = :val',
                 ConditionExpression='begins_with(c, a)',
                 ExpressionAttributeValues={':val': 3})
+    # Although the DynamoDB documentation suggests that begins_with()
+    # can only take a path as the first parameter and a constant as
+    # the second, this isn't actually true - begins_with() works
+    # as expected also to compare two attributes, or in reverse order:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET c = :val',
+            ConditionExpression='begins_with(:str, a)',
+            ExpressionAttributeValues={':val': 'he', ':str': 'hellohi'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 'he'
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET c = :val',
+            ConditionExpression='begins_with(a, c)',
+            ExpressionAttributeValues={':val': 5})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 5
+
 
 def test_update_condition_contains(test_table_s):
     p = random_string()
@@ -779,7 +810,8 @@ def test_update_condition_contains(test_table_s):
         AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'},
                           'b': {'Value': set([2, 4, 7]), 'Action': 'PUT'},
                           'c': {'Value': [2, 4, 7], 'Action': 'PUT'},
-                          'd': {'Value': b'hi there', 'Action': 'PUT'}})
+                          'd': {'Value': b'hi there', 'Action': 'PUT'},
+                          'e': {'Value': ['hi', set([1,2]), [3, 4]], 'Action': 'PUT'}})
     test_table_s.update_item(Key={'p': p},
         UpdateExpression='SET z = :val',
             ConditionExpression='contains(a, :arg)',
@@ -808,6 +840,24 @@ def test_update_condition_contains(test_table_s):
             UpdateExpression='SET z = :val',
                 ConditionExpression='contains(d, :arg)',
                 ExpressionAttributeValues={':val': 4, ':arg': b'dog'})
+    # Moreover, the second parameter to contains() may be *any* type, and
+    # contains checks if perhaps the first parameter is a list or a set
+    # containing that value!
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression='contains(d, :arg)',
+                ExpressionAttributeValues={':val': 4, ':arg': set([1, 2])})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+        ConditionExpression='contains(e, :arg)',
+        ExpressionAttributeValues={':val': 5, ':arg': set([1, 2])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+        ConditionExpression='contains(e, :arg)',
+        ExpressionAttributeValues={':val': 6, ':arg': [3, 4]})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 6
 
 
 # While both operands of contains() may be item attributes, strangely
@@ -1235,9 +1285,6 @@ def test_put_item_condition(test_table_s):
 # during parsing, or during evaluation? The stage we check this changes
 # our behavior when the condition was supposed to fail. So we have two
 # separate tests here, one for failed condition and one for successful.
-# Because Alternator does this check at a different stage from DynamoDB,
-# this test currently fails.
-@pytest.mark.xfail(reason="unused entries are checked too late")
 def test_update_condition_unused_entries_failed(test_table_s):
     p = random_string()
     # unused val3:
@@ -1321,7 +1368,6 @@ def test_update_condition_unused_entries_succeeded(test_table_s):
 # either by dropping short-circuit evaluation (i.e., evaluate all parts
 # of the expression even if the first OR succeeds), or by testing for
 # unused references before evaluating anything.
-@pytest.mark.xfail(reason="unused entries are checked too late")
 def test_update_condition_unused_entries_short_circuit(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},

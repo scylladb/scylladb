@@ -598,6 +598,10 @@ def test_update_expected_1_contains(test_table_s):
             AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
             Expected={'a': {'ComparisonOperator': 'CONTAINS', 'AttributeValueList': []}}
         )
+    # Strangely, while ConditionExpression's contains() allows the argument
+    # to be of any type and checks if the attribute is perhaps a list
+    # containing that item, Expected's "CONTAINS" is more limited, and
+    # refuses a list as the argument (to be searched in a list of lists)
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
@@ -684,6 +688,10 @@ def test_update_expected_1_not_contains(test_table_s):
             AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
             Expected={'a': {'ComparisonOperator': 'NOT_CONTAINS', 'AttributeValueList': []}}
         )
+    # Strangely, while ConditionExpression's contains() allows the argument
+    # to be of any type and checks if the attribute is perhaps a list
+    # containing that item, Expected's "CONTAINS" is more limited, and
+    # refuses a list as the argument (to be searched in a list of lists)
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},

@@ -644,3 +644,38 @@ def test_put_item_empty_key(test_table_s, test_table_b, test_table_ss, test_tabl
         test_table_ss.put_item(Item={'p': 'abc', 'c': '', 'v': 'something'})
     with pytest.raises(ClientError, match='ValidationException.*empty'):
         test_table_sb.put_item(Item={'p': 'abc', 'c': bytearray('', 'utf-8'), 'v': 'something'})
+
+# In many other tests, we tested that ExpressionAttributeNames/Values
+# entries which aren't used in an the different kinds of expressions, are
+# detected and cause an error. Here we verify that also if there is no
+# expression at all, ExpressionAttributeNames/Values must not be present.
+def test_unused_entries_no_expression(test_table_s):
+    p = random_string()
+    # PutItem:
+    with pytest.raises(ClientError, match='ValidationException.*ExpressionAttributeNames'):
+        test_table_s.put_item(Item={'p': p, 'a': 'dog'},
+            ExpressionAttributeNames={'#name1': 'x'})
+    with pytest.raises(ClientError, match='ValidationException.*ExpressionAttributeValues'):
+        test_table_s.put_item(Item={'p': p, 'a': 'dog'},
+            ExpressionAttributeValues={':val1': 1})
+    # DeleteItem:
+    with pytest.raises(ClientError, match='ValidationException.*ExpressionAttributeNames'):
+        test_table_s.delete_item(Key={'p': p},
+            ExpressionAttributeNames={'#name1': 'x'})
+    with pytest.raises(ClientError, match='ValidationException.*ExpressionAttributeValues'):
+        test_table_s.delete_item(Key={'p': p},
+            ExpressionAttributeValues={':val1': 1})
+    # UpdateItem:
+    with pytest.raises(ClientError, match='ValidationException.*ExpressionAttributeNames'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 'dog', 'Action': 'PUT'}},
+            ExpressionAttributeNames={'#name1': 'x'})
+    with pytest.raises(ClientError, match='ValidationException.*ExpressionAttributeValues'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 'dog', 'Action': 'PUT'}},
+            ExpressionAttributeValues={':val1': 1})
+    # GetItem. We can't test ExpressionAttributeValues with boto3 (which
+    # doesn't allow this parameter to get_item().
+    with pytest.raises(ClientError, match='ValidationException.*ExpressionAttributeNames'):
+        test_table_s.get_item(Key={'p': p},
+            ExpressionAttributeNames={'#name1': 'x'})

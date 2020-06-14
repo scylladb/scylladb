@@ -34,7 +34,7 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "utils/overloaded_functor.hh"
 
-#include "expressions_eval.hh"
+#include "expressions.hh"
 
 namespace alternator {
 
@@ -192,11 +192,6 @@ bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
     }
     const auto& kv1 = *v1->MemberBegin();
     const auto& kv2 = *v2.MemberBegin();
-    if (kv2.name != "S" && kv2.name != "N" &&  kv2.name != "B") {
-        throw api_error("ValidationException",
-                        format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
-                               "got {} instead", kv2.name));
-    }
     if (kv1.name == "S" && kv2.name == "S") {
         return rjson::to_string_view(kv1.value).find(rjson::to_string_view(kv2.value)) != std::string_view::npos;
     } else if (kv1.name == "B" && kv2.name == "B") {
@@ -343,7 +338,7 @@ struct cmp_gt {
 
 // True if v is between lb and ub, inclusive.  Throws if lb > ub.
 template <typename T>
-bool check_BETWEEN(const T& v, const T& lb, const T& ub) {
+static bool check_BETWEEN(const T& v, const T& lb, const T& ub) {
     if (cmp_lt()(ub, lb)) {
         throw api_error("ValidationException",
                         format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
@@ -464,11 +459,33 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
             verify_operand_count(attribute_value_list, exact_size(2), *comparison_operator);
             return check_BETWEEN(got, (*attribute_value_list)[0], (*attribute_value_list)[1]);
         case comparison_operator_type::CONTAINS:
-            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_CONTAINS(got, (*attribute_value_list)[0]);
+            {
+                verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+                // Expected's "CONTAINS" has this artificial limitation.
+                // ConditionExpression's "contains()" does not...
+                const rjson::value& arg = (*attribute_value_list)[0];
+                const auto& argtype = (*arg.MemberBegin()).name;
+                if (argtype != "S" && argtype != "N" && argtype != "B") {
+                    throw api_error("ValidationException",
+                            format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
+                                    "got {} instead", argtype));
+                }
+                return check_CONTAINS(got, arg);
+            }
         case comparison_operator_type::NOT_CONTAINS:
-            verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_NOT_CONTAINS(got, (*attribute_value_list)[0]);
+            {
+                verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
+                // Expected's "NOT_CONTAINS" has this artificial limitation.
+                // ConditionExpression's "contains()" does not...
+                const rjson::value& arg = (*attribute_value_list)[0];
+                const auto& argtype = (*arg.MemberBegin()).name;
+                if (argtype != "S" && argtype != "N" && argtype != "B") {
+                    throw api_error("ValidationException",
+                            format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
+                                    "got {} instead", argtype));
+                }
+                return check_NOT_CONTAINS(got, arg);
+            }
         }
         throw std::logic_error(format("Internal error: corrupted operator enum: {}", int(op)));
     }
@@ -535,11 +552,7 @@ bool verify_condition(const rjson::value& condition, bool require_all, const rjs
     return require_all;
 }
 
-bool calculate_primitive_condition(const parsed::primitive_condition& cond,
-        std::unordered_set<std::string>& used_attribute_values,
-        std::unordered_set<std::string>& used_attribute_names,
-        const rjson::value& req,
-        schema_ptr schema,
+static bool calculate_primitive_condition(const parsed::primitive_condition& cond,
         const rjson::value* previous_item) {
     std::vector<rjson::value> calculated_values;
     calculated_values.reserve(cond._values.size());
@@ -548,9 +561,7 @@ bool calculate_primitive_condition(const parsed::primitive_condition& cond,
                 cond._op == parsed::primitive_condition::type::VALUE ?
                         calculate_value_caller::ConditionExpressionAlone :
                         calculate_value_caller::ConditionExpression,
-                rjson::find(req, "ExpressionAttributeValues"),
-                used_attribute_names, used_attribute_values,
-                req, schema, previous_item));
+                previous_item));
     }
     switch (cond._op) {
     case parsed::primitive_condition::type::BETWEEN:
@@ -606,23 +617,17 @@ bool calculate_primitive_condition(const parsed::primitive_condition& cond,
 // conditions given by the given parsed ConditionExpression.
 bool verify_condition_expression(
         const parsed::condition_expression& condition_expression,
-        std::unordered_set<std::string>& used_attribute_values,
-        std::unordered_set<std::string>& used_attribute_names,
-        const rjson::value& req,
-        schema_ptr schema,
         const rjson::value* previous_item) {
     if (condition_expression.empty()) {
         return true;
     }
     bool ret = std::visit(overloaded_functor {
         [&] (const parsed::primitive_condition& cond) -> bool {
-            return calculate_primitive_condition(cond, used_attribute_values,
-                    used_attribute_names, req, schema, previous_item);
+            return calculate_primitive_condition(cond, previous_item);
         },
         [&] (const parsed::condition_expression::condition_list& list) -> bool {
             auto verify_condition = [&] (const parsed::condition_expression& e) {
-                return verify_condition_expression(e, used_attribute_values,
-                        used_attribute_names, req, schema, previous_item);
+                return verify_condition_expression(e, previous_item);
             };
             switch (list.op) {
             case '&':

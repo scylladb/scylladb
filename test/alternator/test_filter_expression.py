@@ -95,14 +95,13 @@ def test_filter_expression_partition_key_1(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.*Condition'):
         got_items = full_query(table, FilterExpression='p=:p', ExpressionAttributeValues={':p': p})
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
+
 def test_filter_expression_partition_key_2(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.* p'):
         got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='p=:p', ExpressionAttributeValues={':p': p})
 
 # FilterExpression is also not allowed on the sort key.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_sort_key(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.* key '):
@@ -111,7 +110,6 @@ def test_filter_expression_sort_key(test_table_sn_with_data):
 
 # Test the "=" operator on different types of attributes (numeric, string,
 # bytes, list, map, set, bool):
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_eq(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b', 'l', 'm', 'ns', 'bool']:
@@ -122,7 +120,6 @@ def test_filter_expression_eq(test_table_sn_with_data):
         assert(got_items == expected_items)
 
 # As usual, whitespace in expression is ignored
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_whitespace(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i = items[2]['i']
@@ -133,7 +130,6 @@ def test_filter_expression_whitespace(test_table_sn_with_data):
 
 # As usual, if we have an expression referring to a missing attribute value,
 # we get an error:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_missing_val(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.*:i'):
@@ -141,7 +137,6 @@ def test_filter_expression_missing_val(test_table_sn_with_data):
             ExpressionAttributeValues={':p': p})
 
 # As usual, if we have an expression with unused values, we get an error:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_unused_val(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.*qq'):
@@ -151,7 +146,6 @@ def test_filter_expression_unused_val(test_table_sn_with_data):
 # Test the "=" operator on the 'r' attribute, which only exists for some
 # of the items and has different types when it does. Obviously, equality
 # happens when the attribute has the expected type, and the same value.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_r_eq(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     # note that random_item() guarantees the first item has an 'r':
@@ -162,7 +156,6 @@ def test_filter_expression_r_eq(test_table_sn_with_data):
     assert(got_items == expected_items)
 
 # Test the "<>" operator on a numeric, string and bytes attributes:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_neq(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -175,7 +168,6 @@ def test_filter_expression_neq(test_table_sn_with_data):
 # Test the "<>" operator on the 'r' attribute, which only exists for some
 # of the items and has different types when it does. If an attribute doesn't
 # exist at all, or has the wrong type, it is considered "not equal".
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_r_neq(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     # note that random_item() guarantees the first item has an 'r':
@@ -186,7 +178,6 @@ def test_filter_expression_r_neq(test_table_sn_with_data):
     assert(got_items == expected_items)
 
 # Test the "<" operator on a numeric, string and bytes attributes:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_lt(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -199,7 +190,6 @@ def test_filter_expression_lt(test_table_sn_with_data):
 # The attribute name does not necessarily need to appear on the left side
 # of the operator, it can also appear on the right side! Note how for
 # "<", reversing the order obviously reverses the operator in the condition.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_num_eq_reverse(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i = items[2]['i']
@@ -208,7 +198,6 @@ def test_filter_expression_num_eq_reverse(test_table_sn_with_data):
     expected_items = [item for item in items if item['i'] == i]
     assert(got_items == expected_items)
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_num_lt_reverse(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i = items[2]['i']
@@ -218,7 +207,6 @@ def test_filter_expression_num_lt_reverse(test_table_sn_with_data):
     assert(got_items == expected_items)
 
 # Test the "<=" operator on a numeric, string or bytes attribute:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_le(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -229,7 +217,6 @@ def test_filter_expression_le(test_table_sn_with_data):
         assert(got_items == expected_items)
 
 # Test the ">" operator on a numeric, string and bytes attribute:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_gt(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -240,7 +227,6 @@ def test_filter_expression_gt(test_table_sn_with_data):
         assert(got_items == expected_items)
 
 # Test the ">=" operator on a numeric, string and bytes attribute:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_ge(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -252,7 +238,6 @@ def test_filter_expression_ge(test_table_sn_with_data):
 
 # Test the "BETWEEN/AND" ternary operator on a numeric, string and bytes
 # attribute. These keywords are case-insensitive.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_between(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -266,7 +251,6 @@ def test_filter_expression_between(test_table_sn_with_data):
         assert(got_items == expected_items)
 
 # BETWEEN requires the upper bound to be greater than or equal to the lower bound.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_num_between_reverse(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i1 = items[2]['i']
@@ -280,7 +264,6 @@ def test_filter_expression_num_between_reverse(test_table_sn_with_data):
             ExpressionAttributeValues={':p': p, ':i1': i1, ':i2': i2})
 
 # Test the "IN" operator on a numeric, string or bytes attribute.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_in(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 's', 'b']:
@@ -294,7 +277,6 @@ def test_filter_expression_in(test_table_sn_with_data):
 
 # The begins_with function does *not* work on a numeric attributes - it only
 # works on strings or bytes - we'll check those next:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_num_begins(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i = items[2]['i']
@@ -302,7 +284,6 @@ def test_filter_expression_num_begins(test_table_sn_with_data):
         full_query(table, KeyConditionExpression='p=:p', FilterExpression='begins_with(i, :i)',
             ExpressionAttributeValues={':p': p, ':i': i})
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_string_begins(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     start = items[2]['s'][0:2]
@@ -311,7 +292,6 @@ def test_filter_expression_string_begins(test_table_sn_with_data):
     expected_items = [item for item in items if item['s'].startswith(start)]
     assert(got_items == expected_items)
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_bytes_begins(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     start = items[2]['b'][0:2]
@@ -335,7 +315,6 @@ def test_filter_expression_bytes_begins(test_table_sn_with_data):
 
 # As explained above, a number can be "contained" in an attribute if it is
 # a set or list and contains this number as an element.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_num_contains(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['ns', 'l']:
@@ -348,7 +327,6 @@ def test_filter_expression_num_contains(test_table_sn_with_data):
 # As explained above, contains() can check for the given value being a
 # *member* or some set or list attribute - not the value being a *subset*
 # of the attribute.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_set_contains(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     s = items[2]['ns']
@@ -357,7 +335,6 @@ def test_filter_expression_set_contains(test_table_sn_with_data):
     # A set is not a member of itself, so nothing matches.
     assert(got_items == [])
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_string_contains(test_table_sn_with_data):
     # Test the "obvious" case - find strings with a given substring:
     table, p, items = test_table_sn_with_data
@@ -375,7 +352,6 @@ def test_filter_expression_string_contains(test_table_sn_with_data):
     expected_items = [item for item in items if s in item['ss']]
     assert(got_items == expected_items)
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_bytes_contains(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     substring = items[2]['b'][2:4]
@@ -389,7 +365,6 @@ def test_filter_expression_bytes_contains(test_table_sn_with_data):
 # We could also imagine what contains() could do for searching maps (check if
 # the map contains the given key or value), DynamoDB doesn't support this use
 # case. Nothing matches.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_map_contains(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     # One key from a map:
@@ -413,7 +388,6 @@ def test_filter_expression_map_contains(test_table_sn_with_data):
 # For a bool constant, contains() will look for lists with this value -
 # it won't match the actual value. It is not not equivalent to an equality
 # check.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_bool_contains(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='contains(bool, :i)',
@@ -422,7 +396,6 @@ def test_filter_expression_bool_contains(test_table_sn_with_data):
 
 # Test the "attribute_exists" function on the "r" attribute (which is missing
 # for some of the items, and has different types for others)
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_r_exists(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='attribute_exists(r)',
@@ -431,7 +404,6 @@ def test_filter_expression_r_exists(test_table_sn_with_data):
     assert(got_items == expected_items)
 
 # Test the "attribute_not_exists" function on the "r" attribute
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_r_not_exists(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='attribute_not_exists(r)',
@@ -441,7 +413,6 @@ def test_filter_expression_r_not_exists(test_table_sn_with_data):
 
 # Test the attribute_type(), which should support all types:
 # S, SS, B, BS, N, NS, BOOL, NULL, L, M.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_attribute_type(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     # Searching for string attributes:
@@ -482,7 +453,6 @@ def test_filter_expression_attribute_type(test_table_sn_with_data):
 # as size(s) < :i. The next test focuses on size() of strings (more tests below
 # test what size() does on other types), and checks the different expressions
 # it can be used inside.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_string_size(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     s = items[2]['s']
@@ -525,7 +495,6 @@ def test_filter_expression_string_size(test_table_sn_with_data):
     expected_items = [item for item in items if len(item['s']) == len1 or len(item['s']) == len2]
     assert(got_items == expected_items)
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_bytes_size(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     b = items[2]['b']
@@ -537,7 +506,6 @@ def test_filter_expression_bytes_size(test_table_sn_with_data):
     # them once for strings, above.
 
 # size() function for lists, maps and sets checks the number of their elements
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_collection_size(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['l', 'm', 'ns']:
@@ -551,7 +519,6 @@ def test_filter_expression_collection_size(test_table_sn_with_data):
 
 # The size() function on an integer or boolean doesn't match anything -
 # it's not >=3 nor <3.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_num_size(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     for xn in ['i', 'bool']:
@@ -563,7 +530,6 @@ def test_filter_expression_num_size(test_table_sn_with_data):
         assert(got_items == [])
 
 # Unknown functions like dog() results in errors
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_unknown_function(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.*dog'):
@@ -576,7 +542,6 @@ def test_filter_expression_unknown_function(test_table_sn_with_data):
 # conditions on the same attribute and this is why BETWEEN and IN exist
 # (see test_key_condition_expression_multi()), this is allowed here in
 # FilterExpression.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_or(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i1 = items[2]['i']
@@ -587,7 +552,6 @@ def test_filter_expression_or(test_table_sn_with_data):
     expected_items = [item for item in items if item['i'] == i1 or item['i'] == i2 or item['i'] == i3]
     assert(got_items == expected_items)
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_and(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i1 = items[2]['i']
@@ -597,7 +561,6 @@ def test_filter_expression_and(test_table_sn_with_data):
     expected_items = [item for item in items if item['i'] == i1 and item['s'] == s1]
     assert(got_items == expected_items)
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_complex(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i1 = items[2]['i']
@@ -610,7 +573,6 @@ def test_filter_expression_complex(test_table_sn_with_data):
     expected_items = [item for item in items if item['i'] == i1 or item['i'] == i2 or item['i'] == i3 or item['i'] >= i4]
     assert(got_items == expected_items)
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_precedence(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i1 = items[2]['i']
@@ -622,7 +584,6 @@ def test_filter_expression_precedence(test_table_sn_with_data):
     assert(got_items == expected_items)
 
 # A simple case of syntax error - unknown operator "!=".
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_syntax(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.*yntax'):
@@ -631,7 +592,6 @@ def test_filter_expression_syntax(test_table_sn_with_data):
 
 # An empty FilterExpression is not allowed (it's not equivalent to a missing
 # FilterExpression)
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_empty(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.*empty'):
@@ -641,7 +601,6 @@ def test_filter_expression_empty(test_table_sn_with_data):
 # Unlike KeyConditionExpression (test_key_condition_expression_bad_compare())
 # here a condition may compare two attributes to each other, not just to
 # constants.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_compare_attributes(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='i=j',
@@ -665,7 +624,6 @@ def test_filter_expression_compare_attributes(test_table_sn_with_data):
 
 # All tests above had the attribute names written explicitly in the expression.
 # Try the same with attribute name references (#something):
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_name_ref(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i = items[2]['i']
@@ -676,7 +634,6 @@ def test_filter_expression_name_ref(test_table_sn_with_data):
     assert(got_items == expected_items)
 
 # Missing or unused attribute name references cause errors:
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_name_ref_error(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     with pytest.raises(ClientError, match='ValidationException.*name'):
@@ -690,7 +647,6 @@ def test_filter_expression_name_ref_error(test_table_sn_with_data):
 # In all the tests above we only used KeyConditionExpression for specifying
 # the partition key. But it can also give a condition on the sort key, in
 # which case this condition is applied (efficiently) before the filtering.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_and_sort_key_condition(test_table_sn_with_data):
     table, p, items = test_table_sn_with_data
     i = items[2]['i']
@@ -705,7 +661,6 @@ def test_filter_expression_and_sort_key_condition(test_table_sn_with_data):
 # implementation again, but we need to verify that the basic feature works,
 # and some differences between Scan and Query.
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_scan(filled_test_table):
     table, items = filled_test_table
     got_items = full_scan(table, FilterExpression='#n=:a',
@@ -725,7 +680,6 @@ def test_filter_expression_scan(filled_test_table):
 # (relatively). But DynamoDB does *not* support KeyConditionExpression in
 # Scan... So FilterExpression is the only option to do such filtering, and
 # it's in fact allowed.
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_scan_partition_key(filled_test_table):
     table, items = filled_test_table
     got_items = full_scan(table, FilterExpression='p=:a',
@@ -733,7 +687,6 @@ def test_filter_expression_scan_partition_key(filled_test_table):
     expected_items = [item for item in items if item['p'] == '3']
     assert multiset(expected_items) == multiset(got_items)
 
-@pytest.mark.xfail(reason="FilterExpression not yet implemented")
 def test_filter_expression_scan_sort_key(filled_test_table):
     table, items = filled_test_table
     got_items = full_scan(table, FilterExpression='c=:a',

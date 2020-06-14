@@ -24,8 +24,11 @@
 #include <string>
 #include <stdexcept>
 #include <vector>
+#include <unordered_set>
+#include <string_view>
 
 #include "expressions_types.hh"
+#include "rjson.hh"
 
 namespace alternator {
 
@@ -37,5 +40,56 @@ public:
 parsed::update_expression parse_update_expression(std::string query);
 std::vector<parsed::path> parse_projection_expression(std::string query);
 parsed::condition_expression parse_condition_expression(std::string query);
+
+void resolve_update_expression(parsed::update_expression& ue,
+        const rjson::value* expression_attribute_names,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values);
+void resolve_projection_expression(std::vector<parsed::path>& pe,
+        const rjson::value* expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names);
+void resolve_condition_expression(parsed::condition_expression& ce,
+        const rjson::value* expression_attribute_names,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_names,
+        std::unordered_set<std::string>& used_attribute_values);
+
+void validate_value(const rjson::value& v, const char* caller);
+
+bool condition_expression_on(const parsed::condition_expression& ce, std::string_view attribute);
+
+// calculate_value() behaves slightly different (especially, different
+// functions supported) when used in different types of expressions, as
+// enumerated in this enum:
+enum class calculate_value_caller {
+    UpdateExpression, ConditionExpression, ConditionExpressionAlone
+};
+
+inline std::ostream& operator<<(std::ostream& out, calculate_value_caller caller) {
+    switch (caller) {
+        case calculate_value_caller::UpdateExpression:
+            out << "UpdateExpression";
+            break;
+        case calculate_value_caller::ConditionExpression:
+            out << "ConditionExpression";
+            break;
+        case calculate_value_caller::ConditionExpressionAlone:
+            out << "ConditionExpression";
+            break;
+        default:
+            out << "unknown type of expression";
+            break;
+    }
+    return out;
+}
+
+rjson::value calculate_value(const parsed::value& v,
+        calculate_value_caller caller,
+        const rjson::value* previous_item);
+
+rjson::value calculate_value(const parsed::set_rhs& rhs,
+        const rjson::value* previous_item);
+
 
 } /* namespace alternator */

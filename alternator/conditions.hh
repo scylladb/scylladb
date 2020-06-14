@@ -33,6 +33,7 @@
 
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "serialization.hh"
+#include "expressions_types.hh"
 
 namespace alternator {
 
@@ -49,5 +50,11 @@ conditional_operator_type get_conditional_operator(const rjson::value& req);
 
 bool verify_expected(const rjson::value& req, const rjson::value* previous_item);
 bool verify_condition(const rjson::value& condition, bool require_all, const rjson::value* previous_item);
+
+bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2);
+
+bool verify_condition_expression(
+        const parsed::condition_expression& condition_expression,
+        const rjson::value* previous_item);
 
 }

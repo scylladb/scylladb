@@ -128,7 +128,6 @@ def test_scan_with_attribute_equality_filtering(dynamodb, filled_test_table):
     assert multiset(expected_items) == multiset(got_items)
 
 # Test that FilterExpression works as expected
-@pytest.mark.xfail(reason="FilterExpression not supported yet")
 def test_scan_filter_expression(filled_test_table):
     test_table, items = filled_test_table
 

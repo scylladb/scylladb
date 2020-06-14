@@ -45,7 +45,7 @@ struct type_representation {
     data_type dtype;
 };
 
-type_info type_info_from_string(std::string type);
+type_info type_info_from_string(std::string_view type);
 type_representation represent_type(alternator_type atype);
 
 bytes serialize_item(const rjson::value& item);
@@ -68,5 +68,22 @@ big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic);
 // and returns set's type and a pointer to that set. If the object does not encode a set,
 // returned value is {"", nullptr}
 const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value& v);
+
+// Check if a given JSON object encodes a list (i.e., it is a {"L": [...]}
+// and returns a pointer to that list.
+const rjson::value* unwrap_list(const rjson::value& v);
+
+// Take two JSON-encoded numeric values ({"N": "thenumber"}) and return the
+// sum, again as a JSON-encoded number.
+rjson::value number_add(const rjson::value& v1, const rjson::value& v2);
+rjson::value number_subtract(const rjson::value& v1, const rjson::value& v2);
+// Take two JSON-encoded set values (e.g. {"SS": [...the actual set]}) and
+// return the sum of both sets, again as a set value.
+rjson::value set_sum(const rjson::value& v1, const rjson::value& v2);
+// Take two JSON-encoded set values (e.g. {"SS": [...the actual list]}) and
+// return the difference of s1 - s2, again as a set value.
+// DynamoDB does not allow empty sets, so if resulting set is empty, return
+// an unset optional instead.
+std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value& v2);
 
 }
