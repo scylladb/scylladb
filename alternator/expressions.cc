@@ -433,10 +433,10 @@ static rjson::value to_bool_json(bool b) {
 }
 
 static bool known_type(std::string_view type) {
-    static thread_local const std::unordered_set<std::string> types = {
+    static thread_local const std::unordered_set<std::string_view> types = {
             "N", "S", "B", "NS", "SS", "BS", "L", "M", "NULL", "BOOL"
     };
-    return types.count(std::string(type));
+    return types.contains(type);
 }
 
 // Given a parsed::value, which can refer either to a constant value from

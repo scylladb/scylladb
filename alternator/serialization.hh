@@ -45,7 +45,7 @@ struct type_representation {
     data_type dtype;
 };
 
-type_info type_info_from_string(std::string type);
+type_info type_info_from_string(std::string_view type);
 type_representation represent_type(alternator_type atype);
 
 bytes serialize_item(const rjson::value& item);

@@ -31,8 +31,8 @@ static logging::logger slogger("alternator-serialization");
 
 namespace alternator {
 
-type_info type_info_from_string(std::string type) {
-    static thread_local const std::unordered_map<std::string, type_info> type_infos = {
+type_info type_info_from_string(std::string_view type) {
+    static thread_local const std::unordered_map<std::string_view, type_info> type_infos = {
         {"S", {alternator_type::S, utf8_type}},
         {"B", {alternator_type::B, bytes_type}},
         {"BOOL", {alternator_type::BOOL, boolean_type}},
@@ -87,7 +87,7 @@ bytes serialize_item(const rjson::value& item) {
         throw api_error("ValidationException", format("An item can contain only one attribute definition: {}", item));
     }
     auto it = item.MemberBegin();
-    type_info type_info = type_info_from_string(it->name.GetString()); // JSON keys are guaranteed to be strings
+    type_info type_info = type_info_from_string(rjson::to_string_view(it->name)); // JSON keys are guaranteed to be strings
 
     if (type_info.atype == alternator_type::NOT_SUPPORTED_YET) {
         slogger.trace("Non-optimal serialization of type {}", it->name.GetString());
