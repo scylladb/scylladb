@@ -134,7 +134,7 @@ rm -rf $RPM_BUILD_ROOT
 %ghost /etc/systemd/system/scylla-server.service.d/mounts.conf
 %ghost /etc/systemd/system/scylla-server.service.d/dependencies.conf
 %ghost /etc/systemd/system/var-lib-systemd-coredump.mount
-%ghost /usr/lib/systemd/system/scylla-cpupower.service
+%ghost /etc/systemd/system/scylla-cpupower.service
 
 %package conf
 Group:          Applications/Databases

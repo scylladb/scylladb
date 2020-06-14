@@ -72,7 +72,7 @@ EnvironmentFile=/etc/sysconfig/scylla-cpupower
 ExecStart=/usr/bin/cpupower $CPUPOWER_START_OPTS
 ExecStop=/usr/bin/cpupower $CPUPOWER_STOP_OPTS
 '''[1:-1]
-        with open('/usr/lib/systemd/system/scylla-cpupower.service', 'w') as f:
+        with open('/etc/systemd/system/scylla-cpupower.service', 'w') as f:
             f.write(unit_data)
         systemd_unit.reload()
         cpupwr = systemd_unit('scylla-cpupower.service')
