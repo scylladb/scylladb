@@ -512,6 +512,21 @@
          ]
       },
       {
+         "path":"/storage_service/cdc_streams_check_and_repair",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Checks that CDC streams reflect current cluster topology and regenerates them if not.",
+               "type":"void",
+               "nickname":"cdc_streams_check_and_repair",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/snapshots",
          "operations":[
             {

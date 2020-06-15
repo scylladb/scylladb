@@ -533,6 +533,9 @@ private:
      */
     void scan_cdc_generations();
 
+public:
+    future<> check_and_repair_cdc_streams();
+private:
     future<> replicate_to_all_cores();
     future<> do_replicate_to_all_cores();
     serialized_action _replicate_action;

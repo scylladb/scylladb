@@ -286,6 +286,12 @@ void set_storage_service(http_context& ctx, routes& r) {
                 req.get_query_param("key")));
     });
 
+    ss::cdc_streams_check_and_repair.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return service::get_local_storage_service().check_and_repair_cdc_streams().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
     ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = split_cf(req->get_query_param("cf"));
