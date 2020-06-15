@@ -326,6 +326,7 @@ scylla_tests = set([
     'test/boost/linearizing_input_stream_test',
     'test/boost/loading_cache_test',
     'test/boost/log_heap_test',
+    'test/boost/estimated_histogram_test',
     'test/boost/logalloc_test',
     'test/boost/managed_vector_test',
     'test/boost/map_difference_test',
@@ -1008,6 +1009,7 @@ deps['test/boost/UUID_test'] = ['utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 
 deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test/boost/murmur_hash_test.cc']
 deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
+deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
 deps['test/perf/perf_fast_forward'] += ['release.cc']
 deps['test/perf/perf_simple_query'] += ['release.cc']

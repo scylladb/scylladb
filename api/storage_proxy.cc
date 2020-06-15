@@ -116,6 +116,23 @@ static future<json::json_return_type>  sum_timed_rate_as_long(distributed<proxy>
     });
 }
 
+utils_json::estimated_histogram time_to_json_histogram(const utils::time_estimated_histogram& val) {
+    utils_json::estimated_histogram res;
+    for (size_t i = 0; i < val.size(); i++) {
+        res.buckets.push(val.get(i));
+        res.bucket_offsets.push(val.get_bucket_lower_limit(i));
+    }
+    return res;
+}
+
+static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx, utils::time_estimated_histogram service::storage_proxy_stats::stats::*f) {
+
+    return two_dimensional_map_reduce(ctx.sp, f, utils::time_estimated_histogram_merge,
+            utils::time_estimated_histogram()).then([](const utils::time_estimated_histogram& val) {
+        return make_ready_future<json::json_return_type>(time_to_json_histogram(val));
+    });
+}
+
 static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx, utils::estimated_histogram service::storage_proxy_stats::stats::*f) {
 
     return two_dimensional_map_reduce(ctx.sp, f, utils::estimated_histogram_merge,
