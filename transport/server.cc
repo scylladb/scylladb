@@ -258,6 +258,14 @@ cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
                     --_connections;
                     return unadvertise_connection(conn);
                 }).handle_exception([] (std::exception_ptr ep) {
+                    try {
+                        std::rethrow_exception(ep);
+                    } catch(std::system_error& serr) {
+                        if (serr.code().category() ==  std::system_category() &&
+                                serr.code().value() == EPIPE) {  // expected if another side closes a connection
+                            return;
+                        }
+                    } catch(...) {};
                     clogger.info("exception while processing connection: {}", ep);
                 });
             });
