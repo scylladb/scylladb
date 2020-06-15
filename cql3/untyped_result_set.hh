@@ -48,6 +48,7 @@
 #include "types/set.hh"
 #include "transport/messages/result_message_base.hh"
 #include "column_specification.hh"
+#include "absl-flat_hash_map.hh"
 
 #pragma once
 
@@ -56,9 +57,10 @@ namespace cql3 {
 class untyped_result_set_row {
 private:
     const std::vector<lw_shared_ptr<column_specification>> _columns;
-    const std::unordered_map<sstring, bytes_opt> _data;
+    using map_t = flat_hash_map<sstring, bytes_opt>;
+    const map_t _data;
 public:
-    untyped_result_set_row(const std::unordered_map<sstring, bytes_opt>&);
+    untyped_result_set_row(const map_t&);
     untyped_result_set_row(const std::vector<lw_shared_ptr<column_specification>>&, std::vector<bytes_opt>);
     untyped_result_set_row(untyped_result_set_row&&) = default;
     untyped_result_set_row(const untyped_result_set_row&) = delete;
