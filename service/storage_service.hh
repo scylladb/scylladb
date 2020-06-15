@@ -853,6 +853,8 @@ public:
      */
     future<> load_new_sstables(sstring ks_name, sstring cf_name);
 
+    future<> set_tables_autocompaction(const sstring &keyspace, std::vector<sstring> tables, bool enabled);
+
     template <typename Func>
     auto run_with_api_lock(sstring operation, Func&& func) {
         return get_storage_service().invoke_on(0, [operation = std::move(operation),

@@ -2921,6 +2921,25 @@ void storage_service::shutdown_client_servers() {
     }
 }
 
+future<>
+storage_service::set_tables_autocompaction(const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
+    if (_initialized) {
+        return make_exception_future<>(std::runtime_error("Too early: storage service not initialized yet"));
+    }
+
+    return _db.invoke_on_all([keyspace, tables, enabled] (database& db) {
+        return parallel_for_each(tables, [&db, keyspace, enabled](const sstring& table) mutable {
+            column_family& cf = db.find_column_family(keyspace, table);
+            if (enabled) {
+                cf.enable_auto_compaction();
+            } else {
+                cf.disable_auto_compaction();
+            }
+            return make_ready_future<>();
+        });
+    });
+}
+
 std::unordered_multimap<inet_address, dht::token_range>
 storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::token_range_vector& ranges) {
     auto my_address = get_broadcast_address();

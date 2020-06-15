@@ -87,20 +87,13 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     };
 }
 
-future<> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
+future<json::json_return_type> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
     if (tables.empty()) {
         tables = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
     }
-    return ctx.db.invoke_on_all([keyspace, tables, enabled] (database& db) {
-        return parallel_for_each(tables, [&db, keyspace, enabled](const sstring& table) mutable {
-            column_family& cf = db.find_column_family(keyspace, table);
-            if (enabled) {
-                cf.enable_auto_compaction();
-            } else {
-                cf.disable_auto_compaction();
-            }
-            return make_ready_future<>();
-        });
+
+    return service::get_local_storage_service().set_tables_autocompaction(keyspace, tables, enabled).then([]{
+        return make_ready_future<json::json_return_type>(json_void());
     });
 }
 
@@ -742,17 +735,15 @@ void set_storage_service(http_context& ctx, routes& r) {
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto tables = split_cf(req->get_query_param("cf"));
-        return set_tables_autocompaction(ctx, keyspace, tables, true).then([]{
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+
+        return set_tables_autocompaction(ctx, keyspace, tables, true);
     });
 
     ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto tables = split_cf(req->get_query_param("cf"));
-        return set_tables_autocompaction(ctx, keyspace, tables, false).then([]{
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+
+        return set_tables_autocompaction(ctx, keyspace, tables, false);
     });
 
     ss::deliver_hints.set(r, [](std::unique_ptr<request> req) {
