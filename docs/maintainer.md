@@ -137,25 +137,20 @@ Note: git contains a bug where branch descriptions with the
 characters `['":\.]` confuse it. Best to search-and-replace those
 characters with nothing.
 
-## Updating seastar submodule references
+## Updating submodule references
 
-Seastar is updated upstream independently of Scylla. We want
-to periodically (and upon contributor request) syncrhonize
-scylla.git to include the latest seastar.git.
+Submodules are maintained in separate repositories. For example, Seastar
+is developed upstream independently of Scylla. We want to periodically
+(and upon contributor request) synchronize scylla.git to include the
+latest submodules.
 
  1. Check out the `next` branch and synchronize it using `git pull`
- 2. `cd seastar`, check out `master`, and synchronize with upstream
-    using `git pull`
- 3. Go back to the scylla directory, and issue the command
-    `git submodule summary seastar`; this generates a change log.
- 4. Verify that all lines in the change log start with '>'. Lines
-    that start with '<' indicate non-fast-forward changes. If that
-    happens, fire three red flares from your flare pistol.
- 5. Use `git commit seastar` to update the submodule. Use something
-    like "Update seastar submodule" for the subject and the log from
-    step 3 for the body. If any of those commits fix an issue, add
-    a "Fixes #wxyz" entry.
- 6. Use `git push` to publish your work.
+ 2. Run the `scripts/sync-submodules.sh` script, which will open a git
+    commit log editor for every submodule to show that commits are being
+    updated.
+ 3. Edit the submodule update commits with any necessary additional
+    imformation. For example, amend the message with `Fixes` tags.
+ 4. Use `git push` to publish your work.
 
 ## Backporting patches
 
