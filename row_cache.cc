@@ -530,8 +530,12 @@ public:
         return _reader.move_to_next_partition(timeout).then([this] (auto&& mfopt) mutable {
             {
                 if (!mfopt) {
-                    this->handle_end_of_stream();
-                    return make_ready_future<read_result>(read_result(std::nullopt, std::nullopt));
+                    return _cache._read_section(_cache._tracker.region(), [&] {
+                        return with_linearized_managed_bytes([&] {
+                            this->handle_end_of_stream();
+                            return make_ready_future<read_result>(read_result(std::nullopt, std::nullopt));
+                        });
+                    });
                 }
                 _cache.on_partition_miss();
                 const partition_start& ps = mfopt->as_partition_start();
@@ -956,13 +960,15 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                         // expensive and we need to amortize it somehow.
                         do {
                           STAP_PROBE(scylla, row_cache_update_partition_start);
-                          with_linearized_managed_bytes([&] {
+                          {
                             if (!update) {
                                 _update_section(_tracker.region(), [&] {
+                                  with_linearized_managed_bytes([&] {
                                     memtable_entry& mem_e = *m.partitions.begin();
                                     size_entry = mem_e.size_in_allocator_without_rows(_tracker.allocator());
                                     auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
                                     update = updater(_update_section, cache_i, mem_e, is_present, real_dirty_acc);
+                                  });
                                 });
                             }
                             // We use cooperative deferring instead of futures so that
@@ -974,14 +980,16 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                             update = {};
                             real_dirty_acc.unpin_memory(size_entry);
                             _update_section(_tracker.region(), [&] {
+                              with_linearized_managed_bytes([&] {
                                 auto i = m.partitions.begin();
                                 memtable_entry& mem_e = *i;
                                 m.partitions.erase(i);
                                 mem_e.partition().evict(_tracker.memtable_cleaner());
                                 current_allocator().destroy(&mem_e);
+                              });
                             });
                             ++partition_count;
-                          });
+                          }
                           STAP_PROBE(scylla, row_cache_update_partition_end);
                         } while (!m.partitions.empty() && !need_preempt());
                         with_allocator(standard_allocator(), [&] {
@@ -1128,8 +1136,8 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
                 seastar::thread::maybe_yield();
 
                 while (true) {
-                    auto done = with_linearized_managed_bytes([&] {
-                        return _update_section(_tracker.region(), [&] {
+                    auto done = _update_section(_tracker.region(), [&] {
+                        return with_linearized_managed_bytes([&] {
                             auto cmp = cache_entry::compare(_schema);
                             auto it = _partitions.lower_bound(*_prev_snapshot_pos, cmp);
                             auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
