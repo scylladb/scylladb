@@ -1,4 +1,4 @@
-FROM fedora:31
+FROM docker.io/fedora:31
 ADD ./install-dependencies.sh ./
 ADD ./seastar/install-dependencies.sh ./seastar/
 ADD ./tools/toolchain/system-auth ./
