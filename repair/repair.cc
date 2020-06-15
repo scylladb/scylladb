@@ -1802,6 +1802,7 @@ future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, 
             dht::token_range_vector ranges_for_removenode;
             auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
             auto local_dc = get_local_dc();
+            bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             for (auto&r : ranges) {
                 seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
@@ -1817,6 +1818,19 @@ future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, 
                     throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, zero replica after the removal",
                             op, keyspace_name, r, current_eps, new_eps));
                 }
+                auto get_neighbors_set = [&] (const std::vector<inet_address>& nodes) {
+                    for (auto& node : nodes) {
+                        if (snitch_ptr->get_datacenter(node) == local_dc) {
+                            return std::unordered_set<inet_address>{node};;
+                        }
+                    }
+                    if (find_node_in_local_dc_only) {
+                        throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, can not find new node in local dc={}",
+                                op, keyspace_name, r, current_eps, new_eps, local_dc));
+                    } else {
+                        return std::unordered_set<inet_address>{nodes.front()};
+                    }
+                };
                 if (new_owner.size() == 1) {
                     // For example, with RF = 3 and 4 nodes n1, n2, n3, n4 in
                     // the cluster, n3 is removed, old_replicas = {n1, n2, n3},
@@ -1841,14 +1855,7 @@ future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, 
                         // responsible for.
                         // Choose the decommission node n3 to run repair to
                         // sync with the new owner node n4.
-                        for (auto& node : new_owner) {
-                            if (snitch_ptr->get_datacenter(node) == local_dc) {
-                                neighbors_set = std::unordered_set<inet_address>{node};
-                                break;
-                            }
-                            throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, can not find new node in local dc={}",
-                                    op, keyspace_name, r, current_eps, new_eps, local_dc));
-                        }
+                        neighbors_set = get_neighbors_set(std::vector<inet_address>{*new_owner.begin()});
                     }
                 } else if (new_owner.size() == 0) {
                     // For example, with RF = 3 and 3 nodes n1, n2, n3 in the
@@ -1871,14 +1878,7 @@ future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, 
                         // Choose the decommission node n3 to run repair to
                         // sync with one of the replica nodes, e.g., n1, in the
                         // local DC.
-                        for (auto& node : new_eps) {
-                            if (snitch_ptr->get_datacenter(node) == local_dc) {
-                                neighbors_set = std::unordered_set<inet_address>{node};
-                                break;
-                            }
-                            throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, can not find new node in local dc={}",
-                                    op, keyspace_name, r, current_eps, new_eps, local_dc));
-                        }
+                        neighbors_set = get_neighbors_set(new_eps);
                     }
                 } else {
                     throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong nubmer of new owner node={}",
