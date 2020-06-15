@@ -929,10 +929,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         // base columns were copied to view. TODO: reconsider the need
         // for virtual columns when we support Projection.
         for (const column_definition& regular_cdef : schema->regular_columns()) {
-            try {
-                //TODO: add a non-throwing API for finding a column in a schema builder
-                view_builder.find_column(*cql3::to_identifier(regular_cdef));
-            } catch (std::invalid_argument&) {
+            if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
                 view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
             }
         }
