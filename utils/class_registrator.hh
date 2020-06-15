@@ -193,9 +193,8 @@ typename class_registry<BaseType, Args...>::result_type  create_object(const sst
 class qualified_name {
     sstring _qname;
 public:
-    // can be optimized with string_views etc.
-    qualified_name(const sstring& pkg_pfx, const sstring& name)
-        : _qname(is_class_name_qualified(name) ? name : pkg_pfx + name)
+    qualified_name(std::string_view pkg_pfx, std::string_view name)
+        : _qname(is_class_name_qualified(name) ? name : make_sstring(pkg_pfx, name))
     {}
     operator const sstring&() const {
         return _qname;
@@ -205,8 +204,7 @@ public:
 class unqualified_name {
     sstring _qname;
 public:
-    // can be optimized with string_views etc.
-    unqualified_name(const sstring& pkg_pfx, const sstring& name)
+    unqualified_name(std::string_view pkg_pfx, std::string_view name)
         : _qname(name.compare(0, pkg_pfx.size(), pkg_pfx) == 0 ? name.substr(pkg_pfx.size()) : name)
     {}
     operator const sstring&() const {
