@@ -2605,7 +2605,7 @@ void mutation_cleaner_impl::start_worker() {
 stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexcept {
     auto&& region = snp.region();
     return with_allocator(region.allocator(), [&] {
-        return with_linearized_managed_bytes([&] {
+        {
             // Allocating sections require the region to be reclaimable
             // which means that they cannot be nested.
             // It is, however, possible, that if the snapshot is taken
@@ -2617,13 +2617,15 @@ stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexce
             }
             try {
                 return _worker_state->alloc_section(region, [&] {
+                  return with_linearized_managed_bytes([&] {
                     return snp.merge_partition_versions(_app_stats);
+                  });
                 });
             } catch (...) {
                 // Merging failed, give up as there is no guarantee of forward progress.
                 return stop_iteration::yes;
             }
-        });
+        }
     });
 }
 
