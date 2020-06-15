@@ -1137,30 +1137,9 @@ public:
     struct compare {
         tri_compare _c;
         explicit compare(const schema& s) : _c(s) {}
-        bool operator()(const rows_entry& e1, const rows_entry& e2) const {
-            return _c(e1, e2) < 0;
-        }
-        bool operator()(const clustering_key& key, const rows_entry& e) const {
-            return _c(key, e) < 0;
-        }
-        bool operator()(const rows_entry& e, const clustering_key& key) const {
-            return _c(e, key) < 0;
-        }
-        bool operator()(const clustering_key_view& key, const rows_entry& e) const {
-            return _c(key, e) < 0;
-        }
-        bool operator()(const rows_entry& e, const clustering_key_view& key) const {
-            return _c(e, key) < 0;
-        }
-        bool operator()(const rows_entry& e, position_in_partition_view p) const {
-            return _c(e.position(), p) < 0;
-        }
-        bool operator()(position_in_partition_view p, const rows_entry& e) const {
-            return _c(p, e.position()) < 0;
-        }
-        bool operator()(position_in_partition_view p1, position_in_partition_view p2) const {
-            return _c(p1, p2) < 0;
-        }
+
+        template <typename K1, typename K2>
+        bool operator()(const K1& k1, const K2& k2) const { return _c(k1, k2) < 0; }
     };
     bool equal(const schema& s, const rows_entry& other) const;
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
