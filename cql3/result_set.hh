@@ -128,14 +128,23 @@ public:
 
 class prepared_metadata {
 public:
-    enum class flag : uint8_t {
+    enum class flag : uint32_t {
         GLOBAL_TABLES_SPEC = 0,
+        // Denotes whether the prepared statement at hand is an LWT statement.
+        //
+        // Use the last available bit in the flags since we don't want to clash
+        // with C* in case they add some other flag in one the next versions of binary protocol.
+        LWT = 31
     };
 
     using flag_enum = super_enum<flag,
-        flag::GLOBAL_TABLES_SPEC>;
+        flag::GLOBAL_TABLES_SPEC,
+        flag::LWT>;
 
     using flag_enum_set = enum_set<flag_enum>;
+
+    static constexpr flag_enum_set::mask_type LWT_FLAG_MASK = flag_enum_set::mask_for<flag::LWT>();
+
 private:
     flag_enum_set _flags;
     std::vector<lw_shared_ptr<column_specification>> _names;

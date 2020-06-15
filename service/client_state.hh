@@ -53,6 +53,9 @@
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
 
+#include "enum_set.hh"
+#include "transport/cql_protocol_extension.hh"
+
 namespace auth {
 class resource;
 }
@@ -87,7 +90,8 @@ private:
     client_state(const client_state* cs, seastar::sharded<auth::service>* auth_service)
             : _keyspace(cs->_keyspace),  _user(cs->_user), _auth_state(cs->_auth_state),
               _is_internal(cs->_is_internal), _is_thrift(cs->_is_thrift), _remote_address(cs->_remote_address),
-              _auth_service(auth_service ? &auth_service->local() : nullptr) {}
+              _auth_service(auth_service ? &auth_service->local() : nullptr),
+              _enabled_protocol_extensions(cs->_enabled_protocol_extensions) {}
     friend client_state_for_another_shard;
 private:
     sstring _keyspace;
@@ -354,6 +358,20 @@ public:
         }
     }
 #endif
+
+private:
+
+    cql_transport::cql_protocol_extension_enum_set _enabled_protocol_extensions;
+
+public:
+
+    bool is_protocol_extension_set(cql_transport::cql_protocol_extension ext) const {
+        return _enabled_protocol_extensions.contains(ext);
+    }
+
+    void set_protocol_extensions(cql_transport::cql_protocol_extension_enum_set exts) {
+        _enabled_protocol_extensions = std::move(exts);
+    }
 };
 
 }
