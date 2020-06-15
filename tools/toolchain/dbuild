@@ -4,6 +4,14 @@ if [[ -f ~/.config/scylladb/dbuild ]]; then
     . ~/.config/scylladb/dbuild
 fi
 
+if which podman >/dev/null 2>&1 ; then
+  tool=${DBUILD_TOOL-podman}
+elif which docker >/dev/null 2>&1 ; then
+  tool=${DBUILD_TOOL-docker}
+else
+  die "Please make sure you install either podman or docker on this machine to run dbuild"
+fi
+
 here="$(realpath $(dirname "$0"))"
 toplevel="$(realpath "$here/../..")"
 group_args=()
@@ -73,8 +81,6 @@ EOF
     exit 1
 }
 
-docker --version >/dev/null 2>&1 || die "Please install Docker on this machine to run dbuild"
-
 if [[ $# -eq 0 ]]; then
     interactive=y
     docker_args=(-it)
@@ -90,7 +96,7 @@ elif [[ "$1" = -* ]]; then
                 if [[ -z "$image" ]]; then
                     die "Expected docker image identifier to follow the --image option"
                 fi
-                if ! docker image inspect "$image" >/dev/null && ! docker image pull "$image"; then
+                if ! $tool image inspect "$image" >/dev/null && ! $tool image pull "$image"; then
                     die
                 fi
                 continue
@@ -127,7 +133,7 @@ MAVEN_LOCAL_REPO="$HOME/.m2"
 
 mkdir -p "$MAVEN_LOCAL_REPO"
 
-is_podman="$(docker --help | grep -o podman)"
+is_podman="$($tool --help | grep -o podman)"
 
 docker_common_args=()
 
@@ -172,14 +178,14 @@ if [[ -n "$interactive" || -n "$is_podman" ]]; then
 
     # We also avoid detached mode with podman, which doesn't need it
     # (it does not proxy SIGTERM) and doesn't work well with it.
-    docker run --rm "${docker_common_args[@]}"
+    $tool run --rm "${docker_common_args[@]}"
     ret=$?
     rm -rf "$tmpdir"
     exit $ret
 fi
 
 container=$(
-    docker run \
+    $tool run \
        "--detach=true" \
        "${docker_common_args[@]}"
 )
@@ -194,10 +200,10 @@ kill_it() {
 
 trap kill_it SIGTERM SIGINT SIGHUP EXIT
 
-docker logs --follow "$container"
+$tool logs --follow "$container"
 
 if [[ -n "$container" ]]; then
-    exitcode="$(docker wait "$container")"
+    exitcode="$($tool wait "$container")"
 else
     exitcode=99
 fi
