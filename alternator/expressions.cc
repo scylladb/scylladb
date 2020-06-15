@@ -37,6 +37,7 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 
 #include <functional>
+#include <unordered_map>
 
 namespace alternator {
 
@@ -439,6 +440,199 @@ static bool known_type(std::string_view type) {
     return types.contains(type);
 }
 
+static const
+std::unordered_map<std::string_view, std::function<rjson::value(calculate_value_caller, const rjson::value*, const parsed::value::function_call&)>> function_handlers {
+    {"list_append", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
+            if (caller != calculate_value_caller::UpdateExpression) {
+                throw api_error("ValidationException",
+                        format("{}: list_append() not allowed here", caller));
+            }
+            if (f._parameters.size() != 2) {
+                throw api_error("ValidationException",
+                        format("{}: list_append() accepts 2 parameters, got {}", caller, f._parameters.size()));
+            }
+            rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
+            rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
+            return list_concatenate(v1, v2);
+        }
+    },
+    {"if_not_exists", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
+            if (caller != calculate_value_caller::UpdateExpression) {
+                throw api_error("ValidationException",
+                        format("{}: if_not_exists() not allowed here", caller));
+            }
+            if (f._parameters.size() != 2) {
+                throw api_error("ValidationException",
+                        format("{}: if_not_exists() accepts 2 parameters, got {}", caller, f._parameters.size()));
+            }
+            if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
+                throw api_error("ValidationException",
+                        format("{}: if_not_exists() must include path as its first argument", caller));
+            }
+            rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
+            rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
+            return v1.IsNull() ? std::move(v2) : std::move(v1);
+        }
+    },
+    {"size", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
+            if (caller != calculate_value_caller::ConditionExpression) {
+                throw api_error("ValidationException",
+                        format("{}: size() not allowed here", caller));
+            }
+            if (f._parameters.size() != 1) {
+                throw api_error("ValidationException",
+                        format("{}: size() accepts 1 parameter, got {}", caller, f._parameters.size()));
+            }
+            rjson::value v = calculate_value(f._parameters[0], caller, previous_item);
+            return calculate_size(v);
+        }
+    },
+    {"attribute_exists", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
+            if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                throw api_error("ValidationException",
+                        format("{}: attribute_exists() not allowed here", caller));
+            }
+            if (f._parameters.size() != 1) {
+                throw api_error("ValidationException",
+                        format("{}: attribute_exists() accepts 1 parameter, got {}", caller, f._parameters.size()));
+            }
+            if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
+                throw api_error("ValidationException",
+                        format("{}: attribute_exists()'s parameter must be a path", caller));
+            }
+            rjson::value v = calculate_value(f._parameters[0], caller, previous_item);
+            return to_bool_json(!v.IsNull());
+        }
+    },
+    {"attribute_not_exists", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
+            if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                throw api_error("ValidationException",
+                        format("{}: attribute_not_exists() not allowed here", caller));
+            }
+            if (f._parameters.size() != 1) {
+                throw api_error("ValidationException",
+                        format("{}: attribute_not_exists() accepts 1 parameter, got {}", caller, f._parameters.size()));
+            }
+            if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
+                throw api_error("ValidationException",
+                        format("{}: attribute_not_exists()'s parameter must be a path", caller));
+            }
+            rjson::value v = calculate_value(f._parameters[0], caller, previous_item);
+            return to_bool_json(v.IsNull());
+        }
+    },
+    {"attribute_type", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
+            if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                throw api_error("ValidationException",
+                        format("{}: attribute_type() not allowed here", caller));
+            }
+            if (f._parameters.size() != 2) {
+                throw api_error("ValidationException",
+                        format("{}: attribute_type() accepts 2 parameters, got {}", caller, f._parameters.size()));
+            }
+            // There is no real reason for the following check (not
+            // allowing the type to come from a document attribute), but
+            // DynamoDB does this check, so we do too...
+            if (!f._parameters[1].is_constant()) {
+                throw api_error("ValidationException",
+                        format("{}: attribute_types()'s first parameter must be an expression attribute", caller));
+            }
+            rjson::value v0 = calculate_value(f._parameters[0], caller, previous_item);
+            rjson::value v1 = calculate_value(f._parameters[1], caller, previous_item);
+            if (v1.IsObject() && v1.MemberCount() == 1 && v1.MemberBegin()->name == "S") {
+                // If the type parameter is not one of the legal types
+                // we should generate an error, not a failed condition:
+                if (!known_type(rjson::to_string_view(v1.MemberBegin()->value))) {
+                    throw api_error("ValidationException",
+                            format("{}: attribute_types()'s second parameter, {}, is not a known type",
+                                    caller, v1.MemberBegin()->value));
+                }
+                if (v0.IsObject() && v0.MemberCount() == 1) {
+                    return to_bool_json(v1.MemberBegin()->value == v0.MemberBegin()->name);
+                } else {
+                    return to_bool_json(false);
+                }
+            } else {
+                throw api_error("ValidationException",
+                        format("{}: attribute_type() second parameter must refer to a string, got {}", caller, v1));
+            }
+        }
+    },
+    {"begins_with", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
+            if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                throw api_error("ValidationException",
+                        format("{}: begins_with() not allowed here", caller));
+            }
+            if (f._parameters.size() != 2) {
+                throw api_error("ValidationException",
+                        format("{}: begins_with() accepts 2 parameters, got {}", caller, f._parameters.size()));
+            }
+            rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
+            rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
+            // TODO: There's duplication here with check_BEGINS_WITH().
+            // But unfortunately, the two functions differ a bit.
+
+            // If one of v1 or v2 is malformed or has an unsupported type
+            // (not B or S), what we do depends on whether it came from
+            // the user's query (is_constant()), or the item. Unsupported
+            // values in the query result in an error, but if they are in
+            // the item, we silently return false (no match).
+            bool bad = false;
+            if (!v1.IsObject() || v1.MemberCount() != 1) {
+                bad = true;
+                if (f._parameters[0].is_constant()) {
+                    throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v1));
+                }
+            } else if (v1.MemberBegin()->name != "S" && v1.MemberBegin()->name != "B") {
+                bad = true;
+                if (f._parameters[0].is_constant()) {
+                    throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v1));
+                }
+            }
+            if (!v2.IsObject() || v2.MemberCount() != 1) {
+                bad = true;
+                if (f._parameters[1].is_constant()) {
+                    throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v2));
+                }
+            } else if (v2.MemberBegin()->name != "S" && v2.MemberBegin()->name != "B") {
+                bad = true;
+                if (f._parameters[1].is_constant()) {
+                    throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v2));
+                }
+            }
+            bool ret = false;
+            if (!bad) {
+                auto it1 = v1.MemberBegin();
+                auto it2 = v2.MemberBegin();
+                if (it1->name == it2->name) {
+                    if (it2->name == "S") {
+                        std::string_view val1 = rjson::to_string_view(it1->value);
+                        std::string_view val2 = rjson::to_string_view(it2->value);
+                        ret = val1.starts_with(val2);
+                    } else /* it2->name == "B" */ {
+                        ret = base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
+                    }
+                }
+            }
+            return to_bool_json(ret);
+        }
+    },
+    {"contains", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
+            if (caller != calculate_value_caller::ConditionExpressionAlone) {
+                throw api_error("ValidationException",
+                        format("{}: contains() not allowed here", caller));
+            }
+            if (f._parameters.size() != 2) {
+                throw api_error("ValidationException",
+                        format("{}: contains() accepts 2 parameters, got {}", caller, f._parameters.size()));
+            }
+            rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
+            rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
+            return to_bool_json(check_CONTAINS(v1.IsNull() ? nullptr : &v1,  v2));
+        }
+    },
+};
+
 // Given a parsed::value, which can refer either to a constant value from
 // ExpressionAttributeValues, to the value of some attribute, or to a function
 // of other values, this function calculates the resulting value.
@@ -453,185 +647,12 @@ rjson::value calculate_value(const parsed::value& v,
             return rjson::copy(calculate_value(c));
         },
         [&] (const parsed::value::function_call& f) -> rjson::value {
-            // TODO: use a lookup table here - for each function name a
-            // function and allowed caller - instead of all these ifs.
-            if (f._function_name == "list_append") {
-                if (caller != calculate_value_caller::UpdateExpression) {
-                    throw api_error("ValidationException",
-                            format("{}: list_append() not allowed here", caller));
-                }
-                if (f._parameters.size() != 2) {
-                    throw api_error("ValidationException",
-                            format("{}: list_append() accepts 2 parameters, got {}", caller, f._parameters.size()));
-                }
-                rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
-                rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
-                return list_concatenate(v1, v2);
-            } else if (f._function_name == "if_not_exists") {
-                if (caller != calculate_value_caller::UpdateExpression) {
-                    throw api_error("ValidationException",
-                            format("{}: if_not_exists() not allowed here", caller));
-                }
-                if (f._parameters.size() != 2) {
-                    throw api_error("ValidationException",
-                            format("{}: if_not_exists() accepts 2 parameters, got {}", caller, f._parameters.size()));
-                }
-                if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
-                    throw api_error("ValidationException",
-                            format("{}: if_not_exists() must include path as its first argument", caller));
-                }
-                rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
-                rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
-                return v1.IsNull() ? std::move(v2) : std::move(v1);
-            } else if (f._function_name == "size") {
-                if (caller != calculate_value_caller::ConditionExpression) {
-                    throw api_error("ValidationException",
-                            format("{}: size() not allowed here", caller));
-                }
-                if (f._parameters.size() != 1) {
-                    throw api_error("ValidationException",
-                            format("{}: size() accepts 1 parameter, got {}", caller, f._parameters.size()));
-                }
-                rjson::value v = calculate_value(f._parameters[0], caller, previous_item);
-                return calculate_size(v);
-            } else if (f._function_name == "attribute_exists") {
-                if (caller != calculate_value_caller::ConditionExpressionAlone) {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_exists() not allowed here", caller));
-                }
-                if (f._parameters.size() != 1) {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_exists() accepts 1 parameter, got {}", caller, f._parameters.size()));
-                }
-                if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_exists()'s parameter must be a path", caller));
-                }
-                rjson::value v = calculate_value(f._parameters[0], caller, previous_item);
-                return to_bool_json(!v.IsNull());
-            } else if (f._function_name == "attribute_not_exists") {
-                if (caller != calculate_value_caller::ConditionExpressionAlone) {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_not_exists() not allowed here", caller));
-                }
-                if (f._parameters.size() != 1) {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_not_exists() accepts 1 parameter, got {}", caller, f._parameters.size()));
-                }
-                if (!std::holds_alternative<parsed::path>(f._parameters[0]._value)) {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_not_exists()'s parameter must be a path", caller));
-                }
-                rjson::value v = calculate_value(f._parameters[0], caller, previous_item);
-                return to_bool_json(v.IsNull());
-            } else if (f._function_name == "attribute_type") {
-                if (caller != calculate_value_caller::ConditionExpressionAlone) {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_type() not allowed here", caller));
-                }
-                if (f._parameters.size() != 2) {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_type() accepts 2 parameters, got {}", caller, f._parameters.size()));
-                }
-                // There is no real reason for the following check (not
-                // allowing the type to come from a document attribute), but
-                // DynamoDB does this check, so we do too...
-                if (!f._parameters[1].is_constant()) {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_types()'s first parameter must be an expression attribute", caller));
-                }
-                rjson::value v0 = calculate_value(f._parameters[0], caller, previous_item);
-                rjson::value v1 = calculate_value(f._parameters[1], caller, previous_item);
-                if (v1.IsObject() && v1.MemberCount() == 1 && v1.MemberBegin()->name == "S") {
-                    // If the type parameter is not one of the legal types
-                    // we should generate an error, not a failed condition:
-                    if (!known_type(rjson::to_string_view(v1.MemberBegin()->value))) {
-                        throw api_error("ValidationException",
-                                format("{}: attribute_types()'s second parameter, {}, is not a known type",
-                                        caller, v1.MemberBegin()->value));
-                    }
-                    if (v0.IsObject() && v0.MemberCount() == 1) {
-                        return to_bool_json(v1.MemberBegin()->value == v0.MemberBegin()->name);
-                    } else {
-                        return to_bool_json(false);
-                    }
-                } else {
-                    throw api_error("ValidationException",
-                            format("{}: attribute_type() second parameter must refer to a string, got {}", caller, v1));
-                }
-            } else if (f._function_name == "begins_with") {
-                if (caller != calculate_value_caller::ConditionExpressionAlone) {
-                    throw api_error("ValidationException",
-                            format("{}: begins_with() not allowed here", caller));
-                }
-                if (f._parameters.size() != 2) {
-                    throw api_error("ValidationException",
-                            format("{}: begins_with() accepts 2 parameters, got {}", caller, f._parameters.size()));
-                }
-                rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
-                rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
-                // TODO: There's duplication here with check_BEGINS_WITH().
-                // But unfortunately, the two functions differ a bit.
-
-                // If one of v1 or v2 is malformed or has an unsupported type
-                // (not B or S), what we do depends on whether it came from
-                // the user's query (is_constant()), or the item. Unsupported
-                // values in the query result in an error, but if they are in
-                // the item, we silently return false (no match).
-                bool bad = false;
-                if (!v1.IsObject() || v1.MemberCount() != 1) {
-                    bad = true;
-                    if (f._parameters[0].is_constant()) {
-                        throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v1));
-                    }
-                } else if (v1.MemberBegin()->name != "S" && v1.MemberBegin()->name != "B") {
-                    bad = true;
-                    if (f._parameters[0].is_constant()) {
-                        throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v1));
-                    }
-                }
-                if (!v2.IsObject() || v2.MemberCount() != 1) {
-                    bad = true;
-                    if (f._parameters[1].is_constant()) {
-                        throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v2));
-                    }
-                } else if (v2.MemberBegin()->name != "S" && v2.MemberBegin()->name != "B") {
-                    bad = true;
-                    if (f._parameters[1].is_constant()) {
-                        throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v2));
-                    }
-                }
-                bool ret = false;
-                if (!bad) {
-                    auto it1 = v1.MemberBegin();
-                    auto it2 = v2.MemberBegin();
-                    if (it1->name == it2->name) {
-                        if (it2->name == "S") {
-                            std::string_view val1 = rjson::to_string_view(it1->value);
-                            std::string_view val2 = rjson::to_string_view(it2->value);
-                            ret = val1.starts_with(val2);
-                        } else /* it2->name == "B" */ {
-                            ret = base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
-                        }
-                    }
-                }
-                return to_bool_json(ret);
-            } else if (f._function_name == "contains") {
-                if (caller != calculate_value_caller::ConditionExpressionAlone) {
-                    throw api_error("ValidationException",
-                            format("{}: contains() not allowed here", caller));
-                }
-                if (f._parameters.size() != 2) {
-                    throw api_error("ValidationException",
-                            format("{}: contains() accepts 2 parameters, got {}", caller, f._parameters.size()));
-                }
-                rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
-                rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
-                return to_bool_json(check_CONTAINS(v1.IsNull() ? nullptr : &v1,  v2));
-            } else {
+            auto function_it = function_handlers.find(std::string_view(f._function_name));
+            if (function_it == function_handlers.end()) {
                 throw api_error("ValidationException",
                         format("UpdateExpression: unknown function '{}' called.", f._function_name));
             }
+            return function_it->second(caller, previous_item, f);
         },
         [&] (const parsed::path& p) -> rjson::value {
             if (!previous_item) {
