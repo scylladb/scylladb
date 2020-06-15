@@ -1448,6 +1448,8 @@ with open(buildfile_tmp, 'w') as f:
             command = reloc/build_rpm.sh --reloc-pkg $in --builddir $out
         rule debbuild
             command = reloc/build_deb.sh --reloc-pkg $in --builddir $out
+        rule unified
+            command = unified/build_unified.sh --mode $mode --unified-pkg $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
@@ -1701,6 +1703,9 @@ with open(buildfile_tmp, 'w') as f:
         f.write(f'  pool = submodule_pool\n')
         f.write(f'  mode = {mode}\n')
         f.write(f'build dist-server-{mode}: phony build/dist/{mode}/redhat build/dist/{mode}/debian\n')
+        f.write(f'build build/{mode}/scylla-unified-package.tar.gz: unified build/{mode}/scylla-package.tar.gz build/{mode}/scylla-python3-package.tar.gz tools/jmx/build/scylla-jmx-package.tar.gz tools/java/build/scylla-tools-package.tar.gz | always\n')
+        f.write(f'  pool = submodule_pool\n')
+        f.write(f'  mode = {mode}\n')
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
         f.write('  command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc} ../build/{mode}/libdeflate//libdeflate.a\n'.format(**locals()))
         f.write('build build/{mode}/libdeflate/libdeflate.a: libdeflate.{mode}\n'.format(**locals()))
