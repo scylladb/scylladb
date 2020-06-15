@@ -2726,7 +2726,6 @@ static dht::partition_range get_range_for_segment(int segment, int total_segment
 
 // TODO(sarna):
 // 1. Paging must have 1MB boundary according to the docs. IIRC we do have a replica-side reply size limit though - verify.
-// 3. Proper timeouts instead of gc_clock::now() and db::no_timeout
 future<executor::request_return_type> executor::scan(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.scan++;
     elogger.trace("Scanning {}", request);
