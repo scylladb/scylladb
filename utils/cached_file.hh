@@ -23,6 +23,7 @@
 
 #include "reader_permit.hh"
 #include "utils/div_ceil.hh"
+#include "tracing/trace_state.hh"
 
 #include <seastar/core/file.hh>
 
@@ -74,6 +75,7 @@ private:
     };
 
     file _file;
+    sstring _file_name; // for logging / tracing
     reader_permit _permit;
     metrics& _metrics;
 
@@ -86,13 +88,16 @@ private:
     offset_type _last_page_size; // Ignores _start in case the start lies on the same page.
     page_idx_type _last_page;
 private:
-    future<temporary_buffer<char>> get_page(page_idx_type idx, const io_priority_class& pc) {
+    future<temporary_buffer<char>> get_page(page_idx_type idx, const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state) {
         auto i = _cache.lower_bound(idx);
         if (i != _cache.end() && i->first == idx) {
             ++_metrics.page_hits;
+            tracing::trace(trace_state, "page cache hit: file={}, page={}", _file_name, idx);
             cached_page& cp = i->second;
             return make_ready_future<temporary_buffer<char>>(cp.buf.share());
         }
+        tracing::trace(trace_state, "page cache miss: file={}, page={}", _file_name, idx);
         ++_metrics.page_misses;
         auto size = idx == _last_page ? _last_page_size : page_size;
         return _file.dma_read_exactly<char>(idx * page_size, size, pc)
@@ -111,6 +116,7 @@ public:
         const io_priority_class* _pc;
         page_idx_type _page_idx;
         offset_type _offset_in_page;
+        tracing::trace_state_ptr _trace_state;
     public:
         // Creates an empty stream.
         stream()
@@ -118,9 +124,11 @@ public:
             , _pc(nullptr)
         { }
 
-        stream(cached_file& cf, const io_priority_class& pc, page_idx_type start_page, offset_type start_offset_in_page)
+        stream(cached_file& cf, const io_priority_class& pc, tracing::trace_state_ptr trace_state,
+                page_idx_type start_page, offset_type start_offset_in_page)
             : _cached_file(&cf)
             , _pc(&pc)
+            , _trace_state(std::move(trace_state))
             , _page_idx(start_page)
             , _offset_in_page(start_offset_in_page)
 
@@ -134,7 +142,7 @@ public:
             if (!_cached_file || _page_idx > _cached_file->_last_page) {
                 return make_ready_future<temporary_buffer<char>>(temporary_buffer<char>());
             }
-            return _cached_file->get_page(_page_idx, *_pc).then([this] (temporary_buffer<char> page) {
+            return _cached_file->get_page(_page_idx, *_pc, _trace_state).then([this] (temporary_buffer<char> page) {
                 if (_page_idx == _cached_file->_last_page) {
                     page.trim(_cached_file->_last_page_size);
                 }
@@ -164,8 +172,9 @@ public:
     /// \param m Metrics object which should be updated from operations on this object.
     ///          The metrics object can be shared by many cached_file instances, in which case it
     ///          will reflect the sum of operations on all cached_file instances.
-    cached_file(file f, reader_permit permit, cached_file::metrics& m, offset_type start, offset_type size)
+    cached_file(file f, reader_permit permit, cached_file::metrics& m, offset_type start, offset_type size, sstring file_name = {})
         : _file(std::move(f))
+        , _file_name(std::move(file_name))
         , _permit(std::move(permit))
         , _metrics(m)
         , _start(start)
@@ -213,7 +222,7 @@ public:
     ///
     ///   - all bytes outside [start, end) which were cached before the call will still be cached.
     ///
-    void invalidate_at_most(offset_type start, offset_type end) {
+    void invalidate_at_most(offset_type start, offset_type end, tracing::trace_state_ptr trace_state = {}) {
         auto lo_page = (_start + start) / page_size
                        // If start is 0 then we can drop the containing page
                        // even if _start is not aligned to the page start.
@@ -223,13 +232,22 @@ public:
         auto hi_page = (_start + end) / page_size;
 
         if (lo_page < hi_page) {
-            evict_range(_cache.lower_bound(lo_page), _cache.lower_bound(hi_page));
+            auto count = evict_range(_cache.lower_bound(lo_page), _cache.lower_bound(hi_page));
+            if (count) {
+                tracing::trace(trace_state, "page cache: evicted {} page(s) in [{}, {}), file={}", count,
+                    lo_page, hi_page, _file_name);
+            }
         }
     }
 
     /// \brief Equivalent to \ref invalidate_at_most(0, end).
-    void invalidate_at_most_front(offset_type end) {
-        evict_range(_cache.begin(), _cache.lower_bound((_start + end) / page_size));
+    void invalidate_at_most_front(offset_type end, tracing::trace_state_ptr trace_state = {}) {
+        auto hi_page = (_start + end) / page_size;
+        auto count = evict_range(_cache.begin(), _cache.lower_bound(hi_page));
+        if (count) {
+            tracing::trace(trace_state, "page cache: evicted {} page(s) in [0, {}), file={}", count,
+                hi_page, _file_name);
+        }
     }
 
     /// \brief Read from the file
@@ -239,14 +257,14 @@ public:
     /// The stream does not do any read-ahead.
     ///
     /// \param pos The offset of the first byte to read, relative to the cached file area.
-    stream read(offset_type pos, const io_priority_class& pc) {
+    stream read(offset_type pos, const io_priority_class& pc, tracing::trace_state_ptr trace_state = {}) {
         if (pos >= _size) {
             return stream();
         }
         auto global_pos = _start + pos;
         auto offset = global_pos % page_size;
         auto page_idx = global_pos / page_size;
-        return stream(*this, pc, page_idx, offset);
+        return stream(*this, pc, std::move(trace_state), page_idx, offset);
     }
 
     /// \brief Returns the number of bytes in the area managed by this instance.

@@ -157,8 +157,8 @@ private:
         return _cached_file.size() - (_blocks_count - idx) * sizeof(pi_offset_type);
     }
 
-    future<pi_offset_type> read_block_offset(pi_index_type idx) {
-        _stream = _cached_file.read(get_offset_entry_pos(idx), _pc);
+    future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
+        _stream = _cached_file.read(get_offset_entry_pos(idx), _pc, trace_state);
         return _stream.next().then([this, idx] (temporary_buffer<char>&& buf) {
             if (__builtin_expect(_primitive_parser.read_32(buf) == data_consumer::read_status::ready, true)) {
                 return make_ready_future<pi_offset_type>(_primitive_parser._u32);
@@ -171,8 +171,8 @@ private:
 
     // Postconditions:
     //   - block.start is engaged and valid.
-    future<> read_block_start(promoted_index_block& block) {
-        _stream = _cached_file.read(block.offset, _pc);
+    future<> read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
+        _stream = _cached_file.read(block.offset, _pc, trace_state);
         _clustering_parser.reset();
         return consume_stream(_stream, _clustering_parser).then([this, &block] {
             block.start.emplace(_clustering_parser.get_and_reset());
@@ -181,8 +181,8 @@ private:
 
     // Postconditions:
     //   - block.end is engaged, all fields in the block are valid
-    future<> read_block(promoted_index_block& block) {
-        _stream = _cached_file.read(block.offset, _pc);
+    future<> read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
+        _stream = _cached_file.read(block.offset, _pc, trace_state);
         _block_parser.reset();
         return consume_stream(_stream, _block_parser).then([this, &block] {
             block.start.emplace(std::move(_block_parser.start()));
@@ -194,12 +194,12 @@ private:
     }
 
     /// \brief Returns a pointer to promoted_index_block entry which has at least offset and index fields valid.
-    future<promoted_index_block*> get_block_only_offset(pi_index_type idx) {
+    future<promoted_index_block*> get_block_only_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
         auto i = _blocks.lower_bound(idx);
         if (i != _blocks.end() && i->index == idx) {
             return make_ready_future<promoted_index_block*>(const_cast<promoted_index_block*>(&*i));
         }
-        return read_block_offset(idx).then([this, idx, hint = i] (pi_offset_type offset) {
+        return read_block_offset(idx, trace_state).then([this, idx, hint = i] (pi_offset_type offset) {
             auto i = this->_blocks.emplace_hint(hint, idx, offset);
             return const_cast<promoted_index_block*>(&*i);
         });
@@ -222,22 +222,22 @@ public:
     { }
 
     /// \brief Returns a pointer to promoted_index_block entry which has at least offset, index and start fields valid.
-    future<promoted_index_block*> get_block_with_start(pi_index_type idx) {
-        return get_block_only_offset(idx).then([this] (promoted_index_block* block) {
+    future<promoted_index_block*> get_block_with_start(pi_index_type idx, tracing::trace_state_ptr trace_state) {
+        return get_block_only_offset(idx, trace_state).then([this, trace_state] (promoted_index_block* block) {
             if (block->start) {
                 return make_ready_future<promoted_index_block*>(block);
             }
-            return read_block_start(*block).then([block] { return block; });
+            return read_block_start(*block, trace_state).then([block] { return block; });
         });
     }
 
     /// \brief Returns a pointer to promoted_index_block entry which has all the fields valid.
-    future<promoted_index_block*> get_block(pi_index_type idx) {
-        return get_block_only_offset(idx).then([this] (promoted_index_block* block) {
+    future<promoted_index_block*> get_block(pi_index_type idx, tracing::trace_state_ptr trace_state) {
+        return get_block_only_offset(idx, trace_state).then([this, trace_state] (promoted_index_block* block) {
             if (block->end) {
                 return make_ready_future<promoted_index_block*>(block);
             }
-            return read_block(*block).then([block] { return block; });
+            return read_block(*block, trace_state).then([block] { return block; });
         });
     }
 
@@ -251,14 +251,14 @@ public:
     ///
     /// Resolving with std::nullopt means the position is not known. The caller should
     /// use the end of the partition as the upper bound.
-    future<std::optional<uint64_t>> upper_bound_cache_only(position_in_partition_view pos) {
+    future<std::optional<uint64_t>> upper_bound_cache_only(position_in_partition_view pos, tracing::trace_state_ptr trace_state) {
         auto i = _blocks.upper_bound(pos);
         if (i == _blocks.end()) {
             return make_ready_future<std::optional<uint64_t>>(std::nullopt);
         }
         auto& block = const_cast<promoted_index_block&>(*i);
         if (!block.end) {
-            return read_block(block).then([this, &block] {
+            return read_block(block, trace_state).then([this, &block] {
                 return make_ready_future<std::optional<uint64_t>>(block.data_file_offset);
             });
         }
@@ -266,9 +266,9 @@ public:
     }
 
     // Invalidates information about blocks with smaller indexes than a given block.
-    void invalidate_prior(promoted_index_block* block) {
-        _cached_file.invalidate_at_most_front(block->offset);
-        _cached_file.invalidate_at_most(get_offset_entry_pos(0), get_offset_entry_pos(block->index));
+    void invalidate_prior(promoted_index_block* block, tracing::trace_state_ptr trace_state) {
+        _cached_file.invalidate_at_most_front(block->offset, trace_state);
+        _cached_file.invalidate_at_most(get_offset_entry_pos(0), get_offset_entry_pos(block->index), trace_state);
         _blocks.erase(_blocks.begin(), _blocks.lower_bound(block->index));
     }
 
@@ -303,6 +303,8 @@ class bsearch_clustered_cursor : public clustered_index_cursor {
 
     // Points to the upper bound of the cursor.
     std::optional<position_in_partition> _current_pos;
+
+    tracing::trace_state_ptr _trace_state;
 private:
     // Advances the cursor to the nearest block whose start position is > pos.
     //
@@ -335,13 +337,15 @@ private:
                 if (_current_idx == _blocks_count) {
                     _current_pos = position_in_partition::after_all_clustered_rows();
                 }
+                tracing::trace(_trace_state, "mc_bsearch_clustered_cursor: bisecting done, current=[{}] .start={}", _current_idx, _current_pos);
                 sstlog.trace("mc_bsearch_clustered_cursor {}: bisecting done, current=[{}] .start={}", this, _current_idx, _current_pos);
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
 
             auto mid = _current_idx + (_upper_idx - _current_idx) / 2;
+            tracing::trace(_trace_state, "mc_bsearch_clustered_cursor: bisecting range [{}, {}], mid={}", _current_idx, _upper_idx, mid);
             sstlog.trace("mc_bsearch_clustered_cursor {}: bisecting range [{}, {}], mid={}", this, _current_idx, _upper_idx, mid);
-            return _promoted_index.get_block_with_start(mid).then([this, mid, pos] (promoted_index_block* block) {
+            return _promoted_index.get_block_with_start(mid, _trace_state).then([this, mid, pos] (promoted_index_block* block) {
                 position_in_partition::less_compare less(_s);
                 sstlog.trace("mc_bsearch_clustered_cursor {}: compare with [{}] .start={}", this, mid, block->start);
                 if (less(pos, *block->start)) {
@@ -362,10 +366,12 @@ public:
             column_values_fixed_lengths cvfl,
             cached_file f,
             io_priority_class pc,
-            pi_index_type blocks_count)
+            pi_index_type blocks_count,
+            tracing::trace_state_ptr trace_state)
         : _s(s)
         , _blocks_count(blocks_count)
         , _promoted_index(s, std::move(permit), std::move(cvfl), std::move(f), pc, blocks_count)
+        , _trace_state(std::move(trace_state))
     { }
 
     future<std::optional<skip_info>> advance_to(position_in_partition_view pos) override {
@@ -387,7 +393,7 @@ public:
                 sstlog.trace("mc_bsearch_clustered_cursor {}: same block", this);
                 return make_ready_future<std::optional<skip_info>>(std::nullopt);
             }
-            return _promoted_index.get_block(_current_idx - 1).then([this] (promoted_index_block* block) {
+            return _promoted_index.get_block(_current_idx - 1, _trace_state).then([this] (promoted_index_block* block) {
                 sstlog.trace("mc_bsearch_clustered_cursor {}: [{}] = {}", this, _current_idx - 1, *block);
                 offset_in_partition datafile_offset = block->data_file_offset;
                 sstlog.trace("mc_bsearch_clustered_cursor {}: datafile_offset={}", this, datafile_offset);
@@ -400,11 +406,12 @@ public:
                 // the beginning of _current_idx - 1. The index block contains tombstone which was
                 // active at the end of the block, not at the beginning of the block, so we need
                 // to read the active tombstone from the preceding block, _current_idx - 2.
-                return _promoted_index.get_block(_current_idx - 2).then([this, datafile_offset] (promoted_index_block* block) -> std::optional<skip_info> {
+                return _promoted_index.get_block(_current_idx - 2, _trace_state)
+                        .then([this, datafile_offset] (promoted_index_block* block) -> std::optional<skip_info> {
                     sstlog.trace("mc_bsearch_clustered_cursor {}: [{}] = {}", this, _current_idx - 2, *block);
                     // XXX: Until we have automatic eviction, we need to invalidate cached index blocks
                     // as we walk so that memory footprint is not O(N) but O(log(N)).
-                    _promoted_index.invalidate_prior(block);
+                    _promoted_index.invalidate_prior(block, _trace_state);
                     if (!block->end_open_marker) {
                         return skip_info{datafile_offset, tombstone(), position_in_partition::before_all_clustered_rows()};
                     }
@@ -417,14 +424,15 @@ public:
     }
 
     future<std::optional<offset_in_partition>> probe_upper_bound(position_in_partition_view pos) override {
-        return _promoted_index.upper_bound_cache_only(pos);
+        return _promoted_index.upper_bound_cache_only(pos, _trace_state);
     }
 
     future<std::optional<entry_info>> next_entry() override {
         if (_current_idx == _blocks_count) {
             return make_ready_future<std::optional<entry_info>>(std::nullopt);
         }
-        return _promoted_index.get_block(_current_idx).then([this] (promoted_index_block* block) -> std::optional<entry_info> {
+        return _promoted_index.get_block(_current_idx, _trace_state)
+                .then([this] (promoted_index_block* block) -> std::optional<entry_info> {
             sstlog.trace("mc_bsearch_clustered_cursor {}: block {}: start={}, end={}, offset={}", this, _current_idx,
                 *block->start, *block->end, block->data_file_offset);
             ++_current_idx;

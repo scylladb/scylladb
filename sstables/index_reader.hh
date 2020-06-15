@@ -71,6 +71,7 @@ class index_consume_entry_context : public data_consumer::continuous_data_consum
     using read_status = typename continuous_data_consumer::read_status;
 private:
     IndexConsumer& _consumer;
+    sstring _file_name;
     file _index_file;
     file_input_stream_options _options;
     uint64_t _entry_offset;
@@ -117,6 +118,7 @@ private:
     const schema& _s;
     std::optional<column_values_fixed_lengths> _ck_values_fixed_lengths;
     bool _use_binary_search;
+    tracing::trace_state_ptr _trace_state;
 
     inline bool is_mc_format() const { return static_cast<bool>(_ck_values_fixed_lengths); }
 
@@ -232,14 +234,14 @@ public:
                 std::unique_ptr<clustered_index_cursor> cursor;
                 if (_use_binary_search) {
                     cached_file f(_index_file, continuous_data_consumer::_permit, index_page_cache_metrics,
-                        promoted_index_start, promoted_index_size);
+                        promoted_index_start, promoted_index_size, _file_name);
                     if (promoted_index_size <= data_size) {
                         f.populate_front(data.share());
                     } else {
                         f.populate_front(std::move(data));
                     }
                     cursor = std::make_unique<mc::bsearch_clustered_cursor>(_s, continuous_data_consumer::_permit,
-                        *_ck_values_fixed_lengths, std::move(f), _options.io_priority_class, _num_pi_blocks);
+                        *_ck_values_fixed_lengths, std::move(f), _options.io_priority_class, _num_pi_blocks, _trace_state);
                 } else {
                     input_stream<char> promoted_index_stream = [&] {
                         if (promoted_index_size <= data_size) {
@@ -277,12 +279,13 @@ public:
     }
 
     index_consume_entry_context(reader_permit permit, IndexConsumer& consumer, trust_promoted_index trust_pi, const schema& s,
-            file index_file, file_input_stream_options options, uint64_t start,
-            uint64_t maxlen, std::optional<column_values_fixed_lengths> ck_values_fixed_lengths)
+            sstring file_name, file index_file, file_input_stream_options options, uint64_t start,
+            uint64_t maxlen, std::optional<column_values_fixed_lengths> ck_values_fixed_lengths, tracing::trace_state_ptr trace_state = {})
         : continuous_data_consumer(std::move(permit), make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
-        , _consumer(consumer), _index_file(index_file), _options(options)
+        , _consumer(consumer), _file_name(std::move(file_name)), _index_file(index_file), _options(options)
         , _entry_offset(start), _trust_pi(trust_pi), _s(s), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
         , _use_binary_search(is_mc_format() && use_binary_search_in_promoted_index)
+        , _trace_state(std::move(trace_state))
     {}
 
     void reset(uint64_t offset) {
@@ -368,11 +371,13 @@ class index_reader {
             : _consumer(quantity)
             , _context(permit, _consumer,
                        trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema,
-                       get_file(*sst, permit, std::move(trace_state)),
+                       trace_state ? sst->filename(component_type::Index) : sstring(),
+                       get_file(*sst, permit, trace_state),
                        get_file_input_stream_options(sst, pc), begin, end - begin,
                        (sst->get_version() == sstable_version_types::mc
                            ? std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header()))
-                           : std::optional<column_values_fixed_lengths>{}))
+                           : std::optional<column_values_fixed_lengths>{}),
+                       trace_state)
         { }
     };
 
