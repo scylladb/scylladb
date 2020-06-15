@@ -929,6 +929,13 @@ column_definition& schema_builder::find_column(const cql3::column_identifier& c)
     throw std::invalid_argument(format("No such column {}", c.name()));
 }
 
+bool schema_builder::has_column(const cql3::column_identifier& c) {
+    auto i = std::find_if(_raw._columns.begin(), _raw._columns.end(), [c](auto& p) {
+        return p.name() == c.name();
+     });
+    return i != _raw._columns.end();
+}
+
 schema_builder& schema_builder::with_column_ordered(const column_definition& c) {
     return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position(), c.view_virtual(), c.get_computation_ptr());
 }
