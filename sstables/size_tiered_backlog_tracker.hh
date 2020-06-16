@@ -25,7 +25,7 @@
 
 // Backlog for one SSTable under STCS:
 //
-//   (1) Bi = Ei * log4 (T / Si),
+//   (1) Bi = Ei * log4 (T / Ei),
 //
 // where Ei is the effective size of the SStable, Si is the Size of this
 // SSTable, and T is the total size of the Table.
@@ -48,24 +48,24 @@
 //
 // Using the fact that log(a / b) = log(a) - log(b), we rewrite (1) as:
 //
-//   Bi = Ei log4(T) - Ei log4(Si)
+//   Bi = Ei log4(T) - Ei log4(Ei)
 //
 // For the entire Table, the Aggregate Backlog (A) is
 //
-//   A = Sum(i = 0...N) { Ei * log4(T) - Ei * log4(Si) },
+//   A = Sum(i = 0...N) { Ei * log4(T) - Ei * log4(Ei) },
 //
 // which can be expressed as a sum of a table component and a SSTable component:
 //
-//   A = Sum(i = 0...N) { Ei } * log4(T) - Sum(i = 0...N) { Ei * log4(Si) },
+//   A = Sum(i = 0...N) { Ei } * log4(T) - Sum(i = 0...N) { Ei * log4(Ei) },
 //
 // and if we define C = Sum(i = 0...N) { Ci }, then we can write
 //
-//   A = (T - C) * log4(T) - Sum(i = 0...N) { (Si - Ci)* log4(Si) }.
+//   A = (T - C) * log4(T) - Sum(i = 0...N) { (Si - Ci)* log4(Ei) }.
 //
 // Because the SSTable number can be quite big, we'd like to keep iterations to a minimum.
 // We can do that if we rewrite the expression above one more time, yielding:
 //
-//   (4) A = T * log4(T) - C * log4(T) - (Sum(i = 0...N) { Si * log4(Si) } - Sum(i = 0...N) { Ci * log4(Si) }
+//   (4) A = T * log4(T) - C * log4(T) - (Sum(i = 0...N) { Si * log4(Ei) } - Sum(i = 0...N) { Ci * log4(Ei) }
 //
 // When SSTables are added or removed, we update the static parts of the equation, and
 // every time we need to compute the backlog we use the most up-to-date estimate of Ci to
