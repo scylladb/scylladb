@@ -35,6 +35,7 @@ namespace sstables {
 
 extern seastar::logger sstlog;
 extern thread_local cached_file::metrics index_page_cache_metrics;
+extern thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 
 class index_consumer {
     uint64_t max_quantity;
@@ -240,7 +241,8 @@ public:
                     } else {
                         f.populate_front(std::move(data));
                     }
-                    cursor = std::make_unique<mc::bsearch_clustered_cursor>(_s, continuous_data_consumer::_permit,
+                    cursor = std::make_unique<mc::bsearch_clustered_cursor>(_s,
+                        promoted_index_cache_metrics, continuous_data_consumer::_permit,
                         *_ck_values_fixed_lengths, std::move(f), _options.io_priority_class, _num_pi_blocks, _trace_state);
                 } else {
                     input_stream<char> promoted_index_stream = [&] {

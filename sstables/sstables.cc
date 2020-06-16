@@ -3382,6 +3382,7 @@ future<> replay_pending_delete_log(sstring pending_delete_log) {
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
 thread_local shared_index_lists::stats shared_index_lists::_shard_stats;
 thread_local cached_file::metrics index_page_cache_metrics;
+thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 static thread_local seastar::metrics::metric_groups metrics;
 
 future<> init_metrics() {
@@ -3405,6 +3406,27 @@ future<> init_metrics() {
             sm::description("Total number of index page cache pages which were inserted into the cache")),
         sm::make_gauge("index_page_cache_bytes", [] { return index_page_cache_metrics.cached_bytes; },
             sm::description("Total number of bytes cached in the index page cache")),
+
+        sm::make_derive("pi_cache_hits_l0", [] { return promoted_index_cache_metrics.hits_l0; },
+            sm::description("Number of requests for promoted index block in state l0 which didn't have to go to the page cache")),
+        sm::make_derive("pi_cache_hits_l1", [] { return promoted_index_cache_metrics.hits_l1; },
+            sm::description("Number of requests for promoted index block in state l1 which didn't have to go to the page cache")),
+        sm::make_derive("pi_cache_hits_l2", [] { return promoted_index_cache_metrics.hits_l2; },
+            sm::description("Number of requests for promoted index block in state l2 which didn't have to go to the page cache")),
+        sm::make_derive("pi_cache_misses_l0", [] { return promoted_index_cache_metrics.misses_l0; },
+            sm::description("Number of requests for promoted index block in state l0 which had to go to the page cache")),
+        sm::make_derive("pi_cache_misses_l1", [] { return promoted_index_cache_metrics.misses_l1; },
+            sm::description("Number of requests for promoted index block in state l1 which had to go to the page cache")),
+        sm::make_derive("pi_cache_misses_l2", [] { return promoted_index_cache_metrics.misses_l2; },
+            sm::description("Number of requests for promoted index block in state l2 which had to go to the page cache")),
+        sm::make_derive("pi_cache_populations", [] { return promoted_index_cache_metrics.populations; },
+            sm::description("Number of promoted index blocks which got inserted")),
+        sm::make_derive("pi_cache_evictions", [] { return promoted_index_cache_metrics.evictions; },
+            sm::description("Number of promoted index blocks which got evicted")),
+        sm::make_gauge("pi_cache_bytes", [] { return promoted_index_cache_metrics.used_bytes; },
+            sm::description("Number of bytes currently used by cached promoted index blocks")),
+        sm::make_gauge("pi_cache_block_count", [] { return promoted_index_cache_metrics.block_count; },
+            sm::description("Number of promoted index blocks currently cached")),
 
         sm::make_derive("partition_writes", [] { return sstables_stats::get_shard_stats().partition_writes; },
             sm::description("Number of partitions written")),

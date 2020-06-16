@@ -81,6 +81,40 @@ public:
                 << ", datafile_offset=" << b.data_file_offset
                 << ", width=" << b.width << "}";
         }
+
+        /// \brief Returns the amount of memory occupied by this object and all its contents.
+        size_t memory_usage() const {
+            size_t result = sizeof(promoted_index_block);
+            if (!start) {
+                return result;
+            }
+            result += start->external_memory_usage();
+            if (!end) {
+                return result;
+            }
+            result += end->external_memory_usage();
+            return result;
+        }
+    };
+
+    struct metrics {
+        uint64_t hits_l0 = 0; // Number of requests for promoted_index_block in state l0
+                              // which didn't have to go to the page cache
+        uint64_t hits_l1 = 0; // Number of requests for promoted_index_block in state l1
+                              // which didn't have to go to the page cache
+        uint64_t hits_l2 = 0; // Number of requests for promoted_index_block in state l2
+                              // which didn't have to go to the page cache
+        uint64_t misses_l0 = 0; // Number of requests for promoted_index_block in state l0
+                                // which didn't have to go to the page cache
+        uint64_t misses_l1 = 0; // Number of requests for promoted_index_block in state l1
+                                // which didn't have to go to the page cache
+        uint64_t misses_l2 = 0; // Number of requests for promoted_index_block in state l2
+                                // which didn't have to go to the page cache
+
+        uint64_t evictions = 0; // Number of promoted_index_blocks which got evicted
+        uint64_t populations = 0; // Number of promoted_index_blocks which got inserted
+        uint64_t block_count = 0; // Number of promoted_index_blocks currently cached
+        uint64_t used_bytes = 0; // Number of bytes currently used by promoted_index_blocks
     };
 
     struct block_comparator {
@@ -125,9 +159,11 @@ private:
     // savings in CPU time from less over-reads more than compensate
     // for it.
     //
-    std::set<promoted_index_block, block_comparator> _blocks;
+    using block_set_type = std::set<promoted_index_block, block_comparator>;
+    block_set_type _blocks;
 public:
     const schema& _s;
+    metrics& _metrics;
     const pi_index_type _blocks_count;
     const io_priority_class _pc;
     cached_file _cached_file;
@@ -175,7 +211,9 @@ private:
         _stream = _cached_file.read(block.offset, _pc, trace_state);
         _clustering_parser.reset();
         return consume_stream(_stream, _clustering_parser).then([this, &block] {
+            auto mem_before = block.memory_usage();
             block.start.emplace(_clustering_parser.get_and_reset());
+            _metrics.used_bytes += block.memory_usage() - mem_before;
         });
     }
 
@@ -185,11 +223,13 @@ private:
         _stream = _cached_file.read(block.offset, _pc, trace_state);
         _block_parser.reset();
         return consume_stream(_stream, _block_parser).then([this, &block] {
+            auto mem_before = block.memory_usage();
             block.start.emplace(std::move(_block_parser.start()));
             block.end.emplace(std::move(_block_parser.end()));
             block.end_open_marker = _block_parser.end_open_marker();
             block.data_file_offset = _block_parser.offset();
             block.width = _block_parser.width();
+            _metrics.used_bytes += block.memory_usage() - mem_before;
         });
     }
 
@@ -197,15 +237,30 @@ private:
     future<promoted_index_block*> get_block_only_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
         auto i = _blocks.lower_bound(idx);
         if (i != _blocks.end() && i->index == idx) {
+            ++_metrics.hits_l0;
             return make_ready_future<promoted_index_block*>(const_cast<promoted_index_block*>(&*i));
         }
+        ++_metrics.misses_l0;
         return read_block_offset(idx, trace_state).then([this, idx, hint = i] (pi_offset_type offset) {
             auto i = this->_blocks.emplace_hint(hint, idx, offset);
+            _metrics.used_bytes += sizeof(promoted_index_block);
+            ++_metrics.block_count;
+            ++_metrics.populations;
             return const_cast<promoted_index_block*>(&*i);
         });
     }
+
+    void erase_range(block_set_type::iterator begin, block_set_type::iterator end) {
+        while (begin != end) {
+            --_metrics.block_count;
+            ++_metrics.evictions;
+            _metrics.used_bytes -= begin->memory_usage();
+            begin = _blocks.erase(begin);
+        }
+    }
 public:
     cached_promoted_index(const schema& s,
+            metrics& m,
             reader_permit permit,
             column_values_fixed_lengths cvfl,
             cached_file f,
@@ -213,6 +268,7 @@ public:
             pi_index_type blocks_count)
         : _blocks(block_comparator{s})
         , _s(s)
+        , _metrics(m)
         , _blocks_count(blocks_count)
         , _pc(pc)
         , _cached_file(std::move(f))
@@ -221,12 +277,22 @@ public:
         , _block_parser(s, std::move(permit), std::move(cvfl))
     { }
 
+    ~cached_promoted_index() {
+        _metrics.block_count -= _blocks.size();
+        _metrics.evictions += _blocks.size();
+        for (auto&& b : _blocks) {
+            _metrics.used_bytes -= b.memory_usage();
+        }
+    }
+
     /// \brief Returns a pointer to promoted_index_block entry which has at least offset, index and start fields valid.
     future<promoted_index_block*> get_block_with_start(pi_index_type idx, tracing::trace_state_ptr trace_state) {
         return get_block_only_offset(idx, trace_state).then([this, trace_state] (promoted_index_block* block) {
             if (block->start) {
+                ++_metrics.hits_l1;
                 return make_ready_future<promoted_index_block*>(block);
             }
+            ++_metrics.misses_l1;
             return read_block_start(*block, trace_state).then([block] { return block; });
         });
     }
@@ -235,8 +301,10 @@ public:
     future<promoted_index_block*> get_block(pi_index_type idx, tracing::trace_state_ptr trace_state) {
         return get_block_only_offset(idx, trace_state).then([this, trace_state] (promoted_index_block* block) {
             if (block->end) {
+                ++_metrics.hits_l2;
                 return make_ready_future<promoted_index_block*>(block);
             }
+            ++_metrics.misses_l2;
             return read_block(*block, trace_state).then([block] { return block; });
         });
     }
@@ -269,7 +337,7 @@ public:
     void invalidate_prior(promoted_index_block* block, tracing::trace_state_ptr trace_state) {
         _cached_file.invalidate_at_most_front(block->offset, trace_state);
         _cached_file.invalidate_at_most(get_offset_entry_pos(0), get_offset_entry_pos(block->index), trace_state);
-        _blocks.erase(_blocks.begin(), _blocks.lower_bound(block->index));
+        erase_range(_blocks.begin(), _blocks.lower_bound(block->index));
     }
 
     cached_file& file() { return _cached_file; }
@@ -362,6 +430,7 @@ private:
     }
 public:
     bsearch_clustered_cursor(const schema& s,
+            cached_promoted_index::metrics& metrics,
             reader_permit permit,
             column_values_fixed_lengths cvfl,
             cached_file f,
@@ -370,7 +439,7 @@ public:
             tracing::trace_state_ptr trace_state)
         : _s(s)
         , _blocks_count(blocks_count)
-        , _promoted_index(s, std::move(permit), std::move(cvfl), std::move(f), pc, blocks_count)
+        , _promoted_index(s, metrics, std::move(permit), std::move(cvfl), std::move(f), pc, blocks_count)
         , _trace_state(std::move(trace_state))
     { }
 
