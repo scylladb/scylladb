@@ -682,19 +682,11 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
+    ctx_ptr->last_attempted_rp = rp;
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
         (void)with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
             try {
-                try {
-                    ctx_ptr->rps_set.emplace(rp);
-                } catch (...) {
-                    // if we failed to insert the rp into the set then its contents can't be trusted and we have to re-send the current file from the beginning
-                    ctx_ptr->state.set(send_state::restart_segment);
-                    ctx_ptr->state.set(send_state::segment_replay_failed);
-                    return make_ready_future<>();
-                }
-
                 auto m = this->get_mutation(ctx_ptr, buf);
                 gc_clock::duration gc_grace_sec = m.s->gc_grace_seconds();
 
@@ -703,16 +695,14 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                 // Files are aggregated for at most manager::hints_timer_period therefore the oldest hint there is
                 // (last_modification - manager::hints_timer_period) old.
                 if (gc_clock::now().time_since_epoch() - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
-                    ctx_ptr->rps_set.erase(rp);
                     return make_ready_future<>();
                 }
 
                 return this->send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
-                    ctx_ptr->rps_set.erase(rp);
                     ++this->shard_stats().sent;
-                }).handle_exception([this, ctx_ptr] (auto eptr) {
+                }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
                     manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
-                    ctx_ptr->state.set(send_state::segment_replay_failed);
+                    ctx_ptr->on_hint_send_failure(rp);
                 });
 
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
@@ -725,14 +715,23 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             } catch (no_column_mapping& e) {
                 manager_logger.debug("send_hints(): {} at {}: {}", fname, rp, e.what());
                 ++this->shard_stats().discarded;
+            } catch (...) {
+                manager_logger.debug("send_hints(): unexpected error in file {} at {}: {}", fname, rp, std::current_exception());
+                ctx_ptr->on_hint_send_failure(rp);
             }
-            ctx_ptr->rps_set.erase(rp);
             return make_ready_future<>();
         }).finally([units = std::move(units), ctx_ptr] {});
-    }).handle_exception([this, ctx_ptr] (auto eptr) {
+    }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
         manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
-        ctx_ptr->state.set(send_state::segment_replay_failed);
+        ctx_ptr->on_hint_send_failure(rp);
     });
+}
+
+void manager::end_point_hints_manager::sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
+    segment_replay_failed = true;
+    if (!first_failed_rp || rp < *first_failed_rp) {
+        first_failed_rp = rp;
+    }
 }
 
 // runs in a seastar::async context
@@ -746,13 +745,13 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
             auto&& [buf, rp] = buf_rp;
             // Check that we can still send the next hint. Don't try to send it if the destination host
             // is DOWN or if we have already failed to send some of the previous hints.
-            if (!draining() && ctx_ptr->state.contains(send_state::segment_replay_failed)) {
+            if (!draining() && ctx_ptr->segment_replay_failed) {
                 return make_ready_future<>();
             }
 
             // Break early if stop() was called or the destination node went down.
             if (!can_send()) {
-                ctx_ptr->state.set(send_state::segment_replay_failed);
+                ctx_ptr->segment_replay_failed = true;
                 return make_ready_future<>();
             }
 
@@ -762,31 +761,28 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
         }, _last_not_complete_rp.pos, &_db.extensions()).get();
     } catch (db::commitlog::segment_error& ex) {
         manager_logger.error("{}: {}. Dropping...", fname, ex.what());
-        ctx_ptr->state.remove(send_state::segment_replay_failed);
+        ctx_ptr->segment_replay_failed = false;
         ++this->shard_stats().corrupted_files;
     } catch (...) {
         manager_logger.trace("sending of {} failed: {}", fname, std::current_exception());
-        ctx_ptr->state.set(send_state::segment_replay_failed);
+        ctx_ptr->segment_replay_failed = true;
     }
 
     // wait till all background hints sending is complete
     ctx_ptr->file_send_gate.close().get();
 
     // If we are draining ignore failures and drop the segment even if we failed to send it.
-    if (draining() && ctx_ptr->state.contains(send_state::segment_replay_failed)) {
+    if (draining() && ctx_ptr->segment_replay_failed) {
         manager_logger.trace("send_one_file(): we are draining so we are going to delete the segment anyway");
-        ctx_ptr->state.remove(send_state::segment_replay_failed);
+        ctx_ptr->segment_replay_failed = false;
     }
 
     // update the next iteration replay position if needed
-    if (ctx_ptr->state.contains(send_state::segment_replay_failed)) {
-        if (ctx_ptr->state.contains(send_state::restart_segment)) {
-            // if _rps_set contents is inconsistent simply re-start the current file from the beginning
-            _last_not_complete_rp = replay_position();
-        } else if (!ctx_ptr->rps_set.empty()) {
-            _last_not_complete_rp = *std::min_element(ctx_ptr->rps_set.begin(), ctx_ptr->rps_set.end());
-        }
-
+    if (ctx_ptr->segment_replay_failed) {
+        // If some hints failed to be sent, first_failed_rp will tell the position of first such hint.
+        // If there was an error thrown by read_log_file function itself, we will retry sending from
+        // the last entry that was successfully read from commitlog (last_attempted_rp).
+        _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_attempted_rp.value_or(_last_not_complete_rp));
         manager_logger.trace("send_one_file(): error while sending hints from {}, last RP is {}", fname, _last_not_complete_rp);
         return false;
     }

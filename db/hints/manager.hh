@@ -26,6 +26,7 @@
 #include <vector>
 #include <list>
 #include <chrono>
+#include <optional>
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/timer.hh>
@@ -95,23 +96,17 @@ public:
                 state::ep_state_left_the_ring,
                 state::draining>>;
 
-            enum class send_state {
-                segment_replay_failed,  // current segment sending failed
-                restart_segment,        // segment sending failed and it has to be restarted from the beginning since we failed to store one or more RPs
-            };
-
-            using send_state_set = enum_set<super_enum<send_state,
-                send_state::segment_replay_failed,
-                send_state::restart_segment>>;
-
             struct send_one_file_ctx {
                 send_one_file_ctx(std::unordered_map<table_schema_version, column_mapping>& last_schema_ver_to_column_mapping)
                     : schema_ver_to_column_mapping(last_schema_ver_to_column_mapping)
                 {}
                 std::unordered_map<table_schema_version, column_mapping>& schema_ver_to_column_mapping;
                 seastar::gate file_send_gate;
-                std::unordered_set<db::replay_position> rps_set; // number of elements in this set is never going to be greater than the maximum send queue length
-                send_state_set state;
+                std::optional<db::replay_position> first_failed_rp;
+                std::optional<db::replay_position> last_attempted_rp;
+                bool segment_replay_failed = false;
+
+                void on_hint_send_failure(db::replay_position rp) noexcept;
             };
 
         private:
@@ -197,8 +192,7 @@ public:
             ///  - Limit the maximum memory size of hints "in the air" and the maximum total number of hints "in the air".
             ///  - Discard the hints that are older than the grace seconds value of the corresponding table.
             ///
-            /// If sending fails we are going to clear the state::segment_replay_ok in the _state and \ref rp is going to be stored in the _rps_set.
-            /// If sending is successful then \ref rp is going to be removed from the _rps_set.
+            /// If sending fails we are going to set the state::segment_replay_failed in the _state and _first_failed_rp will be updated to min(_first_failed_rp, \ref rp).
             ///
             /// \param ctx_ptr shared pointer to the file sending context
             /// \param buf buffer representing the hint
