@@ -65,7 +65,7 @@ def test_deeply_nested_put(dynamodb, test_table):
     # to receive a response that it was not found. An error informing
     # about not being able to process this request is also acceptable,
     # as long as the server didn't crash.
-    item = test_table.get_item(Key={'p': 'x', 'c':'x'})
+    item = test_table.get_item(Key={'p': 'x', 'c':'x'}, ConsistentRead=True)
     print(item)
 
 # Test that a too deeply nested object is refused,

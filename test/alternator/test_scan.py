@@ -30,10 +30,10 @@ def test_scan_basic(filled_test_table):
         got_items = []
         while True:
             if limit:
-                response = test_table.scan(Limit=limit, ExclusiveStartKey=pos) if pos else test_table.scan(Limit=limit)
+                response = test_table.scan(Limit=limit, ConsistentRead=True, ExclusiveStartKey=pos) if pos else test_table.scan(Limit=limit, ConsistentRead=True)
                 assert len(response['Items']) <= limit
             else:
-                response = test_table.scan(ExclusiveStartKey=pos) if pos else test_table.scan()
+                response = test_table.scan(ExclusiveStartKey=pos, ConsistentRead=True) if pos else test_table.scan(ConsistentRead=True)
             pos = response.get('LastEvaluatedKey', None)
             got_items += response['Items']
             if not pos:

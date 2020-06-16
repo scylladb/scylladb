@@ -295,8 +295,8 @@ def test_gsi_missing_attribute(test_table_gsi_2):
     test_table_gsi_2.put_item(Item={'p':  p2})
 
     # Both items are now in the base table:
-    assert test_table_gsi_2.get_item(Key={'p':  p1})['Item'] == {'p': p1, 'x': x1}
-    assert test_table_gsi_2.get_item(Key={'p':  p2})['Item'] == {'p': p2}
+    assert test_table_gsi_2.get_item(Key={'p':  p1}, ConsistentRead=True)['Item'] == {'p': p1, 'x': x1}
+    assert test_table_gsi_2.get_item(Key={'p':  p2}, ConsistentRead=True)['Item'] == {'p': p2}
 
     # But only the first item is in the index: It can be found using a
     # Query, and a scan of the index won't find it (but a scan on the base
@@ -410,7 +410,7 @@ def test_gsi_missing_attribute_3(test_table_gsi_3):
     # First, add an item with a missing "a" value. It should appear in the
     # base table, but not in the index:
     test_table_gsi_3.put_item(Item={'p':  p, 'b': b})
-    assert test_table_gsi_3.get_item(Key={'p':  p})['Item'] == {'p': p, 'b': b}
+    assert test_table_gsi_3.get_item(Key={'p':  p}, ConsistentRead=True)['Item'] == {'p': p, 'b': b}
     # Note: with eventually consistent read, we can't really be sure that
     # an item will "never" appear in the index. We hope that if a bug exists
     # and such an item did appear, sometimes the delay here will be enough
@@ -418,11 +418,11 @@ def test_gsi_missing_attribute_3(test_table_gsi_3):
     assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, ConsistentRead=False, IndexName='hello')])
     # Same thing for an item with a missing "b" value:
     test_table_gsi_3.put_item(Item={'p':  p, 'a': a})
-    assert test_table_gsi_3.get_item(Key={'p':  p})['Item'] == {'p': p, 'a': a}
+    assert test_table_gsi_3.get_item(Key={'p':  p}, ConsistentRead=True)['Item'] == {'p': p, 'a': a}
     assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, ConsistentRead=False, IndexName='hello')])
     # And for an item missing both:
     test_table_gsi_3.put_item(Item={'p':  p})
-    assert test_table_gsi_3.get_item(Key={'p':  p})['Item'] == {'p': p}
+    assert test_table_gsi_3.get_item(Key={'p':  p}, ConsistentRead=True)['Item'] == {'p': p}
     assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, ConsistentRead=False, IndexName='hello')])
 
 # A fourth scenario of GSI. Two GSIs on a single base table.
