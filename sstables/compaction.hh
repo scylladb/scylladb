@@ -73,6 +73,8 @@ namespace sstables {
             return "RESHARD";
         case compaction_type::Upgrade:
             return "UPGRADE";
+        case compaction_type::Reshape:
+            return "RESHAPE";
         default:
             throw std::runtime_error("Invalid Compaction Type");
         }

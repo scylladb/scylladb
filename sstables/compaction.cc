@@ -766,6 +766,53 @@ void garbage_collected_sstable_writer::data::finish_sstable_writer() {
     }
 }
 
+class reshape_compaction : public compaction {
+public:
+    reshape_compaction(column_family& cf, compaction_descriptor descriptor)
+        : compaction(cf, std::move(descriptor)) {
+        _info->run_identifier = _run_identifier;
+        _info->type = compaction_type::Reshape;
+    }
+
+    flat_mutation_reader make_sstable_reader() const override {
+        return ::make_local_shard_sstable_reader(_schema,
+                _permit,
+                _compacting,
+                query::full_partition_range,
+                _schema->full_slice(),
+                _io_priority,
+                tracing::trace_state_ptr(),
+                ::streamed_mutation::forwarding::no,
+                ::mutation_reader::forwarding::no,
+                default_read_monitor_generator());
+    }
+
+    void report_start(const sstring& formatted_msg) const override {
+        clogger.info("Reshaping {}", formatted_msg);
+    }
+
+    void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
+        clogger.info("Reshaped {}", formatted_msg);
+    }
+
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+        auto sst = _sstable_creator(this_shard_id());
+        setup_new_sstable(sst);
+
+        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
+        cfg.max_sstable_size = _max_sstable_size;
+        cfg.monitor = &default_write_monitor();
+        cfg.run_identifier = _run_identifier;
+        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
+    }
+
+    virtual void stop_sstable_writer(compaction_writer* writer) override {
+        if (writer) {
+            finish_new_sstable(writer);
+        }
+    }
+};
+
 class regular_compaction : public compaction {
     // sstable being currently written.
     mutable compaction_read_monitor_generator _monitor_generator;
@@ -1335,7 +1382,14 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c, GCConsume
 
 compaction_type compaction_options::type() const {
     // Maps options_variant indexes to the corresponding compaction_type member.
-    static const compaction_type index_to_type[] = {compaction_type::Compaction, compaction_type::Cleanup, compaction_type::Upgrade, compaction_type::Scrub, compaction_type::Reshard};
+    static const compaction_type index_to_type[] = {
+        compaction_type::Compaction,
+        compaction_type::Cleanup,
+        compaction_type::Upgrade,
+        compaction_type::Scrub,
+        compaction_type::Reshard,
+        compaction_type::Reshape,
+    };
     return index_to_type[_options.index()];
 }
 
@@ -1344,6 +1398,9 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
         column_family& cf;
         sstables::compaction_descriptor&& descriptor;
 
+        std::unique_ptr<compaction> operator()(compaction_options::reshape) {
+            return std::make_unique<reshape_compaction>(cf, std::move(descriptor));
+        }
         std::unique_ptr<compaction> operator()(compaction_options::reshard) {
             return std::make_unique<resharding_compaction>(cf, std::move(descriptor));
         }
