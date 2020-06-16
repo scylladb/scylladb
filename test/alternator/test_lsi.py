@@ -29,19 +29,19 @@ from util import create_test_table, random_string, full_scan, full_query, multis
 # LSIs support strongly-consistent reads, so the following functions do not
 # need to retry like we did in test_gsi.py for GSIs:
 def assert_index_query(table, index_name, expected_items, **kwargs):
-    assert multiset(expected_items) == multiset(full_query(table, IndexName=index_name, ConsistentRead=True, **kwargs))
+    assert multiset(expected_items) == multiset(full_query(table, IndexName=index_name, **kwargs))
 def assert_index_scan(table, index_name, expected_items, **kwargs):
-    assert multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, ConsistentRead=True, **kwargs))
+    assert multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, **kwargs))
 
 # A version doing retries instead of ConsistentRead, to be used just for the
 # one test below which has both GSI and LSI:
 def retrying_assert_index_query(table, index_name, expected_items, **kwargs):
     for i in range(3):
-        if multiset(expected_items) == multiset(full_query(table, IndexName=index_name, **kwargs)):
+        if multiset(expected_items) == multiset(full_query(table, IndexName=index_name, ConsistentRead=False, **kwargs)):
             return
         print('retrying_assert_index_query retrying')
         time.sleep(1)
-    assert multiset(expected_items) == multiset(full_query(table, IndexName=index_name, **kwargs))
+    assert multiset(expected_items) == multiset(full_query(table, IndexName=index_name, ConsistentRead=False, **kwargs))
 
 # Although quite silly, it is actually allowed to create an index which is
 # identical to the base table.

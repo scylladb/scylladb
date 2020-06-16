@@ -28,14 +28,18 @@ def random_string(length=10, chars=string.ascii_uppercase + string.digits):
 def random_bytes(length=10):
     return bytearray(random.getrandbits(8) for _ in range(length))
 
-# Utility functions for scan and query into an array of items:
-# TODO: add to full_scan and full_query by default ConsistentRead=True, as
-# it's not useful for tests without it!
-def full_scan(table, **kwargs):
-    response = table.scan(**kwargs)
+# Utility functions for scan and query into an array of items, reading
+# the full (possibly requiring multiple requests to read successive pages).
+# For convenience, ConsistentRead=True is used by default, as most tests
+# need it to run correctly on a multi-node cluster. Callers who need to
+# override it, can (this is necessary in GSI tests, where ConsistentRead=True
+# is not supported).
+def full_scan(table, ConsistentRead=True, **kwargs):
+    response = table.scan(ConsistentRead=ConsistentRead, **kwargs)
     items = response['Items']
     while 'LastEvaluatedKey' in response:
-        response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
+        response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'],
+            ConsistentRead=ConsistentRead, **kwargs)
         items.extend(response['Items'])
     return items
 
@@ -43,8 +47,8 @@ def full_scan(table, **kwargs):
 # Note that count isn't simply len(items) - the server returns them
 # independently. e.g., with Select='COUNT' the items are not returned, but
 # count is.
-def full_scan_and_count(table, **kwargs):
-    response = table.scan(**kwargs)
+def full_scan_and_count(table, ConsistentRead=True, **kwargs):
+    response = table.scan(ConsistentRead=ConsistentRead, **kwargs)
     items = []
     count = 0
     if 'Items' in response:
@@ -52,7 +56,8 @@ def full_scan_and_count(table, **kwargs):
     if 'Count' in response:
         count = count + response['Count']
     while 'LastEvaluatedKey' in response:
-        response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
+        response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'],
+            ConsistentRead=ConsistentRead, **kwargs)
         if 'Items' in response:
             items.extend(response['Items'])
         if 'Count' in response:
@@ -60,11 +65,12 @@ def full_scan_and_count(table, **kwargs):
     return (count, items)
 
 # Utility function for fetching the entire results of a query into an array of items
-def full_query(table, **kwargs):
-    response = table.query(**kwargs)
+def full_query(table, ConsistentRead=True, **kwargs):
+    response = table.query(ConsistentRead=ConsistentRead, **kwargs)
     items = response['Items']
     while 'LastEvaluatedKey' in response:
-        response = table.query(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
+        response = table.query(ExclusiveStartKey=response['LastEvaluatedKey'],
+            ConsistentRead=ConsistentRead, **kwargs)
         items.extend(response['Items'])
     return items
 
@@ -73,8 +79,8 @@ def full_query(table, **kwargs):
 # Note that count isn't simply len(items) - the server returns them
 # independently. e.g., with Select='COUNT' the items are not returned, but
 # count is.
-def full_query_and_counts(table, **kwargs):
-    response = table.query(**kwargs)
+def full_query_and_counts(table, ConsistentRead=True, **kwargs):
+    response = table.query(ConsistentRead=ConsistentRead, **kwargs)
     items = []
     prefilter_count = 0
     postfilter_count = 0
@@ -87,7 +93,8 @@ def full_query_and_counts(table, **kwargs):
     if 'ScannedCount' in response:
         prefilter_count = prefilter_count + response['ScannedCount']
     while 'LastEvaluatedKey' in response:
-        response = table.query(ExclusiveStartKey=response['LastEvaluatedKey'], **kwargs)
+        response = table.query(ExclusiveStartKey=response['LastEvaluatedKey'],
+            ConsistentRead=ConsistentRead, **kwargs)
         if 'Items' in response:
             items.extend(response['Items'])
             pages = pages + 1

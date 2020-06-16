@@ -37,19 +37,19 @@ from util import create_test_table, random_string, full_scan, full_query, multis
 # retry.
 def assert_index_query(table, index_name, expected_items, **kwargs):
     for i in range(3):
-        if multiset(expected_items) == multiset(full_query(table, IndexName=index_name, **kwargs)):
+        if multiset(expected_items) == multiset(full_query(table, IndexName=index_name, ConsistentRead=False, **kwargs)):
             return
         print('assert_index_query retrying')
         time.sleep(1)
-    assert multiset(expected_items) == multiset(full_query(table, IndexName=index_name, **kwargs))
+    assert multiset(expected_items) == multiset(full_query(table, IndexName=index_name, ConsistentRead=False, **kwargs))
 
 def assert_index_scan(table, index_name, expected_items, **kwargs):
     for i in range(3):
-        if multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, **kwargs)):
+        if multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, ConsistentRead=False, **kwargs)):
             return
         print('assert_index_scan retrying')
         time.sleep(1)
-    assert multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, **kwargs))
+    assert multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, ConsistentRead=False, **kwargs))
 
 # Although quite silly, it is actually allowed to create an index which is
 # identical to the base table.
@@ -76,7 +76,7 @@ def test_gsi_identical(dynamodb):
     assert_index_scan(table, 'hello', items)
     # We can't scan a non-existent index
     with pytest.raises(ClientError, match='ValidationException'):
-        full_scan(table, IndexName='wrong')
+        full_scan(table, ConsistentRead=False, IndexName='wrong')
     table.delete()
 
 # One of the simplest forms of a non-trivial GSI: The base table has a hash
@@ -308,7 +308,7 @@ def test_gsi_missing_attribute(test_table_gsi_2):
     # and item will "never" appear in the index. We do this test last,
     # so if we had a bug and such item did appear, hopefully we had enough
     # time for the bug to become visible. At least sometimes.
-    assert not any([i['p'] == p2 for i in full_scan(test_table_gsi_2, IndexName='hello')])
+    assert not any([i['p'] == p2 for i in full_scan(test_table_gsi_2, ConsistentRead=False, IndexName='hello')])
 
 # Test when a table has a GSI, if the indexed attribute has the wrong type,
 # the update operation is rejected, and is added to neither base table nor
@@ -415,15 +415,15 @@ def test_gsi_missing_attribute_3(test_table_gsi_3):
     # an item will "never" appear in the index. We hope that if a bug exists
     # and such an item did appear, sometimes the delay here will be enough
     # for the unexpected item to become visible.
-    assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, IndexName='hello')])
+    assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, ConsistentRead=False, IndexName='hello')])
     # Same thing for an item with a missing "b" value:
     test_table_gsi_3.put_item(Item={'p':  p, 'a': a})
     assert test_table_gsi_3.get_item(Key={'p':  p})['Item'] == {'p': p, 'a': a}
-    assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, IndexName='hello')])
+    assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, ConsistentRead=False, IndexName='hello')])
     # And for an item missing both:
     test_table_gsi_3.put_item(Item={'p':  p})
     assert test_table_gsi_3.get_item(Key={'p':  p})['Item'] == {'p': p}
-    assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, IndexName='hello')])
+    assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, ConsistentRead=False, IndexName='hello')])
 
 # A fourth scenario of GSI. Two GSIs on a single base table.
 @pytest.fixture(scope="session")
@@ -735,10 +735,10 @@ def test_gsi_backfill(dynamodb):
     # assert_index_scan() or assert_index_query() functions) because after
     # we waited for backfilling to complete, we know all the pre-existing
     # data is already in the index.
-    assert multiset(items1) == multiset(full_scan(table, IndexName='hello'))
+    assert multiset(items1) == multiset(full_scan(table, ConsistentRead=False, IndexName='hello'))
     # We can also use Query on the new GSI, to search on the attribute x:
     assert multiset([items1[3]]) == multiset(full_query(table,
-        IndexName='hello',
+        ConsistentRead=False, IndexName='hello',
         KeyConditions={'x': {'AttributeValueList': [items1[3]['x']], 'ComparisonOperator': 'EQ'}}))
     # Let's also test that we cannot add another index with the same name
     # that already exists
@@ -785,7 +785,7 @@ def test_gsi_delete(dynamodb):
     wait_for_gsi_gone(table, 'hello')
     # Now index is gone. We cannot query using it.
     with pytest.raises(ClientError, match='ValidationException.*hello'):
-        full_query(table, IndexName='hello',
+        full_query(table, ConsistentRead=False, IndexName='hello',
             KeyConditions={'x': {'AttributeValueList': [items[3]['x']], 'ComparisonOperator': 'EQ'}})
     table.delete()
 
