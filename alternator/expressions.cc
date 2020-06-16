@@ -440,8 +440,9 @@ static bool known_type(std::string_view type) {
     return types.contains(type);
 }
 
+using function_handler_type = rjson::value(calculate_value_caller, const rjson::value*, const parsed::value::function_call&);
 static const
-std::unordered_map<std::string_view, std::function<rjson::value(calculate_value_caller, const rjson::value*, const parsed::value::function_call&)>> function_handlers {
+std::unordered_map<std::string_view, function_handler_type*> function_handlers {
     {"list_append", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
             if (caller != calculate_value_caller::UpdateExpression) {
                 throw api_error("ValidationException",
