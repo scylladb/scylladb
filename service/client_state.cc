@@ -248,13 +248,13 @@ future<> service::client_state::ensure_has_permission(auth::permission p, const 
     });
 }
 
-void service::client_state::set_keyspace(database& db, sstring keyspace) {
+void service::client_state::set_keyspace(database& db, std::string_view keyspace) {
     // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
     // call set_keyspace() before calling login(), and we have to handle that.
     if (_user && !db.has_keyspace(keyspace)) {
         throw exceptions::invalid_request_exception(format("Keyspace '{}' does not exist", keyspace));
     }
-    _keyspace = keyspace;
+    _keyspace = sstring(keyspace);
 }
 
 future<> service::client_state::ensure_exists(const auth::resource& r) const {
