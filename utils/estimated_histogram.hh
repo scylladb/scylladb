@@ -55,70 +55,103 @@
 namespace utils {
 
 /**
- * This is a pseudo floating point implementation of an estimated histogram.
- * When entering a value:
- * All values lower than the MIN will be included in the first bucket.
- * All values higher than MAX will be included the last bucket that serves as the
- * infinity bucket.
+ * This is a pseudo-exponential implementation of an estimated histogram.
  *
- * buckets are distributed as pseudo floating point:
- * The range [MIN, MAX) is split into log2 ranges.
- *     ranges = log2(max/min)
- * Each of that ranges is split according to the number of buckets:
- *     resolution = (NUM_BUCKETS - 1)/ranges
+ * An exponential-histogram with coefficient 'coef', is a histogram where for bucket 'i'
+ * the lower limit is coef^i and the higher limit is coef^(i+1).
  *
- * For example, if the MIN value is 128, the MAX is 1024 and the number of buckets is 13:
+ * A pseudo-exponential is similar but the bucket limits are an approximation.
  *
- * Anything below 128 will be in the bucket 0, anything above 1024 will be in bucket 13.
+ * The approx_exponential_histogram is an efficient pseudo-exponential implementation.
  *
- * the range [128, 1024) will be split into log2(1024/128) = 3:
+ * The histogram is defined by a Min and Max value limits, and a Precision (all should be power of 2
+ * and will be explained).
+ *
+ * When adding a value to a histogram:
+ * All values lower than Min will be included in the first bucket (the assumption is that it's
+ * not suppose to happen but it is ok if it does).
+ *
+ * All values higher than Max will be included in the last bucket that serves as the
+ * infinity bucket (the assumption is that it can happen but it is rare).
+ *
+ * Note the difference between the first and last buckets.
+ * The first bucket is just like a regular bucket but has a second roll to collect unexpected low values.
+ * The last bucket, also known as the infinity bucket, collect all values that passes the defined Max,
+ * it only collect those values.
+ *
+ * Buckets Distribution (limits)
+ * =============================
+ * The buckets limits in the histogram are defined similar to a floating-point representation.
+ *
+ * Buckets limits have an exponent part and a linear part.
+ *
+ * The exponential part is a power of 2. Each power-of-2 range [2^n..2^n+1)
+ * is split linearly to 'Precision' number of buckets.
+ *
+ * The total number of buckets is:
+ *   NUM_BUCKETS = log2(Max/Min)*Precision +1
+ *
+ * For example, if the Min value is 128, the Max is 1024 and the Precision is 4, the number of buckets is 13.
+ *
+ * Anything below 160 will be in the bucket 0, anything above 1024 will be in bucket 13.
+ * Note that the first bucket will include all values below Min.
+ *
+ * the range [128, 1024) will be split into log2(1024/128) = 3 ranges:
  * 128, 256, 512, 1024
+ * Or more mathematically: [128, 256), [256, 512), [512,1024)
  *
- * Each range is split into 12/3 = 4.
+ * Each range is split into 4 (The Precision).
  * 128            | 256            | 512            | 1024
  * 128 160 192 224| 256 320 384 448| 512 640 768 896|
  *
+ * To get the exponential part of an index you divide by the Precision.
+ * The linear part of the index is Modulus the precision.
  *
- * Calculating the bucket limit of bucket i:
- * The range: 2^(i/4)* min
- * The sub range: i%4 * range/4
+ * Calculating the bucket lower limit of bucket i:
+ * The exponential part: exp_part = 2^floor(i/Precision)* Min
+ *    with the above example 2^floor(i/4)*128
+ * The linear part: (i%Precision) * (exp_part/Precision)
+ *    With the example: (i%4) * (exp_part/4)
  *
- * How to find a bucket index for a value.
- * The bucket index consist of two part:
- * higher bits are based on log2(value/min)
+ * So the lower limit of bucket 6:
+ *    2^floor(6/4)* 128  = 256
+ *    (6%4) * 256/4 = 128
+ *    lower-limit   = 384
  *
- * lower bits are based on the high 2 MSB (ignoring the leading 1).
-
+ * How to find a bucket index for a value
+ * =======================================
+ * The bucket index consist of two parts:
+ * higher bits (exponential part) are based on log2(value/min)
+ *
+ * lower bits (linear part) are based on the 'n' MSB (ignoring the leading 1) where n=log2(Precision).
+ * Continuing with the example where the number of precision bits: PRECISION_BITS = log2(4) = 2
+ *
  * for example: 330 (101001010)
+ * The number of precision_bits: PRECISION_BITS = log2(4) = 2
  * higher bits: log2(330/128) = 1
- * low bit MSB: 330 = 01 (the lower two bits out of the upper 3)
+ * MSB: 01 (the highest two bits following the leading 1)
  * So the index: 101 = 5
  *
+ * About the Min, Max and Precision
+ * ================================
+ * For Min, Max and Precision, choose numbers that are a power of 2.
  *
- * About the min/max and number of buckets.
- * ========================================
- *
- * For MIN and MAX choose numbers that are a power of 2.
- * The number of buckets will determine the resolution that should also be a power of 2
- * So the total number of bucket should be log2(MAX/MIN) * Resolution + 1
- *
- * Limitation: You must set the MIN value to be higher then the resolution.
- * For example, for a 2 bits resolution MIN should be 2^2 = 4 or higher.
+ * Limitation: You must set the MIN value to be higher or equal to the Precision.
  *
  */
-template<uint64_t Min, uint64_t Max, size_t NumBuckets>
-requires (Min > 0 && Min < Max)
+template<uint64_t Min, uint64_t Max, size_t Precision>
+requires (Min >= Precision && Min < Max && log2floor(Max) == log2ceil(Max) && log2floor(Min) == log2ceil(Min) && log2floor(Precision) == log2ceil(Precision))
 class approx_exponential_histogram {
-    std::array<uint64_t, NumBuckets> _buckets;
 public:
 
-    static constexpr unsigned RANGES = log2floor(Max/Min);
-    static constexpr unsigned RESOLUTION = (NumBuckets - 1)/RANGES;
-    static constexpr unsigned RESOLUTION_BITS = log2floor(RESOLUTION);
-    static constexpr unsigned BASESHIFT = (Min == 0) ? 0 : log2floor(Min);
-    static constexpr uint64_t LOWER_BITS_MASK = (1 << RESOLUTION_BITS) - 1;
-    static_assert(BASESHIFT >= RESOLUTION);
-
+    static constexpr unsigned NUM_EXP_RANGES = log2floor(Max/Min);
+    static constexpr size_t NUM_BUCKETS = NUM_EXP_RANGES * Precision + 1;
+    static constexpr unsigned PRECISION_BITS = log2floor(Precision);
+    static constexpr unsigned BASESHIFT = log2floor(Min);
+    static constexpr uint64_t LOWER_BITS_MASK = Precision - 1;
+private:
+    std::array<uint64_t, NUM_BUCKETS> _buckets;
+public:
     approx_exponential_histogram() {
         clear();
     }
@@ -129,24 +162,21 @@ public:
      *
      */
     uint64_t get_bucket_lower_limit(uint16_t bucket_id) const {
-        if (bucket_id == 0) {
-            return Min;
-        }
-        if (bucket_id == NumBuckets - 1) {
+        if (bucket_id == NUM_BUCKETS - 1) {
             return Max;
         }
-        int16_t range_id = (bucket_id >> RESOLUTION_BITS);
-        return (1 << (range_id + BASESHIFT)) +  ((bucket_id & LOWER_BITS_MASK) << (range_id + BASESHIFT - RESOLUTION_BITS));
+        int16_t exp_rang = (bucket_id >> PRECISION_BITS);
+        return (Min << exp_rang) +  ((bucket_id & LOWER_BITS_MASK) << (exp_rang + BASESHIFT - PRECISION_BITS));
     }
 
     /*!
      * \brief Returns the bucket upper limit given the bucket id.
-     * The last bucket will return MAX.
+     * The last bucket (Infinity bucket) will return UMAX_INT.
      *
      */
     uint64_t get_bucket_upper_limit(uint16_t bucket_id) const {
-        if (bucket_id == NumBuckets - 1) {
-            return Max;
+        if (bucket_id == NUM_BUCKETS - 1) {
+            return std::numeric_limits<uint64_t>::max();
         }
         return get_bucket_lower_limit(bucket_id + 1);
     }
@@ -154,26 +184,19 @@ public:
     /*!
      * \brief Find the bucket index for a given value
      * The position of a value that is lower or equal to Min will always be 0.
-     * The position of a value is that is higher or equal to MAX will always be NUM_BUCKETS - 1.
+     * The position of a value that is higher or equal to MAX will always be NUM_BUCKETS - 1.
      */
-    uint16_t find_bucket_pos(uint64_t val) const {
+    uint16_t find_bucket_index(uint64_t val) const {
         if (val >= Max) {
-            return NumBuckets - 1;
+            return NUM_BUCKETS - 1;
         }
         if (val <= Min) {
             return 0;
         }
         uint16_t range = log2floor(val);
-        val >>= range - RESOLUTION_BITS; // leave the top most N+1 bits where N is the resolution.
-        return ((range - BASESHIFT) << RESOLUTION_BITS) + (val & LOWER_BITS_MASK);
+        val >>= range - PRECISION_BITS; // leave the top most N+1 bits where N is the resolution.
+        return ((range - BASESHIFT) << PRECISION_BITS) + (val & LOWER_BITS_MASK);
     }
-
-    /*!
-     * \brief returns a cumulative histogram.
-     *
-     * The metrics cumulative histogram uses upper bounds.
-     * The histogram.count serves as an infinite upper bound bucket
-     */
 
     /*!
      * \brief clear the current values.
@@ -184,17 +207,21 @@ public:
 
     /*!
      * \brief Add an item to the histogram
-     * Increments the count of the bucket closest to n, rounding DOWN.
+     * Increments the count of the bucket holding that value
      */
     void add(uint64_t n) {
-        _buckets.at(find_bucket_pos(n))++;
+        _buckets.at(find_bucket_index(n))++;
     }
 
     /*!
      * \brief returns the smallest value that could have been added to this histogram
+     * This method looks for the first non-empty bucket and returns its lower limit.
+     * Note that for non-empty histogram the lowest potentail value is Min.
+     *
+     * It will return 0 if the histogram is empty.
      */
     uint64_t min() const {
-        for (size_t i = 0; i < NumBuckets; i ++) {
+        for (size_t i = 0; i < NUM_BUCKETS; i ++) {
             if (_buckets[i] > 0) {
                 return get_bucket_lower_limit(i);
             }
@@ -203,14 +230,14 @@ public:
     }
 
     /*!
-     * \brief returns the largest value that could have been added to this histogram.  If the histogram
-     * overflowed, returns UINT64_MAX.
+     * \brief returns the largest value that could have been added to this histogram.
+     * This method looks for the first non empty bucket and return its upper limit.
+     * If the histogram overflowed, it will returns UINT64_MAX.
+     *
+     * It will return 0 if the histogram is empty.
      */
     uint64_t max() const {
-        if (_buckets[NumBuckets - 1] > 0) {
-            return UINT64_MAX;
-        }
-        for (int i = NumBuckets - 1; i >= 0; i--) {
+        for (int i = NUM_BUCKETS - 1; i >= 0; i--) {
             if (_buckets[i] > 0) {
                 return get_bucket_upper_limit(i);
             }
@@ -222,7 +249,7 @@ public:
      * \brief merge a histogram to the current one.
      */
     approx_exponential_histogram& merge(const approx_exponential_histogram& b) {
-        for (size_t i = 0; i < NumBuckets; i++) {
+        for (size_t i = 0; i < NUM_BUCKETS; i++) {
             _buckets[i] += b.get(i);
         }
         return *this;
@@ -241,9 +268,19 @@ public:
     /*!
      * \brief get a histogram quantile
      *
-     * returns the estimated value at given quantile
+     * This method will returns the estimated value at a given quantile.
+     * If there are N values in the histogram.
+     * It would look for the bucket that the total number of elements in the buckets
+     * before it are less than N * quantile and return that bucket lower limit.
+     *
+     * For example, quantile(0.5) will find the bucket that that sum of all buckets values
+     * below it is less than half and will return that bucket lower limit.
+     * In this example, this is a median estimation.
+     *
+     * It will return 0 if the histogram is empty.
+     *
      */
-    uint64_t quantile(double quantile) const {
+    uint64_t quantile(float quantile) const {
         if (quantile < 0 || quantile > 1.0) {
             throw std::runtime_error("Invalid quantile value " + std::to_string(quantile) + ". Value should be between 0 and 1");
         }
@@ -255,7 +292,7 @@ public:
 
         auto pcount = uint64_t(std::floor(c * quantile));
         uint64_t elements = 0;
-        for (size_t i = 0; i < NumBuckets - 2; i++) {
+        for (size_t i = 0; i < NUM_BUCKETS - 2; i++) {
             if (_buckets[i]) {
                 elements += _buckets[i];
                 if (elements >= pcount) {
@@ -268,22 +305,23 @@ public:
 
     /*!
      * \brief returns the mean histogram value (average of bucket offsets, weighted by count)
+     * It will return 0 if the histogram is empty.
      */
     uint64_t mean() const {
-        double elements = 0;
-        uint64_t sum = 0;
-        for (size_t i = 0; i < NumBuckets - 1; i++) {
+        uint64_t elements = 0;
+        double sum = 0;
+        for (size_t i = 0; i < NUM_BUCKETS - 1; i++) {
             elements += _buckets[i];
             sum += _buckets[i] * get_bucket_lower_limit(i);
         }
-        return (sum + elements - 1) / elements;
+        return (elements) ?  sum / elements : 0;
     }
 
     /*!
      * \brief returns the number of buckets;
      */
     size_t size() const {
-        return NumBuckets;
+        return NUM_BUCKETS;
     }
 
     /*!
@@ -291,7 +329,7 @@ public:
      */
     uint64_t count() const {
         uint64_t sum = 0L;
-        for (size_t i = 0; i < NumBuckets; i++) {
+        for (size_t i = 0; i < NUM_BUCKETS; i++) {
             sum += _buckets[i];
         }
         return sum;
@@ -301,7 +339,7 @@ public:
      * \brief multiple all the buckets content in the histogram by a constant
      */
     approx_exponential_histogram& operator*=(double v) {
-        for (size_t i = 0; i < NumBuckets; i++) {
+        for (size_t i = 0; i < NUM_BUCKETS; i++) {
             _buckets[i] *= v;
         }
         return *this;
@@ -315,23 +353,22 @@ inline approx_exponential_histogram<Min, Max, NumBuckets> base_estimated_histogr
 
 /*!
  * \brief estimated histogram for duration values
- * time_estimated_histogram is used for common task timing.
- * It covers the range of 0.5ms to 33s with a 2 bits granularity.
+ * time_estimated_histogram is used for short task timing.
+ * It covers the range of 0.5ms to 33s with a precision of 4.
  *
- * 512us, 640us, 768us, 896us, 1024us, 1280us, 1536us, 1792us, 2048us, 2560us...
+ * 512us, 640us, 768us, 896us, 1024us, 1280us, 1536us, 1792us...16s, 20s, 25s, 29s, 33s (33554432us)
  */
-class time_estimated_histogram : public approx_exponential_histogram<512, 33554432, 65> {
+class time_estimated_histogram : public approx_exponential_histogram<512, 33554432, 4> {
 public:
     using clock = std::chrono::steady_clock;
     using duration = clock::duration;
-    using approx_exponential_histogram<512, 33554432, 65>::add;
     time_estimated_histogram& merge(const time_estimated_histogram& b) {
-        approx_exponential_histogram<512, 33554432, 65>::merge(b);
+        approx_exponential_histogram<512, 33554432, 4>::merge(b);
         return *this;
     }
 
     void add_micro(uint64_t n) {
-        add(n);
+        approx_exponential_histogram<512, 33554432, 4>::add(n);
     }
 
     void add(const duration& latency) {

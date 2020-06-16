@@ -28,14 +28,14 @@
 #include "estimated_histogram.hh"
 
 
-template<uint64_t Min, uint64_t Max, size_t NumBuckets>
-seastar::metrics::histogram to_metrics_histogram(const utils::approx_exponential_histogram<Min, Max, NumBuckets>& hist) {
+template<uint64_t Min, uint64_t Max, size_t Precision>
+seastar::metrics::histogram to_metrics_histogram(const utils::approx_exponential_histogram<Min, Max, Precision>& hist) {
     seastar::metrics::histogram res;
     res.buckets.resize(hist.size() - 1);
     uint64_t cummulative_count = 0;
     res.sample_sum = 0;
 
-    for (size_t i = 0; i < NumBuckets - 1; i++) {
+    for (size_t i = 0; i < hist.NUM_BUCKETS - 1; i++) {
         auto& v = res.buckets[i];
         v.upper_bound = hist.get_bucket_lower_limit(i + 1);
         cummulative_count += hist.get(i);
@@ -43,7 +43,7 @@ seastar::metrics::histogram to_metrics_histogram(const utils::approx_exponential
         res.sample_sum += hist.get(i) * v.upper_bound;
     }
     // The count serves as the infinite bucket
-    res.sample_count = cummulative_count + hist.get(NumBuckets - 1);
-    res.sample_sum += hist.get(NumBuckets - 1) * hist.get_bucket_lower_limit(NumBuckets - 1);
+    res.sample_count = cummulative_count + hist.get(hist.NUM_BUCKETS - 1);
+    res.sample_sum += hist.get(hist.NUM_BUCKETS - 1) * hist.get_bucket_lower_limit(hist.NUM_BUCKETS - 1);
     return res;
 }
