@@ -60,10 +60,10 @@ std::string validate_histogram(seastar::metrics::histogram& h, const std::vector
 
 BOOST_AUTO_TEST_CASE(test_histogram_bucket_limits) {
     std::vector<size_t> limits{128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024};
-    utils::approx_exponential_histogram<128, 1024, 13> hist;
-    BOOST_CHECK_EQUAL(hist.RANGES, 3);
-    BOOST_CHECK_EQUAL(hist.RESOLUTION, 4);
-    BOOST_CHECK_EQUAL(hist.RESOLUTION_BITS, 2);
+    utils::approx_exponential_histogram<128, 1024, 4> hist;
+    BOOST_CHECK_EQUAL(hist.NUM_EXP_RANGES, 3);
+    BOOST_CHECK_EQUAL(hist.NUM_BUCKETS, 13);
+    BOOST_CHECK_EQUAL(hist.PRECISION_BITS, 2);
     BOOST_CHECK_EQUAL(hist.LOWER_BITS_MASK, 3);
 
     BOOST_CHECK_EQUAL(hist.BASESHIFT, 7);
@@ -73,7 +73,7 @@ BOOST_AUTO_TEST_CASE(test_histogram_bucket_limits) {
 }
 
 BOOST_AUTO_TEST_CASE(test_basic_estimated) {
-    utils::approx_exponential_histogram<128, 1024, 13> hist;
+    utils::approx_exponential_histogram<128, 1024, 4> hist;
     hist.add(1);
     validate_histogram(hist, {1});
     hist.add(100);
@@ -111,7 +111,7 @@ BOOST_AUTO_TEST_CASE(test_basic_estimated) {
 }
 
 BOOST_AUTO_TEST_CASE(test_estimated_statistics) {
-    utils::approx_exponential_histogram<128, 1024, 13> hist;
+    utils::approx_exponential_histogram<128, 1024, 4> hist;
     hist.add(1);
     hist.add(160);
     BOOST_CHECK_EQUAL(hist.min(), 128);
