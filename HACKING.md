@@ -18,23 +18,35 @@ $ git submodule update --init --recursive
 
 ### Dependencies
 
-Scylla depends on the system package manager for its development dependencies.
+Scylla is fairly fussy about its build environment, requiring a very recent
+version of the C++20 compiler and numerous tools and libraries to build.
 
-Running `./install-dependencies.sh` (as root) installs the appropriate packages based on your Linux distribution.
+Run `./install-dependencies.sh` (as root) to use your Linux distributions's
+package manager to install the appropriate packages on your build machine.
+However, this will only work on very recent distributions. For example,
+currently Fedora users must upgrade to Fedora 32 otherwise the C++ compiler
+will be too old, and not support the new C++20 standard that Scylla uses.
 
-On Ubuntu and Debian based Linux distributions, some packages
-required to build Scylla are missing in the official upstream:
+Alternatively, to avoid having to upgrade your build machine or install
+various packages on it, we provide another option - the **frozen toolchain**.
+This is a script, `./tools/toolchain/dbuild`, that can execute build or run
+commands inside a Docker image that contains exactly the right build tools and
+libraries. The `dbuild` technique is useful for beginners, but is also the way
+in which ScyllaDB produces official releases, so it is highly recommended.
 
-- libthrift-dev and libthrift
-- antlr3-c++-dev
+To use `dbuild`, you simply prefix any build or run command with it. Building
+and running Scylla becomes as easy as:
 
-Try running ```sudo ./scripts/scylla_current_repo``` to add Scylla upstream,
-and get the missing packages from it.
+```bash
+$ ./tools/toolchain/dbuild ./configure.py
+$ ./tools/toolchain/dbuild ninja build/release/scylla
+$ ./tools/toolchain/dbuild ./build/release/scylla --developer-mode 1
+```
 
 ### Build system
 
 **Note**: Compiling Scylla requires, conservatively, 2 GB of memory per native
-thread, and up to 3 GB per native thread while linking. GCC >= 8.1.1. is
+thread, and up to 3 GB per native thread while linking. GCC >= 10 is
 required.
 
 Scylla is built with [Ninja](https://ninja-build.org/), a low-level rule-based system. A Python script, `configure.py`, generates a Ninja file (`build.ninja`) based on configuration options.
