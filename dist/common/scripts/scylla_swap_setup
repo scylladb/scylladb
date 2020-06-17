@@ -54,7 +54,7 @@ if __name__ == '__main__':
     if swapfile.exists():
         print('swapfile {} already exists'.format(swapfile))
         sys.exit(1)
-    run('fallocate -v -l {}GB {}'.format(swapsize, swapfile))
+    run('dd if=/dev/zero of={} bs=1G count={}'.format(swapfile, swapsize))
     swapfile.chmod(0o600)
     run('mkswap -f {}'.format(swapfile))
     swapunit_bn = out('/usr/bin/systemd-escape -p --suffix=swap {}'.format(swapfile))
