@@ -583,8 +583,13 @@ private:
         return consumer(make_sstable_reader());
     }
 
-    virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) = 0;
-    virtual bool use_interposer_consumer() const = 0;
+    virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) {
+        return _cf.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
+    }
+
+    virtual bool use_interposer_consumer() const {
+        return _cf.get_compaction_strategy().use_interposer_consumer();
+    }
 
     compaction_info finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
         _info->ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(ended_at.time_since_epoch()).count();
@@ -621,7 +626,7 @@ private:
 
     virtual void report_start(const sstring& formatted_msg) const = 0;
     virtual void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const = 0;
-    virtual void backlog_tracker_adjust_charges() = 0;
+    virtual void backlog_tracker_adjust_charges() { };
 
     std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() {
         if (!tombstone_expiration_enabled()) {
@@ -640,9 +645,9 @@ private:
         };
     }
 
-    virtual void on_new_partition() = 0;
+    virtual void on_new_partition() {}
 
-    virtual void on_end_of_compaction() = 0;
+    virtual void on_end_of_compaction() {};
 
     // create a writer based on decorated key.
     virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) = 0;
@@ -766,14 +771,6 @@ public:
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
                 _monitor_generator);
-    }
-
-    reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
-        return _cf.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
-    }
-
-    bool use_interposer_consumer() const override {
-        return _cf.get_compaction_strategy().use_interposer_consumer();
     }
 
     void report_start(const sstring& formatted_msg) const override {
