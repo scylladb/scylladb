@@ -982,67 +982,67 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
 
 namespace {
 
-    struct fill_buffer_result {
-        foreign_ptr<std::unique_ptr<const circular_buffer<mutation_fragment>>> buffer;
-        bool end_of_stream = false;
+struct fill_buffer_result {
+    foreign_ptr<std::unique_ptr<const circular_buffer<mutation_fragment>>> buffer;
+    bool end_of_stream = false;
 
-        fill_buffer_result() = default;
-        fill_buffer_result(circular_buffer<mutation_fragment> buffer, bool end_of_stream)
-            : buffer(make_foreign(std::make_unique<const circular_buffer<mutation_fragment>>(std::move(buffer))))
-            , end_of_stream(end_of_stream) {
-        }
-    };
+    fill_buffer_result() = default;
+    fill_buffer_result(circular_buffer<mutation_fragment> buffer, bool end_of_stream)
+        : buffer(make_foreign(std::make_unique<const circular_buffer<mutation_fragment>>(std::move(buffer))))
+        , end_of_stream(end_of_stream) {
+    }
+};
 
 }
 
-    // Encapsulates all data and logic that is local to the remote shard the
-    // reader lives on.
-    class evictable_reader {
-        schema_ptr _schema;
-        reader_lifecycle_policy& _lifecycle_policy;
-        const dht::partition_range* _pr;
-        const query::partition_slice& _ps;
-        const io_priority_class& _pc;
-        tracing::global_trace_state_ptr _trace_state;
-        const mutation_reader::forwarding _fwd_mr;
-        reader_concurrency_semaphore::inactive_read_handle _irh;
-        bool _reader_created = false;
-        bool _drop_partition_start = false;
-        bool _drop_static_row = false;
-        position_in_partition::tri_compare _tri_cmp;
+// Encapsulates all data and logic that is local to the remote shard the
+// reader lives on.
+class evictable_reader {
+    schema_ptr _schema;
+    reader_lifecycle_policy& _lifecycle_policy;
+    const dht::partition_range* _pr;
+    const query::partition_slice& _ps;
+    const io_priority_class& _pc;
+    tracing::global_trace_state_ptr _trace_state;
+    const mutation_reader::forwarding _fwd_mr;
+    reader_concurrency_semaphore::inactive_read_handle _irh;
+    bool _reader_created = false;
+    bool _drop_partition_start = false;
+    bool _drop_static_row = false;
+    position_in_partition::tri_compare _tri_cmp;
 
-        std::optional<dht::decorated_key> _last_pkey;
-        position_in_partition _next_position_in_partition = position_in_partition::for_partition_start();
-        // These are used when the reader has to be recreated (after having been
-        // evicted while paused) and the range and/or slice it is recreated with
-        // differs from the original ones.
-        std::optional<dht::partition_range> _range_override;
-        std::optional<query::partition_slice> _slice_override;
+    std::optional<dht::decorated_key> _last_pkey;
+    position_in_partition _next_position_in_partition = position_in_partition::for_partition_start();
+    // These are used when the reader has to be recreated (after having been
+    // evicted while paused) and the range and/or slice it is recreated with
+    // differs from the original ones.
+    std::optional<dht::partition_range> _range_override;
+    std::optional<query::partition_slice> _slice_override;
 
-    private:
-        void update_next_position(flat_mutation_reader& reader, circular_buffer<mutation_fragment>& buffer);
-        void adjust_partition_slice();
-        flat_mutation_reader recreate_reader();
-        flat_mutation_reader resume_or_create_reader();
-        bool should_drop_fragment(const mutation_fragment& mf);
-        future<> do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
-        future<> fill_buffer(flat_mutation_reader& reader, circular_buffer<mutation_fragment>& buffer, db::timeout_clock::time_point timeout);
+private:
+    void update_next_position(flat_mutation_reader& reader, circular_buffer<mutation_fragment>& buffer);
+    void adjust_partition_slice();
+    flat_mutation_reader recreate_reader();
+    flat_mutation_reader resume_or_create_reader();
+    bool should_drop_fragment(const mutation_fragment& mf);
+    future<> do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
+    future<> fill_buffer(flat_mutation_reader& reader, circular_buffer<mutation_fragment>& buffer, db::timeout_clock::time_point timeout);
 
-    public:
-        evictable_reader(
-                schema_ptr schema,
-                reader_lifecycle_policy& lifecycle_policy,
-                const dht::partition_range& pr,
-                const query::partition_slice& ps,
-                const io_priority_class& pc,
-                tracing::trace_state_ptr trace_state,
-                mutation_reader::forwarding fwd_mr);
-        future<fill_buffer_result> fill_buffer(const dht::partition_range& pr, bool pending_next_partition, db::timeout_clock::time_point timeout);
-        future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout);
-        reader_concurrency_semaphore::inactive_read_handle inactive_read_handle() && {
-            return std::move(_irh);
-        }
-    };
+public:
+    evictable_reader(
+            schema_ptr schema,
+            reader_lifecycle_policy& lifecycle_policy,
+            const dht::partition_range& pr,
+            const query::partition_slice& ps,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            mutation_reader::forwarding fwd_mr);
+    future<fill_buffer_result> fill_buffer(const dht::partition_range& pr, bool pending_next_partition, db::timeout_clock::time_point timeout);
+    future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout);
+    reader_concurrency_semaphore::inactive_read_handle inactive_read_handle() && {
+        return std::move(_irh);
+    }
+};
 
 void evictable_reader::update_next_position(flat_mutation_reader& reader, circular_buffer<mutation_fragment>& buffer) {
     if (buffer.empty()) {
