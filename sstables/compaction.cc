@@ -74,6 +74,25 @@ namespace sstables {
 
 logging::logger clogger("compaction");
 
+std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
+    static constexpr const char* suffixes[] = { " bytes", "kB", "MB", "GB", "TB", "PB" };
+
+    unsigned exp = 0;
+    while ((data._size >= 1000) && (exp < sizeof(suffixes))) {
+        exp++;
+        data._size /= 1000;
+    }
+
+    os << data._size << suffixes[exp];
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, pretty_printed_throughput tp) {
+    uint64_t throughput = tp._duration.count() > 0 ? tp._size / tp._duration.count() : 0;
+    os << pretty_printed_data_size(throughput) << "/s";
+    return os;
+}
+
 static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk) {
     auto timestamp = api::max_timestamp;
@@ -596,7 +615,6 @@ private:
         auto ratio = double(_info->end_size) / double(_info->start_size);
         auto duration = std::chrono::duration<float>(ended_at - started_at);
         // Don't report NaN or negative number.
-        auto throughput = duration.count() > 0 ? (double(_info->end_size) / (1024*1024)) / duration.count() : double{};
         sstring new_sstables_msg;
 
         on_end_of_compaction();
@@ -610,10 +628,10 @@ private:
         // - add support to merge summary (message: Partition merge counts were {%s}.).
         // - there is no easy way, currently, to know the exact number of total partitions.
         // By the time being, using estimated key count.
-        sstring formatted_msg = sprint("%ld sstables to [%s]. %ld bytes to %ld (~%d%% of original) in %dms = %.2fMB/s. " \
-            "~%ld total partitions merged to %ld.",
-            _info->sstables, new_sstables_msg, _info->start_size, _info->end_size, int(ratio * 100),
-            std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), throughput,
+        sstring formatted_msg = fmt::format("{} sstables to [{}]. {} to {} (~{} of original) in {}ms = {}. " \
+            "~{} total partitions merged to {}.",
+            _info->sstables, new_sstables_msg, pretty_printed_data_size(_info->start_size), pretty_printed_data_size(_info->end_size), int(ratio * 100),
+            std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_info->end_size, duration),
             _info->total_partitions, _info->total_keys_written);
         report_finish(formatted_msg, ended_at);
 

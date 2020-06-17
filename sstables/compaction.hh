@@ -35,6 +35,20 @@ class flat_mutation_reader;
 
 namespace sstables {
 
+    class pretty_printed_data_size {
+        uint64_t _size;
+    public:
+        pretty_printed_data_size(uint64_t size) : _size(size) {}
+        friend std::ostream& operator<<(std::ostream&, pretty_printed_data_size);
+    };
+
+    class pretty_printed_throughput {
+        uint64_t _size;
+        std::chrono::duration<float> _duration;
+    public:
+        pretty_printed_throughput(uint64_t size, std::chrono::duration<float> dur) : _size(size), _duration(std::move(dur)) {}
+        friend std::ostream& operator<<(std::ostream&, pretty_printed_throughput);
+    };
 
     struct resharding_descriptor {
         std::vector<sstables::shared_sstable> sstables;
