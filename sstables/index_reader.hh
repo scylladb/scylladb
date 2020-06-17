@@ -686,7 +686,7 @@ public:
     future<> advance_to(const dht::partition_range& range) {
         return seastar::when_all_succeed(
             advance_lower_to_start(range),
-            advance_upper_to_end(range));
+            advance_upper_to_end(range)).discard_result();
     }
 
     // Get current index entry

@@ -1248,7 +1248,7 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
     std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, shared_from_this(), _key.token())};
     future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout);
 
-    return when_all_succeed(std::move(f_cdc), std::move(f_lwt));
+    return when_all_succeed(std::move(f_cdc), std::move(f_lwt)).discard_result();
 }
 
 void paxos_response_handler::prune(utils::UUID ballot) {
@@ -2278,7 +2278,7 @@ future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consisten
     return seastar::when_all_succeed(
         mutate_counters(boost::make_iterator_range(mutations.begin(), mid), cl, tr_state, permit, timeout),
         mutate_internal(boost::make_iterator_range(mid, mutations.end()), cl, false, tr_state, permit, timeout, std::move(cdc_tracker))
-    );
+    ).discard_result();
 }
 
 future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
@@ -3506,7 +3506,7 @@ protected:
         auto want_digest = _targets.size() > 1;
         auto f_data = futurize_invoke([&] { return make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout, want_digest); });
         auto f_digest = futurize_invoke([&] { return make_digest_requests(resolver, _targets.begin() + 1, _targets.end(), timeout); });
-        return when_all_succeed(std::move(f_data), std::move(f_digest)).handle_exception([] (auto&&) { });
+        return when_all_succeed(std::move(f_data), std::move(f_digest)).discard_result().handle_exception([] (auto&&) { });
     }
     virtual void got_cl() {}
     uint32_t original_row_limit() const {
@@ -5123,7 +5123,7 @@ future<> storage_proxy::uninit_messaging_service() {
         ms.unregister_paxos_accept(),
         ms.unregister_paxos_learn(),
         ms.unregister_paxos_prune()
-    );
+    ).discard_result();
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>

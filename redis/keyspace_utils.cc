@@ -188,9 +188,7 @@ future<> create_keyspace_if_not_exists_impl(db::config& config, int default_repl
                 table_gen(ks_name, redis::SETs, sets_schema(ks_name)),
                 table_gen(ks_name, redis::HASHes, hashes_schema(ks_name)),
                 table_gen(ks_name, redis::ZSETs, zsets_schema(ks_name))
-            ).then([] {
-                return make_ready_future<>();
-            });
+            ).discard_result();
         });
     });
 }

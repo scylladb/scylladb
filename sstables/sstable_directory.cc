@@ -315,7 +315,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
                     desc.creator = std::move(creator);
 
                     return sstables::compact_sstables(std::move(desc), table).then([this, &sstlist] (sstables::compaction_info result) {
-                        return when_all_succeed(collect_output_sstables_from_resharding(std::move(result.new_sstables)), remove_input_sstables_from_resharding(sstlist));
+                        return when_all_succeed(collect_output_sstables_from_resharding(std::move(result.new_sstables)), remove_input_sstables_from_resharding(sstlist)).discard_result();
                     });
                 });
             });

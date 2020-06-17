@@ -2710,7 +2710,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
         if (!do_sync_dirs) {
             return make_ready_future<>();
         }
-        return when_all_succeed(sync_directory(old_dir), sync_directory(new_dir));
+        return when_all_succeed(sync_directory(old_dir), sync_directory(new_dir)).discard_result();
     });
 }
 

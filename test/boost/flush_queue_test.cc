@@ -161,7 +161,7 @@ static future<> test_propagation(bool propagate,
     return seastar::when_all_succeed(std::move(f1), std::move(f2)).finally([sem, queue, want_except_in_run, want_except_in_wait, xr, xw] {
         BOOST_CHECK_EQUAL(want_except_in_run, *xr);
         BOOST_CHECK_EQUAL(want_except_in_wait, *xw);
-    }).finally([queue] {
+    }).discard_result().finally([queue] {
         return queue->close().finally([queue] { });
     });
 }

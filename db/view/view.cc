@@ -1495,7 +1495,7 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     auto f = this_shard_id() == 0 ? _sys_dist_ks.start_view_build(view->ks_name(), view->cf_name()) : make_ready_future<>();
     return when_all_succeed(
             std::move(f),
-            system_keyspace::register_view_for_building(view->ks_name(), view->cf_name(), step.current_token()));
+            system_keyspace::register_view_for_building(view->ks_name(), view->cf_name(), step.current_token())).discard_result();
 }
 
 static future<> flush_base(lw_shared_ptr<column_family> base, abort_source& as) {
@@ -1581,7 +1581,9 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
         return when_all_succeed(
                     system_keyspace::remove_view_build_progress(ks_name, view_name),
                     system_keyspace::remove_built_view(ks_name, view_name),
-                    _sys_dist_ks.remove_view(ks_name, view_name)).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+                    _sys_dist_ks.remove_view(ks_name, view_name))
+                        .discard_result()
+                        .handle_exception([ks_name, view_name] (std::exception_ptr ep) {
             vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, ep);
         });
     });

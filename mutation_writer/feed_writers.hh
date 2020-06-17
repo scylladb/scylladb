@@ -34,7 +34,7 @@ future<> feed_writer(flat_mutation_reader&& rd, Writer&& wr) {
             return do_until([&rd] { return rd.is_buffer_empty() && rd.is_end_of_stream(); }, [&rd, &wr] {
                 auto f1 = rd.pop_mutation_fragment().consume(wr);
                 auto f2 = rd.is_buffer_empty() ? rd.fill_buffer(db::no_timeout) : make_ready_future<>();
-                return when_all_succeed(std::move(f1), std::move(f2));
+                return when_all_succeed(std::move(f1), std::move(f2)).discard_result();
             });
         }).finally([&wr] {
             return wr.consume_end_of_stream();

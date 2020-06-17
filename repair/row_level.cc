@@ -585,7 +585,7 @@ public:
 
     future<> wait_for_writer_done() {
         return parallel_for_each(boost::irange(unsigned(0), unsigned(_nr_peer_nodes)), [this] (unsigned node_idx) {
-            return when_all_succeed(write_end_of_stream(node_idx), do_wait_for_writer_done(node_idx));
+            return when_all_succeed(write_end_of_stream(node_idx), do_wait_for_writer_done(node_idx)).discard_result();
         }).handle_exception([this] (std::exception_ptr ep) {
             rlogger.warn("repair_writer: keyspace={}, table={}, wait_for_writer_done failed: {}",
                     _schema->ks_name(), _schema->cf_name(), ep);
@@ -735,7 +735,7 @@ public:
         auto f1 = _sink_source_for_get_full_row_hashes.close();
         auto f2 = _sink_source_for_get_row_diff.close();
         auto f3 = _sink_source_for_put_row_diff.close();
-        return when_all_succeed(std::move(gate_future), std::move(writer_future), std::move(f1), std::move(f2), std::move(f3));
+        return when_all_succeed(std::move(gate_future), std::move(writer_future), std::move(f1), std::move(f2), std::move(f3)).discard_result();
     }
 
     static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map() {
@@ -1398,7 +1398,7 @@ public:
                 (rpc::sink<repair_stream_cmd>& sink, rpc::source<repair_hash_with_cmd>& source) mutable {
             auto source_op = get_full_row_hashes_source_op(current_hashes, remote_node, node_idx, source);
             auto sink_op = get_full_row_hashes_sink_op(sink);
-            return when_all_succeed(std::move(source_op), std::move(sink_op));
+            return when_all_succeed(std::move(source_op), std::move(sink_op)).discard_result();
         }).then([this, current_hashes] () mutable {
             stats().rx_hashes_nr += current_hashes->size();
             _metrics.rx_hashes_nr += current_hashes->size();
@@ -1792,7 +1792,7 @@ public:
                                     (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
                                 auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
                                 auto sink_op = put_row_diff_sink_op(std::move(rows), sink, remote_node);
-                                return when_all_succeed(std::move(source_op), std::move(sink_op));
+                                return when_all_succeed(std::move(source_op), std::move(sink_op)).discard_result();
                             });
                         });
                     });

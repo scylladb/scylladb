@@ -406,7 +406,7 @@ future<> timestamp_based_splitting_mutation_writer::write_marker_and_tombstone(c
     if (tomb_bucket_id) {
         write_tomb_fut = write_to_bucket(*tomb_bucket_id, clustering_row(cr.key(), cr.tomb(), {}, {}));
     }
-    return when_all_succeed(std::move(write_marker_fut), std::move(write_tomb_fut));
+    return when_all_succeed(std::move(write_marker_fut), std::move(write_tomb_fut)).discard_result();
 }
 
 future<> timestamp_based_splitting_mutation_writer::consume(partition_start&& ps) {

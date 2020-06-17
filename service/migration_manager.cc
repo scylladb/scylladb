@@ -167,7 +167,7 @@ future<> migration_manager::uninit_messaging_service()
         ms.unregister_migration_request(),
         ms.unregister_definitions_update(),
         ms.unregister_schema_check()
-    );
+    ).discard_result();
 }
 
 void migration_notifier::register_listener(migration_listener* listener)

@@ -178,7 +178,7 @@ future<> service::start(::service::migration_manager& mm) {
         return create_keyspace_if_missing(mm);
     }).then([this] {
         return _role_manager->start().then([this] {
-            return when_all_succeed(_authorizer->start(), _authenticator->start());
+            return when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
         });
     }).then([this] {
         _permissions_cache = std::make_unique<permissions_cache>(_permissions_cache_config, *this, log);
@@ -199,7 +199,7 @@ future<> service::stop() {
         }
         return make_ready_future<>();
     }).then([this] {
-        return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop());
+        return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
     });
 }
 
@@ -458,7 +458,9 @@ future<> drop_role(const service& ser, std::string_view name) {
 
         return when_all_succeed(
                 a.revoke_all(name),
-                a.revoke_all(r)).handle_exception_type([](const unsupported_authorization_operation&) {
+                a.revoke_all(r))
+                    .discard_result()
+                    .handle_exception_type([](const unsupported_authorization_operation&) {
             // Nothing.
         });
     }).then([&ser, name] {
