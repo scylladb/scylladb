@@ -40,6 +40,10 @@ if __name__ == '__main__':
         sys.exit(1)
 
     memtotal = get_memtotal_gb()
+    if memtotal == 0:
+        print('memory too small: {} KB'.format(get_memtotal()))
+        sys.exit(1)
+
     # Scylla document says 'swap size should be set to either total_mem/3 or
     # 16GB - lower of the two', so we need to compare 16g vs memtotal/3 and
     # choose lower one
