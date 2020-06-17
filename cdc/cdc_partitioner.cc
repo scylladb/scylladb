@@ -40,7 +40,8 @@ static dht::token to_token(int64_t value) {
 }
 
 static dht::token to_token(bytes_view key) {
-    if (key.empty()) {
+    // Key should be 16 B long, of which first 8 B are used for token calculation
+    if (key.size() != 2*sizeof(int64_t)) {
         return dht::minimum_token();
     }
     return to_token(stream_id::token_from_bytes(key));
