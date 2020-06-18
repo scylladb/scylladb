@@ -155,6 +155,7 @@ if __name__ == '__main__':
         else:
             with open(mounts_conf, 'a') as f:
                 f.write('RequiresMountsFor={mount_at}\n'.format(mount_at=mount_at))
+        systemd_unit.reload()
 
     if is_debian_variant():
         run('update-initramfs -u')
