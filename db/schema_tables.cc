@@ -2074,7 +2074,7 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
         read_schema_partition_for_table(proxy, computed_columns(), table.keyspace_name, table.table_name),
         read_schema_partition_for_table(proxy, dropped_columns(), table.keyspace_name, table.table_name),
         read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name),
-        read_schema_partition_for_table(proxy, scylla_tables(), table.keyspace_name, table.table_name)).then(
+        read_schema_partition_for_table(proxy, scylla_tables(), table.keyspace_name, table.table_name)).then_unpack(
             [] (mutation cf_m, mutation col_m, mutation vv_col_m, mutation c_col_m, mutation dropped_m, mutation idx_m, mutation st_m) {
                 return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
             });

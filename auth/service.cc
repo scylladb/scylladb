@@ -473,7 +473,7 @@ future<> drop_role(const service& ser, std::string_view name) {
 future<bool> has_role(const service& ser, std::string_view grantee, std::string_view name) {
     return when_all_succeed(
             validate_role_exists(ser, name),
-            ser.get_roles(grantee)).then([name](role_set all_roles) {
+            ser.get_roles(grantee)).then_unpack([name](role_set all_roles) {
         return make_ready_future<bool>(all_roles.count(sstring(name)) != 0);
     });
 }

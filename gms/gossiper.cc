@@ -498,7 +498,7 @@ future<> gossiper::uninit_messaging_service_handler() {
         ms.unregister_gossip_digest_syn(),
         ms.unregister_gossip_digest_ack(),
         ms.unregister_gossip_digest_ack2()
-    ).then([this] {
+    ).then_unpack([this] {
         _ms_registered = false;
     });
 }

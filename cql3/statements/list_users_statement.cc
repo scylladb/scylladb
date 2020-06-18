@@ -90,7 +90,7 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
             return do_for_each(sorted_roles, [&as, &results](const sstring& role) {
                 return when_all_succeed(
                         as.has_superuser(role),
-                        as.underlying_role_manager().can_login(role)).then([&results, &role](bool super, bool login) {
+                        as.underlying_role_manager().can_login(role)).then_unpack([&results, &role](bool super, bool login) {
                     if (login) {
                         results->add_column_value(utf8_type->decompose(role));
                         results->add_column_value(boolean_type->decompose(super));

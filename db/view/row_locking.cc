@@ -122,7 +122,7 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
     waiting_latency.start();
     future<lock_type::holder> lock_row = exclusive ? j->second.hold_write_lock(timeout) : j->second.hold_read_lock(timeout);
     return when_all_succeed(std::move(lock_partition), std::move(lock_row))
-    .then([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] (auto lock1, auto lock2) mutable {
+    .then_unpack([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] (auto lock1, auto lock2) mutable {
         lock1.release();
         lock2.release();
         waiting_latency.stop();

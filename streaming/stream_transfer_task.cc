@@ -241,7 +241,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
             });
         }();
 
-        return when_all_succeed(std::move(source_op), std::move(sink_op)).then([got_error_from_peer, si] {
+        return when_all_succeed(std::move(source_op), std::move(sink_op)).then_unpack([got_error_from_peer, si] {
             if (*got_error_from_peer) {
                 throw std::runtime_error(format("Peer failed to process mutation_fragment peer={}, plan_id={}, cf_id={}", si->id.addr, si->plan_id, si->cf_id));
             }

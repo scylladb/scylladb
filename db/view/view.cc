@@ -1846,7 +1846,7 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
                 vlogger.info("Finished building view {}.{}", view->ks_name(), view->cf_name());
                 return seastar::when_all_succeed(
                         system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name()),
-                        builder._sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).then([view] {
+                        builder._sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).then_unpack([view] {
                     // The view is built, so shard 0 can remove the entry in the build progress system table on
                     // behalf of all shards. It is guaranteed to have a higher timestamp than the per-shard entries.
                     return system_keyspace::remove_view_build_progress_across_all_shards(view->ks_name(), view->cf_name());

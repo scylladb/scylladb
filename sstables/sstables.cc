@@ -1415,7 +1415,7 @@ future<> sstable::load(const io_priority_class& pc) {
                 return seastar::when_all_succeed(
                         read_compression(pc),
                         read_filter(pc),
-                        read_summary(pc)).then([this] {
+                        read_summary(pc)).then_unpack([this] {
                             validate_min_max_metadata();
                             validate_max_local_deletion_time();
                             validate_partitioner();
