@@ -79,6 +79,10 @@ static io_error_handler error_handler_for_upload_dir() {
     };
 }
 
+io_error_handler error_handler_gen_for_upload_dir(disk_error_signal_type& dummy) {
+    return error_handler_for_upload_dir();
+}
+
 // TODO: possibly move it to seastar
 template <typename Service, typename PtrType, typename Func>
 static future<> invoke_shards_with_ptr(std::unordered_set<shard_id> shards, distributed<Service>& s, PtrType ptr, Func&& func) {
@@ -108,87 +112,6 @@ public:
         return get();
     }
 };
-
-// checks whether or not a given column family is worth resharding by checking if any of its
-// sstables has more than one owner shard.
-static future<bool> worth_resharding(distributed<database>& db, global_column_family_ptr cf) {
-    auto has_shared_sstables = [cf] (database& db) {
-        return cf->has_shared_sstables();
-    };
-    return db.map_reduce0(has_shared_sstables, bool(false), std::logical_or<bool>());
-}
-
-static future<std::vector<sstables::shared_sstable>>
-load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ssts_info, global_column_family_ptr cf, sstring dir,
-        noncopyable_function<bool (const sstables::foreign_sstable_open_info&)> pred) {
-    return do_with(std::vector<sstables::shared_sstable>(), [ssts_info = std::move(ssts_info), cf, dir, pred = std::move(pred)] (auto& ssts) mutable {
-        return parallel_for_each(std::move(ssts_info), [&ssts, cf, dir, pred = std::move(pred)] (auto& info) mutable {
-            if (!pred(info)) {
-                return make_ready_future<>();
-            }
-            auto sst = cf->make_sstable(dir, info.generation, info.version, info.format);
-            return sst->load(std::move(info)).then([&ssts, sst] {
-                ssts.push_back(std::move(sst));
-                return make_ready_future<>();
-            });
-        }).then([&ssts] () mutable {
-            return std::move(ssts);
-        });
-    });
-}
-
-// make a set of sstables available at another shard.
-static future<> forward_sstables_to(shard_id shard, sstring directory, std::vector<sstables::shared_sstable> sstables, global_column_family_ptr cf,
-        std::function<future<> (std::vector<sstables::shared_sstable>)> func) {
-    return seastar::async([sstables = std::move(sstables), directory, shard, cf, func = std::move(func)] () mutable {
-        auto infos = boost::copy_range<std::vector<sstables::foreign_sstable_open_info>>(sstables
-            | boost::adaptors::transformed([] (auto&& sst) { return sst->get_open_info().get0(); }));
-
-        smp::submit_to(shard, [cf, func, infos = std::move(infos), directory] () mutable {
-            return load_sstables_with_open_info(std::move(infos), cf, directory, [] (auto& p) {
-                return true;
-            }).then([func] (std::vector<sstables::shared_sstable> sstables) {
-                return func(std::move(sstables));
-            });
-        }).get();
-    });
-}
-
-// Return all sstables that need resharding in the system. Only one instance of a shared sstable is returned.
-static future<std::vector<sstables::shared_sstable>> get_all_shared_sstables(distributed<database>& db, sstring sstdir, global_column_family_ptr cf) {
-    class all_shared_sstables {
-        sstring _dir;
-        global_column_family_ptr _cf;
-        std::unordered_map<int64_t, sstables::shared_sstable> _result;
-    public:
-        all_shared_sstables(const sstring& sstdir, global_column_family_ptr cf) : _dir(sstdir), _cf(cf) {}
-
-        future<> operator()(std::vector<sstables::foreign_sstable_open_info> ssts_info) {
-            return load_sstables_with_open_info(std::move(ssts_info), _cf, _dir, [this] (auto& info) {
-                // skip loading of shared sstable that is already stored in _result.
-                return !_result.count(info.generation);
-            }).then([this] (std::vector<sstables::shared_sstable> sstables) {
-                for (auto& sst : sstables) {
-                    auto gen = sst->generation();
-                    _result.emplace(gen, std::move(sst));
-                }
-                return make_ready_future<>();
-            });
-        }
-
-        std::vector<sstables::shared_sstable> get() && {
-            return boost::copy_range<std::vector<sstables::shared_sstable>>(std::move(_result) | boost::adaptors::map_values);
-        }
-    };
-
-    return db.map_reduce(all_shared_sstables(sstdir, cf), [cf, sstdir] (database& db) mutable {
-        return seastar::async([cf, sstdir] {
-            return boost::copy_range<std::vector<sstables::foreign_sstable_open_info>>(cf->sstables_need_rewrite()
-                | boost::adaptors::filtered([sstdir] (auto&& sst) { return sst->get_dir() == sstdir; })
-                | boost::adaptors::transformed([] (auto&& sst) { return sst->get_open_info().get0(); }));
-        });
-    });
-}
 
 template <typename... Args>
 static inline
@@ -343,9 +266,8 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
     }
 
     return do_with(std::move(reshard_jobs), [&dir, &db, ks_name, table_name, creator = std::move(creator), total_size] (std::vector<reshard_shard_descriptor>& reshard_jobs) {
-        auto total_size_mb = total_size / 1000000.0;
         auto start = std::chrono::steady_clock::now();
-        dblog.info("{}", fmt::format("Resharding {:.2f} MB", total_size_mb));
+        dblog.info("{}", fmt::format("Resharding {} ", sstables::pretty_printed_data_size(total_size)));
 
         return dir.invoke_on_all([&dir, &db, &reshard_jobs, ks_name, table_name, creator] (sstables::sstable_directory& d) mutable {
             auto& table = db.local().find_column_family(ks_name, table_name);
@@ -356,11 +278,9 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
             return d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop).then([&d, &dir] {
                 return d.move_foreign_sstables(dir);
             });
-        }).then([start, total_size_mb] {
-            // add a microsecond to prevent division by zero
-            auto now = std::chrono::steady_clock::now() + 1us;
-            auto seconds = std::chrono::duration_cast<std::chrono::duration<float>>(now - start).count();
-            dblog.info("{}", fmt::format("Resharded {:.2f} MB in {:.2f} seconds, {:.2f} MB/s", total_size_mb, seconds, (total_size_mb / seconds)));
+        }).then([start, total_size] {
+            auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
+            dblog.info("{}", fmt::format("Resharded {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
             return make_ready_future<>();
         });
     });
@@ -380,12 +300,99 @@ distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<d
     });
 }
 
+future<int64_t>
+highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
+    return directory.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_generation_seen), int64_t(0), [] (int64_t a, int64_t b) {
+        return std::max(a, b);
+    });
+}
+
+future<sstables::sstable::version_types>
+highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstable_version_types system_version) {
+    using version = sstables::sstable_version_types;
+    return dir.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_version_seen), system_version, [] (version a, version b) {
+        return sstables::is_later(a, b) ? a : b;
+    });
+}
+
 future<>
-distributed_loader::process_upload_dir(distributed<database>& db, sstring ks, sstring cf) {
+distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstables::reshape_mode mode,
+        sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
+
+    auto start = std::chrono::steady_clock::now();
+    return dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode] (sstables::sstable_directory& d) {
+        auto& table = db.local().find_column_family(ks_name, table_name);
+        auto& cm = table.get_compaction_manager();
+        auto& iop = service::get_local_streaming_read_priority();
+        return d.reshape(cm, table, creator, iop, mode);
+    }, uint64_t(0), std::plus<uint64_t>()).then([start] (uint64_t total_size) {
+        if (total_size > 0) {
+            auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
+            dblog.info("{}", fmt::format("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
+        }
+        return make_ready_future<>();
+    });
+}
+
+// Loads SSTables into the main directory (or staging) and returns how many were loaded
+future<size_t>
+distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sharded<database>& db,
+        sharded<db::view::view_update_generator>& view_update_generator, fs::path datadir, sstring ks, sstring cf) {
+
+    auto& table = db.local().find_column_family(ks, cf);
+
+    return do_with(dht::ring_position::max(), dht::ring_position::min(), [&table, &dir, &view_update_generator, datadir = std::move(datadir)] (dht::ring_position& min, dht::ring_position& max) {
+        return dir.do_for_each_sstable([&table, datadir = std::move(datadir), &min, &max] (sstables::shared_sstable sst) {
+            min = std::min(dht::ring_position(sst->get_first_decorated_key()), min, dht::ring_position_less_comparator(*table.schema()));
+            max = std::max(dht::ring_position(sst->get_last_decorated_key()) , max, dht::ring_position_less_comparator(*table.schema()));
+
+            auto gen = table.calculate_generation_for_new_table();
+            dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), datadir.native(), gen);
+            return sst->move_to_new_dir(datadir.native(), gen,  true).then([&table, sst] {
+                table._sstables_opened_but_not_loaded.push_back(std::move(sst));
+                return make_ready_future<>();
+            });
+        }).then([&table, &min, &max] {
+            // nothing loaded
+            if (min.is_max() && max.is_min()) {
+                return make_ready_future<>();
+            }
+
+            return table.get_row_cache().invalidate([&table] () noexcept {
+                for (auto& sst : table._sstables_opened_but_not_loaded) {
+                    try {
+                        table.load_sstable(sst, true);
+                    } catch (...) {
+                        dblog.error("Failed to load {}: {}. Aborting.", sst->toc_filename(), std::current_exception());
+                        abort();
+                    }
+                }
+            }, dht::partition_range::make({min, true}, {max, true}));
+        }).then([&view_update_generator, &table] {
+            return parallel_for_each(table._sstables_opened_but_not_loaded, [&view_update_generator, &table] (sstables::shared_sstable& sst) {
+                if (sst->requires_view_building()) {
+                    return view_update_generator.local().register_staging_sstable(sst, table.shared_from_this());
+                }
+                return make_ready_future<>();
+            });
+        }).then_wrapped([&table] (future<> f) {
+            auto opened = std::exchange(table._sstables_opened_but_not_loaded, {});
+            if (!f.failed()) {
+                return make_ready_future<size_t>(opened.size());
+            } else {
+                return make_exception_future<size_t>(f.get_exception());
+            }
+        });
+    });
+}
+
+future<>
+distributed_loader::process_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
+        distributed<db::view::view_update_generator>& view_update_generator, sstring ks, sstring cf) {
     seastar::thread_attributes attr;
     attr.sched_group = db.local().get_streaming_scheduling_group();
 
-    return seastar::async(std::move(attr), [&db, ks = std::move(ks), cf = std::move(cf)] {
+    return seastar::async(std::move(attr), [&db, &view_update_generator, &sys_dist_ks, ks = std::move(ks), cf = std::move(cf)] {
         global_column_family_ptr global_table(db, ks, cf);
 
         sharded<sstables::sstable_directory> directory;
@@ -396,7 +403,7 @@ distributed_loader::process_upload_dir(distributed<database>& db, sstring ks, ss
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
             sstables::sstable_directory::allow_loading_materialized_view::no,
             [&global_table] (fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-                return global_table->make_sstable(dir.native(), gen, v, f);
+                return global_table->make_sstable(dir.native(), gen, v, f, &error_handler_gen_for_upload_dir);
 
         }).get();
 
@@ -406,13 +413,9 @@ distributed_loader::process_upload_dir(distributed<database>& db, sstring ks, ss
 
         lock_table(directory, db, ks, cf).get();
         process_sstable_dir(directory).get();
-        auto highest_generation_seen = directory.map_reduce0(
-            std::mem_fn(&sstables::sstable_directory::highest_generation_seen),
-            int64_t(0),
-            [] (int64_t a, int64_t b) { return std::max(a, b); }
-        ).get0();
 
-        auto shard_generation_base = highest_generation_seen / smp::count + 1;
+        auto generation = highest_generation_seen(directory).get0();
+        auto shard_generation_base = generation / smp::count + 1;
 
         // We still want to do our best to keep the generation numbers shard-friendly.
         // Each destination shard will manage its own generation counter.
@@ -427,80 +430,30 @@ distributed_loader::process_upload_dir(distributed<database>& db, sstring ks, ss
 
             return global_table->make_sstable(upload.native(), gen,
                     global_table->get_sstables_manager().get_highest_supported_format(),
-                    sstables::sstable::format_types::big);
+                    sstables::sstable::format_types::big, &error_handler_gen_for_upload_dir);
         }).get();
-    });
-}
 
-// This function will iterate through upload directory in column family,
-// and will do the following for each sstable found:
-// 1) Mutate sstable level to 0.
-// 2) Check if view updates need to be generated from this sstable. If so, leave it intact for now.
-// 3) Otherwise, create hard links to its components in column family dir.
-// 4) Remove all of its components in upload directory.
-// At the end, it's expected that upload dir contains only staging sstables
-// which need to wait until view updates are generated from them.
-//
-// Return a vector containing descriptor of sstables to be loaded.
-future<std::vector<sstables::entry_descriptor>>
-distributed_loader::flush_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks, sstring ks_name, sstring cf_name) {
-    return seastar::async([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] {
-        std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
-        std::vector<sstables::entry_descriptor> flushed;
+        reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
+            auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
+            return global_table->make_sstable(upload.native(), gen,
+                  global_table->get_sstables_manager().get_highest_supported_format(),
+                  sstables::sstable::format_types::big,
+                  &error_handler_gen_for_upload_dir);
+        }).get();
 
-        auto& cf = db.local().find_column_family(ks_name, cf_name);
-        auto upload_dir = fs::path(cf._config.datadir) / "upload";
-        verify_owner_and_mode(upload_dir).get();
-        lister::scan_dir(upload_dir, { directory_entry_type::regular }, [&descriptors] (fs::path parent_dir, directory_entry de) {
-              auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
-              if (comps.component != component_type::TOC) {
-                  return make_ready_future<>();
-              }
-              descriptors.emplace(comps.generation, std::move(comps));
-              return make_ready_future<>();
-        }, &sstables::manifest_json_filter).get();
+        const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), *global_table, streaming::stream_reason::repair).get0();
 
-        flushed.reserve(descriptors.size());
-        for (auto& [generation, comps] : descriptors) {
-            auto descriptors = db.invoke_on(column_family::calculate_shard_from_sstable_generation(generation), [&sys_dist_ks, ks_name, cf_name, comps] (database& db) {
-                return seastar::async([&db, &sys_dist_ks, ks_name = std::move(ks_name), cf_name = std::move(cf_name), comps = std::move(comps)] () mutable {
-                    auto& cf = db.find_column_family(ks_name, cf_name);
-                    auto sst = cf.make_sstable(cf._config.datadir + "/upload", comps.generation, comps.version, comps.format,
-                        [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
-                    auto gen = cf.calculate_generation_for_new_table();
-
-                    sst->read_toc().get();
-                    schema_ptr s = cf.schema();
-                    if (s->is_counter() && !sst->has_scylla_component()) {
-                        sstring error = "Direct loading non-Scylla SSTables containing counters is not supported.";
-                        if (db.get_config().enable_dangerous_direct_import_of_cassandra_counters()) {
-                            dblog.info("{} But trying to continue on user's request.", error);
-                        } else {
-                            dblog.error("{} Use sstableloader instead.", error);
-                            throw std::runtime_error(fmt::format("{} Use sstableloader instead.", error));
-                        }
-                    }
-                    if (s->is_view()) {
-                        throw std::runtime_error("Loading Materialized View SSTables is not supported. Re-create the view instead.");
-                    }
-                    sst->mutate_sstable_level(0).get();
-                    const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), cf, streaming::stream_reason::repair).get0();
-                    sstring datadir = cf._config.datadir;
-                    if (use_view_update_path) {
-                        // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
-                        datadir += "/staging";
-                    }
-                    sst->create_links(datadir, gen).get();
-                    sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir()).get();
-                    comps.generation = gen;
-                    comps.sstdir = std::move(datadir);
-                    return std::move(comps);
-                });
-            }).get0();
-
-            flushed.push_back(std::move(descriptors));
+        auto datadir = upload.parent_path();
+        if (use_view_update_path) {
+            // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
+           datadir /= "staging";
         }
-        return std::vector<sstables::entry_descriptor>(std::move(flushed));
+
+        size_t loaded = directory.map_reduce0([&db, ks, cf, datadir, &view_update_generator] (sstables::sstable_directory& dir) {
+            return make_sstables_available(dir, db, view_update_generator, datadir, ks, cf);
+        }, size_t(0), std::plus<size_t>()).get0();
+
+        dblog.info("Loaded {} SSTables into {}", loaded, datadir.native());
     });
 }
 
@@ -548,205 +501,6 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
                     });
                 });
             });
-        });
-    });
-}
-
-// invokes each descriptor at its target shard, which involves forwarding sstables too.
-static future<> invoke_all_resharding_jobs(global_column_family_ptr cf, sstring directory, std::vector<sstables::resharding_descriptor> jobs,
-        std::function<future<> (std::vector<sstables::shared_sstable>, uint32_t level, uint64_t max_sstable_bytes)> func) {
-    return parallel_for_each(std::move(jobs), [cf, func, &directory] (sstables::resharding_descriptor& job) mutable {
-        return forward_sstables_to(job.reshard_at, directory, std::move(job.sstables), cf,
-                [cf, func, level = job.level, max_sstable_bytes = job.max_sstable_bytes] (auto sstables) {
-            // compaction manager ensures that only one reshard operation will run per shard.
-            auto job = [func, sstables = std::move(sstables), level, max_sstable_bytes] () mutable {
-                return func(std::move(sstables), level, max_sstable_bytes);
-            };
-            return cf->get_compaction_manager().run_resharding_job(&*cf, std::move(job));
-        });
-    });
-}
-
-static std::vector<sstables::shared_sstable> sstables_for_shard(const std::vector<sstables::shared_sstable>& sstables, shard_id shard) {
-    auto belongs_to_shard = [] (const sstables::shared_sstable& sst, unsigned shard) {
-        auto& shards = sst->get_shards_for_this_sstable();
-        return boost::range::find(shards, shard) != shards.end();
-    };
-
-    return boost::copy_range<std::vector<sstables::shared_sstable>>(sstables
-        | boost::adaptors::filtered([&] (auto& sst) { return belongs_to_shard(sst, shard); }));
-}
-
-void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sstring cf_name) {
-    assert(this_shard_id() == 0); // NOTE: should always run on shard 0!
-
-    // ensures that only one column family is resharded at a time (that's okay because
-    // actual resharding is parallelized), and that's needed to prevent the same column
-    // family from being resharded in parallel (that could happen, for example, if
-    // refresh (triggers resharding) is issued by user while resharding is going on).
-    static semaphore sem(1);
-
-    // FIXME: discarded future.
-    (void)with_semaphore(sem, 1, [&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] () mutable {
-        return seastar::async([&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] () mutable {
-            global_column_family_ptr cf(db, ks_name, cf_name);
-
-            if (!cf->get_compaction_manager().enabled()) {
-                return;
-            }
-            // fast path to detect that this column family doesn't need reshard.
-            if (!worth_resharding(db, cf).get0()) {
-                dblog.debug("Nothing to reshard for {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
-                return;
-            }
-
-            parallel_for_each(cf->_config.all_datadirs, [&db, cf] (const sstring& directory) {
-                auto candidates = get_all_shared_sstables(db, directory, cf).get0();
-                dblog.debug("{} candidates for resharding for {}.{}", candidates.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
-                auto jobs = cf->get_compaction_strategy().get_resharding_jobs(*cf, std::move(candidates));
-                dblog.debug("{} resharding jobs for {}.{}", jobs.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
-
-                return invoke_all_resharding_jobs(cf, directory, std::move(jobs), [directory, &cf] (auto sstables, auto level, auto max_sstable_bytes) {
-                    // FIXME: run it in maintenance priority.
-                    // Resharding, currently, cannot provide compaction with a snapshot of the sstable set
-                    // which spans all shards that input sstables belong to, so expiration is disabled.
-                    std::optional<sstables::sstable_set> sstable_set = std::nullopt;
-                    sstables::compaction_descriptor descriptor(sstables, std::move(sstable_set), service::get_local_compaction_priority(),
-                                                               level, max_sstable_bytes);
-                    descriptor.options = sstables::compaction_options::make_reshard();
-                    descriptor.creator = [&cf, directory] (shard_id shard) mutable {
-                        // we need generation calculated by instance of cf at requested shard,
-                        // or resource usage wouldn't be fairly distributed among shards.
-                        auto gen = smp::submit_to(shard, [&cf] () {
-                            return cf->calculate_generation_for_new_table();
-                        }).get0();
-
-                        return cf->make_sstable(directory, gen,
-                            cf->get_sstables_manager().get_highest_supported_format(),
-                            sstables::sstable::format_types::big);
-                    };
-                    auto f = sstables::compact_sstables(std::move(descriptor), *cf);
-
-                    return f.then([&cf, sstables = std::move(sstables), directory] (sstables::compaction_info info) mutable {
-                        auto new_sstables = std::move(info.new_sstables);
-                        // an input sstable may belong to shard 1 and 2 and only have data which
-                        // token belongs to shard 1. That means resharding will only create a
-                        // sstable for shard 1, but both shards opened the sstable. So our code
-                        // below should ask both shards to remove the resharded table, or it
-                        // wouldn't be deleted by our deletion manager, and resharding would be
-                        // triggered again in the subsequent boot.
-                        return parallel_for_each(boost::irange(0u, smp::count), [&cf, directory, sstables, new_sstables] (auto shard) {
-                            auto old_sstables_for_shard = sstables_for_shard(sstables, shard);
-                            // nothing to do if no input sstable belongs to this shard.
-                            if (old_sstables_for_shard.empty()) {
-                                return make_ready_future<>();
-                            }
-                            auto new_sstables_for_shard = sstables_for_shard(new_sstables, shard);
-                            // sanity checks
-                            for (auto& sst : new_sstables_for_shard) {
-                                auto& shards = sst->get_shards_for_this_sstable();
-                                if (shards.size() != 1) {
-                                    throw std::runtime_error(format("resharded sstable {} doesn't belong to only one shard", sst->get_filename()));
-                                }
-                                if (shards.front() != shard) {
-                                    throw std::runtime_error(format("resharded sstable {} should belong to shard {:d}", sst->get_filename(), shard));
-                                }
-                            }
-
-                            std::unordered_set<uint64_t> ancestors;
-                            boost::range::transform(old_sstables_for_shard, std::inserter(ancestors, ancestors.end()),
-                                std::mem_fn(&sstables::sstable::generation));
-
-                            if (new_sstables_for_shard.empty()) {
-                                // handles case where sstable needing rewrite doesn't produce any sstable
-                                // for a shard it belongs to when resharded (the reason is explained above).
-                                return smp::submit_to(shard, [cf, ancestors = std::move(ancestors)] () mutable {
-                                    return cf->remove_ancestors_needed_rewrite(ancestors);
-                                });
-                            } else {
-                                return forward_sstables_to(shard, directory, new_sstables_for_shard, cf, [cf, ancestors = std::move(ancestors)] (std::vector<sstables::shared_sstable> sstables) mutable {
-                                    return cf->replace_ancestors_needed_rewrite(std::move(ancestors), std::move(sstables));
-                                });
-                            }
-                        }).then([&cf, sstables] {
-                            // schedule deletion of shared sstables after we're certain that new unshared ones were successfully forwarded to respective shards.
-                            (void)sstables::delete_atomically(sstables).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
-                                try {
-                                    std::rethrow_exception(eptr);
-                                } catch (...) {
-                                    dblog.warn("Exception in resharding when deleting sstable file: {}", eptr);
-                                }
-                            }).then([cf, sstables = std::move(sstables)] {
-                                // Refresh cache's snapshot of shards involved in resharding to prevent the cache from
-                                // holding reference to deleted files which results in disk space not being released.
-                                std::unordered_set<shard_id> owner_shards;
-                                for (auto& sst : sstables) {
-                                    const auto& shards = sst->get_shards_for_this_sstable();
-                                    owner_shards.insert(shards.begin(), shards.end());
-                                    if (owner_shards.size() == smp::count) {
-                                        break;
-                                    }
-                                }
-                                return parallel_for_each(std::move(owner_shards), [cf] (shard_id shard) {
-                                    return smp::submit_to(shard, [cf] () mutable {
-                                        cf->_cache.refresh_snapshot();
-                                    });
-                                });
-                            });
-                        });
-                    });
-                });
-            }).get();
-        });
-    });
-}
-
-future<> distributed_loader::load_new_sstables(distributed<database>& db, distributed<db::view::view_update_generator>& view_update_generator,
-        sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables) {
-    return parallel_for_each(new_tables, [&] (auto comps) {
-        auto cf_sstable_open = [comps] (column_family& cf, sstables::foreign_sstable_open_info info) {
-            auto f = cf.open_sstable(std::move(info), comps.sstdir, comps.generation, comps.version, comps.format);
-            return f.then([&cf] (sstables::shared_sstable sst) mutable {
-                if (sst) {
-                    cf._sstables_opened_but_not_loaded.push_back(sst);
-                }
-                return make_ready_future<>();
-            });
-        };
-        return distributed_loader::open_sstable(db, comps, cf_sstable_open, service::get_local_compaction_priority())
-            .handle_exception([comps, ks, cf] (std::exception_ptr ep) {
-                auto name = sstables::sstable::filename(comps.sstdir, ks, cf, comps.version, comps.generation, comps.format, sstables::component_type::TOC);
-                dblog.error("Failed to open {}: {}", name, ep);
-                return make_exception_future<>(ep);
-            });
-    }).then([&db, &view_update_generator, ks, cf] {
-        return db.invoke_on_all([&view_update_generator, ks = std::move(ks), cfname = std::move(cf)] (database& db) {
-            auto& cf = db.find_column_family(ks, cfname);
-            return cf.get_row_cache().invalidate([&view_update_generator, &cf] () noexcept {
-                // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
-                // atomically load all opened sstables into column family.
-                for (auto& sst : cf._sstables_opened_but_not_loaded) {
-                    try {
-                        cf.load_sstable(sst, true);
-                    } catch(...) {
-                        dblog.error("Failed to load {}: {}. Aborting.", sst->toc_filename(), std::current_exception());
-                        abort();
-                    }
-                    if (sst->requires_view_building()) {
-                        // FIXME: discarded future.
-                        (void)view_update_generator.local().register_staging_sstable(sst, cf.shared_from_this());
-                    }
-                }
-                cf._sstables_opened_but_not_loaded.clear();
-                cf.trigger_compaction();
-            });
-        });
-    }).handle_exception([&db, ks, cf] (std::exception_ptr ep) {
-        return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
-            auto& cf = db.find_column_family(ks, cfname);
-            cf._sstables_opened_but_not_loaded.clear();
-        }).then([ep] {
-            return make_exception_future<>(ep);
         });
     });
 }
@@ -872,105 +626,71 @@ future<> distributed_loader::handle_sstables_pending_delete(sstring pending_dele
     });
 }
 
-future<> distributed_loader::do_populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf) {
-    // We can catch most errors when we try to load an sstable. But if the TOC
-    // file is the one missing, we won't try to load the sstable at all. This
-    // case is still an invalid case, but it is way easier for us to treat it
-    // by waiting for all files to be loaded, and then checking if we saw a
-    // file during scan_dir, without its corresponding TOC.
-    enum class component_status {
-        has_some_file,
-        has_toc_file,
-        has_temporary_toc_file,
-    };
-
-    struct sstable_descriptor {
-        component_status status;
-        sstables::sstable::version_types version;
-        sstables::sstable::format_types format;
-    };
-
-    auto verifier = make_lw_shared<std::unordered_map<unsigned long, sstable_descriptor>>();
-
-    return do_with(std::vector<future<>>(), [&db, sstdir = std::move(sstdir), verifier, ks, cf] (std::vector<future<>>& futures) {
-        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, verifier, &futures] (fs::path sstdir, directory_entry de) {
-            // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-
-            // push future returned by probe_file into an array of futures,
-            // so that the supplied callback will not block scan_dir() from
-            // reading the next entry in the directory.
-            auto f = distributed_loader::probe_file(db, sstdir.native(), de.name).then([verifier, sstdir, de] (auto entry) {
-                if (entry.component == component_type::TemporaryStatistics) {
-                    return remove_file(sstables::sstable::filename(sstdir.native(), entry.ks, entry.cf, entry.version, entry.generation,
-                        entry.format, component_type::TemporaryStatistics));
-                }
-
-                if (verifier->count(entry.generation)) {
-                    if (verifier->at(entry.generation).status == component_status::has_toc_file) {
-                        fs::path file_path(sstdir / de.name);
-                        if (entry.component == component_type::TOC) {
-                            throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed", file_path.native());
-                        } else if (entry.component == component_type::TemporaryTOC) {
-                            throw sstables::malformed_sstable_exception("Invalid State encountered. Temporary TOC file found after TOC file was processed", file_path.native());
-                        }
-                    } else if (entry.component == component_type::TOC) {
-                        verifier->at(entry.generation).status = component_status::has_toc_file;
-                    } else if (entry.component == component_type::TemporaryTOC) {
-                        verifier->at(entry.generation).status = component_status::has_temporary_toc_file;
-                    }
-                } else {
-                    if (entry.component == component_type::TOC) {
-                        verifier->emplace(entry.generation, sstable_descriptor{component_status::has_toc_file, entry.version, entry.format});
-                    } else if (entry.component == component_type::TemporaryTOC) {
-                        verifier->emplace(entry.generation, sstable_descriptor{component_status::has_temporary_toc_file, entry.version, entry.format});
-                    } else {
-                        verifier->emplace(entry.generation, sstable_descriptor{component_status::has_some_file, entry.version, entry.format});
-                    }
-                }
-                return make_ready_future<>();
-            });
-
-            futures.push_back(std::move(f));
-
-            return make_ready_future<>();
-        }, &sstables::manifest_json_filter).then([&futures] {
-            return execute_futures(futures);
-        }).then([verifier, sstdir, ks = std::move(ks), cf = std::move(cf)] {
-            return do_for_each(*verifier, [sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), verifier] (auto v) {
-                if (v.second.status == component_status::has_temporary_toc_file) {
-                    unsigned long gen = v.first;
-                    sstables::sstable::version_types version = v.second.version;
-                    sstables::sstable::format_types format = v.second.format;
-
-                    if (this_shard_id() != 0) {
-                        dblog.debug("At directory: {}, partial SSTable with generation {} not relevant for this shard, ignoring", sstdir, v.first);
-                        return make_ready_future<>();
-                    }
-                    // shard 0 is the responsible for removing a partial sstable.
-                    return sstables::sstable::remove_sstable_with_temp_toc(ks, cf, sstdir, gen, version, format);
-                } else if (v.second.status != component_status::has_toc_file) {
-                    throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable with generation {:d}!. Refusing to boot", sstdir, v.first));
-                }
-                return make_ready_future<>();
-            });
-        });
-    });
-
-}
-
 future<> distributed_loader::populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf) {
     return async([&db, sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf)] {
+        assert(this_shard_id() == 0);
         // First pass, cleanup temporary sstable directories and sstables pending delete.
-        if (this_shard_id() == 0) {
-            cleanup_column_family_temp_sst_dirs(sstdir).get();
-            auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();
-            auto exists = file_exists(pending_delete_dir).get0();
-            if (exists) {
-                handle_sstables_pending_delete(pending_delete_dir).get();
-            }
+        cleanup_column_family_temp_sst_dirs(sstdir).get();
+        auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();
+        auto exists = file_exists(pending_delete_dir).get0();
+        if (exists) {
+            handle_sstables_pending_delete(pending_delete_dir).get();
         }
-        // Second pass, cleanup sstables with temporary TOCs and load the rest.
-        do_populate_column_family(db, std::move(sstdir), std::move(ks), std::move(cf)).get();
+
+        global_column_family_ptr global_table(db, ks, cf);
+
+        sharded<sstables::sstable_directory> directory;
+        directory.start(fs::path(sstdir), db.local().get_config().initial_sstable_loading_concurrency(),
+            sstables::sstable_directory::need_mutate_level::yes,
+            sstables::sstable_directory::lack_of_toc_fatal::yes,
+            sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
+            sstables::sstable_directory::allow_loading_materialized_view::yes,
+            [&global_table] (fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
+                return global_table->make_sstable(dir.native(), gen, v, f);
+        }).get();
+
+        auto stop = defer([&directory] {
+            directory.stop().get();
+        });
+
+        lock_table(directory, db, ks, cf).get();
+        process_sstable_dir(directory).get();
+
+        // If we are resharding system tables before we can read them, we will not
+        // know which is the highest format we support: this information is itself stored
+        // in the system tables. In that case we'll rely on what we find on disk: we'll
+        // at least not downgrade any files. If we already know that we support a higher
+        // format than the one we see then we use that.
+        auto sys_format = global_table->get_sstables_manager().get_highest_supported_format();
+        auto sst_version = highest_version_seen(directory, sys_format).get0();
+        auto generation = highest_generation_seen(directory).get0();
+
+        db.invoke_on_all([&global_table, generation] (database& db) {
+            global_table->update_sstables_known_generation(generation);
+            global_table->disable_auto_compaction();
+            return make_ready_future<>();
+        }).get();
+
+        reshard(directory, db, ks, cf, [&global_table, sstdir, sst_version] (shard_id shard) mutable {
+            auto gen = smp::submit_to(shard, [&global_table] () {
+                return global_table->calculate_generation_for_new_table();
+            }).get0();
+
+            return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
+        }).get();
+
+        // The node is offline at this point so we are very lenient with what we consider
+        // offstrategy.
+        reshape(directory, db, sstables::reshape_mode::relaxed, ks, cf, [global_table, sstdir, sst_version] (shard_id shard) {
+            auto gen = global_table->calculate_generation_for_new_table();
+            return global_table->make_sstable(sstdir, gen, sst_version, sstables::sstable::format_types::big);
+        }).get();
+
+        directory.invoke_on_all([global_table] (sstables::sstable_directory& dir) {
+            return dir.do_for_each_sstable([&global_table] (sstables::shared_sstable sst) {
+                return global_table->add_sstable_and_update_cache(sst);
+            });
+        }).get();
     });
 }
 

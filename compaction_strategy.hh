@@ -23,6 +23,7 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <seastar/core/file.hh>
 
 #include "schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
@@ -61,8 +62,6 @@ public:
     compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<shared_sstable> candidates);
 
     compaction_descriptor get_major_compaction_job(column_family& cf, std::vector<shared_sstable> candidates);
-
-    std::vector<resharding_descriptor> get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates);
 
     // Some strategies may look at the compacted and resulting sstables to
     // get some useful information for subsequent compactions.
@@ -135,6 +134,20 @@ public:
 
     // Returns whether or not interposer consumer is used by a given strategy.
     bool use_interposer_consumer() const;
+
+    // Informs the caller (usually the compaction manager) about what would it take for this set of
+    // SSTables closer to becoming in-strategy. If this returns an empty compaction descriptor, this
+    // means that the sstable set is already in-strategy.
+    //
+    // The caller can specify one of two modes: strict or relaxed. In relaxed mode the tolerance for
+    // what is considered offstrategy is higher. It can be used, for instance, for when the system
+    // is restarting and previous compactions were likely in-flight. In strict mode, we are less
+    // tolerant to invariant breakages.
+    //
+    // The caller should also pass a maximum number of SSTables which is the maximum amount of
+    // SSTables that can be added into a single job.
+    compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode);
+
 };
 
 // Creates a compaction_strategy object from one of the strategies available.

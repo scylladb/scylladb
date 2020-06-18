@@ -101,7 +101,7 @@ private:
 
     // SSTables that are unshared and belong to this shard. They are already stored as an
     // SSTable object.
-    utils::chunked_vector<sstables::shared_sstable> _unshared_local_sstables;
+    std::vector<sstables::shared_sstable> _unshared_local_sstables;
 
     // SSTables that are unshared and belong to foreign shards. Because they are more conveniently
     // stored as a foreign_sstable_open_info object, they are in a different attribute separate from the
@@ -121,6 +121,9 @@ private:
     void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
     future<> remove_input_sstables_from_resharding(const std::vector<sstables::shared_sstable>& sstlist);
     future<> collect_output_sstables_from_resharding(std::vector<sstables::shared_sstable> resharded_sstables);
+
+    future<> remove_input_sstables_from_reshaping(std::vector<sstables::shared_sstable> sstlist);
+    future<> collect_output_sstables_from_reshaping(std::vector<sstables::shared_sstable> reshaped_sstables);
 
     template <typename Container, typename Func>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
@@ -173,6 +176,12 @@ public:
     future<> reshard(sstable_info_vector info, compaction_manager& cm, table& table,
                      unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator,
                      const ::io_priority_class& iop);
+
+    // reshapes a collection of SSTables, and returns the total amount of bytes reshaped.
+    future<uint64_t> reshape(compaction_manager& cm, table& table,
+                     sstables::compaction_sstable_creator_fn creator,
+                     const ::io_priority_class& iop,
+                     sstables::reshape_mode mode);
 
     // Store a phased operation. Usually used to keep an object alive while the directory is being
     // processed. One example is preventing table drops concurrent to the processing of this

@@ -208,4 +208,25 @@ size_tiered_compaction_strategy::most_interesting_bucket(const std::vector<sstab
     return most_interesting;
 }
 
+compaction_descriptor
+size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode)
+{
+    size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
+    size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
+
+    if (mode == reshape_mode::relaxed) {
+        offstrategy_threshold = max_sstables;
+    }
+
+    for (auto& bucket : get_buckets(input)) {
+        if (bucket.size() >= offstrategy_threshold) {
+            bucket.resize(std::min(max_sstables, bucket.size()));
+            compaction_descriptor desc(std::move(bucket), std::optional<sstables::sstable_set>(), iop);
+            desc.options = compaction_options::make_reshape();
+        }
+    }
+
+    return compaction_descriptor();
+}
+
 }

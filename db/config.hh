@@ -304,6 +304,7 @@ public:
     named_value<uint32_t> max_partition_key_restrictions_per_query;
     named_value<uint32_t> max_clustering_key_restrictions_per_query;
     named_value<uint64_t> max_memory_for_unlimited_query;
+    named_value<unsigned> initial_sstable_loading_concurrency;
     named_value<bool> enable_3_1_0_compatibility_mode;
     named_value<bool> enable_user_defined_functions;
     named_value<unsigned> user_defined_function_time_limit_ms;

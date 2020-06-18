@@ -76,39 +76,6 @@ compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(colu
                                  sst->get_sstable_level(), _max_sstable_size_in_mb*1024*1024);
 }
 
-std::vector<resharding_descriptor> leveled_compaction_strategy::get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates) {
-    leveled_manifest manifest = leveled_manifest::create(cf, candidates, _max_sstable_size_in_mb, _stcs_options);
-
-    std::vector<resharding_descriptor> descriptors;
-    shard_id target_shard = 0;
-    auto get_shard = [&target_shard] { return target_shard++ % smp::count; };
-
-    // Basically, we'll iterate through all levels, and for each, we'll sort the
-    // sstables by first key because there's a need to reshard together adjacent
-    // sstables.
-    // The shard at which the job will run is chosen in a round-robin fashion.
-    for (auto level = 0U; level <= manifest.get_level_count(); level++) {
-        uint64_t max_sstable_size = !level ? std::numeric_limits<uint64_t>::max() : (_max_sstable_size_in_mb*1024*1024);
-        auto& sstables = manifest.get_level(level);
-        boost::sort(sstables, [] (auto& i, auto& j) {
-            return i->compare_by_first_key(*j) < 0;
-        });
-
-        resharding_descriptor current_descriptor = resharding_descriptor{{}, max_sstable_size, get_shard(), level};
-
-        for (auto it = sstables.begin(); it != sstables.end(); it++) {
-            current_descriptor.sstables.push_back(*it);
-
-            auto next = std::next(it);
-            if (current_descriptor.sstables.size() == smp::count || next == sstables.end()) {
-                descriptors.push_back(std::move(current_descriptor));
-                current_descriptor = resharding_descriptor{{}, max_sstable_size, get_shard(), level};
-            }
-        }
-    }
-    return descriptors;
-}
-
 void leveled_compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
     if (removed.empty() || added.empty()) {
         return;
@@ -169,6 +136,71 @@ int64_t leveled_compaction_strategy::estimated_pending_compactions(column_family
     }
     leveled_manifest manifest = leveled_manifest::create(cf, sstables, _max_sstable_size_in_mb, _stcs_options);
     return manifest.get_estimated_tasks();
+}
+
+compaction_descriptor
+leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+    std::array<std::vector<shared_sstable>, leveled_manifest::MAX_LEVELS> level_info;
+
+    auto is_disjoint = [this, schema] (const std::vector<shared_sstable>& sstables, unsigned tolerance) {
+        unsigned disjoint_sstables = 0;
+        auto prev_last = dht::ring_position::min();
+        for (auto& sst : sstables) {
+            if (dht::ring_position(sst->get_first_decorated_key()).less_compare(*schema, prev_last)) {
+                disjoint_sstables++;
+            }
+            prev_last = dht::ring_position(sst->get_last_decorated_key());
+        }
+        return disjoint_sstables > tolerance;
+    };
+
+    for (auto& sst : input) {
+        auto sst_level = sst->get_sstable_level();
+        if (sst_level > leveled_manifest::MAX_LEVELS) {
+            leveled_manifest::logger.warn("Found SSTable with level {}, higher than the maximum {}. This is unexpected, but will fix", sst_level, leveled_manifest::MAX_LEVELS);
+
+            // This is really unexpected, so we'll just compact it all to fix it
+            compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, leveled_manifest::MAX_LEVELS - 1, _max_sstable_size_in_mb * 1024 * 1024);
+            desc.options = compaction_options::make_reshape();
+            return desc;
+        }
+        level_info[sst_level].push_back(sst);
+    }
+
+    for (auto& level : level_info) {
+        std::sort(level.begin(), level.end(), [this, schema] (shared_sstable a, shared_sstable b) {
+            return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
+        });
+    }
+
+    unsigned max_filled_level = 0;
+
+    size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
+    size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
+    unsigned tolerance = mode == reshape_mode::strict ? 0 : leveled_manifest::leveled_fan_out * 2;
+
+    if (level_info[0].size() > offstrategy_threshold) {
+        level_info[0].resize(std::min(level_info[0].size(), max_sstables));
+        compaction_descriptor desc(std::move(level_info[0]), std::optional<sstables::sstable_set>(), iop);
+        desc.options = compaction_options::make_reshape();
+        return desc;
+    }
+
+    for (unsigned level = 1; level < leveled_manifest::MAX_LEVELS; ++level) {
+        if (level_info[level].empty()) {
+            continue;
+        }
+        max_filled_level = std::max(max_filled_level, level);
+
+        if (!is_disjoint(level_info[level], tolerance)) {
+            // Unfortunately no good limit to limit input size to max_sstables for LCS major
+            compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, max_filled_level, _max_sstable_size_in_mb * 1024 * 1024);
+            desc.options = compaction_options::make_reshape();
+            return desc;
+        }
+    }
+
+   return compaction_descriptor();
 }
 
 }

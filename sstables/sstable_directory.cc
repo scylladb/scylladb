@@ -26,6 +26,7 @@
 #include "log.hh"
 #include "sstable_directory.hh"
 #include "lister.hh"
+#include "database.hh"
 
 static logging::logger dirlog("sstable_directory");
 
@@ -187,7 +188,7 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop) {
                 return std::max<int64_t>(a, b);
             });
 
-            dirlog.debug("{} After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
+            dirlog.debug("After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
                     _sstable_dir, _max_generation_seen, state.descriptors.size(), state.generations_found.size());
 
             // _descriptors is everything with a TOC. So after we remove this, what's left is
@@ -232,7 +233,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
         }
         // Should be empty, since an SSTable that belongs to this shard is not remote.
         assert(shard_id != this_shard_id());
-        dirlog.debug("{} Moving {} unshared SSTables to shard {} ", info_vec.size(), shard_id);
+        dirlog.debug("Moving {} unshared SSTables to shard {} ", info_vec.size(), shard_id);
         return source_directory.invoke_on(shard_id, &sstables::sstable_directory::load_foreign_sstables, std::move(info_vec));
     });
 }
@@ -279,6 +280,83 @@ sstable_directory::collect_output_sstables_from_resharding(std::vector<sstables:
 }
 
 future<>
+sstable_directory::remove_input_sstables_from_reshaping(std::vector<sstables::shared_sstable> sstlist) {
+    // When removing input sstables from reshaping: Those SSTables used to be in the unshared local
+    // list. So not only do we have to remove them, we also have to update the list. Because we're
+    // dealing with a vector it's easier to just reconstruct the list.
+    dirlog.debug("Removing {} reshaped SSTables", sstlist.size());
+    return do_with(std::move(sstlist), std::unordered_set<sstables::shared_sstable>(),
+            [this] (std::vector<sstables::shared_sstable>& sstlist, std::unordered_set<sstables::shared_sstable>& exclude) {
+
+        for (auto& sst : sstlist) {
+            exclude.insert(sst);
+        }
+
+        auto old = std::exchange(_unshared_local_sstables, {});
+
+        for (auto& sst : old) {
+            if (!exclude.count(sst)) {
+                _unshared_local_sstables.push_back(sst);
+            }
+        }
+
+        // Do this last for exception safety. If there is an exception on unlink we
+        // want to at least leave the SSTable unshared list in a sane state.
+        return parallel_for_each(std::move(sstlist), [] (sstables::shared_sstable sst) {
+            return sst->unlink();
+        }).then([] {
+            fmt::print("Finished removing all SSTables\n");
+        });
+    });
+}
+
+
+future<>
+sstable_directory::collect_output_sstables_from_reshaping(std::vector<sstables::shared_sstable> reshaped_sstables) {
+    dirlog.debug("Collecting {} reshaped SSTables", reshaped_sstables.size());
+    return parallel_for_each(std::move(reshaped_sstables), [this] (sstables::shared_sstable sst) {
+        _unshared_local_sstables.push_back(std::move(sst));
+        return make_ready_future<>();
+    });
+}
+
+future<uint64_t> sstable_directory::reshape(compaction_manager& cm, table& table, sstables::compaction_sstable_creator_fn creator, const ::io_priority_class& iop, sstables::reshape_mode mode)
+{
+    return do_with(uint64_t(0), [this, &cm, &table, creator = std::move(creator), iop, mode] (uint64_t & reshaped_size) mutable {
+        return repeat([this, &cm, &table, creator = std::move(creator), iop, &reshaped_size, mode] () mutable {
+            auto desc = table.get_compaction_strategy().get_reshaping_job(_unshared_local_sstables, table.schema(), iop, mode);
+            if (desc.sstables.empty()) {
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }
+
+            if (!reshaped_size) {
+                dirlog.info("Found SSTables that need reshape. Starting reshape process");
+            }
+
+            std::vector<sstables::shared_sstable> sstlist;
+            for (auto& sst : desc.sstables) {
+                reshaped_size += sst->data_size();
+                sstlist.push_back(sst);
+            }
+
+            desc.creator = creator;
+
+            return cm.run_custom_job(&table, "reshape", [this, &table, sstlist = std::move(sstlist), desc = std::move(desc)] () mutable {
+                return sstables::compact_sstables(std::move(desc), table).then([this, sstlist = std::move(sstlist)] (sstables::compaction_info result) mutable {
+                    return remove_input_sstables_from_reshaping(std::move(sstlist)).then([this, new_sstables = std::move(result.new_sstables)] () mutable {
+                        return collect_output_sstables_from_reshaping(std::move(new_sstables));
+                    });
+                });
+            }).then([] {
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            });
+        }).then([&reshaped_size] {
+            return make_ready_future<uint64_t>(reshaped_size);
+        });
+    });
+}
+
+future<>
 sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& cm, table& table,
                            unsigned max_sstables_per_job, sstables::compaction_sstable_creator_fn creator, const ::io_priority_class& iop)
 {
@@ -309,7 +387,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
             // parallel_for_each so the statistics about pending jobs are updated to reflect all
             // jobs. But only one will run in parallel at a time
             return parallel_for_each(buckets, [this, iop, &cm, &table, creator = std::move(creator)] (std::vector<sstables::shared_sstable>& sstlist) mutable {
-                return cm.run_resharding_job(&table, [this, iop, &cm, &table, creator, &sstlist] () {
+                return cm.run_custom_job(&table, "resharding", [this, iop, &cm, &table, creator, &sstlist] () {
                     sstables::compaction_descriptor desc(sstlist, {}, iop);
                     desc.options = sstables::compaction_options::make_reshard();
                     desc.creator = std::move(creator);

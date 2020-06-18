@@ -35,12 +35,19 @@ class flat_mutation_reader;
 
 namespace sstables {
 
+    class pretty_printed_data_size {
+        uint64_t _size;
+    public:
+        pretty_printed_data_size(uint64_t size) : _size(size) {}
+        friend std::ostream& operator<<(std::ostream&, pretty_printed_data_size);
+    };
 
-    struct resharding_descriptor {
-        std::vector<sstables::shared_sstable> sstables;
-        uint64_t max_sstable_bytes;
-        shard_id reshard_at;
-        uint32_t level;
+    class pretty_printed_throughput {
+        uint64_t _size;
+        std::chrono::duration<float> _duration;
+    public:
+        pretty_printed_throughput(uint64_t size, std::chrono::duration<float> dur) : _size(size), _duration(std::move(dur)) {}
+        friend std::ostream& operator<<(std::ostream&, pretty_printed_throughput);
     };
 
     static inline sstring compaction_name(compaction_type type) {
@@ -59,6 +66,8 @@ namespace sstables {
             return "RESHARD";
         case compaction_type::Upgrade:
             return "UPGRADE";
+        case compaction_type::Reshape:
+            return "RESHAPE";
         default:
             throw std::runtime_error("Invalid Compaction Type");
         }

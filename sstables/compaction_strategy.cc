@@ -460,25 +460,17 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& s
     return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
 }
 
-std::vector<resharding_descriptor>
-compaction_strategy_impl::get_resharding_jobs(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
-    std::vector<resharding_descriptor> jobs;
-    shard_id reshard_at_current = 0;
-
-    clogger.debug("Trying to get resharding jobs for {}.{}...", cf.schema()->ks_name(), cf.schema()->cf_name());
-    for (auto& candidate : candidates) {
-        auto level = candidate->get_sstable_level();
-        jobs.push_back(resharding_descriptor{{std::move(candidate)}, std::numeric_limits<uint64_t>::max(), reshard_at_current++ % smp::count, level});
-    }
-    return jobs;
-}
-
 uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
     return partition_estimate;
 }
 
 reader_consumer compaction_strategy_impl::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer end_consumer) {
     return end_consumer;
+}
+
+compaction_descriptor
+compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+    return compaction_descriptor();
 }
 
 } // namespace sstables
@@ -980,10 +972,6 @@ compaction_descriptor compaction_strategy::get_major_compaction_job(column_famil
     return _compaction_strategy_impl->get_major_compaction_job(cf, std::move(candidates));
 }
 
-std::vector<resharding_descriptor> compaction_strategy::get_resharding_jobs(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
-    return _compaction_strategy_impl->get_resharding_jobs(cf, std::move(candidates));
-}
-
 void compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
     _compaction_strategy_impl->notify_completion(removed, added);
 }
@@ -1010,6 +998,11 @@ compaction_strategy::make_sstable_set(schema_ptr schema) const {
 
 compaction_backlog_tracker& compaction_strategy::get_backlog_tracker() {
     return _compaction_strategy_impl->get_backlog_tracker();
+}
+
+sstables::compaction_descriptor
+compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+    return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, iop, mode);
 }
 
 uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {

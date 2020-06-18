@@ -32,4 +32,5 @@ enum class compaction_strategy_type {
     time_window,
 };
 
+enum class reshape_mode { strict, relaxed };
 }

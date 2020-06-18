@@ -74,6 +74,25 @@ namespace sstables {
 
 logging::logger clogger("compaction");
 
+std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
+    static constexpr const char* suffixes[] = { " bytes", "kB", "MB", "GB", "TB", "PB" };
+
+    unsigned exp = 0;
+    while ((data._size >= 1000) && (exp < sizeof(suffixes))) {
+        exp++;
+        data._size /= 1000;
+    }
+
+    os << data._size << suffixes[exp];
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, pretty_printed_throughput tp) {
+    uint64_t throughput = tp._duration.count() > 0 ? tp._size / tp._duration.count() : 0;
+    os << pretty_printed_data_size(throughput) << "/s";
+    return os;
+}
+
 static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk) {
     auto timestamp = api::max_timestamp;
@@ -371,34 +390,6 @@ public:
     }
 };
 
-// Resharding doesn't really belong into any strategy, because it is not worried about laying out
-// SSTables according to any strategy-specific criteria.  So we will just make it proportional to
-// the amount of data we still have to reshard.
-//
-// Although at first it may seem like we could improve this by tracking the ongoing reshard as well
-// and reducing the backlog as we compact, that is not really true. Resharding is not really
-// expected to get rid of data and it is usually just splitting data among shards. Whichever backlog
-// we get rid of by tracking the compaction will come back as a big spike as we add this SSTable
-// back to their rightful shard owners.
-//
-// So because the data is supposed to be constant, we will just add the total amount of data as the
-// backlog.
-class resharding_backlog_tracker final : public compaction_backlog_tracker::impl {
-    uint64_t _total_bytes = 0;
-public:
-    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
-        return _total_bytes;
-    }
-
-    virtual void add_sstable(sstables::shared_sstable sst)  override {
-        _total_bytes += sst->data_size();
-    }
-
-    virtual void remove_sstable(sstables::shared_sstable sst)  override {
-        _total_bytes -= sst->data_size();
-    }
-};
-
 class compaction {
 protected:
     column_family& _cf;
@@ -583,15 +574,19 @@ private:
         return consumer(make_sstable_reader());
     }
 
-    virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) = 0;
-    virtual bool use_interposer_consumer() const = 0;
+    virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) {
+        return _cf.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
+    }
+
+    virtual bool use_interposer_consumer() const {
+        return _cf.get_compaction_strategy().use_interposer_consumer();
+    }
 
     compaction_info finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
         _info->ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(ended_at.time_since_epoch()).count();
         auto ratio = double(_info->end_size) / double(_info->start_size);
         auto duration = std::chrono::duration<float>(ended_at - started_at);
         // Don't report NaN or negative number.
-        auto throughput = duration.count() > 0 ? (double(_info->end_size) / (1024*1024)) / duration.count() : double{};
         sstring new_sstables_msg;
 
         on_end_of_compaction();
@@ -605,10 +600,10 @@ private:
         // - add support to merge summary (message: Partition merge counts were {%s}.).
         // - there is no easy way, currently, to know the exact number of total partitions.
         // By the time being, using estimated key count.
-        sstring formatted_msg = sprint("%ld sstables to [%s]. %ld bytes to %ld (~%d%% of original) in %dms = %.2fMB/s. " \
-            "~%ld total partitions merged to %ld.",
-            _info->sstables, new_sstables_msg, _info->start_size, _info->end_size, int(ratio * 100),
-            std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), throughput,
+        sstring formatted_msg = fmt::format("{} sstables to [{}]. {} to {} (~{} of original) in {}ms = {}. " \
+            "~{} total partitions merged to {}.",
+            _info->sstables, new_sstables_msg, pretty_printed_data_size(_info->start_size), pretty_printed_data_size(_info->end_size), int(ratio * 100),
+            std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_info->end_size, duration),
             _info->total_partitions, _info->total_keys_written);
         report_finish(formatted_msg, ended_at);
 
@@ -621,7 +616,7 @@ private:
 
     virtual void report_start(const sstring& formatted_msg) const = 0;
     virtual void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const = 0;
-    virtual void backlog_tracker_adjust_charges() = 0;
+    virtual void backlog_tracker_adjust_charges() { };
 
     std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() {
         if (!tombstone_expiration_enabled()) {
@@ -640,9 +635,9 @@ private:
         };
     }
 
-    virtual void on_new_partition() = 0;
+    virtual void on_new_partition() {}
 
-    virtual void on_end_of_compaction() = 0;
+    virtual void on_end_of_compaction() {};
 
     // create a writer based on decorated key.
     virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) = 0;
@@ -743,6 +738,53 @@ void garbage_collected_sstable_writer::data::finish_sstable_writer() {
     }
 }
 
+class reshape_compaction : public compaction {
+public:
+    reshape_compaction(column_family& cf, compaction_descriptor descriptor)
+        : compaction(cf, std::move(descriptor)) {
+        _info->run_identifier = _run_identifier;
+        _info->type = compaction_type::Reshape;
+    }
+
+    flat_mutation_reader make_sstable_reader() const override {
+        return ::make_local_shard_sstable_reader(_schema,
+                _permit,
+                _compacting,
+                query::full_partition_range,
+                _schema->full_slice(),
+                _io_priority,
+                tracing::trace_state_ptr(),
+                ::streamed_mutation::forwarding::no,
+                ::mutation_reader::forwarding::no,
+                default_read_monitor_generator());
+    }
+
+    void report_start(const sstring& formatted_msg) const override {
+        clogger.info("Reshaping {}", formatted_msg);
+    }
+
+    void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
+        clogger.info("Reshaped {}", formatted_msg);
+    }
+
+    virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
+        auto sst = _sstable_creator(this_shard_id());
+        setup_new_sstable(sst);
+
+        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
+        cfg.max_sstable_size = _max_sstable_size;
+        cfg.monitor = &default_write_monitor();
+        cfg.run_identifier = _run_identifier;
+        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
+    }
+
+    virtual void stop_sstable_writer(compaction_writer* writer) override {
+        if (writer) {
+            finish_new_sstable(writer);
+        }
+    }
+};
+
 class regular_compaction : public compaction {
     // sstable being currently written.
     mutable compaction_read_monitor_generator _monitor_generator;
@@ -766,14 +808,6 @@ public:
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
                 _monitor_generator);
-    }
-
-    reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
-        return _cf.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
-    }
-
-    bool use_interposer_consumer() const override {
-        return _cf.get_compaction_strategy().use_interposer_consumer();
     }
 
     void report_start(const sstring& formatted_msg) const override {
@@ -1185,7 +1219,6 @@ flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_co
 
 class resharding_compaction final : public compaction {
     shard_id _shard; // shard of current sstable writer
-    compaction_backlog_tracker _resharding_backlog_tracker;
 
     // Partition count estimation for a shard S:
     //
@@ -1215,14 +1248,10 @@ private:
 public:
     resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor)
         : compaction(cf, std::move(descriptor))
-        , _resharding_backlog_tracker(std::make_unique<resharding_backlog_tracker>())
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
     {
-        cf.get_compaction_manager().register_backlog_tracker(_resharding_backlog_tracker);
         for (auto& sst : _sstables) {
-            _resharding_backlog_tracker.add_sstable(sst);
-
             const auto& shards = sst->get_shards_for_this_sstable();
             auto size = sst->bytes_on_disk();
             auto estimated_partitions = sst->get_estimated_key_count();
@@ -1237,11 +1266,7 @@ public:
         _info->type = compaction_type::Reshard;
     }
 
-    ~resharding_compaction() {
-        for (auto& s : _sstables) {
-            _resharding_backlog_tracker.remove_sstable(s);
-        }
-    }
+    ~resharding_compaction() { }
 
     // Use reader that makes sure no non-local mutation will not be filtered out.
     flat_mutation_reader make_sstable_reader() const override {
@@ -1284,6 +1309,7 @@ public:
 
         sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
         cfg.max_sstable_size = _max_sstable_size;
+        cfg.monitor = &default_write_monitor();
         // sstables generated for a given shard will share the same run identifier.
         cfg.run_identifier = _run_identifiers.at(shard);
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard), sst};
@@ -1320,7 +1346,14 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c, GCConsume
 
 compaction_type compaction_options::type() const {
     // Maps options_variant indexes to the corresponding compaction_type member.
-    static const compaction_type index_to_type[] = {compaction_type::Compaction, compaction_type::Cleanup, compaction_type::Upgrade, compaction_type::Scrub, compaction_type::Reshard};
+    static const compaction_type index_to_type[] = {
+        compaction_type::Compaction,
+        compaction_type::Cleanup,
+        compaction_type::Upgrade,
+        compaction_type::Scrub,
+        compaction_type::Reshard,
+        compaction_type::Reshape,
+    };
     return index_to_type[_options.index()];
 }
 
@@ -1329,6 +1362,9 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
         column_family& cf;
         sstables::compaction_descriptor&& descriptor;
 
+        std::unique_ptr<compaction> operator()(compaction_options::reshape) {
+            return std::make_unique<reshape_compaction>(cf, std::move(descriptor));
+        }
         std::unique_ptr<compaction> operator()(compaction_options::reshard) {
             return std::make_unique<resharding_compaction>(cf, std::move(descriptor));
         }

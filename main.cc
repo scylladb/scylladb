@@ -762,6 +762,11 @@ int main(int ac, char** av) {
 
             dirs.init(*cfg, bool(hinted_handoff_enabled)).get();
 
+            // We need the compaction manager ready early so we can reshard.
+            db.invoke_on_all([&proxy, &stop_signal] (database& db) {
+                db.get_compaction_manager().enable();
+            }).get();
+
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column
             // families, and in each of them, it will load the sstables for all
@@ -926,8 +931,11 @@ int main(int ac, char** av) {
                 }
             }
 
-            db.invoke_on_all([&proxy] (database& db) {
-                db.get_compaction_manager().enable();
+            db.invoke_on_all([] (database& db) {
+                for (auto& x : db.get_column_families()) {
+                    table& t = *(x.second);
+                    t.enable_auto_compaction();
+                }
             }).get();
 
             // If the same sstable is shared by several shards, it cannot be
@@ -937,10 +945,10 @@ int main(int ac, char** av) {
             // we will have races between the compaction and loading processes
             // We also want to trigger regular compaction on boot.
 
-            for (auto& x : db.local().get_column_families()) {
-                column_family& cf = *(x.second);
-                distributed_loader::reshard(db, cf.schema()->ks_name(), cf.schema()->cf_name());
-            }
+            // FIXME: temporary as this code is being replaced. I am keeping the scheduling
+            // group that was effectively used in the bulk of it (compaction). Soon it will become
+            // streaming
+
             db.invoke_on_all([&proxy] (database& db) {
                 for (auto& x : db.get_column_families()) {
                     column_family& cf = *(x.second);

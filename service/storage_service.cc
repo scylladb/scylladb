@@ -2789,18 +2789,6 @@ void storage_service::add_expire_time_if_found(inet_address endpoint, int64_t ex
 // All the global operations are going to happen here, and just the reloading happens
 // in there.
 future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
-    class max_element {
-        int64_t _result = 0;
-    public:
-        future<> operator()(int64_t value) {
-            _result = std::max(value, _result);
-            return make_ready_future<>();
-        }
-        int64_t get() && {
-            return _result;
-        }
-    };
-
     if (_loading_new_sstables) {
         throw std::runtime_error("Already loading SSTables. Try again later");
     } else {
@@ -2809,100 +2797,8 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
 
     slogger.info("Loading new SSTables for {}.{}...", ks_name, cf_name);
 
-    return distributed_loader::process_upload_dir(_db, ks_name, cf_name).then([this, ks_name, cf_name] {
-    // First, we need to stop SSTable creation for that CF in all shards. This is a really horrible
-    // thing to do, because under normal circumnstances this can make dirty memory go up to the point
-    // of explosion.
-    //
-    // Remember, however, that we are assuming this is going to be ran on an empty CF. In that scenario,
-    // stopping the SSTables should have no effect, while guaranteeing we will see no data corruption
-    // * in case * this is ran on a live CF.
-    //
-    // The statement above is valid at least from the Scylla side of things: it is still totally possible
-    // that someones just copies the table over existing ones. There isn't much we can do about it.
-    return _db.map_reduce(max_element(), [ks_name, cf_name] (database& db) {
-        auto& cf = db.find_column_family(ks_name, cf_name);
-        return cf.disable_sstable_write();
-    }).then([this, cf_name, ks_name] (int64_t max_seen_sstable) {
-        // Then, we will reshuffle the tables to make sure that the generation numbers don't go too high.
-        // We will do all of it the same CPU, to make sure that we won't have two parallel shufflers stepping
-        // onto each other.
-
-        class all_generations {
-            std::set<int64_t> _result;
-        public:
-            future<> operator()(std::set<int64_t> value) {
-                _result.insert(value.begin(), value.end());
-                return make_ready_future<>();
-            }
-            std::set<int64_t> get() && {
-                return _result;
-            }
-        };
-
-        // We provide to reshuffle_sstables() the generation of all existing sstables, such that it will
-        // easily know which sstables are new.
-        return _db.map_reduce(all_generations(), [ks_name, cf_name] (database& db) {
-            auto& cf = db.find_column_family(ks_name, cf_name);
-            std::set<int64_t> generations;
-            for (auto& p : *(cf.get_sstables())) {
-                generations.insert(p->generation());
-            }
-            return make_ready_future<std::set<int64_t>>(std::move(generations));
-        }).then([this, max_seen_sstable, ks_name, cf_name] (std::set<int64_t> all_generations) {
-            auto shard = std::hash<sstring>()(cf_name) % smp::count;
-            return _db.invoke_on(shard, [ks_name, cf_name, max_seen_sstable, all_generations = std::move(all_generations)] (database& db) {
-                auto& cf = db.find_column_family(ks_name, cf_name);
-                return cf.reshuffle_sstables(std::move(all_generations), max_seen_sstable + 1);
-            });
-        });
-    }).then_wrapped([this, ks_name, cf_name] (future<std::vector<sstables::entry_descriptor>> f) {
-        std::vector<sstables::entry_descriptor> new_tables;
-        std::exception_ptr eptr;
-        int64_t new_gen = -1;
-
-        try {
-            new_tables = f.get0();
-        } catch(std::exception& e) {
-            slogger.error("Loading of new tables failed to {}.{} due to {}", ks_name, cf_name, e.what());
-            eptr = std::current_exception();
-        } catch(...) {
-            slogger.error("Loading of new tables failed to {}.{} due to unexpected reason", ks_name, cf_name);
-            eptr = std::current_exception();
-        }
-
-        if (new_tables.size() > 0) {
-            new_gen = new_tables.back().generation;
-        }
-
-        slogger.debug("Now accepting writes for sstables with generation larger or equal than {}", new_gen);
-        return _db.invoke_on_all([ks_name, cf_name, new_gen] (database& db) {
-            auto& cf = db.find_column_family(ks_name, cf_name);
-            auto disabled = std::chrono::duration_cast<std::chrono::microseconds>(cf.enable_sstable_write(new_gen)).count();
-            slogger.info("CF {}.{} at shard {} had SSTables writes disabled for {} usec", ks_name, cf_name, this_shard_id(), disabled);
-            return make_ready_future<>();
-        }).then([new_tables = std::move(new_tables), eptr = std::move(eptr)] {
-            if (eptr) {
-                return make_exception_future<std::vector<sstables::entry_descriptor>>(eptr);
-            }
-            return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
-        });
-    }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
-        auto f = distributed_loader::flush_upload_dir(_db, _sys_dist_ks, ks_name, cf_name);
-        return f.then([new_tables = std::move(new_tables), ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables_from_upload) mutable {
-            if (new_tables.empty() && new_tables_from_upload.empty()) {
-                slogger.info("No new SSTables were found for {}.{}", ks_name, cf_name);
-            }
-            // merge new sstables found in both column family and upload directories, if any.
-            new_tables.insert(new_tables.end(), new_tables_from_upload.begin(), new_tables_from_upload.end());
-            return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
-        });
-    }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
-        return distributed_loader::load_new_sstables(_db, _view_update_generator, ks_name, cf_name, std::move(new_tables)).then([ks_name, cf_name] {
-            slogger.info("Done loading new SSTables for {}.{} for all shards", ks_name, cf_name);
-        });
-    });
-    }).finally([this] {
+    return distributed_loader::process_upload_dir(_db, _sys_dist_ks, _view_update_generator, ks_name, cf_name).finally([this, ks_name, cf_name] {
+        slogger.info("Done loading new SSTables for {}.{}", ks_name, cf_name);
         _loading_new_sstables = false;
     });
 }
@@ -2919,6 +2815,25 @@ void storage_service::shutdown_client_servers() {
         }
         slogger.info("Shutting down {} was successful", name);
     }
+}
+
+future<>
+storage_service::set_tables_autocompaction(const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
+    if (_initialized) {
+        return make_exception_future<>(std::runtime_error("Too early: storage service not initialized yet"));
+    }
+
+    return _db.invoke_on_all([keyspace, tables, enabled] (database& db) {
+        return parallel_for_each(tables, [&db, keyspace, enabled](const sstring& table) mutable {
+            column_family& cf = db.find_column_family(keyspace, table);
+            if (enabled) {
+                cf.enable_auto_compaction();
+            } else {
+                cf.disable_auto_compaction();
+            }
+            return make_ready_future<>();
+        });
+    });
 }
 
 std::unordered_multimap<inet_address, dht::token_range>

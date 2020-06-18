@@ -489,11 +489,7 @@ private:
     // This semaphore ensures that an operation like snapshot won't have its selected
     // sstables deleted by compaction in parallel, a race condition which could
     // easily result in failure.
-    // Locking order: must be acquired either independently or after _sstables_lock
     seastar::named_semaphore _sstable_deletion_sem = {1, named_semaphore_exception_factory{"sstable deletion"}};
-    // There are situations in which we need to stop writing sstables. Flushers will take
-    // the read lock, and the ones that wish to stop that process will take the write lock.
-    rwlock _sstables_lock;
     mutable row_cache _cache; // Cache covers only sstables.
     std::optional<int64_t> _sstable_generation = {};
 
@@ -819,16 +815,6 @@ public:
     future<> fail_streaming_mutations(utils::UUID plan_id);
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
-
-    // Important warning: disabling writes will only have an effect in the current shard.
-    // The other shards will keep writing tables at will. Therefore, you very likely need
-    // to call this separately in all shards first, to guarantee that none of them are writing
-    // new data before you can safely assume that the whole node is disabled.
-    future<int64_t> disable_sstable_write();
-
-    // SSTable writes are now allowed again, and generation is updated to new_generation if != -1
-    // returns the amount of microseconds elapsed since we disabled writes.
-    std::chrono::steady_clock::duration enable_sstable_write(int64_t new_generation);
 
     // Make sure the generation numbers are sequential, starting from "start".
     // Generations before "start" are left untouched.

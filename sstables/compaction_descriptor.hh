@@ -43,6 +43,7 @@ enum class compaction_type {
     Index_build = 4,
     Reshard = 5,
     Upgrade = 6,
+    Reshape = 7,
 };
 
 struct compaction_completion_desc {
@@ -72,9 +73,10 @@ public:
     };
     struct reshard {
     };
-
+    struct reshape {
+    };
 private:
-    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard>;
+    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape>;
 
 private:
     options_variant _options;
@@ -84,6 +86,10 @@ private:
     }
 
 public:
+    static compaction_options make_reshape() {
+        return compaction_options(reshape{});
+    }
+
     static compaction_options make_reshard() {
         return compaction_options(reshard{});
     }
