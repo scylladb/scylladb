@@ -195,6 +195,7 @@ class read_context : public reader_lifecycle_policy {
 
     // One for each shard. Index is shard id.
     std::vector<reader_meta> _readers;
+    std::vector<reader_concurrency_semaphore*> _semaphores;
 
     gate _dismantling_gate;
 
@@ -211,7 +212,8 @@ public:
             , _schema(std::move(s))
             , _cmd(cmd)
             , _ranges(ranges)
-            , _trace_state(std::move(trace_state)) {
+            , _trace_state(std::move(trace_state))
+            , _semaphores(smp::count, nullptr) {
         _readers.resize(smp::count);
     }
 
@@ -236,7 +238,12 @@ public:
     virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
-        return _readers[this_shard_id()].rparts->semaphore;
+        const auto shard = this_shard_id();
+        if (!_semaphores[shard]) {
+            auto& table = _db.local().find_column_family(_schema);
+            _semaphores[shard] = &table.read_concurrency_semaphore();
+        }
+        return *_semaphores[shard];
     }
 
     future<> lookup_readers();
