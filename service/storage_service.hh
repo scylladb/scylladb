@@ -521,6 +521,9 @@ private:
     /* Returns `true` iff we started using the generation (it was not obsolete),
      * which means that this node might write some CDC log entries using streams from this generation. */
     bool do_handle_cdc_generation(db_clock::time_point);
+    /* Wrapper around `do_handle_cdc_generation` which intercepts timeout/unavailability exceptions.
+     * Returns: do_handle_cdc_generation(ts). */
+    bool do_handle_cdc_generation_intercept_nonfatal_errors(db_clock::time_point ts);
 
     /* If `handle_cdc_generation` fails, it schedules an asynchronous retry in the background
      * using `async_handle_cdc_generation`.
