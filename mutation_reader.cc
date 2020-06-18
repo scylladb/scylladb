@@ -1372,6 +1372,41 @@ future<> evictable_reader::fast_forward_to(const dht::partition_range& pr, db::t
     return make_ready_future<>();
 }
 
+evictable_reader_handle::evictable_reader_handle(evictable_reader& r) : _r(&r)
+{ }
+
+void evictable_reader_handle::evictable_reader_handle::pause() {
+    _r->pause();
+}
+
+flat_mutation_reader make_auto_paused_evictable_reader(
+        mutation_source ms,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr) {
+    return make_flat_mutation_reader<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms), std::move(schema), std::move(permit), pr, ps,
+            pc, std::move(trace_state), fwd_mr);
+}
+
+std::pair<flat_mutation_reader, evictable_reader_handle> make_manually_paused_evictable_reader(
+        mutation_source ms,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr) {
+    auto reader = std::make_unique<evictable_reader>(evictable_reader::auto_pause::no, std::move(ms), std::move(schema), std::move(permit), pr, ps,
+            pc, std::move(trace_state), fwd_mr);
+    auto handle = evictable_reader_handle(*reader.get());
+    return std::pair(flat_mutation_reader(std::move(reader)), handle);
+}
+
 namespace {
 
 // A special-purpose shard reader.
