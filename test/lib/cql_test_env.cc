@@ -514,6 +514,13 @@ public:
             }).get();
             distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
+            db.invoke_on_all([] (database& db) {
+                for (auto& x : db.get_column_families()) {
+                    table& t = *(x.second);
+                    t.enable_auto_compaction();
+                }
+            }).get();
+
             sharded<cdc::cdc_service> cdc;
             cdc.start(std::ref(proxy)).get();
             auto stop_cdc_service = defer([&] {
