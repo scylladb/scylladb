@@ -186,7 +186,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         return desc;
     }
 
-    for (unsigned level = 1; level < leveled_manifest::MAX_LEVELS; ++level) {
+    for (unsigned level = leveled_manifest::MAX_LEVELS - 1; level > 0; --level) {
         if (level_info[level].empty()) {
             continue;
         }
