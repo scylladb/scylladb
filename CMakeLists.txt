@@ -138,7 +138,7 @@ add_executable(scylla
 #
 # For ease of browsing the source code, we always pretend that DPDK is enabled.
 target_compile_options(scylla PUBLIC
-        -std=gnu++1z
+        -std=gnu++20
         -DHAVE_DPDK
         -DHAVE_HWLOC
         "${SEASTAR_CFLAGS}")
