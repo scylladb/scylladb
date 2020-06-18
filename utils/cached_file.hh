@@ -128,10 +128,9 @@ public:
                 page_idx_type start_page, offset_type start_offset_in_page)
             : _cached_file(&cf)
             , _pc(&pc)
-            , _trace_state(std::move(trace_state))
             , _page_idx(start_page)
             , _offset_in_page(start_offset_in_page)
-
+            , _trace_state(std::move(trace_state))
         { }
 
         // Yields the next chunk of data.
