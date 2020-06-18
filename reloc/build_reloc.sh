@@ -2,14 +2,12 @@
 
 . /etc/os-release
 
-COMMON_FLAGS="--cflags=-ffile-prefix-map=$PWD=."
-
 DEFAULT_MODE="release"
 
 print_usage() {
     echo "Usage: build_reloc.sh [OPTION]..."
     echo ""
-    echo "  --configure-flags FLAGS specify extra build flags passed to 'configure.py' (common: '$COMMON_FLAGS')"
+    echo "  --configure-flags FLAGS specify extra build flags passed to 'configure.py'"
     echo "  --mode MODE             specify build mode (default: '$DEFAULT_MODE')"
     echo "  --jobs JOBS             specify number of jobs"
     echo "  --clean                 clean build directory"
@@ -59,7 +57,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-FLAGS="$COMMON_FLAGS $FLAGS"
+FLAGS="$FLAGS"
 
 if [ ! -e reloc/build_reloc.sh ]; then
     echo "run build_reloc.sh in top of scylla dir"
