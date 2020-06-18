@@ -993,6 +993,20 @@ struct fill_buffer_result {
     }
 };
 
+class inactive_shard_read : public reader_concurrency_semaphore::inactive_read {
+    flat_mutation_reader_opt _reader;
+public:
+    inactive_shard_read(flat_mutation_reader reader)
+        : _reader(std::move(reader)) {
+    }
+    flat_mutation_reader reader() && {
+        return std::move(*_reader);
+    }
+    virtual void evict() override {
+        _reader = {};
+    }
+};
+
 }
 
 // Encapsulates all data and logic that is local to the remote shard the
@@ -1652,24 +1666,6 @@ future<> multishard_combining_reader::fast_forward_to(const dht::partition_range
 
 future<> multishard_combining_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
     return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
-}
-
-namespace {
-
-class inactive_shard_read : public reader_concurrency_semaphore::inactive_read {
-    flat_mutation_reader_opt _reader;
-public:
-    inactive_shard_read(flat_mutation_reader reader)
-        : _reader(std::move(reader)) {
-    }
-    flat_mutation_reader reader() && {
-        return std::move(*_reader);
-    }
-    virtual void evict() override {
-        _reader = {};
-    }
-};
-
 }
 
 reader_concurrency_semaphore::inactive_read_handle
