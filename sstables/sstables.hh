@@ -103,6 +103,8 @@ class data_consume_context;
 
 class index_reader;
 
+extern bool use_binary_search_in_promoted_index;
+
 extern size_t summary_byte_cost(double summary_ratio);
 
 struct sstable_writer_config {
@@ -485,6 +487,7 @@ private:
 
     lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
     lw_shared_ptr<file_input_stream_history> _partition_range_history = make_lw_shared<file_input_stream_history>();
+    lw_shared_ptr<file_input_stream_history> _index_history = make_lw_shared<file_input_stream_history>();
 
     //FIXME: Set by sstable_writer to influence sstable writing behavior.
     //       Remove when doing #3012

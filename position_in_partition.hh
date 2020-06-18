@@ -346,6 +346,10 @@ public:
         return { _type, _bound_weight, _ck ? &*_ck : nullptr };
     }
 
+    size_t external_memory_usage() const {
+        return _ck ? _ck->external_memory_usage() : 0;
+    }
+
     // Defines total order on the union of position_and_partition and composite objects.
     //
     // The ordering is compatible with position_range (r). The following is satisfied for

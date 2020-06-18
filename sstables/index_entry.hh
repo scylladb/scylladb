@@ -28,33 +28,60 @@
 #include "column_translation.hh"
 #include "m_format_read_helpers.hh"
 #include "utils/overloaded_functor.hh"
+#include "sstables/mc/parsers.hh"
 
 namespace sstables {
 
-using promoted_index_block_position = std::variant<composite_view, position_in_partition_view>;
+using promoted_index_block_position_view = std::variant<composite_view, position_in_partition_view>;
+using promoted_index_block_position = std::variant<composite, position_in_partition>;
+
+inline
+promoted_index_block_position_view to_view(const promoted_index_block_position& v) {
+    return std::visit(overloaded_functor{
+            [] (const composite& v) -> promoted_index_block_position_view {
+                return composite_view(v);
+            },
+            [] (const position_in_partition& v) -> promoted_index_block_position_view {
+                return position_in_partition_view(v);
+            }
+        }, v);
+}
+
+// Return the owning version of the position given a view.
+inline
+promoted_index_block_position materialize(const promoted_index_block_position_view& v) {
+    return std::visit(overloaded_functor{
+            [] (const composite_view& v) -> promoted_index_block_position {
+                return composite(v);
+            },
+            [] (const position_in_partition_view& v) -> promoted_index_block_position {
+                return position_in_partition(v);
+            }
+        }, v);
+}
 
 class promoted_index_block_compare {
     const position_in_partition::composite_less_compare _cmp;
 public:
     explicit promoted_index_block_compare(const schema& s) : _cmp{s} {}
 
-    bool operator()(const promoted_index_block_position& lhs, position_in_partition_view rhs) const {
+    bool operator()(const promoted_index_block_position_view& lhs, position_in_partition_view rhs) const {
         return std::visit([this, rhs] (const auto& pos) { return _cmp(pos, rhs); }, lhs);
     }
 
-    bool operator()(position_in_partition_view lhs, const promoted_index_block_position& rhs) const {
+    bool operator()(position_in_partition_view lhs, const promoted_index_block_position_view& rhs) const {
         return std::visit([this, lhs] (const auto& pos) { return _cmp(lhs, pos); }, rhs);
     }
 
-    bool operator()(const promoted_index_block_position& lhs, composite_view rhs) const {
+    bool operator()(const promoted_index_block_position_view& lhs, composite_view rhs) const {
         return std::visit([this, rhs] (const auto& pos) { return _cmp(pos, rhs); }, lhs);
     }
 
-    bool operator()(composite_view lhs, const promoted_index_block_position& rhs) const {
+    bool operator()(composite_view lhs, const promoted_index_block_position_view& rhs) const {
         return std::visit([this, lhs] (const auto& pos) { return _cmp(lhs, pos); }, rhs);
     }
 
-    bool operator()(const promoted_index_block_position& lhs, const promoted_index_block_position& rhs) const {
+    bool operator()(const promoted_index_block_position_view& lhs, const promoted_index_block_position_view& rhs) const {
         return std::visit([this, &lhs] (const auto& pos) { return (*this)(lhs, pos); }, rhs);
     }
 };
@@ -77,11 +104,11 @@ class promoted_index_block {
     std::optional<deletion_time> _end_open_marker;
 
     inline static
-    promoted_index_block_position get_position(const schema& s, const bound_storage& storage) {
+    promoted_index_block_position_view get_position(const schema& s, const bound_storage& storage) {
         return std::visit(overloaded_functor{
-            [&s] (const temporary_buffer<char>& buf) -> promoted_index_block_position {
+            [&s] (const temporary_buffer<char>& buf) -> promoted_index_block_position_view {
                 return composite_view{to_bytes_view(buf), s.is_compound()}; },
-            [] (const position_in_partition& pos) -> promoted_index_block_position {
+            [] (const position_in_partition& pos) -> promoted_index_block_position_view {
                 return pos;
             }}, storage);
     }
@@ -106,8 +133,8 @@ public:
     promoted_index_block& operator=(const promoted_index_block&) = delete;
     promoted_index_block& operator=(promoted_index_block&&) noexcept = default;
 
-    promoted_index_block_position start(const schema& s) const { return get_position(s, _start);}
-    promoted_index_block_position end(const schema& s) const { return get_position(s, _end);}
+    promoted_index_block_position_view start(const schema& s) const { return get_position(s, _start);}
+    promoted_index_block_position_view end(const schema& s) const { return get_position(s, _end);}
     uint64_t offset() const { return _offset; }
     uint64_t width() const { return _width; }
     std::optional<deletion_time> end_open_marker() const { return _end_open_marker; }
@@ -168,79 +195,11 @@ private:
     };
 
     struct m_parser_context {
-        column_values_fixed_lengths clustering_values_fixed_lengths;
-        bool parsing_start_key = true;
-        boost::iterator_range<column_values_fixed_lengths::const_iterator> ck_range;
+        mc::promoted_index_block_parser block_parser;
 
-        std::vector<temporary_buffer<char>> clustering_key_values;
-        bound_kind_m kind;
-
-        temporary_buffer<char> column_value;
-        uint64_t ck_blocks_header = 0;
-        uint32_t ck_blocks_header_offset = 0;
-        std::optional<position_in_partition> start_pos;
-        std::optional<position_in_partition> end_pos;
-        std::optional<deletion_time> end_open_marker;
-
-        uint64_t offset;
-        uint64_t width;
-
-        enum class state {
-            CLUSTERING_START,
-            CK_KIND,
-            CK_SIZE,
-            CK_BLOCK,
-            CK_BLOCK_HEADER,
-            CK_BLOCK2,
-            CK_BLOCK_END,
-            ADD_CLUSTERING_KEY,
-            OFFSET,
-            WIDTH,
-            END_OPEN_MARKER_FLAG,
-            END_OPEN_MARKER_LOCAL_DELETION_TIME,
-            END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1,
-            END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2,
-            ADD_BLOCK,
-        } state = state::CLUSTERING_START;
-
-        bool is_block_empty() const {
-            return (ck_blocks_header & (uint64_t(1) << (2 * ck_blocks_header_offset))) != 0;
-        }
-
-        bool is_block_null() const {
-            return (ck_blocks_header & (uint64_t(1) << (2 * ck_blocks_header_offset + 1))) != 0;
-        }
-
-        bool no_more_ck_blocks() const { return ck_range.empty(); }
-
-        void move_to_next_ck_block() {
-            ck_range.advance_begin(1);
-            ++ck_blocks_header_offset;
-            if (ck_blocks_header_offset == 32u) {
-                ck_blocks_header_offset = 0u;
-            }
-        }
-
-        bool should_read_block_header() const {
-            return ck_blocks_header_offset == 0u;
-        }
-        std::optional<uint32_t> get_ck_block_value_length() const {
-            return ck_range.front();
-        }
-
-        position_in_partition make_position() {
-            auto key = clustering_key_prefix::from_range(clustering_key_values | boost::adaptors::transformed(
-                [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
-
-            if (kind == bound_kind_m::clustering) {
-                return position_in_partition::for_key(std::move(key));
-            }
-
-            bound_kind rt_marker_kind = is_bound_kind(kind)
-                    ? to_bound_kind(kind)
-                    :(parsing_start_key ? boundary_to_start_bound : boundary_to_end_bound)(kind);
-            return position_in_partition(position_in_partition::range_tag_t{}, rt_marker_kind, std::move(key));
-        }
+        m_parser_context(const schema& s, reader_permit permit, column_values_fixed_lengths cvfl)
+            : block_parser(s, std::move(permit), std::move(cvfl))
+        { }
     };
 
     std::variant<k_l_parser_context, m_parser_context> _ctx;
@@ -294,137 +253,18 @@ private:
     }
 
     void process_state(temporary_buffer<char>& data, m_parser_context& ctx) {
-        static constexpr size_t width_base = 65536;
-        using state_m = typename m_parser_context::state;
         // keep running in the loop until we either are out of data or have consumed all the blocks
-        while (true) {
-            switch (ctx.state) {
-            case state_m::CLUSTERING_START:
-            clustering_start_label:
-                ctx.clustering_key_values.clear();
-                ctx.clustering_key_values.reserve(ctx.clustering_values_fixed_lengths.size());
-                ctx.ck_range = boost::make_iterator_range(ctx.clustering_values_fixed_lengths);
-                ctx.ck_blocks_header_offset = 0u;
-                if (read_8(data) != read_status::ready) {
-                    ctx.state = state_m::CK_KIND;
-                    return;
-                }
-            case state_m::CK_KIND:
-                ctx.kind = bound_kind_m{_u8};
-                if (ctx.kind == bound_kind_m::clustering) {
-                    ctx.state = state_m::CK_BLOCK;
-                    goto ck_block_label;
-                }
-                if (read_16(data) != read_status::ready) {
-                    ctx.state = state_m::CK_SIZE;
-                    return;
-                }
-            case state_m::CK_SIZE:
-                if (_u16 < _s.clustering_key_size()) {
-                    ctx.ck_range.drop_back(_s.clustering_key_size() - _u16);
-                }
-
-            case state_m::CK_BLOCK:
-            ck_block_label:
-                if (ctx.no_more_ck_blocks()) {
-                    goto add_clustering_key_label;
-                }
-                if (!ctx.should_read_block_header()) {
-                    ctx.state = state_m::CK_BLOCK2;
-                    goto ck_block2_label;
-                }
-                if (read_unsigned_vint(data) != read_status::ready) {
-                    ctx.state = state_m::CK_BLOCK_HEADER;
-                    return;
-                }
-            case state_m::CK_BLOCK_HEADER:
-                ctx.ck_blocks_header = _u64;
-            case state_m::CK_BLOCK2:
-            ck_block2_label:
-            {
-                if (ctx.is_block_empty()) {
-                    ctx.clustering_key_values.push_back({});
-                    ctx.move_to_next_ck_block();
-                    goto ck_block_label;
-                }
-                if (ctx.is_block_null()) {
-                    ctx.move_to_next_ck_block();
-                    goto ck_block_label;
-                }
-                read_status status = read_status::waiting;
-                if (auto len = ctx.get_ck_block_value_length()) {
-                    status = read_bytes(data, *len, ctx.column_value);
-                } else {
-                    status = read_unsigned_vint_length_bytes(data, ctx.column_value);
-                }
-                if (status != read_status::ready) {
-                    ctx.state = state_m::CK_BLOCK_END;
-                    return;
-                }
+        while (_num_blocks_left) {
+            if (ctx.block_parser.consume(data) == read_status::waiting) {
+                return;
             }
-            case state_m::CK_BLOCK_END:
-                ctx.clustering_key_values.push_back(std::move(ctx.column_value));
-                ctx.move_to_next_ck_block();
-                ctx.state = state_m::CK_BLOCK;
-                goto ck_block_label;
-            case state_m::ADD_CLUSTERING_KEY:
-            add_clustering_key_label:
-                (ctx.parsing_start_key ? ctx.start_pos : ctx.end_pos) = ctx.make_position();
-                ctx.parsing_start_key = !ctx.parsing_start_key;
-                if (!ctx.end_pos) {
-                    ctx.state = state_m::CLUSTERING_START;
-                    goto clustering_start_label;
-                }
-            case state_m::OFFSET:
-                if (read_unsigned_vint(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::WIDTH;
-                    return;
-                }
-            case state_m::WIDTH:
-                ctx.offset = _u64;
-                if (read_signed_vint(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::END_OPEN_MARKER_FLAG;
-                    return;
-                }
-            case state_m::END_OPEN_MARKER_FLAG:
-                assert(_i64 + width_base > 0);
-                ctx.width = (_i64 + width_base);
-                if (read_8(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::END_OPEN_MARKER_LOCAL_DELETION_TIME;
-                    return;
-                }
-            case state_m::END_OPEN_MARKER_LOCAL_DELETION_TIME:
-                if (_u8 == 0) {
-                    ctx.state = state_m::ADD_BLOCK;
-                    goto add_block_label;
-                }
-                ctx.end_open_marker.emplace();
-                if (read_32(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1;
-                    return;
-                }
-            case state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1:
-                ctx.end_open_marker->local_deletion_time = _u32;
-                if (read_64(data) != continuous_data_consumer::read_status::ready) {
-                    ctx.state = state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2;
-                    return;
-                }
-            case state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2:
-                ctx.end_open_marker->marked_for_delete_at = _u64;
-            case m_parser_context::state::ADD_BLOCK:
-            add_block_label:
-
-                _pi_blocks.emplace_back(*std::exchange(ctx.start_pos, {}),
-                                        *std::exchange(ctx.end_pos, {}),
-                                        ctx.offset,
-                                        ctx.width,
-                                        std::exchange(ctx.end_open_marker, {}));
-                ctx.state = state_m::CLUSTERING_START;
-                --_num_blocks_left;
-                if (_num_blocks_left == 0) {
-                    return;
-                }
-            }
+            _pi_blocks.emplace_back(std::move(ctx.block_parser.start()),
+                                    std::move(ctx.block_parser.end()),
+                                    ctx.block_parser.offset(),
+                                    ctx.block_parser.width(),
+                                    std::move(ctx.block_parser.end_open_marker()));
+            --_num_blocks_left;
+            ctx.block_parser.reset();
         }
     }
 
@@ -440,13 +280,7 @@ public:
     }
 
     bool non_consuming(const m_parser_context& ctx) const {
-        using state_m = typename m_parser_context::state;
-        return ctx.state == state_m::CK_SIZE
-                || ctx.state == state_m::CK_BLOCK_HEADER
-                || ctx.state == state_m::CK_BLOCK_END
-                || ctx.state == state_m::ADD_CLUSTERING_KEY
-                || ctx.state == state_m::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2
-                || ctx.state == state_m::ADD_BLOCK;
+        return false;
     }
 
     bool non_consuming() const {
@@ -484,60 +318,101 @@ public:
     void switch_to_consume_until_mode(position_in_partition_view pos) { _pos = pos; _mode = consuming_mode::consume_until; }
     promoted_index_blocks& get_pi_blocks() { return _pi_blocks; };
 
-    // This constructor is used for ka/la format which does not have information about columns fixed lengths
-    promoted_index_blocks_reader(reader_permit permit, input_stream<char>&& promoted_index_stream, uint32_t num_blocks,
-                                 const schema& s, uint64_t start, uint64_t maxlen)
-        : continuous_data_consumer(std::move(permit), std::move(promoted_index_stream), start, maxlen)
-        , _total_num_blocks(num_blocks)
-        , _num_blocks_left(num_blocks)
-        , _s(s)
-    {}
-
-    // This constructor is used for mc format which requires information about columns fixed lengths for parsing
+    // For the mc format clustering_values_fixed_lengths must be engaged. When not engaged ka/la is assumed.
     promoted_index_blocks_reader(reader_permit permit, input_stream<char>&& promoted_index_stream, uint32_t num_blocks,
                                  const schema& s, uint64_t start, uint64_t maxlen,
-                                 column_values_fixed_lengths&& clustering_values_fixed_lengths)
-        : continuous_data_consumer(std::move(permit), std::move(promoted_index_stream), start, maxlen)
+                                 std::optional<column_values_fixed_lengths> clustering_values_fixed_lengths)
+        : continuous_data_consumer(permit, std::move(promoted_index_stream), start, maxlen)
         , _total_num_blocks{num_blocks}
         , _num_blocks_left{num_blocks}
         , _s{s}
-        , _ctx{m_parser_context{std::move(clustering_values_fixed_lengths)}}
-    {}
+    {
+        if (clustering_values_fixed_lengths) {
+            _ctx.emplace<m_parser_context>(m_parser_context{s, std::move(permit), std::move(*clustering_values_fixed_lengths)});
+        }
+    }
+};
+
+// Cursor over the index for clustered elements of a single partition.
+//
+// The user is expected to call advance_to() for monotonically increasing positions
+// in order to check if the index has information about more precise location
+// of the fragments relevant for the range starting at given position.
+//
+// The user must serialize all async methods. The next call may start only when the future
+// returned by the previous one has resolved.
+//
+// The user must call close() and wait for it to resolve before destroying.
+//
+class clustered_index_cursor {
+public:
+    // Position of indexed elements in the data file realative to the start of the partition.
+    using offset_in_partition = uint64_t;
+
+    struct skip_info {
+        offset_in_partition offset;
+        tombstone active_tombstone;
+        position_in_partition active_tombstone_pos;
+    };
+
+    struct entry_info {
+        promoted_index_block_position_view start;
+        promoted_index_block_position_view end;
+        offset_in_partition offset;
+    };
+
+    virtual ~clustered_index_cursor() {};
+    virtual future<> close() = 0;
+
+    // Advances the cursor to given position. When the cursor has more accurate information about
+    // location of the fragments from the range [pos, +inf) in the data file (since it was last advanced)
+    // it resolves with an engaged optional containing skip_info.
+    //
+    // The index may not be precise, so fragments from the range [pos, +inf) may be located after the
+    // position indicated by skip_info. It is guaranteed that no such fragments are located before the returned position.
+    //
+    // Offsets returned in skip_info are monotonically increasing.
+    //
+    // Must be called for non-decreasing positions.
+    // The caller must ensure that pos remains valid until the future resolves.
+    virtual future<std::optional<skip_info>> advance_to(position_in_partition_view pos) = 0;
+
+    // Determines the data file offset relative to the start of the partition such that fragments
+    // from the range (-inf, pos] are located before that offset.
+    //
+    // If such offset cannot be determined in a cheap way, returns a disengaged optional.
+    //
+    // Does not advance the cursor.
+    //
+    // The caller must ensure that pos remains valid until the future resolves.
+    virtual future<std::optional<offset_in_partition>> probe_upper_bound(position_in_partition_view pos) = 0;
+
+    // Returns skip information about the next position after the cursor
+    // or nullopt if there is no information about further positions.
+    //
+    // When entry_info is returned, the cursor was advanced to entry_info::start.
+    //
+    // The returned entry_info is only valid until the next invocation of any method on this instance.
+    virtual future<std::optional<entry_info>> next_entry() = 0;
 };
 
 class promoted_index {
     deletion_time _del_time;
     uint32_t _promoted_index_size;
-    promoted_index_blocks_reader _reader;
+    std::unique_ptr<clustered_index_cursor> _cursor;
     bool _reader_closed = false;
-
 public:
-    promoted_index(const schema& s, reader_permit permit, deletion_time del_time, input_stream<char>&& promoted_index_stream,
-                   uint32_t promoted_index_size, uint32_t blocks_count)
+    promoted_index(const schema& s, deletion_time del_time, uint32_t promoted_index_size, std::unique_ptr<clustered_index_cursor> index)
             : _del_time{del_time}
             , _promoted_index_size(promoted_index_size)
-            , _reader{std::move(permit), std::move(promoted_index_stream), blocks_count, s, 0, promoted_index_size}
-    {}
-
-    promoted_index(const schema& s, reader_permit permit, deletion_time del_time, input_stream<char>&& promoted_index_stream,
-                   uint32_t promoted_index_size, uint32_t blocks_count, column_values_fixed_lengths clustering_values_fixed_lengths)
-            : _del_time{del_time}
-            , _promoted_index_size(promoted_index_size)
-            , _reader{std::move(permit), std::move(promoted_index_stream), blocks_count, s, 0, promoted_index_size, std::move(clustering_values_fixed_lengths)}
-    {}
+            , _cursor(std::move(index))
+    { }
 
     [[nodiscard]] deletion_time get_deletion_time() const { return _del_time; }
     [[nodiscard]] uint32_t get_promoted_index_size() const { return _promoted_index_size; }
-    [[nodiscard]] promoted_index_blocks_reader& get_reader() { return _reader; };
-    [[nodiscard]] const promoted_index_blocks_reader& get_reader() const { return _reader; };
-    future<> close_reader() {
-        if (!_reader_closed) {
-            _reader_closed = true;
-            return _reader.close();
-        }
-
-        return make_ready_future<>();
-    }
+    [[nodiscard]] clustered_index_cursor& cursor() { return *_cursor; };
+    [[nodiscard]] const clustered_index_cursor& cursor() const { return *_cursor; };
+    future<> close_reader() { return _cursor->close(); }
 };
 
 class index_entry {
@@ -575,8 +450,6 @@ public:
         return {};
     }
 
-    uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
-
     index_entry(const schema& s, temporary_buffer<char>&& key, uint64_t position, std::unique_ptr<promoted_index>&& index)
         : _s(std::cref(s))
         , _key(std::move(key))
@@ -587,45 +460,11 @@ public:
     index_entry(index_entry&&) = default;
     index_entry& operator=(index_entry&&) = default;
 
-    // Reads promoted index blocks from the stream until it finds the upper bound
-    // for a given position.
-    // Returns the index of the element right before the upper bound one.
-    future<size_t> get_pi_blocks_until(position_in_partition_view pos) {
-        if (!_index) {
-            return make_ready_future<size_t>(0);
-        }
+    // Can be nullptr
+    const std::unique_ptr<promoted_index>& get_promoted_index() const { return _index; }
+    std::unique_ptr<promoted_index>& get_promoted_index() { return _index; }
+    uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
 
-        auto& reader = _index->get_reader();
-        reader.switch_to_consume_until_mode(pos);
-        promoted_index_blocks& blocks = reader.get_pi_blocks();
-        erase_all_but_last_two(blocks);
-        return reader.consume_input().then([this, &reader] {
-            return reader.get_current_pi_index();
-        });
-    }
-
-    // Unconditionally reads the promoted index blocks from the next data buffer
-    future<> get_next_pi_blocks() {
-        if (!_index) {
-            return make_ready_future<>();
-        }
-
-        auto& reader = _index->get_reader();
-        promoted_index_blocks& blocks = reader.get_pi_blocks();
-        blocks = promoted_index_blocks{};
-        reader.switch_to_consume_next_mode();
-        return reader.consume_input();
-    }
-
-    [[nodiscard]] uint32_t get_total_pi_blocks_count() const {
-        return _index ? _index->get_reader().get_total_num_blocks() : 0;
-    }
-    [[nodiscard]] uint32_t get_read_pi_blocks_count() const {
-        return _index ? _index->get_reader().get_read_num_blocks() : 0;
-    }
-    [[nodiscard]] promoted_index_blocks* get_pi_blocks() {
-        return _index ? &_index->get_reader().get_pi_blocks() : nullptr;
-    }
     future<> close_pi_stream() {
         if (_index) {
             return _index->close_reader();
@@ -637,8 +476,12 @@ public:
 
 }
 
-inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_index_block_position& pos) {
+inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_index_block_position_view& pos) {
     std::visit([&out] (const auto& pos) mutable { out << pos; }, pos);
     return out;
 }
 
+inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_index_block_position& pos) {
+    std::visit([&out] (const auto& pos) mutable { out << pos; }, pos);
+    return out;
+}

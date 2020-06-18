@@ -290,7 +290,7 @@ public:
                 || (_state == state::STOP_THEN_ATOM_START)
                 || (_state == state::COUNTER_CELL_2)
                 || (_state == state::RANGE_TOMBSTONE_4)
-                || (_state == state::EXPIRING_CELL_3)) && (_prestate == prestate::NONE));
+                || (_state == state::EXPIRING_CELL_3)));
     }
 
     // process() feeds the given data into the state machine.
@@ -535,7 +535,7 @@ public:
             _consumer.consume_row_end();
             return;
         }
-        if (_state != state::ROW_START || _prestate != prestate::NONE) {
+        if (_state != state::ROW_START || primitive_consumer::active()) {
             throw malformed_sstable_exception("end of input, but not end of row");
         }
     }
@@ -769,7 +769,7 @@ public:
                 || _state == state::COLUMN_TIMESTAMP
                 || _state == state::COLUMN_DELETION_TIME_2
                 || _state == state::COLUMN_TTL_2
-                || _state == state::COLUMN_END) && (_prestate == prestate::NONE);
+                || _state == state::COLUMN_END);
     }
 
     data_consumer::processing_result process_state(temporary_buffer<char>& data) {
@@ -1368,7 +1368,7 @@ public:
         // and proceeding to attempt to parse the next partition, since state::DELETION_TIME
         // is the first state corresponding to the contents of a new partition.
         if (_state != state::DELETION_TIME
-                && (_state != state::PARTITION_START || _prestate != prestate::NONE)) {
+                && (_state != state::PARTITION_START || primitive_consumer::active())) {
             throw malformed_sstable_exception("end of input, but not end of partition");
         }
     }
