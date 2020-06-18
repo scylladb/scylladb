@@ -35,7 +35,7 @@
 
 namespace java org.apache.cassandra.thrift
 namespace cpp cassandra
-namespace csharp Apache.Cassandra
+namespace netstd Apache.Cassandra
 namespace py cassandra
 namespace php cassandra
 namespace perl Cassandra
