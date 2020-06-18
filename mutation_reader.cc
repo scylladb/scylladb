@@ -1010,6 +1010,11 @@ public:
 // Encapsulates all data and logic that is local to the remote shard the
 // reader lives on.
 class evictable_reader : public flat_mutation_reader::impl {
+public:
+    using auto_pause = bool_class<class auto_pause_tag>;
+
+private:
+    auto_pause _auto_pause;
     mutation_source _ms;
     reader_permit _permit;
     const dht::partition_range* _pr;
@@ -1032,8 +1037,11 @@ class evictable_reader : public flat_mutation_reader::impl {
     std::optional<query::partition_slice> _slice_override;
     bool _pending_next_partition = false;
 
+    flat_mutation_reader_opt _reader;
+
 private:
-    void pause(flat_mutation_reader reader);
+    void do_pause(flat_mutation_reader reader);
+    void maybe_pause(flat_mutation_reader reader);
     flat_mutation_reader_opt try_resume();
     void update_next_position(flat_mutation_reader& reader);
     void adjust_partition_slice();
@@ -1045,6 +1053,7 @@ private:
 
 public:
     evictable_reader(
+            auto_pause ap,
             mutation_source ms,
             schema_ptr schema,
             reader_permit permit,
@@ -1063,10 +1072,23 @@ public:
     reader_concurrency_semaphore::inactive_read_handle inactive_read_handle() && {
         return std::move(_irh);
     }
+    void pause() {
+        if (_reader) {
+            do_pause(std::move(*_reader));
+        }
+    }
 };
 
-void evictable_reader::pause(flat_mutation_reader reader) {
-    _irh = _permit.semaphore().register_inactive_read(std::make_unique<inactive_shard_read>(std::move(reader)));
+void evictable_reader::do_pause(flat_mutation_reader reader) {
+    _irh = _permit.semaphore().register_inactive_read(std::make_unique<inactive_evictable_reader>(std::move(reader)));
+}
+
+void evictable_reader::maybe_pause(flat_mutation_reader reader) {
+    if (_auto_pause) {
+        do_pause(std::move(reader));
+    } else {
+        _reader = std::move(reader);
+    }
 }
 
 flat_mutation_reader_opt evictable_reader::try_resume() {
@@ -1074,7 +1096,7 @@ flat_mutation_reader_opt evictable_reader::try_resume() {
     if (!ir_ptr) {
         return {};
     }
-    auto& ir = static_cast<inactive_shard_read&>(*ir_ptr);
+    auto& ir = static_cast<inactive_evictable_reader&>(*ir_ptr);
     return std::move(ir).reader();
 }
 
@@ -1185,6 +1207,9 @@ flat_mutation_reader evictable_reader::resume_or_create_reader() {
         _reader_created = true;
         return reader;
     }
+    if (_reader) {
+        return std::move(*_reader);
+    }
     if (auto reader_opt = try_resume()) {
         return std::move(*reader_opt);
     }
@@ -1271,6 +1296,7 @@ future<> evictable_reader::fill_buffer(flat_mutation_reader& reader, db::timeout
 }
 
 evictable_reader::evictable_reader(
+        auto_pause ap,
         mutation_source ms,
         schema_ptr schema,
         reader_permit permit,
@@ -1280,6 +1306,7 @@ evictable_reader::evictable_reader(
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr)
     : impl(std::move(schema))
+    , _auto_pause(ap)
     , _ms(std::move(ms))
     , _permit(std::move(permit))
     , _pr(&pr)
@@ -1310,7 +1337,7 @@ future<> evictable_reader::fill_buffer(db::timeout_clock::time_point timeout) {
 
         return fill_buffer(reader, timeout).then([this, &reader] {
             _end_of_stream = reader.is_end_of_stream() && reader.is_buffer_empty();
-            pause(std::move(reader));
+            maybe_pause(std::move(reader));
         });
     });
 }
@@ -1330,13 +1357,16 @@ future<> evictable_reader::fast_forward_to(const dht::partition_range& pr, db::t
     clear_buffer();
     _end_of_stream = false;
 
+    if (_reader) {
+        return _reader->fast_forward_to(pr, timeout);
+    }
     if (!_reader_created || !_irh) {
         return make_ready_future<>();
     }
     if (auto reader_opt = try_resume()) {
         auto f = reader_opt->fast_forward_to(pr, timeout);
         return f.then([this, reader = std::move(*reader_opt)] () mutable {
-            pause(std::move(reader));
+            maybe_pause(std::move(reader));
         });
     }
     return make_ready_future<>();
@@ -1466,7 +1496,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
                         mutation_reader::forwarding fwd_mr) {
                 return lifecycle_policy->create_reader(std::move(s), pr, ps, pc, std::move(ts), fwd_mr);
             });
-            auto rreader = make_foreign(std::make_unique<evictable_reader>(std::move(ms),
+            auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
                         gs.get(), _lifecycle_policy->semaphore().make_permit(), *_pr, _ps, _pc, _trace_state, _fwd_mr));
             auto f = rreader->fill_buffer(timeout);
             return f.then([rreader = std::move(rreader)] () mutable {
