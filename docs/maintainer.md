@@ -141,11 +141,11 @@ characters with nothing.
 
 Submodules are maintained in separate repositories. For example, Seastar
 is developed upstream independently of Scylla. We want to periodically
-(and upon contributor request) synchronize scylla.git to include the
+(and upon contributor request) refresh scylla.git to include the
 latest submodules.
 
  1. Check out the `next` branch and synchronize it using `git pull`
- 2. Run the `scripts/sync-submodules.sh` script, which will open a git
+ 2. Run the `scripts/refresh-submodules.sh` script, which will open a git
     commit log editor for every submodule to show that commits are being
     updated.
  3. Edit the submodule update commits with any necessary additional

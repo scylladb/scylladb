@@ -1,5 +1,10 @@
 #!/bin/bash
-
+#
+# Refresh git submodules by fast-forward merging them to the tip of the
+# master branch of their respective repositories and committing the
+# update with a default commit message of "git submodule summary".
+#
+# Copyright (C) 2020 ScyllaDB
 #
 # This file is part of Scylla.
 #
