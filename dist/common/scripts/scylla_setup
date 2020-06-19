@@ -27,6 +27,7 @@ import glob
 import shutil
 import io
 import stat
+import distro
 from scylla_util import *
 
 interactive = False
@@ -471,5 +472,10 @@ if __name__ == '__main__':
             print('Please restart your machine before using ScyllaDB, as you have disabled')
             print(' SELinux.')
 
-        if dist_name() == 'Ubuntu':
-            run('apt-get install -y hugepages')
+        if distro.id() == 'ubuntu':
+            # Ubuntu version is 20.04 or later
+            if int(distro.major_version()) >= 20:
+                hugepkg = 'libhugetlbfs-bin'
+            else:
+                hugepkg = 'hugepages'
+            run(f'apt-get install -y {hugepkg}')
