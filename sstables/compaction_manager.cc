@@ -725,8 +725,8 @@ future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exc
             // Note that we potentially could be doing multiple
             // upgrades here in parallel, but that is really the users
             // problem.
-            return rewrite_sstables(cf, sstables::compaction_options::make_upgrade(), [&](auto&) {
-                return tables;
+            return rewrite_sstables(cf, sstables::compaction_options::make_upgrade(), [&](auto&) mutable {
+                return std::exchange(tables, {});
             });
         });
     });
