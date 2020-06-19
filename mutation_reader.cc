@@ -991,10 +991,10 @@ struct fill_buffer_result {
     }
 };
 
-class inactive_shard_read : public reader_concurrency_semaphore::inactive_read {
+class inactive_evictable_reader : public reader_concurrency_semaphore::inactive_read {
     flat_mutation_reader_opt _reader;
 public:
-    inactive_shard_read(flat_mutation_reader reader)
+    inactive_evictable_reader(flat_mutation_reader reader)
         : _reader(std::move(reader)) {
     }
     flat_mutation_reader reader() && {
@@ -1668,7 +1668,7 @@ future<> multishard_combining_reader::fast_forward_to(position_range pr, db::tim
 
 reader_concurrency_semaphore::inactive_read_handle
 reader_lifecycle_policy::pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader) {
-    return sem.register_inactive_read(std::make_unique<inactive_shard_read>(std::move(reader)));
+    return sem.register_inactive_read(std::make_unique<inactive_evictable_reader>(std::move(reader)));
 }
 
 flat_mutation_reader_opt
@@ -1677,7 +1677,7 @@ reader_lifecycle_policy::try_resume(reader_concurrency_semaphore& sem, reader_co
     if (!ir_ptr) {
         return {};
     }
-    auto& ir = static_cast<inactive_shard_read&>(*ir_ptr);
+    auto& ir = static_cast<inactive_evictable_reader&>(*ir_ptr);
     return std::move(ir).reader();
 }
 
