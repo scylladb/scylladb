@@ -734,8 +734,8 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
 
 future<> compaction_manager::perform_cleanup(column_family* cf) {
     if (check_for_cleanup(cf)) {
-        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
-            cf->schema()->ks_name(), cf->schema()->cf_name()));
+        return make_exception_future<>(std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
+            cf->schema()->ks_name(), cf->schema()->cf_name())));
     }
     return rewrite_sstables(cf, sstables::compaction_options::make_cleanup(), [this] (const table& table) {
         auto schema = table.schema();
