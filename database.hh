@@ -810,7 +810,7 @@ public:
 
     db::replay_position set_low_replay_position_mark();
 
-    future<> snapshot(sstring name);
+    future<> snapshot(database& db, sstring name);
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     /*!
@@ -829,7 +829,7 @@ public:
      * CREATE INDEX command.
      * The same is true for local index and MATERIALIZED VIEW.
      */
-    future<> write_schema_as_cql(sstring dir) const;
+    future<> write_schema_as_cql(database& db, sstring dir) const;
 
     const bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;

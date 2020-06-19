@@ -91,7 +91,7 @@ future<> snapshot_ctl::take_snapshot(sstring tag, std::vector<sstring> keyspace_
                     auto& ks = db.find_keyspace(ks_name);
                     return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, tag = std::move(tag)] (auto& pair) {
                         auto& cf = db.find_column_family(pair.second);
-                        return cf.snapshot(tag);
+                        return cf.snapshot(db, tag);
                     });
                 });
             });
@@ -119,7 +119,7 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
                     }
                     return _db.invoke_on_all([ks_name, table_name, tag] (database &db) {
                         auto& cf = db.find_column_family(ks_name, table_name);
-                        return cf.snapshot(tag);
+                        return cf.snapshot(db, tag);
                     });
                 });
             });

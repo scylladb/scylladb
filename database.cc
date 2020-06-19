@@ -1830,7 +1830,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                     future<> f = make_ready_future<>();
                     if (auto_snapshot) {
                         auto name = format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
-                        f = cf.snapshot(name);
+                        f = cf.snapshot(*this, name);
                     }
                     return f.then([this, &cf, truncated_at, low_mark, should_flush] {
                         return cf.discard_sstables(truncated_at).then([this, &cf, truncated_at, low_mark, should_flush](db::replay_position rp) {
