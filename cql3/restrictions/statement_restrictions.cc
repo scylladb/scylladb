@@ -54,7 +54,9 @@ class statement_restrictions::initial_key_restrictions : public primary_key_rest
     bool _allow_filtering;
 public:
     initial_key_restrictions(bool allow_filtering)
-        : _allow_filtering(allow_filtering) {}
+        : _allow_filtering(allow_filtering) {
+        this->expression = conjunction{};
+    }
     using bounds_range_type = typename primary_key_restrictions<T>::bounds_range_type;
 
     ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {

@@ -100,7 +100,9 @@ public:
         : _schema(schema)
         , _allow_filtering(allow_filtering)
         , _restrictions(::make_shared<single_column_restrictions>(schema))
-    { }
+    {
+        this->expression = conjunction{};  // This will track _restrictions, which is a conjunction.
+    }
 
     // Convert another primary key restrictions type into this type, possibly using different schema
     template<typename OtherValueType>
@@ -109,7 +111,7 @@ public:
         , _allow_filtering(other._allow_filtering)
         , _restrictions(::make_shared<single_column_restrictions>(schema))
     {
-        for (const auto& entry : other._restrictions->restrictions()) {
+        for (const auto& entry : other.restrictions()) {
             const column_definition* other_cdef = entry.first;
             const column_definition* this_cdef = _schema->get_column_definition(other_cdef->name());
             if (!this_cdef) {
@@ -155,6 +157,7 @@ public:
         }
         restriction::_ops.add(restriction->get_ops());
         _restrictions->add_restriction(restriction);
+        this->expression = make_conjunction(std::move(this->expression), restriction->expression);
     }
 
     virtual size_t prefix_size() const override {
@@ -164,12 +167,12 @@ public:
     ::shared_ptr<single_column_primary_key_restrictions<clustering_key>> get_longest_prefix_restrictions() {
         static_assert(std::is_same_v<ValueType, clustering_key>, "Only clustering key can produce longest prefix restrictions");
         size_t current_prefix_size = prefix_size();
-        if (current_prefix_size == _restrictions->restrictions().size()) {
+        if (current_prefix_size == restrictions().size()) {
             return dynamic_pointer_cast<single_column_primary_key_restrictions<clustering_key>>(this->shared_from_this());
         }
 
         auto longest_prefix_restrictions = ::make_shared<single_column_primary_key_restrictions<clustering_key>>(_schema, _allow_filtering);
-        auto restriction_it = _restrictions->restrictions().begin();
+        auto restriction_it = restrictions().begin();
         for (size_t i = 0; i < current_prefix_size; ++i) {
             longest_prefix_restrictions->merge_with((restriction_it++)->second);
         }
@@ -192,7 +195,7 @@ public:
     virtual std::vector<ValueType> values_as_keys(const query_options& options) const override {
         std::vector<std::vector<bytes_opt>> value_vector;
         value_vector.reserve(_restrictions->size());
-        for (auto&& e : _restrictions->restrictions()) {
+        for (auto&& e : restrictions()) {
             const column_definition* def = e.first;
             auto&& r = e.second;
             assert(!r->is_slice());

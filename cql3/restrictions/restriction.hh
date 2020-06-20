@@ -247,6 +247,8 @@ protected:
     enum_set<op_enum> _ops;
     target _target = target::SINGLE_COLUMN;
 public:
+    // Init to false for now, to easily detect errors.  This whole class is going away.
+    cql3::restrictions::expression expression = false;
     virtual ~restriction() {}
 
     restriction() = default;
