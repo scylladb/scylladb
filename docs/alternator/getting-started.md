@@ -16,6 +16,10 @@ This section will guide you through the steps for setting up the cluster:
    whether or not Alternator will use LWT for every write.
    For example,
    `docker run --name scylla -d -p 8000:8000 scylladb/scylla-nightly:latest --alternator-port=8000 --alternator-write-isolation=always
+   The `--alternator-https-port=...` option can also be used to enable
+   Alternator on an encrypted (HTTPS) port. Note that in this case, the files
+   `/etc/scylla/scylla.crt` and `/etc/scylla/scylla.key` must be inserted into
+   the image, containing the SSL certificate and key to use.
 
 ## Testing Scylla's DynamoDB API support:
 ### Running AWS Tic Tac Toe demo app to test the cluster:

@@ -16,6 +16,7 @@ class ScyllaSetup:
         self._broadcastRpcAddress = arguments.broadcastRpcAddress
         self._apiAddress = arguments.apiAddress
         self._alternatorPort = arguments.alternatorPort
+        self._alternatorHttpsPort = arguments.alternatorHttpsPort
         self._alternatorWriteIsolation = arguments.alternatorWriteIsolation
         self._smp = arguments.smp
         self._memory = arguments.memory
@@ -116,6 +117,10 @@ class ScyllaSetup:
         if self._alternatorPort is not None:
             args += ["--alternator-address %s" % self._alternatorAddress]
             args += ["--alternator-port %s" % self._alternatorPort]
+
+        if self._alternatorHttpsPort is not None:
+            args += ["--alternator-address %s" % self._alternatorAddress]
+            args += ["--alternator-https-port %s" % self._alternatorHttpsPort]
 
         if self._alternatorWriteIsolation is not None:
             args += ["--alternator-write-isolation %s" % self._alternatorWriteIsolation]

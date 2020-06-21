@@ -163,6 +163,14 @@ $ docker run --name some-scylla -d scylladb/scylla --alternator-port 8000
 
 **Since: 3.2**
 
+### `--alternator-https-port PORT`
+
+The `--alternator-https-port` option is similar to `--alternator-port`, just enables an encrypted (HTTPS) port. Either the `--alternator-https-port` or `--alternator-http-port`, or both, can be used to enable Alternator.
+
+Note that the `--alternator-https-port` option also requires that files `/etc/scylla/scylla.crt` and `/etc/scylla/scylla.key` be inserted into the image. These files contain an SSL certificate and key, respectively.
+
+**Since: 4.2**
+
 ### `--alternator-write-isolation policy`
 
 The `--alternator-write-isolation` command line option chooses between four allowed write isolation policies described in docs/alternator/alternator.md. This option must be specified if Alternator is enabled - it does not have a default.
