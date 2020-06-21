@@ -32,9 +32,6 @@ Do the following in the top-level Scylla source directory:
 1. Build your own Scylla in whatever build mode you prefer, e.g., dev.
 
 2. Run `./reloc/build_reloc.sh --mode dev`
-   Unfortunately, even if you already compiled Scylla above, this step will
-   rerun configure.py with slightly different options and then recompile
-   Scylla from scratch. This is issue #6477.
 
 3. Run `./reloc/build_rpm.sh --reloc-pkg build/dev/scylla-package.tar.gz`
 
