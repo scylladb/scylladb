@@ -164,12 +164,16 @@ future<> distributed_loader::verify_owner_and_mode(fs::path path) {
 
 future<>
 distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& dir) {
-    return dir.invoke_on_all([&dir] (sstables::sstable_directory& d) {
+    return dir.invoke_on(0, [] (const sstables::sstable_directory& d) {
+        return distributed_loader::verify_owner_and_mode(d.sstable_dir());
+    }).then([&dir] {
+      return dir.invoke_on_all([&dir] (sstables::sstable_directory& d) {
         // Supposed to be called with the node either down or on behalf of maintenance tasks
         // like nodetool refresh
         return d.process_sstable_dir(service::get_local_streaming_read_priority()).then([&dir, &d] {
             return d.move_foreign_sstables(dir);
         });
+      });
     }).then([&dir] {
         return dir.invoke_on_all([&dir] (sstables::sstable_directory& d) {
             return d.commit_directory_changes();
