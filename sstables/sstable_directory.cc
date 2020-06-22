@@ -330,7 +330,7 @@ future<uint64_t> sstable_directory::reshape(compaction_manager& cm, table& table
             }
 
             if (!reshaped_size) {
-                dirlog.info("Found SSTables that need reshape. Starting reshape process");
+                dirlog.info("Table {}.{} with compaction strategy {} found SSTables that need reshape. Starting reshape process", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
             }
 
             std::vector<sstables::shared_sstable> sstlist;
