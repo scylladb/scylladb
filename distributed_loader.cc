@@ -645,7 +645,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
 
         sharded<sstables::sstable_directory> directory;
         directory.start(fs::path(sstdir), db.local().get_config().initial_sstable_loading_concurrency(),
-            sstables::sstable_directory::need_mutate_level::yes,
+            sstables::sstable_directory::need_mutate_level::no,
             sstables::sstable_directory::lack_of_toc_fatal::yes,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
             sstables::sstable_directory::allow_loading_materialized_view::yes,
