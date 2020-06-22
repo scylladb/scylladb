@@ -57,7 +57,7 @@ if __name__ == '__main__':
     run('dd if=/dev/zero of={} bs=1G count={}'.format(swapfile, swapsize))
     swapfile.chmod(0o600)
     run('mkswap -f {}'.format(swapfile))
-    swapunit_bn = out('/usr/bin/systemd-escape -p --suffix=swap {}'.format(swapfile))
+    swapunit_bn = out('systemd-escape -p --suffix=swap {}'.format(swapfile))
     swapunit = Path('/etc/systemd/system/{}'.format(swapunit_bn))
     if swapunit.exists():
         print('swap unit {} already exists'.format(swapunit))
