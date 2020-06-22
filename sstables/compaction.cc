@@ -438,6 +438,8 @@ protected:
         , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
     {
+        _info->type = descriptor.options.type();
+        _info->run_identifier = _run_identifier;
         _info->cf = &cf;
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
@@ -742,8 +744,6 @@ class reshape_compaction : public compaction {
 public:
     reshape_compaction(column_family& cf, compaction_descriptor descriptor)
         : compaction(cf, std::move(descriptor)) {
-        _info->run_identifier = _run_identifier;
-        _info->type = compaction_type::Reshape;
     }
 
     flat_mutation_reader make_sstable_reader() const override {
@@ -794,7 +794,6 @@ public:
         : compaction(cf, std::move(descriptor))
         , _monitor_generator(_cf.get_compaction_manager(), _cf)
     {
-        _info->run_identifier = _run_identifier;
     }
 
     flat_mutation_reader make_sstable_reader() const override {
@@ -991,7 +990,6 @@ public:
         : regular_compaction(cf, std::move(descriptor))
         , _owned_ranges(service::get_local_storage_service().get_local_ranges(_schema->ks_name()))
     {
-        _info->type = compaction_type::Cleanup;
     }
 
     void report_start(const sstring& formatted_msg) const override {
@@ -1195,7 +1193,6 @@ public:
     scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_options::scrub options)
         : regular_compaction(cf, std::move(descriptor))
         , _options(options) {
-        _info->type = compaction_type::Scrub;
     }
 
     void report_start(const sstring& formatted_msg) const override {
@@ -1263,7 +1260,6 @@ public:
         for (auto i : boost::irange(0u, smp::count)) {
             _run_identifiers[i] = utils::make_random_uuid();
         }
-        _info->type = compaction_type::Reshard;
     }
 
     ~resharding_compaction() { }
