@@ -635,11 +635,11 @@ static future<> update_tags(service::migration_manager& mm, const rjson::value& 
         for (auto it = tags.Begin(); it != tags.End(); ++it) {
             const rjson::value& key = (*it)["Key"];
             const rjson::value& value = (*it)["Value"];
-            std::string_view tag_key(key.GetString(), key.GetStringLength());
+            auto tag_key = rjson::to_string_view(key);
             if (tag_key.empty() || tag_key.size() > 128 || !validate_legal_tag_chars(tag_key)) {
                 throw api_error("ValidationException", "The Tag Key provided is invalid string");
             }
-            std::string_view tag_value(value.GetString(), value.GetStringLength());
+            auto tag_value = rjson::to_string_view(value);
             if (tag_value.empty() || tag_value.size() > 256 || !validate_legal_tag_chars(tag_value)) {
                 throw api_error("ValidationException", "The Tag Value provided is invalid string");
             }
@@ -647,8 +647,7 @@ static future<> update_tags(service::migration_manager& mm, const rjson::value& 
         }
     } else if (action == update_tags_action::delete_tags) {
         for (auto it = tags.Begin(); it != tags.End(); ++it) {
-            std::string_view tag_key(it->GetString(), it->GetStringLength());
-            tags_map.erase(sstring(tag_key));
+            tags_map.erase(sstring(it->GetString(), it->GetStringLength()));
         }
     }
 
@@ -683,7 +682,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         if (!arn || !arn->IsString()) {
             return api_error("AccessDeniedException", "Incorrect resource identifier");
         }
-        schema_ptr schema = get_table_from_arn(_proxy, std::string_view(arn->GetString(), arn->GetStringLength()));
+        schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
         add_tags(_mm, _proxy, schema, request).get();
         return json_string("");
     });
@@ -702,7 +701,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
             return api_error("ValidationException", format("Cannot parse tag keys"));
         }
 
-        schema_ptr schema = get_table_from_arn(_proxy, std::string_view(arn->GetString(), arn->GetStringLength()));
+        schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
         std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
         update_tags(_mm, *tags, schema, std::move(tags_map), update_tags_action::delete_tags).get();
@@ -716,7 +715,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     if (!arn || !arn->IsString()) {
         return make_ready_future<request_return_type>(api_error("AccessDeniedException", "Incorrect resource identifier"));
     }
-    schema_ptr schema = get_table_from_arn(_proxy, std::string_view(arn->GetString(), arn->GetStringLength()));
+    schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
     auto tags_map = get_tags_of_table(schema);
     rjson::value ret = rjson::empty_object();
