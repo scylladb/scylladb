@@ -134,8 +134,13 @@ implemented, with the following limitations:
   Note that this is a new DynamoDB feature - these are more powerful than
   the old conditional updates which were "lightweight transactions".
 ### Streams
-* Scylla has experimental support for [CDC](https://docs.scylladb.com/using-scylla/cdc/)
-  (change data capture), but the "DynamoDB Streams" API is not yet supported.
+* Implemented via [CDC](https://docs.scylladb.com/using-scylla/cdc/)
+  (change data capture). The Alternator server responed to all DynamoDB 
+  Streams API calls.
+  Note that because of how Scylla CDC operates, there is a time window
+  between data being written to a table and it being visible via
+  GetRecords calls (default 10s).
+  
 ### Encryption at rest
 * Supported by Scylla Enterprise (not in open-source). Needs to be enabled.
 ### Tags
