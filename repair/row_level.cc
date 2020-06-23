@@ -429,6 +429,11 @@ public:
         return _reader(db::no_timeout);
     }
 
+    void on_end_of_stream() {
+        _reader = make_empty_flat_reader(_schema);
+        _reader_handle.reset();
+    }
+
     lw_shared_ptr<const decorated_key_with_hash>& get_current_dk() {
         return _current_dk;
     }
@@ -1038,11 +1043,7 @@ private:
         return repair_hash(h.finalize_uint64());
     }
 
-    stop_iteration handle_mutation_fragment(mutation_fragment_opt mfopt, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
-        if (!mfopt) {
-            return stop_iteration::yes;
-        }
-        mutation_fragment& mf = *mfopt;
+    stop_iteration handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (mf.is_partition_start()) {
             auto& start = mf.as_partition_start();
             _repair_reader.set_current_dk(start.key());
@@ -1077,9 +1078,17 @@ private:
                 }
                 _gate.check();
                 return _repair_reader.read_mutation_fragment().then([this, &cur_size, &new_rows_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
-                    return handle_mutation_fragment(std::move(mfopt), cur_size, new_rows_size, cur_rows);
+                    if (!mfopt) {
+                        _repair_reader.on_end_of_stream();
+                        return stop_iteration::yes;
+                    }
+                    return handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows);
                 });
-            }).then([this, &cur_rows, &new_rows_size] () mutable {
+            }).then_wrapped([this, &cur_rows, &new_rows_size] (future<> fut) mutable {
+                if (fut.failed()) {
+                    _repair_reader.on_end_of_stream();
+                    return make_exception_future<std::list<repair_row>, size_t>(fut.get_exception());
+                }
                 _repair_reader.pause();
                 return make_ready_future<std::list<repair_row>, size_t>(std::move(cur_rows), new_rows_size);
             });
