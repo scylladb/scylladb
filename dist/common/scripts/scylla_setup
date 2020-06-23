@@ -162,9 +162,9 @@ if __name__ == '__main__':
     parser.add_argument('--nic',
                         help='specify NIC')
     parser.add_argument('--ntp-domain',
-                        help='specify NTP domain')
+                        help='specify subdomain of pool.ntp.org (ex: centos, fedora or amazon)')
     parser.add_argument('--swap-directory',
-                        help='specify swap directory')
+                        help='specify swapfile directory (ex: /)')
     parser.add_argument('--ami', action='store_true', default=False,
                         help='setup AMI instance')
     parser.add_argument('--setup-nic-and-disks', action='store_true', default=False,
