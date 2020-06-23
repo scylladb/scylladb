@@ -355,30 +355,28 @@ def out(cmd, shell=False, exception=True, timeout=None):
         return p.communicate()[0].strip().decode('utf-8')
 
 
-def parse_os_release_line(line):
-    id, data = line.split('=', 1)
-    val = shlex.split(data)[0]
-    return (id, val.split(' ') if id == 'ID' or id == 'ID_LIKE' else val)
-
-os_release = dict([parse_os_release_line(x) for x in open('/etc/os-release').read().splitlines() if re.match(r'\w+=', x) ])
+def get_id_like():
+    like = distro.like()
+    if not like:
+        return None
+    return like.split(' ')
 
 def is_debian_variant():
-    d = os_release['ID_LIKE'] if 'ID_LIKE' in os_release else os_release['ID']
+    d = get_id_like() if get_id_like() else distro.id()
     return ('debian' in d)
 
-
 def is_redhat_variant():
-    d = os_release['ID_LIKE'] if 'ID_LIKE' in os_release else os_release['ID']
+    d = get_id_like() if get_id_like() else distro.id()
     return ('rhel' in d) or ('fedora' in d) or ('ol') in d
 
 def is_amzn2():
-    return ('amzn' in os_release['ID']) and ('2' in os_release['VERSION_ID'])
+    return ('amzn' in distro.id()) and ('2' in distro.version())
 
 def is_gentoo_variant():
-    return ('gentoo' in os_release['ID'])
+    return ('gentoo' in distro.id())
 
 def redhat_version():
-    return os_release['VERSION_ID']
+    return distro.version()
 
 def is_ec2():
     if os.path.exists('/sys/hypervisor/uuid'):
