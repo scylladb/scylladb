@@ -19,4 +19,4 @@ custom_args:
     sstable_3_x_test:
         - '-c1 -m2G'
     cql_query_test:
-        - '-c2 -m2G --fail-on-abandoned-failed-futures'
+        - '-c2 -m2G --fail-on-abandoned-failed-futures=true'
