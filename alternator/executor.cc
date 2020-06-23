@@ -733,12 +733,12 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
 
-static future<> wait_for_schema_agreement(db::timeout_clock::time_point deadline) {
-    return do_until([deadline] {
+static future<> wait_for_schema_agreement(service::migration_manager& mm, db::timeout_clock::time_point deadline) {
+    return do_until([&mm, deadline] {
         if (db::timeout_clock::now() > deadline) {
             throw std::runtime_error("Unable to reach schema agreement");
         }
-        return service::get_local_migration_manager().have_schema_agreement();
+        return mm.have_schema_agreement();
     }, [] {
         return seastar::sleep(500ms);
     });
@@ -931,15 +931,15 @@ future<executor::request_return_type> executor::create_table(client_state& clien
             // Ignore the fact that the keyspace may already exist. See discussion in #6340
         }).then([this, table_name, request = std::move(request), schema, view_builders = std::move(view_builders)] () mutable {
         return futurize_invoke([&] { return _mm.announce_new_column_family(schema, false); }).then([this, table_info = std::move(request), schema, view_builders = std::move(view_builders)] () mutable {
-            return parallel_for_each(std::move(view_builders), [schema] (schema_builder builder) {
-                return service::get_local_migration_manager().announce_new_view(view_ptr(builder.build()));
+            return parallel_for_each(std::move(view_builders), [this, schema] (schema_builder builder) {
+                return _mm.announce_new_view(view_ptr(builder.build()));
             }).then([this, table_info = std::move(table_info), schema] () mutable {
                 future<> f = make_ready_future<>();
                 if (rjson::find(table_info, "Tags")) {
                     f = add_tags(_mm, _proxy, schema, table_info);
                 }
-                return f.then([] {
-                    return wait_for_schema_agreement(db::timeout_clock::now() + 10s);
+                return f.then([this] {
+                    return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
                 }).then([table_info = std::move(table_info), schema] () mutable {
                     rjson::value status = rjson::empty_object();
                     supplement_table_info(table_info, *schema);
