@@ -2668,7 +2668,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
-    auto p = service::pager::query_pagers::pager(schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), cql_stats, nullptr);
+    auto p = service::pager::query_pagers::pager(schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
     return p->fetch_page(limit, gc_clock::now(), default_timeout()).then(
             [p, schema, cql_stats, partition_slice = std::move(partition_slice),
@@ -2686,6 +2686,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
             rjson::set(items, "LastEvaluatedKey", encode_paging_state(*schema, *paging_state));
         }
         if (has_filter){
+            cql_stats.filtered_rows_read_total += p->stats().rows_read_total;
             // update our "filtered_row_matched_total" for all the rows matched, despited the filter
             cql_stats.filtered_rows_matched_total += items["Items"].Size();
         }

@@ -71,6 +71,12 @@ namespace pager {
  * is done even though it is.
  */
 class query_pager {
+public:
+    struct stats {
+        // Total number of rows read by this pager, based on all pages it fetched
+        size_t rows_read_total = 0;
+    };
+
 protected:
     // remember if we use clustering. if not, each partition == one row
     const bool _has_clustering_keys;
@@ -90,6 +96,7 @@ protected:
     paging_state::replicas_per_token_range _last_replicas;
     std::optional<db::read_repair_decision> _query_read_repair_decision;
     uint32_t _rows_fetched_for_last_partition = 0;
+    stats _stats;
 public:
     query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
@@ -141,6 +148,10 @@ public:
      * to a paging_state instance which will return 0 on calling get_remaining() on it.
      */
     lw_shared_ptr<const paging_state> state() const;
+
+    const stats& stats() const {
+        return _stats;
+    }
 
 protected:
     template<typename Base>
