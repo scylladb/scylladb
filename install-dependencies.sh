@@ -103,6 +103,7 @@ fedora_python3_packages=(
     python3-setuptools
     python3-psutil
     python3-distro
+    python3-cerberus
 )
 
 centos_packages=(

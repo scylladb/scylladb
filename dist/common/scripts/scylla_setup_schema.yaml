@@ -1,0 +1,103 @@
+disks:
+    type: string
+    nullable: true
+nic:
+    type: string
+    nullable: true
+ntp_domain:
+    type: string
+    nullable: true
+swap_directory:
+    type: string
+    nullable: true
+swap_size:
+    type: integer
+    nullable: true
+rsyslog_server:
+    type: string
+    nullable: true
+developer_mode:
+    type: boolean
+    default: false
+raid_setup:
+    type: boolean
+    dependencies:
+      - disks
+    default: true
+    negative: true
+ami:
+    type: boolean
+    default: false
+setup_nic_and_disks:
+    type: boolean
+    dependencies:
+      - nic
+    default: false
+ec2_check:
+    type: boolean
+    default: true
+    negative: true
+kernel_check:
+    type: boolean
+    default: true
+    negative: true
+verify_package:
+    type: boolean
+    default: true
+    negative: true
+enable_service:
+    type: boolean
+    default: true
+    negative: true
+selinux_setup:
+    type: boolean
+    default: true
+    negative: true
+bootparam_setup:
+    type: boolean
+    default: true
+    negative: true
+ntp_setup:
+    type: boolean
+    default: true
+    negative: true
+coredump_setup:
+    type: boolean
+    default: true
+    negative: true
+sysconfig_setup:
+    type: boolean
+    default: true
+    negative: true
+io_setup:
+    type: boolean
+    default: true
+    negative: true
+version_check:
+    type: boolean
+    default: true
+    negative: true
+node_exporter:
+    type: boolean
+    default: true
+    negative: true
+cpuscaling_setup:
+    type: boolean
+    default: true
+    negative: true
+fstrim_setup:
+    type: boolean
+    default: true
+    negative: true
+memory_setup:
+    type: boolean
+    default: true
+    negative: true
+swap_setup:
+    type: boolean
+    default: true
+    negative: true
+rsyslog_setup:
+    type: boolean
+    default: true
+    nagative: true
