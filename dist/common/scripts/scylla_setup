@@ -396,7 +396,7 @@ if __name__ == '__main__':
 
         args.no_raid_setup = not raid_setup
         if raid_setup:
-            run_setup_script('RAID', 'scylla_raid_setup --disks {} --update-fstab'.format(disks))
+            run_setup_script('RAID', f'scylla_raid_setup --disks {disks} --enable-on-nextboot')
 
         coredump_setup = interactive_ask_service('Do you want to enable coredumps?', 'Yes - sets up coredump to allow a post-mortem analysis of the Scylla state just prior to a crash. No - skips this step.', coredump_setup)
         args.no_coredump_setup = not coredump_setup
