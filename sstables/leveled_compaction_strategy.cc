@@ -21,6 +21,7 @@
 
 #include "leveled_compaction_strategy.hh"
 #include <algorithm>
+#include <ranges>
 
 namespace sstables {
 
@@ -167,8 +168,8 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         level_info[sst_level].push_back(sst);
     }
 
-    for (auto& level : level_info) {
-        std::sort(level.begin(), level.end(), [this, schema] (shared_sstable a, shared_sstable b) {
+    for (auto& level : level_info | std::ranges::views::drop(1)) {
+        std::sort(level.begin(), level.end(), [&schema] (const shared_sstable& a, const shared_sstable& b) {
             return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
         });
     }
