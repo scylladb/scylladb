@@ -74,9 +74,9 @@ make_failure_injection_function(sstring name,
 shared_ptr<function> make_enable_injection_function() {
     return make_failure_injection_function<false>("enable_injection", empty_type, { ascii_type, ascii_type },
             [] (cql_serialization_format, const std::vector<bytes_opt>& parameters) {
-        const sstring injection_name = ascii_type->get_string(parameters[0].value());
+        sstring injection_name = ascii_type->get_string(parameters[0].value());
         const bool one_shot = ascii_type->get_string(parameters[1].value()) == "true";
-        smp::invoke_on_all([injection_name, one_shot] {
+        smp::invoke_on_all([injection_name, one_shot] () mutable {
             utils::get_local_injector().enable(injection_name, one_shot);
         }).get0();
         return std::nullopt;
@@ -86,8 +86,8 @@ shared_ptr<function> make_enable_injection_function() {
 shared_ptr<function> make_disable_injection_function() {
     return make_failure_injection_function<false>("disable_injection", empty_type, { ascii_type },
             [] (cql_serialization_format, const std::vector<bytes_opt>& parameters) {
-        const sstring injection_name = ascii_type->get_string(parameters[0].value());
-        smp::invoke_on_all([injection_name] {
+        sstring injection_name = ascii_type->get_string(parameters[0].value());
+        smp::invoke_on_all([injection_name] () mutable {
             utils::get_local_injector().disable(injection_name);
         }).get0();
         return std::nullopt;
