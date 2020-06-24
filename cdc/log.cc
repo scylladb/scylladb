@@ -1175,7 +1175,7 @@ public:
                     pirow = &rs->front();
                 }
 
-                if (preimage && pirow) {
+                if (preimage) {
                     pikey = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
                     set_operation(*pikey, ts, operation::pre_image, res);
                 }
@@ -1220,7 +1220,7 @@ public:
                         }
                     }
 
-                    if (preimage && pirow) {
+                    if (preimage) {
                         pikey = set_pk_columns(m.key(), ts, tuuid, batch_no++, res);
                         set_operation(*pikey, ts, operation::pre_image, res);
                     }
@@ -1239,7 +1239,6 @@ public:
                         res.set_cell(log_ck, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
 
                         if (pikey) {
-                            assert(pirow->has(column.name_as_text()));
                             res.set_cell(*pikey, *cdef, atomic_cell::make_live(*column.type, ts, bytes_view(ck_value[pos]), _cdc_ttl_opt));
                         }
                         if (poikey) {
@@ -1255,7 +1254,10 @@ public:
                         cdc_op = operation::row_delete;
                         if (pirow && pikey) {
                             for (const column_definition& column: _schema->regular_columns()) {
-                                assert(pirow->has(column.name_as_text()));
+                                if (!pirow->has(column.name_as_text())) {
+                                    continue;
+                                }
+
                                 auto& cdef = *_log_schema->get_column_definition(log_data_column_name_bytes(column.name()));
                                 auto value = get_preimage_col_value(column, pirow);                                
                                 res.set_cell(*pikey, cdef, atomic_cell::make_live(*column.type, ts, bytes_view(*value), _cdc_ttl_opt));

@@ -79,6 +79,12 @@ SELECT "cdc$batch_seq_no", "cdc$operation", ck, pk, val FROM ks.tbl_cdc_lwt_scyl
 	[
 		{
 			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"ck" : "1",
+			"pk" : "1"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
 			"cdc$operation" : "2",
 			"ck" : "1",
 			"pk" : "1",
@@ -114,13 +120,13 @@ SELECT "cdc$batch_seq_no", "cdc$operation", ck, pk, val FROM ks.tbl_cdc_lwt_scyl
 	]
 }
 
--- there should be 5 rows in total: (0) + (2) + preimg(2) + (4) + preimg(4)
+-- there should be 6 rows in total: (0) + preimg(0) + (2) + preimg(2) + (4) + preimg(4)
 SELECT count(*) FROM ks.tbl_cdc_lwt_scylla_cdc_log;
 {
 	"rows" : 
 	[
 		{
-			"count" : "5"
+			"count" : "6"
 		}
 	]
 }

@@ -522,7 +522,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
 
             auto rows = select_log(e, "tbl");
 
-            BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
+            BOOST_REQUIRE_EQUAL(!pre_enabled, to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
             BOOST_REQUIRE_EQUAL(!post_enabled, to_bytes_filtered(*rows, cdc::operation::post_image).empty());
 
             auto first = to_bytes_filtered(*rows, cdc::operation::update);
@@ -561,7 +561,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
                 sort_by_time(*rows, post_image);
 
                 if (pre_enabled) {
-                    BOOST_REQUIRE_EQUAL(pre_image.size(), i + 1);
+                    BOOST_REQUIRE_EQUAL(pre_image.size(), i + 2);
 
                     val = *pre_image.back()[val_index];
                     // note: no val2 in pre-image, because we are not modifying it. 
@@ -610,7 +610,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging_static_row) {
 
             auto rows = select_log(e, "tbl");
 
-            BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
+            BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty() == !enabled);
             BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::post_image).empty() == !enabled);
 
             auto first = to_bytes_filtered(*rows, cdc::operation::update);
@@ -646,7 +646,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging_static_row) {
                     sort_by_time(*rows, second);
                     sort_by_time(*rows, pre_image);
                     sort_by_time(*rows, post_image);
-                    BOOST_REQUIRE_EQUAL(pre_image.size(), i + 1);
+                    BOOST_REQUIRE_EQUAL(pre_image.size(), i + 2);
 
                     s = *pre_image.back()[s_index];
                     BOOST_REQUIRE_EQUAL(data_value(last), s_type->deserialize(bytes_view(s)));
@@ -859,9 +859,7 @@ static void test_collection(cql_test_env& e, data_type val_type, data_type del_t
 
         auto val_index = column_index(*rows, cdc::log_data_column_name("val"));
 
-        if (t.prev.is_null()) {
-            BOOST_REQUIRE(pre_image.empty());
-        } else {
+        if (!t.prev.is_null()) {
             BOOST_REQUIRE_GE(pre_image.size(), t.changes.size());
         }
 
@@ -1595,6 +1593,10 @@ SEASTAR_THREAD_TEST_CASE(test_batch_with_row_delete) {
         auto set_null = data_value::make_null(s_type);
 
         const std::vector<std::vector<data_value>> expected = {
+            // Preimage for (0)
+            {int_null, udt_null, map_null, set_null, oper_ut(cdc::operation::pre_image)},
+            // Update (0)
+            {int32_t(1), make_user_value(udt_type, {1,2}), make_map_value(m_type, {{1,2},{3,4}}), make_set_value(s_type, {1,2,3}), oper_ut(cdc::operation::insert)},
             // Preimage for (1)
             {int32_t(1), udt_null, map_null, set_null, oper_ut(cdc::operation::pre_image)},
             // Update (1)
@@ -1614,7 +1616,7 @@ SEASTAR_THREAD_TEST_CASE(test_batch_with_row_delete) {
 
         for (size_t idx = 0; idx < expected.size(); ++idx) {
             const auto& er = expected[idx];
-            const auto& r = results[idx + 1]; // We skip first log record because it represents initial insert.
+            const auto& r = results[idx]; // We skip first log record because it represents initial insert.
             BOOST_REQUIRE_EQUAL(deser(int32_type, r[0]), er[0]);
             BOOST_REQUIRE_EQUAL(deser(udt_type, r[1]), er[1]);
             BOOST_REQUIRE_EQUAL(deser(m_type, r[2]), er[2]);
