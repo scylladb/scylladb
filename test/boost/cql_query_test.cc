@@ -53,6 +53,7 @@
 #include "service/migration_manager.hh"
 #include <regex>
 #include "gms/feature.hh"
+#include "db/query_context.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -4569,6 +4570,16 @@ SEASTAR_TEST_CASE(ck_slice_with_null_is_forbidden) {
             const auto nullerr = exception_predicate::message_contains("null");
             BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where r<null allow filtering").get(), ire, nullerr);
             BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where r>null allow filtering").get(), ire, nullerr);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_internal_alter_table_on_a_distributed_table) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&e] {
+            cquery_nofail(e, "create table t (p int primary key, v int)");
+            const auto local_err = exception_predicate::message_contains("local");
+            BOOST_REQUIRE_EXCEPTION(db::execute_cql("alter table ks.t add col abcd").get(), std::logic_error, local_err);
         });
     });
 }
