@@ -25,8 +25,7 @@ import sys
 import argparse
 import subprocess
 import re
-
-from pkg_resources import parse_version
+import distro
 
 from scylla_util import *
 
@@ -76,7 +75,7 @@ if __name__ == '__main__':
             run('rc-service ntpd start')
 
     if is_redhat_variant():
-        if parse_version(redhat_version()) >= parse_version('8'):
+        if int(distro.major_version()) >= 8:
             run('dnf install -y chrony')
             with open('/etc/chrony.conf') as f:
                 conf = f.read()
