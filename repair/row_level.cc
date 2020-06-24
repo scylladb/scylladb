@@ -372,6 +372,7 @@ private:
     std::optional<utils::phased_barrier::operation> _local_read_op;
     // Local reader or multishard reader to read the range
     flat_mutation_reader _reader;
+    std::optional<evictable_reader_handle> _reader_handle;
     // Current partition read from disk
     lw_shared_ptr<const decorated_key_with_hash> _current_dk;
 
@@ -390,30 +391,47 @@ public:
             , _sharder(remote_sharder, range, remote_shard)
             , _seed(seed)
             , _local_read_op(local_reader ? std::optional(cf.read_in_progress()) : std::nullopt)
-            , _reader(make_reader(db, cf, local_reader)) {
-    }
-
-private:
-    flat_mutation_reader
-    make_reader(seastar::sharded<database>& db,
-            column_family& cf,
-            is_local_reader local_reader) {
+            , _reader(nullptr) {
         if (local_reader) {
-            return cf.make_streaming_reader(_schema, _range);
+            auto ms = mutation_source([&cf] (
+                        schema_ptr s,
+                        reader_permit,
+                        const dht::partition_range& pr,
+                        const query::partition_slice& ps,
+                        const io_priority_class& pc,
+                        tracing::trace_state_ptr,
+                        streamed_mutation::forwarding,
+                        mutation_reader::forwarding fwd_mr) {
+                return cf.make_streaming_reader(std::move(s), pr, ps, fwd_mr);
+            });
+            std::tie(_reader, _reader_handle) = make_manually_paused_evictable_reader(
+                    std::move(ms),
+                    _schema,
+                    cf.streaming_read_concurrency_semaphore().make_permit(),
+                    _range,
+                    _schema->full_slice(),
+                    service::get_local_streaming_priority(),
+                    {},
+                    mutation_reader::forwarding::no);
+        } else {
+            _reader = make_multishard_streaming_reader(db, _schema, [this] {
+                auto shard_range = _sharder.next();
+                if (shard_range) {
+                    return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
+                }
+                return std::optional<dht::partition_range>();
+            });
         }
-        return make_multishard_streaming_reader(db, _schema, [this] {
-            auto shard_range = _sharder.next();
-            if (shard_range) {
-                return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
-            }
-            return std::optional<dht::partition_range>();
-        });
     }
 
-public:
     future<mutation_fragment_opt>
     read_mutation_fragment() {
         return _reader(db::no_timeout);
+    }
+
+    void on_end_of_stream() {
+        _reader = make_empty_flat_reader(_schema);
+        _reader_handle.reset();
     }
 
     lw_shared_ptr<const decorated_key_with_hash>& get_current_dk() {
@@ -434,6 +452,11 @@ public:
         }
     }
 
+    void pause() {
+        if (_reader_handle) {
+            _reader_handle->pause();
+        }
+    }
 };
 
 class repair_writer {
@@ -1015,11 +1038,7 @@ private:
         return repair_hash(h.finalize_uint64());
     }
 
-    stop_iteration handle_mutation_fragment(mutation_fragment_opt mfopt, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
-        if (!mfopt) {
-            return stop_iteration::yes;
-        }
-        mutation_fragment& mf = *mfopt;
+    stop_iteration handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (mf.is_partition_start()) {
             auto& start = mf.as_partition_start();
             _repair_reader.set_current_dk(start.key());
@@ -1054,9 +1073,18 @@ private:
                 }
                 _gate.check();
                 return _repair_reader.read_mutation_fragment().then([this, &cur_size, &new_rows_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
-                    return handle_mutation_fragment(std::move(mfopt), cur_size, new_rows_size, cur_rows);
+                    if (!mfopt) {
+                        _repair_reader.on_end_of_stream();
+                        return stop_iteration::yes;
+                    }
+                    return handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows);
                 });
-            }).then([&cur_rows, &new_rows_size] () mutable {
+            }).then_wrapped([this, &cur_rows, &new_rows_size] (future<> fut) mutable {
+                if (fut.failed()) {
+                    _repair_reader.on_end_of_stream();
+                    return make_exception_future<std::list<repair_row>, size_t>(fut.get_exception());
+                }
+                _repair_reader.pause();
                 return make_ready_future<std::list<repair_row>, size_t>(std::move(cur_rows), new_rows_size);
             });
         });

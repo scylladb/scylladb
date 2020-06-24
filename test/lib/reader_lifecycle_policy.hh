@@ -91,6 +91,7 @@ private:
         std::optional<const dht::partition_range> range;
         std::optional<const query::partition_slice> slice;
 
+        reader_context() = default;
         reader_context(dht::partition_range range, query::partition_slice slice) : range(std::move(range)), slice(std::move(slice)) {
         }
     };
@@ -143,18 +144,21 @@ public:
     }
     virtual reader_concurrency_semaphore& semaphore() override {
         const auto shard = this_shard_id();
-        if (!_contexts[shard]->semaphore) {
-            if (_evict_paused_readers) {
-                _contexts[shard]->semaphore = std::make_unique<reader_concurrency_semaphore>(0, std::numeric_limits<ssize_t>::max(),
-                        format("reader_concurrency_semaphore @shard_id={}", shard));
-                _contexts[shard]->permit = _contexts[shard]->semaphore->make_permit();
-                // Add a waiter, so that all registered inactive reads are
-                // immediately evicted.
-                // We don't care about the returned future.
-                _contexts[shard]->wait_future = _contexts[shard]->permit->wait_admission(1, db::no_timeout);
-            } else {
-                _contexts[shard]->semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
-            }
+        if (!_contexts[shard]) {
+            _contexts[shard] = make_foreign(std::make_unique<reader_context>());
+        } else if (_contexts[shard]->semaphore) {
+            return *_contexts[shard]->semaphore;
+        }
+        if (_evict_paused_readers) {
+            _contexts[shard]->semaphore = std::make_unique<reader_concurrency_semaphore>(0, std::numeric_limits<ssize_t>::max(),
+                    format("reader_concurrency_semaphore @shard_id={}", shard));
+            _contexts[shard]->permit = _contexts[shard]->semaphore->make_permit();
+            // Add a waiter, so that all registered inactive reads are
+            // immediately evicted.
+            // We don't care about the returned future.
+            _contexts[shard]->wait_future = _contexts[shard]->permit->wait_admission(1, db::no_timeout);
+        } else {
+            _contexts[shard]->semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
         }
         return *_contexts[shard]->semaphore;
     }
