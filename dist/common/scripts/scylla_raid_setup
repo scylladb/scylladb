@@ -37,8 +37,8 @@ if __name__ == '__main__':
                         help='specify disks for RAID')
     parser.add_argument('--raiddev', default='/dev/md0',
                         help='MD device name for RAID')
-    parser.add_argument('--update-fstab', action='store_true', default=False,
-                        help='update /etc/fstab for RAID')
+    parser.add_argument('--enable-on-nextboot', '--update-fstab', action='store_true', default=False,
+                        help='mount RAID on next boot')
     parser.add_argument('--root', default='/var/lib/scylla',
                         help='specify the root of the tree')
     parser.add_argument('--volume-role', default='all',
@@ -131,7 +131,44 @@ if __name__ == '__main__':
             f.write(res)
 
     makedirs(mount_at)
-    run('mount -t xfs -o noatime {raid} "{mount_at}"'.format(raid=fsdev, mount_at=mount_at))
+    mntunit_bn = out('systemd-escape -p --suffix=mount {}'.format(mount_at))
+    mntunit = Path('/etc/systemd/system/{}'.format(mntunit_bn))
+    if mntunit.exists():
+        print('mount unit {} already exists'.format(mntunit))
+        sys.exit(1)
+
+    uuid = out(f'blkid -s UUID -o value {fsdev}')
+    unit_data = f'''
+[Unit]
+Description=Scylla data directory
+Before=scylla-server.service
+After=local-fs.target
+
+[Mount]
+What={uuid}
+Where={mount_at}
+Type=xfs
+Options=noatime
+
+[Install]
+WantedBy=multi-user.target
+'''[1:-1]
+    with open(f'/etc/systemd/system/{mntunit_bn}', 'w') as f:
+        f.write(unit_data)
+    mounts_conf = '/etc/systemd/system/scylla-server.service.d/mounts.conf'
+    if not os.path.exists(mounts_conf):
+        makedirs('/etc/systemd/system/scylla-server.service.d/')
+        with open(mounts_conf, 'w') as f:
+            f.write(f'[Unit]\nRequiresMountsFor={mount_at}\n')
+    else:
+        with open(mounts_conf, 'a') as f:
+            f.write(f'RequiresMountsFor={mount_at}\n')
+
+    systemd_unit.reload()
+    mount = systemd_unit(mntunit_bn)
+    mount.start()
+    if args.enable_on_nextboot:
+        mount.enable()
     uid = pwd.getpwnam('scylla').pw_uid
     gid = grp.getgrnam('scylla').gr_gid
     os.chown(root, uid, gid)
@@ -140,22 +177,6 @@ if __name__ == '__main__':
         dpath = '{}/{}'.format(root, d)
         makedirs(dpath)
         os.chown(dpath, uid, gid)
-
-    if args.update_fstab:
-        res = out('blkid {}'.format(fsdev))
-        match = re.search(r'^/dev/\S+: (UUID="\S+")', res.strip())
-        uuid = match.group(1)
-        with open('/etc/fstab', 'a') as f:
-            f.write('{uuid} {mount_at} xfs noatime,nofail 0 0\n'.format(uuid=uuid, mount_at=mount_at))
-        mounts_conf = '/etc/systemd/system/scylla-server.service.d/mounts.conf'
-        if not os.path.exists(mounts_conf):
-            makedirs('/etc/systemd/system/scylla-server.service.d/')
-            with open(mounts_conf, 'w') as f:
-                f.write('[Unit]\nRequiresMountsFor={mount_at}\n'.format(mount_at=mount_at))
-        else:
-            with open(mounts_conf, 'a') as f:
-                f.write('RequiresMountsFor={mount_at}\n'.format(mount_at=mount_at))
-        systemd_unit.reload()
 
     if is_debian_variant():
         run('update-initramfs -u')
