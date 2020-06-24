@@ -3660,6 +3660,8 @@ class scylla_gdb_func_collection_element(gdb.Function):
 
     def invoke(self, collection, key):
         typ = collection.type.strip_typedefs()
+        if typ.code == gdb.TYPE_CODE_PTR or typ.code == gdb.TYPE_CODE_REF or typ.code == gdb.TYPE_CODE_RVALUE_REF:
+            typ = typ.target().strip_typedefs()
         if typ.name.startswith('std::vector<'):
             return std_vector(collection)[int(key)]
         elif typ.name.startswith('std::__cxx11::list<'):
