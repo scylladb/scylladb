@@ -2761,7 +2761,7 @@ public:
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
         } catch(...) {
-            slogger.error("Exception when communicating with {}: {}", ep, eptr);
+            slogger.error("Exception when communicating with {}, to read from {}.{}: {}", ep, _schema->ks_name(), _schema->cf_name(), eptr);
         }
 
         if (!_request_failed) { // request may fail only once.
