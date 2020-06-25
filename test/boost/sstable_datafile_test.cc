@@ -1097,11 +1097,10 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
     BOOST_REQUIRE(cm->get_stats().completed_tasks == 1);
     BOOST_REQUIRE(cm->get_stats().errors == 0);
 
-    // remove cf from compaction manager; this will wait for the
-    // ongoing compaction to finish.
-    cf->stop().get();
     // expect sstables of cf to be compacted.
     BOOST_REQUIRE(cf->sstables_count() == 1);
+
+    cf->stop().get();
   });
 }
 
