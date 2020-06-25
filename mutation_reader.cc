@@ -1080,6 +1080,7 @@ public:
 };
 
 void evictable_reader::do_pause(flat_mutation_reader reader) {
+    assert(!_irh);
     _irh = _permit.semaphore().register_inactive_read(std::make_unique<inactive_evictable_reader>(std::move(reader)));
 }
 
