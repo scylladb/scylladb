@@ -1038,33 +1038,6 @@ table::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sst
     _sstables = make_lw_shared(std::move(new_sstable_list));
 }
 
-future<>
-table::rebuild_sstable_list_with_deletion_sem(std::vector<sstables::shared_sstable> new_ssts, std::vector<sstables::shared_sstable> old_ssts) {
-    // Resharding deletes shared sstables in the coordinator, so it's important to only remove its
-    // input SSTables from the SSTable set after acquiring deletion semaphore to synchronize with
-    // other processes that also acquire that semaphore and only then iterate through the SSTable
-    // set, expecting that all SSTables will still do exist throughout the operation.
-    //
-    // FIXME: with_gate() returns a non-futurized exception if gate is closed, so let's futurize it.
-    // This should be removed when with_gate() is made noexcept in newer API version of seastar.
-    try {
-        return seastar::with_gate(_sstable_deletion_gate, [this, new_ssts = std::move(new_ssts), old_ssts = std::move(old_ssts)] () mutable {
-            return with_semaphore(_sstable_deletion_sem, 1, [this, new_ssts = std::move(new_ssts), old_ssts = std::move(old_ssts)] () mutable {
-                rebuild_sstable_list(std::move(new_ssts), std::move(old_ssts));
-                rebuild_statistics();
-                trigger_compaction();
-            });
-        }).handle_exception([this] (std::exception_ptr eptr) {
-            tlogger.error("Failed to update SSTable set on behalf of resharding for {}.{}: {}", _schema->ks_name(), _schema->cf_name(), eptr);
-            return make_exception_future<>(std::move(eptr));
-        });
-    } catch (...) {
-        auto eptr = std::current_exception();
-        tlogger.error("Failed to update SSTable set on behalf of resharding for {}.{}: {}", _schema->ks_name(), _schema->cf_name(), eptr);
-        return make_exception_future<>(std::move(eptr));
-    }
-}
-
 // Note: must run in a seastar thread
 void
 table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
@@ -1133,34 +1106,6 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
     });
     _sstables_compacted_but_not_deleted.erase(e, _sstables_compacted_but_not_deleted.end());
     rebuild_statistics();
-}
-
-// For replace/remove_ancestors_needed_write, note that we need to update the compaction backlog
-// manually. The new tables will be coming from a remote shard and thus unaccounted for in our
-// list so far, and the removed ones will no longer be needed by us.
-future<> table::replace_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors, std::vector<sstables::shared_sstable> new_sstables) {
-    std::vector<sstables::shared_sstable> old_sstables;
-
-    for (auto& ancestor : ancestors) {
-        auto it = _sstables_need_rewrite.find(ancestor);
-        if (it != _sstables_need_rewrite.end()) {
-            old_sstables.push_back(it->second);
-        }
-    }
-    return rebuild_sstable_list_with_deletion_sem(new_sstables, old_sstables).then([this, new_sstables, old_sstables] {
-        for (auto& sst : new_sstables) {
-            add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
-        }
-
-        for (auto& sst : old_sstables) {
-            remove_sstable_from_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
-            _sstables_need_rewrite.erase(sst->generation());
-        }
-    });
-}
-
-future<> table::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors) {
-    return replace_ancestors_needed_rewrite(std::move(ancestors), {});
 }
 
 future<>
