@@ -1439,12 +1439,6 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) {
     });
 }
 
-future<sstable_open_info> sstable::load_shared_components() {
-    auto info = sstable_open_info{make_lw_shared<shareable_components>(std::move(*_components)),
-        std::move(_shards), std::move(_data_file), std::move(_index_file)};
-    return make_ready_future<sstable_open_info>(std::move(info));
-}
-
 future<foreign_sstable_open_info> sstable::get_open_info() & {
     return _components.copy().then([this] (auto c) mutable {
         return foreign_sstable_open_info{std::move(c), this->get_shards_for_this_sstable(), _data_file.dup(), _index_file.dup(),
