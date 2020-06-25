@@ -36,6 +36,9 @@ uint64_t from_varint_to_integer(const utils::multiprecision_int& varint) {
     return static_cast<uint64_t>(~static_cast<uint64_t>(0) & boost::multiprecision::cpp_int(varint));
 }
 
+big_decimal::big_decimal() : big_decimal(0, 0) {}
+big_decimal::big_decimal(int32_t scale, boost::multiprecision::cpp_int unscaled_value)
+    : _scale(scale), _unscaled_value(std::move(unscaled_value)) {}
 
 big_decimal::big_decimal(sstring_view text)
 {
