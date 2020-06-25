@@ -1725,6 +1725,10 @@ class pointer_metadata(object):
         self._is_containing_page_free = True
         self._is_live = False
 
+    @property
+    def obj_ptr(self):
+        return self.ptr - self.offset_in_object
+
     def __str__(self):
         if not self.is_managed_by_seastar():
             return "0x{:x} (default allocator)".format(self.ptr)
@@ -1741,7 +1745,7 @@ class pointer_metadata(object):
             msg += ', large (size=%d)' % self.size
 
         if self.is_live:
-            msg += ', live (0x%x +%d)' % (self.ptr - self.offset_in_object, self.offset_in_object)
+            msg += ', live (0x%x +%d)' % (self.obj_ptr, self.offset_in_object)
         else:
             msg += ', free'
 
@@ -2766,7 +2770,7 @@ class scylla_find(gdb.Command):
             else:
                 formatted_offset = ""
             if args.resolve:
-                maybe_vptr = int(gdb.Value(ptr_meta.ptr).reinterpret_cast(scylla_find._vptr_type).dereference())
+                maybe_vptr = int(gdb.Value(ptr_meta.obj_ptr).reinterpret_cast(scylla_find._vptr_type).dereference())
                 symbol = resolve(maybe_vptr, cache=False)
                 if symbol is None:
                     gdb.write('{}{}\n'.format(formatted_offset, ptr_meta))
