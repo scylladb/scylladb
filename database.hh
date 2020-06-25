@@ -445,11 +445,6 @@ private:
     // in all shards at the same time, which makes it hard to store all sstables
     // we need to load later on for all shards.
     std::vector<sstables::shared_sstable> _sstables_opened_but_not_loaded;
-    // sstables that are shared between several shards so we want to rewrite
-    // them (split the data belonging to this shard to a separate sstable),
-    // but for correct compaction we need to start the compaction only after
-    // reading all sstables.
-    std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_need_rewrite;
     // sstables that should not be compacted (e.g. because they need to be used
     // to generate view updates later)
     std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_staging;
@@ -614,10 +609,6 @@ private:
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 public:
-    bool has_shared_sstables() const {
-        return bool(_sstables_need_rewrite.size());
-    }
-
     sstring dir() const {
         return _config.datadir;
     }
@@ -862,7 +853,6 @@ public:
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
     std::vector<sstables::shared_sstable> candidates_for_compaction() const;
-    std::vector<sstables::shared_sstable> sstables_need_rewrite() const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;
