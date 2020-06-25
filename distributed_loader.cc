@@ -83,16 +83,6 @@ io_error_handler error_handler_gen_for_upload_dir(disk_error_signal_type& dummy)
     return error_handler_for_upload_dir();
 }
 
-// TODO: possibly move it to seastar
-template <typename Service, typename PtrType, typename Func>
-static future<> invoke_shards_with_ptr(std::unordered_set<shard_id> shards, distributed<Service>& s, PtrType ptr, Func&& func) {
-    return parallel_for_each(std::move(shards), [&s, &func, ptr] (shard_id id) {
-        return s.invoke_on(id, [func, foreign = make_foreign(ptr)] (Service& s) mutable {
-            return func(s, std::move(foreign));
-        });
-    });
-}
-
 // global_column_family_ptr provides a way to easily retrieve local instance of a given column family.
 class global_column_family_ptr {
     distributed<database>& _db;
