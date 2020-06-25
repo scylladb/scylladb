@@ -183,14 +183,10 @@ static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstrin
     });
 }
 
-static future<sstable_ptr> do_write_sst(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
-  return test_env::do_with([schema = std::move(schema), load_dir = std::move(load_dir), write_dir = std::move(write_dir), generation] (test_env& env) {
-      return do_write_sst(env, std::move(schema), std::move(load_dir), std::move(write_dir), generation);
-  });
-}
-
 static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
-    return do_write_sst(std::move(schema), load_dir, write_dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
+    return test_env::do_with([schema = std::move(schema), load_dir = std::move(load_dir), write_dir = std::move(write_dir), generation] (test_env& env) {
+        return do_write_sst(env, std::move(schema), load_dir, write_dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
+    });
 }
 
 using bufptr_t = std::unique_ptr<char [], free_deleter>;
