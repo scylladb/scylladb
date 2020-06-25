@@ -40,8 +40,8 @@ struct my_consumer {
 
 static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstring msg,
     sstable_version_types version = la) {
+  sstables::test_env::do_with_async([&] (sstables::test_env& env) {
     try {
-        sstables::test_env env;
         sstable_ptr sstp = env.reusable_sst(s, dir, generation, version).get0();
         auto r = sstp->read_rows_flat(s, tests::make_permit());
         r.consume(my_consumer{}, db::no_timeout).get();
@@ -49,6 +49,7 @@ static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstr
     } catch (malformed_sstable_exception& e) {
         BOOST_REQUIRE_EQUAL(sstring(e.what()), msg);
     }
+  }).get();
 }
 
 static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
@@ -59,18 +60,19 @@ static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_empty_index) {
+  sstables::test_env::do_with_async([&] (sstables::test_env& env) {
     auto s = schema_builder("test_ks", "test_table")
                  .with_column("pk", int32_type, column_kind::partition_key)
                  .with_column("ck", int32_type, column_kind::clustering_key)
                  .with_column("val", int32_type)
                  .set_compressor_params(compression_parameters::no_compression())
                  .build();
-    sstables::test_env env;
     sstable_ptr sstp = env.reusable_sst(s, "test/resource/sstables/empty_index", 36, sstable_version_types::mc).get0();
     sstp->load().get();
     auto fut = sstables::test(sstp).read_indexes();
     BOOST_REQUIRE_EXCEPTION(fut.get(), malformed_sstable_exception, exception_predicate::message_equals(
         "missing index entry in sstable test/resource/sstables/empty_index/mc-36-big-Index.db"));
+  }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(missing_column_in_schema) {
