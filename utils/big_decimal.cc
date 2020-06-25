@@ -85,6 +85,14 @@ big_decimal::big_decimal(sstring_view text)
     _scale += fraction.size();
 }
 
+boost::multiprecision::cpp_rational big_decimal::as_rational() const {
+    boost::multiprecision::cpp_int ten(10);
+    auto unscaled_value = static_cast<const boost::multiprecision::cpp_int&>(_unscaled_value);
+    boost::multiprecision::cpp_rational r = unscaled_value;
+    r /= boost::multiprecision::pow(ten, _scale);
+    return r;
+}
+
 sstring big_decimal::to_string() const
 {
     if (!_unscaled_value) {

@@ -262,14 +262,12 @@ static auto visit_lua_raw_value(lua_State* l, int index, Func&& f) {
 
 template <typename Func>
 static auto visit_decimal(const big_decimal &v, Func&& f) {
-    boost::multiprecision::cpp_int ten(10);
-    const auto& dividend = v.unscaled_value();
-    auto divisor = boost::multiprecision::pow(ten, v.scale());
+    boost::multiprecision::cpp_rational r = v.as_rational();
+    const boost::multiprecision::cpp_int& dividend = numerator(r);
+    const boost::multiprecision::cpp_int& divisor = denominator(r);
     if (dividend % divisor == 0) {
-        return f(utils::multiprecision_int(boost::multiprecision::cpp_int(dividend/divisor)));
+        return f(utils::multiprecision_int(dividend/divisor));
     }
-    boost::multiprecision::cpp_rational r = dividend;
-    r /= divisor;
     return f(r.convert_to<double>());
 }
 

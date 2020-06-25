@@ -44,6 +44,7 @@ public:
 
     int32_t scale() const { return _scale; }
     const boost::multiprecision::cpp_int& unscaled_value() const { return _unscaled_value; }
+    boost::multiprecision::cpp_rational as_rational() const;
 
     sstring to_string() const;
 
