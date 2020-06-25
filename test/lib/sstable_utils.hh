@@ -316,6 +316,7 @@ public:
             storage_service_for_tests ssft;
             auto tmp = tmpdir();
             test_env env;
+            auto close_env = defer([&] { env.stop().get(); });
             fut(env, tmp.path().string()).get();
         });
     }
@@ -331,6 +332,7 @@ public:
             auto dest_path = dest_dir.path() / src.c_str();
             std::filesystem::create_directories(dest_path);
             test_env env;
+            auto close_env = defer([&] { env.stop().get(); });
             fut(env, src_dir.path().string(), dest_path.string()).get();
         });
     }
