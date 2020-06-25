@@ -1628,11 +1628,8 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
 
             for (auto& p : *cf._sstables->all()) {
                 if (p->max_data_age() <= gc_trunc) {
-                    // Only one shard that own the sstable will submit it for deletion to avoid race condition in delete procedure.
-                    if (*boost::min_element(p->get_shards_for_this_sstable()) == this_shard_id()) {
-                        rp = std::max(p->get_stats_metadata().position, rp);
-                        remove.emplace_back(p);
-                    }
+                    rp = std::max(p->get_stats_metadata().position, rp);
+                    remove.emplace_back(p);
                     continue;
                 }
                 pruned->insert(p);
