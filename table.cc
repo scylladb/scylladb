@@ -645,17 +645,6 @@ table::open_sstable(sstables::foreign_sstable_open_info info, sstring dir, int64
 
 void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
     auto& shards = sst->get_shards_for_this_sstable();
-    if (belongs_to_other_shard(shards)) {
-        // If we're here, this sstable is shared by this and other
-        // shard(s). Shared sstables cannot be deleted until all
-        // shards compacted them, so to reduce disk space usage we
-        // want to start splitting them now.
-        // However, we need to delay this compaction until we read all
-        // the sstables belonging to this CF, because we need all of
-        // them to know which tombstones we can drop, and what
-        // generation number is free.
-        _sstables_need_rewrite.emplace(sst->generation(), sst);
-    }
     if (reset_level) {
         // When loading a migrated sstable, set level to 0 because
         // it may overlap with existing tables in levels > 0.
@@ -692,6 +681,9 @@ inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracke
 }
 
 void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsigned>& shards_for_the_sstable) {
+    if (belongs_to_other_shard(shards_for_the_sstable)) {
+        on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
+    }
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared(*_sstables);
     new_sstables->insert(sstable);
