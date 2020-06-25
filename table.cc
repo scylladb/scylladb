@@ -666,18 +666,11 @@ void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, co
 }
 
 inline void table::add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
-    // Don't add sstables that belong to more than one shard to the table's backlog tracker
-    // given that such sstables are supposed to be tracked only by resharding's own tracker.
-    if (!sstable->is_shared()) {
-        tracker.add_sstable(sstable);
-    }
+    tracker.add_sstable(std::move(sstable));
 }
 
 inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
-    // Shared sstables belong to resharding's own backlog tracker.
-    if (!sstable->is_shared()) {
-        tracker.remove_sstable(std::move(sstable));
-    }
+    tracker.remove_sstable(std::move(sstable));
 }
 
 void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsigned>& shards_for_the_sstable) {
