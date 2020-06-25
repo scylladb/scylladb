@@ -89,5 +89,4 @@ public:
 private:
     static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
     static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);
-    static future<> do_populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
 };
