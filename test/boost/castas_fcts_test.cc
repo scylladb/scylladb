@@ -142,6 +142,19 @@ SEASTAR_TEST_CASE(test_decimal_to_bigint) {
     });
 }
 
+SEASTAR_TEST_CASE(test_decimal_to_float) {
+    return do_with_cql_env_thread([&](auto& e) {
+        e.execute_cql("CREATE TABLE test (key text primary key, value decimal)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k1', 10)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k2', 1e1)").get();
+        auto v = e.execute_cql("SELECT key, CAST(value as float) from test").get0();
+        assert_that(v).is_rows().with_rows_ignore_order({
+            {{serialized("k1")}, {serialized(float(10))}},
+            {{serialized("k2")}, {serialized(float(10))}},
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_varint_to_bigint) {
     return do_with_cql_env_thread([&](auto& e) {
         e.execute_cql("CREATE TABLE test (key text primary key, value varint)").get();

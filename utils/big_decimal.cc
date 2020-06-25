@@ -89,7 +89,13 @@ boost::multiprecision::cpp_rational big_decimal::as_rational() const {
     boost::multiprecision::cpp_int ten(10);
     auto unscaled_value = static_cast<const boost::multiprecision::cpp_int&>(_unscaled_value);
     boost::multiprecision::cpp_rational r = unscaled_value;
-    r /= boost::multiprecision::pow(ten, _scale);
+    int32_t abs_scale = std::abs(_scale);
+    auto pow = boost::multiprecision::pow(ten, abs_scale);
+    if (_scale < 0) {
+        r *= pow;
+    } else {
+        r /= pow;
+    }
     return r;
 }
 
