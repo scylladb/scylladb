@@ -634,13 +634,10 @@ void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
     add_sstable(sst, std::move(shards));
 }
 
-void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept {
-    assert(!shards_for_the_sstable.empty());
-    if (*boost::min_element(shards_for_the_sstable) == this_shard_id()) {
-        _stats.live_disk_space_used += disk_space_used_by_sstable;
-        _stats.total_disk_space_used += disk_space_used_by_sstable;
-        _stats.live_sstable_count++;
-    }
+void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept {
+    _stats.live_disk_space_used += disk_space_used_by_sstable;
+    _stats.total_disk_space_used += disk_space_used_by_sstable;
+    _stats.live_sstable_count++;
 }
 
 inline void table::add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
@@ -659,7 +656,7 @@ void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsi
     auto new_sstables = make_lw_shared(*_sstables);
     new_sstables->insert(sstable);
     _sstables = std::move(new_sstables);
-    update_stats_for_new_sstable(sstable->bytes_on_disk(), shards_for_the_sstable);
+    update_stats_for_new_sstable(sstable->bytes_on_disk());
     if (sstable->requires_view_building()) {
         _sstables_staging.emplace(sstable->generation(), sstable);
     } else {
@@ -993,7 +990,7 @@ void table::rebuild_statistics() {
                     // making the two ranges compatible when compiling with boost 1.55.
                     // Noone is actually moving anything...
                                          std::move(*_sstables->all()))) {
-        update_stats_for_new_sstable(tab->bytes_on_disk(), tab->get_shards_for_this_sstable());
+        update_stats_for_new_sstable(tab->bytes_on_disk());
     }
 }
 
