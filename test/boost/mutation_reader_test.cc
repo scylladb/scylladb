@@ -2000,7 +2000,7 @@ class puppet_reader : public flat_mutation_reader::impl {
 public:
     struct control {
         promise<> buffer_filled;
-        bool destroyed = false;
+        bool destroyed = true;
         bool pending = false;
     };
 
@@ -2012,7 +2012,7 @@ public:
 private:
     simple_schema _s;
     control& _ctrl;
-    fill_buffer_action _action;
+    std::vector<fill_buffer_action> _actions;
     std::vector<uint32_t> _pkeys;
     unsigned _partition_index = 0;
 
@@ -2026,27 +2026,27 @@ private:
     }
 
     void do_fill_buffer() {
+        if (!maybe_push_next_partition()) {
+            return;
+        }
         auto ck = uint32_t(0);
         while (!is_buffer_full()) {
             push_mutation_fragment(_s.make_row(_s.make_ckey(ck++), make_random_string(2 << 5)));
         }
 
         push_mutation_fragment(partition_end());
-        maybe_push_next_partition();
     }
 
 public:
-    puppet_reader(simple_schema s, control& ctrl, fill_buffer_action action, std::vector<uint32_t> pkeys)
+    puppet_reader(simple_schema s, control& ctrl, std::vector<fill_buffer_action> actions, std::vector<uint32_t> pkeys)
         : impl(s.schema())
         , _s(std::move(s))
         , _ctrl(ctrl)
-        , _action(action)
+        , _actions(std::move(actions))
         , _pkeys(std::move(pkeys)) {
-        if (maybe_push_next_partition()) {
-            push_mutation_fragment(_s.make_row(_s.make_ckey(0), make_random_string(4)));
-            push_mutation_fragment(partition_end());
-        }
-        maybe_push_next_partition();
+        std::ranges::reverse(_actions);
+        _end_of_stream = false;
+        _ctrl.destroyed = false;
     }
     ~puppet_reader() {
         _ctrl.destroyed = true;
@@ -2056,17 +2056,24 @@ public:
         if (is_end_of_stream() || !is_buffer_empty()) {
             return make_ready_future<>();
         }
+        if (_actions.empty()) {
+            _end_of_stream = true;
+            return make_ready_future<>();
+        }
 
-        _end_of_stream = true;
+        auto action = _actions.back();
+        _actions.pop_back();
 
-        switch (_action) {
+        switch (action) {
         case fill_buffer_action::fill:
             do_fill_buffer();
             return make_ready_future<>();
         case fill_buffer_action::block:
             do_fill_buffer();
+            _ctrl.pending = true;
             return _ctrl.buffer_filled.get_future().then([this] {
                 BOOST_REQUIRE(!_ctrl.destroyed);
+                _ctrl.pending = false;
                 return make_ready_future<>();
             });
         }
@@ -2115,7 +2122,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
             auto control = make_foreign(std::make_unique<puppet_reader::control>());
             auto reader = make_foreign(std::make_unique<flat_mutation_reader>(make_flat_mutation_reader<puppet_reader>(gs.get(),
                     *control,
-                    puppet_reader::fill_buffer_action::block,
+                    std::vector{puppet_reader::fill_buffer_action::fill, puppet_reader::fill_buffer_action::block},
                     std::vector<uint32_t>{0, 1})));
 
             return make_ready_future<std::tuple<control_type, reader_type>>(std::tuple(std::move(control), std::move(reader)));
@@ -2160,19 +2167,20 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
 // destoyed objects causing memory errors.
 //
 // Theory of operation:
-// 1) First read a partition from each shard in turn;
-// 2) [shard 1] puppet reader's buffer is empty -> increase concurrency to 2
-//    because we traversed to another shard in the same fill_buffer() call;
+// 1) First read a full buffer from shard 0;
+// 2) Shard 0 has no more data so move on to shard 1; puppet reader's buffer is
+//    empty -> increase concurrency to 2 because we traversed to another shard
+//    in the same fill_buffer() call;
 // 3) [shard 2] puppet reader -> read-ahead launched in the background but it's
 //    blocked;
 // 4) Reader is destroyed;
 // 5) Resume the shard 2's puppet reader -> the now orphan read-ahead fiber
 //    executes;
 //
-// Best run with smp >= 2
+// Best run with smp >= 3
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending_read_ahead) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (smp::count < 3) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 3" << std::endl;
         return;
     }
 
@@ -2207,7 +2215,9 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
             shard_pkeys[i++ % smp::count].push_back(pkey);
         }
 
-        auto factory = [gs = global_simple_schema(s), &remote_controls, &shard_pkeys] (
+        const auto shard_to_block = 2;
+
+        auto factory = [gs = global_simple_schema(s), &remote_controls, &shard_pkeys, shard_to_block] (
                 schema_ptr,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
@@ -2215,16 +2225,38 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding) mutable {
             const auto shard = this_shard_id();
-            auto action = shard == 0 ? puppet_reader::fill_buffer_action::fill : puppet_reader::fill_buffer_action::block;
-            return make_flat_mutation_reader<puppet_reader>(gs.get(), *remote_controls.at(shard), action, shard_pkeys.at(shard));
+            auto actions = [shard, shard_to_block] () -> std::vector<puppet_reader::fill_buffer_action> {
+                if (shard < shard_to_block) {
+                    return {puppet_reader::fill_buffer_action::fill};
+                } else if (shard == shard_to_block) {
+                    return {puppet_reader::fill_buffer_action::block};
+                } else {
+                    return {};
+                }
+            }();
+            return make_flat_mutation_reader<puppet_reader>(gs.get(), *remote_controls.at(shard), std::move(actions), shard_pkeys.at(shard));
         };
 
         {
             dummy_sharder sharder(s.schema()->get_sharder(), std::move(pkeys_by_tokens));
             auto reader = make_multishard_combining_reader_for_tests(sharder, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
                     s.schema(), query::full_partition_range, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
+
+            // This will read shard 0's buffer only
             reader.fill_buffer(db::no_timeout).get();
             BOOST_REQUIRE(reader.is_buffer_full());
+            reader.detach_buffer();
+
+            // This will move to shard 1 and trigger read-ahead on shard 2
+            reader.fill_buffer(db::no_timeout).get();
+            BOOST_REQUIRE(reader.is_buffer_full());
+
+            // Check that shard with read-ahead is indeed blocked.
+            BOOST_REQUIRE(eventually_true([&] {
+                return smp::submit_to(2, [control = remote_controls.at(2).get()] {
+                    return control->pending;
+                }).get0();
+            }));
         }
 
         parallel_for_each(std::views::iota(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
