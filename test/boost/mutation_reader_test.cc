@@ -2309,6 +2309,80 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pending_read_ahead) {
+    if (smp::count < multishard_reader_for_read_ahead::min_shards) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < " << multishard_reader_for_read_ahead::min_shards << std::endl;
+        return;
+    }
+
+    test_reader_lifecycle_policy::operations_gate operations_gate;
+
+    do_with_cql_env([&] (cql_test_env& env) -> future<> {
+        auto s = simple_schema();
+
+        auto [reader, sharder, remote_controls, pr] = prepare_multishard_reader_for_read_ahead_test(s, operations_gate);
+
+        reader.fill_buffer(db::no_timeout).get();
+        BOOST_REQUIRE(reader.is_buffer_full());
+        reader.detach_buffer();
+
+        reader.fill_buffer(db::no_timeout).get();
+        BOOST_REQUIRE(reader.is_buffer_full());
+        reader.detach_buffer();
+
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(multishard_reader_for_read_ahead::blocked_shard,
+                    [control = remote_controls.at(multishard_reader_for_read_ahead::blocked_shard).get()] {
+                return control->pending;
+            }).get0();
+        }));
+
+        auto end_token = dht::token(pr->end()->value().token());
+        ++end_token._data;
+
+        auto next_pr = dht::partition_range::make_starting_with(dht::ring_position::starting_at(end_token));
+        auto fut = reader.fast_forward_to(next_pr, db::no_timeout);
+
+        smp::submit_to(multishard_reader_for_read_ahead::blocked_shard,
+                [control = remote_controls.at(multishard_reader_for_read_ahead::blocked_shard).get()] {
+            control->buffer_filled.set_value();
+        }).get();
+
+        fut.get();
+
+        const auto all_shard_fast_forwarded = map_reduce(
+                std::views::iota(0u, multishard_reader_for_read_ahead::blocked_shard + 1u),
+                [&] (unsigned shard) {
+                    return smp::submit_to(shard, [control = remote_controls.at(shard).get()] {
+                        return control->fast_forward_to == 1;
+                    });
+                },
+                true,
+                std::logical_and<bool>()).get0();
+
+        BOOST_REQUIRE(all_shard_fast_forwarded);
+
+        reader.fill_buffer(db::no_timeout).get();
+
+        BOOST_REQUIRE(reader.is_buffer_empty());
+        BOOST_REQUIRE(reader.is_end_of_stream());
+
+        reader = flat_mutation_reader(nullptr);
+
+        BOOST_REQUIRE(eventually_true([&] {
+            return map_reduce(std::views::iota(0u, smp::count), [&] (unsigned shard) {
+                    return smp::submit_to(shard, [&remote_controls, shard] {
+                        return remote_controls.at(shard)->destroyed;
+                    });
+                },
+                true,
+                std::logical_and<bool>()).get0();
+        }));
+
+        return operations_gate.close();
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
     test_reader_lifecycle_policy::operations_gate operations_gate;
 
