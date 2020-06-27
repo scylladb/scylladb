@@ -6,7 +6,7 @@ Scylla is fairly fussy about its build environment, requiring very recent
 versions of the C++20 compiler and of many libraries to build. The document
 [HACKING.md](HACKING.md) includes detailed information on building and
 developing Scylla, but to get Scylla building quickly on (almost) any build
-machine, Scylla offers offers a [frozen toolchain](tools/toolchain/README.md),
+machine, Scylla offers a [frozen toolchain](tools/toolchain/README.md),
 This is a pre-configured Docker image which includes recent versions of all
 the required compilers, libraries and build tools. Using the frozen toolchain
 allows you to avoid changing anything in your build machine to meet Scylla's
