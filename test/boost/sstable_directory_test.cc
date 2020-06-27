@@ -56,21 +56,21 @@ schema_ptr test_table_schema() {
 
 using namespace sstables;
 
-future<sstables::shared_sstable>
+sstables::shared_sstable
 make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factory) {
     auto s = test_table_schema();
     auto key_token_pair = token_generation_for_shard(1, this_shard_id(), 12);
     auto key = partition_key::from_exploded(*s, {to_bytes(key_token_pair[0].first)});
     mutation m(s, key);
     m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
-    return make_ready_future<sstables::shared_sstable>(make_sstable_containing(sst_factory, {m}));
+    return make_sstable_containing(sst_factory, {m});
 }
 
 /// Create a shared SSTable belonging to all shards for the following schema: "create table cf (p text PRIMARY KEY, c int)"
 ///
 /// Arguments passed to the function are passed to table::make_sstable
 template <typename... Args>
-future<sstables::shared_sstable>
+sstables::shared_sstable
 make_sstable_for_all_shards(database& db, table& table, fs::path sstdir, int64_t generation, Args&&... args) {
     // Unlike the previous helper, we'll assume we're in a thread here. It's less flexible
     // but the users are usually in a thread, and rewrite_toc_without_scylla_component requires
@@ -92,7 +92,7 @@ make_sstable_for_all_shards(database& db, table& table, fs::path sstdir, int64_t
     // it came from Cassandra
     sstables::test(sst).remove_component(sstables::component_type::Scylla).get();
     sstables::test(sst).rewrite_toc_without_scylla_component();
-    return make_ready_future<sstables::shared_sstable>(sst);
+    return sst;
 }
 
 sstables::shared_sstable sstable_from_existing_file(fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
@@ -143,7 +143,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_simple_empty_directory_sca
 // Test unrecoverable SSTable: missing a file that is expected in the TOC.
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
     auto dir = tmpdir();
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1)).get0();
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1));
 
     // Now there is one sstable to the upload directory, but it is incomplete and one component is missing.
     // We should fail validation and leave the directory untouched
@@ -168,7 +168,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) 
 // Test always-benign incomplete SSTable: temporaryTOC found
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_temporary_toc) {
     auto dir = tmpdir();
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1)).get0();
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1));
     rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
     sharded<sstable_directory> sstdir;
@@ -191,7 +191,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_temporary_toc) {
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_missing_toc) {
     auto dir = tmpdir();
 
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1)).get0();
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1));
     remove_file(sst->filename(sstables::component_type::TOC)).get();
 
     sharded<sstable_directory> sstdir_fatal;
@@ -231,7 +231,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_missing_toc) {
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
     auto dir = tmpdir();
 
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1)).get0();
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1));
     auto tempstr = sst->filename(dir.path().native(), component_type::TemporaryStatistics);
     auto f = open_file_dma(tempstr, open_flags::rw | open_flags::create | open_flags::truncate).get0();
     f.close().get();
@@ -277,8 +277,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
 // Test that we see the right generation during the scan. Temporary files are skipped
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
     auto dir = tmpdir();
-    make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 3333)).get0();
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 6666)).get0();
+    make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 3333));
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 6666));
     rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
     sharded<sstable_directory> sstdir;
@@ -324,7 +324,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
             // this is why it is annoying for the internal functions in the test infrastructure to
             // assume threaded execution
             return seastar::async([dir, i] {
-                make_sstable_for_this_shard(std::bind(new_sstable, dir, i)).get0();
+                make_sstable_for_this_shard(std::bind(new_sstable, dir, i));
             });
         }).get();
     }
@@ -354,7 +354,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
             // this is why it is annoying for the internal functions in the test infrastructure to
             // assume threaded execution
             return seastar::async([dir, i] {
-                make_sstable_for_this_shard(std::bind(new_sstable, dir, i + 1)).get0();
+                make_sstable_for_this_shard(std::bind(new_sstable, dir, i + 1));
             });
         }).get();
     }
@@ -440,7 +440,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         unsigned num_sstables = 10 * smp::count;
         auto generation = 0;
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++, sstables::sstable_version_types::mc, sstables::sstable::format_types::big).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++, sstables::sstable_version_types::mc, sstables::sstable::format_types::big);
         }
 
         sharded<sstable_directory> sstdir;
@@ -493,7 +493,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         unsigned num_sstables = 10 * smp::count;
         auto generation = 0;
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++ * smp::count, sstables::sstable_version_types::mc, sstables::sstable::format_types::big).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++ * smp::count, sstables::sstable_version_types::mc, sstables::sstable::format_types::big);
         }
 
         sharded<sstable_directory> sstdir;
@@ -546,7 +546,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         unsigned num_sstables = (cf.schema()->max_compaction_threshold() + 1) * smp::count;
         auto generation = 0;
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++, sstables::sstable_version_types::mc, sstables::sstable::format_types::big).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++, sstables::sstable_version_types::mc, sstables::sstable::format_types::big);
         }
 
         sharded<sstable_directory> sstdir;
