@@ -1106,9 +1106,9 @@ pkgs.append('libsystemd')
 
 
 compiler_test_src = '''
-#if __GNUC__ < 8
+#if __GNUC__ < 10
     #error "MAJOR"
-#elif __GNUC__ == 8
+#elif __GNUC__ == 10
     #if __GNUC_MINOR__ < 1
         #error "MINOR"
     #elif __GNUC_MINOR__ == 1
@@ -1121,7 +1121,7 @@ compiler_test_src = '''
 int main() { return 0; }
 '''
 if not try_compile_and_link(compiler=args.cxx, source=compiler_test_src):
-    print('Wrong GCC version. Scylla needs GCC >= 8.1.1 to compile.')
+    print('Wrong GCC version. Scylla needs GCC >= 10.1.1 to compile.')
     sys.exit(1)
 
 if not try_compile(compiler=args.cxx, source='#include <boost/version.hpp>'):
