@@ -99,7 +99,6 @@ sstables::shared_sstable sstable_from_existing_file(fs::path dir, int64_t gen, s
     return test_sstables_manager.make_sstable(test_table_schema(), dir.native(), gen, v, f, gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
 }
 
-template <typename... Args>
 sstables::shared_sstable new_sstable(fs::path dir, int64_t gen) {
     return test_sstables_manager.make_sstable(test_table_schema(), dir.native(), gen,
                 sstables::sstable_version_types::mc, sstables::sstable_format_types::big,
