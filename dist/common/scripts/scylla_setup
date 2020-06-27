@@ -27,6 +27,10 @@ import glob
 import shutil
 import io
 import stat
+import copy
+from prompt_toolkit import prompt
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.validation import Validator, ValidationError
 from scylla_util import *
 
 interactive = False
@@ -148,6 +152,25 @@ def run_setup_script(name, script):
             print('{} setup failed.'.format(name))
             sys.exit(1)
     return res
+
+class disk_validator(Validator):
+    def __init__(self, devices):
+        self.devices = devices
+
+    def validate(self, document):
+        if document.text == 'cancel' or document.text == 'done':
+            return
+        disks = document.text.split(',')
+        for disk in disks:
+            self.validate_disk(disk)
+
+    def validate_disk(self, disk):
+        if not os.path.exists(disk):
+            raise ValidationError(message=f'{disk} not found')
+        if not stat.S_ISBLK(os.stat(disk).st_mode):
+            raise ValidationError(message=f'{disk} is not block device')
+        if not disk in self.devices:
+            raise ValidationError(message=f'{disk} is not unused disk')
 
 if __name__ == '__main__':
     if not is_nonroot() and os.getuid() > 0:
@@ -361,12 +384,15 @@ if __name__ == '__main__':
             selected = []
             dsklist = []
             while True:
-                print('type \'cancel\' to cancel RAID/XFS setup.')
-                print('type \'done\' to finish selection. Selected: {}'.format(selected))
                 if len(dsklist) > 0:
                     dsk = dsklist.pop(0)
                 else:
-                    dsk = input('> ')
+                    print('type \'cancel\' to cancel RAID/XFS setup.')
+                    print('type \'done\' to finish selection. Selected: {}'.format(selected))
+                    complist = copy.copy(devices)
+                    complist.extend(['cancel', 'done'])
+                    disk_completer = WordCompleter(complist)
+                    dsk = prompt('> ', completer=disk_completer, validator=disk_validator(devices), complete_while_typing=True)
                 if dsk == 'cancel':
                     raid_setup = 0
                     break
@@ -378,12 +404,6 @@ if __name__ == '__main__':
                     continue
                 if dsk.find(',') > 0:
                     dsklist = dsk.split(',')
-                    continue
-                if not os.path.exists(dsk):
-                    print('{} not found'.format(dsk))
-                    continue
-                if not stat.S_ISBLK(os.stat(dsk).st_mode):
-                    print('{} is not block device'.format(dsk))
                     continue
                 selected.append(dsk)
                 devices.remove(dsk)
