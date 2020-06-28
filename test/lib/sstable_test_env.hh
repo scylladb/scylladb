@@ -81,6 +81,16 @@ public:
             func(env);
         });
     }
+
+    template <typename T>
+    static future<T> do_with_async_returning(noncopyable_function<T (test_env&)> func) {
+        return seastar::async([func = std::move(func)] {
+            auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
+            test_env env;
+            auto stop = defer([&] { env.stop().get(); });
+            return func(env);
+        });
+    }
 };
 
 }   // namespace sstables
