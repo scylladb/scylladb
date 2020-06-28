@@ -374,6 +374,9 @@ if __name__ == '__main__':
                 if not stat.S_ISBLK(os.stat(dsk).st_mode):
                     print('{} is not block device'.format(dsk))
                     continue
+                if dsk in selected:
+                    print(f'{dsk} is already added')
+                    continue
                 selected.append(dsk)
                 devices.remove(dsk)
             disks = ','.join(selected)
