@@ -41,6 +41,7 @@
 #include "sstables/sstables.hh"
 #include "database.hh"
 #include "db/extensions.hh"
+#include "db/snapshot-ctl.hh"
 #include "transport/controller.hh"
 #include "thrift/controller.hh"
 
@@ -979,15 +980,15 @@ void set_storage_service(http_context& ctx, routes& r) {
 
 }
 
-void set_snapshot(http_context& ctx, routes& r) {
-    ss::get_snapshot_details.set(r, [](std::unique_ptr<request> req) {
-        std::function<future<>(output_stream<char>&&)> f = [](output_stream<char>&& s) {
-            return do_with(output_stream<char>(std::move(s)), true, [] (output_stream<char>& s, bool& first){
-                return s.write("[").then([&s, &first] {
-                    return service::get_local_storage_service().get_snapshot_details().then([&s, &first] (std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>&& result) {
-                        return do_with(std::move(result), [&s, &first](const std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>& result) {
-                            return do_for_each(result, [&s, &result,&first](std::tuple<sstring, std::vector<service::storage_service::snapshot_details>>&& map){
-                                return do_with(ss::snapshots(), [&s, &first, &result, &map](ss::snapshots& all_snapshots) {
+void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
+    ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<request> req) {
+        return snap_ctl.local().get_snapshot_details().then([] (std::unordered_map<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& result) {
+            return do_with(std::move(result), [](const std::unordered_map<sstring, std::vector<db::snapshot_ctl::snapshot_details>>& result) {
+                std::function<future<>(output_stream<char>&&)> f = [&result](output_stream<char>&& s) {
+                    return do_with(output_stream<char>(std::move(s)), true, [&result] (output_stream<char>& s, bool& first){
+                        return s.write("[").then([&s, &first, &result] {
+                            return do_for_each(result, [&s, &result, &first](std::tuple<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& map){
+                                return do_with(ss::snapshots(), [&s, &first, &map](ss::snapshots& all_snapshots) {
                                     all_snapshots.key = std::get<0>(map);
                                     future<> f = first ? make_ready_future<>() : s.write(", ");
                                     first = false;
@@ -1006,19 +1007,20 @@ void set_snapshot(http_context& ctx, routes& r) {
                                     });
                                 });
                             });
-                        });
-                    }).then([&s] {
-                        return s.write("]").then([&s] {
-                            return s.close();
+                        }).then([&s] {
+                            return s.write("]").then([&s] {
+                                return s.close();
+                            });
                         });
                     });
-                });
+                };
+
+                return make_ready_future<json::json_return_type>(std::move(f));
             });
-        };
-        return make_ready_future<json::json_return_type>(std::move(f));
+        });
     });
 
-    ss::take_snapshot.set(r, [](std::unique_ptr<request> req) {
+    ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) {
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
 
@@ -1026,7 +1028,7 @@ void set_snapshot(http_context& ctx, routes& r) {
 
         auto resp = make_ready_future<>();
         if (column_families.empty()) {
-            resp = service::get_local_storage_service().take_snapshot(tag, keynames);
+            resp = snap_ctl.local().take_snapshot(tag, keynames);
         } else {
             if (keynames.empty()) {
                 throw httpd::bad_param_exception("The keyspace of column families must be specified");
@@ -1034,37 +1036,37 @@ void set_snapshot(http_context& ctx, routes& r) {
             if (keynames.size() > 1) {
                 throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
             }
-            resp = service::get_local_storage_service().take_column_family_snapshot(keynames[0], column_families, tag);
+            resp = snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag);
         }
         return resp.then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::del_snapshot.set(r, [](std::unique_ptr<request> req) {
+    ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) {
         auto tag = req->get_query_param("tag");
         auto column_family = req->get_query_param("cf");
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
-        return service::get_local_storage_service().clear_snapshot(tag, keynames, column_family).then([] {
+        return snap_ctl.local().clear_snapshot(tag, keynames, column_family).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::true_snapshots_size.set(r, [](std::unique_ptr<request> req) {
-        return service::get_local_storage_service().true_snapshots_size().then([] (int64_t size) {
+    ss::true_snapshots_size.set(r, [&snap_ctl](std::unique_ptr<request> req) {
+        return snap_ctl.local().true_snapshots_size().then([] (int64_t size) {
             return make_ready_future<json::json_return_type>(size);
         });
     });
 
-    ss::scrub.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
+    ss::scrub.set(r, wrap_ks_cf(ctx, [&snap_ctl] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
         const auto skip_corrupted = req_param<bool>(*req, "skip_corrupted", false);
 
         auto f = make_ready_future<>();
         if (!req_param<bool>(*req, "disable_snapshot", false)) {
             auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
-            f = parallel_for_each(column_families, [keyspace, tag](sstring cf) {
-                return service::get_local_storage_service().take_column_family_snapshot(keyspace, cf, tag);
+            f = parallel_for_each(column_families, [&snap_ctl, keyspace, tag](sstring cf) {
+                return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag);
             });
         }
 
@@ -1080,6 +1082,14 @@ void set_snapshot(http_context& ctx, routes& r) {
             return make_ready_future<json::json_return_type>(0);
         });
     }));
+}
+
+void unset_snapshot(http_context& ctx, routes& r) {
+    ss::get_snapshot_details.unset(r);
+    ss::take_snapshot.unset(r);
+    ss::del_snapshot.unset(r);
+    ss::true_snapshots_size.unset(r);
+    ss::scrub.unset(r);
 }
 
 }

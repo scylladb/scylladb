@@ -36,7 +36,6 @@
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
 #include "database.hh"
-#include "service/storage_service.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/token-sharding.hh"
 #include "cdc/cdc_extension.hh"
@@ -709,22 +708,22 @@ std::ostream& column_definition_as_cql_key(std::ostream& os, const column_defini
     return os;
 }
 
-static bool is_global_index(const utils::UUID& id, const schema& s) {
-    return  service::get_local_storage_service().db().local().find_column_family(id).get_index_manager().is_global_index(s);
+static bool is_global_index(database& db, const utils::UUID& id, const schema& s) {
+    return  db.find_column_family(id).get_index_manager().is_global_index(s);
 }
 
-static bool is_index(const utils::UUID& id, const schema& s) {
-    return  service::get_local_storage_service().db().local().find_column_family(id).get_index_manager().is_index(s);
+static bool is_index(database& db, const utils::UUID& id, const schema& s) {
+    return  db.find_column_family(id).get_index_manager().is_index(s);
 }
 
 
-std::ostream& schema::describe(std::ostream& os) const {
+std::ostream& schema::describe(database& db, std::ostream& os) const {
     os << "CREATE ";
     int n = 0;
 
     if (is_view()) {
-        if (is_index(view_info()->base_id(), *this)) {
-            auto is_local = !is_global_index(view_info()->base_id(), *this);
+        if (is_index(db, view_info()->base_id(), *this)) {
+            auto is_local = !is_global_index(db, view_info()->base_id(), *this);
 
             os << "INDEX " << cql3::util::maybe_quote(secondary_index::index_name_from_table_name(cf_name())) << " ON "
                     << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(view_info()->base_name()) << "(";

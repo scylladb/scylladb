@@ -1523,10 +1523,10 @@ seal_snapshot(sstring jsondir) {
     });
 }
 
-future<> table::write_schema_as_cql(sstring dir) const {
+future<> table::write_schema_as_cql(database& db, sstring dir) const {
     std::ostringstream ss;
     try {
-        this->schema()->describe(ss);
+        this->schema()->describe(db, ss);
     } catch (...) {
         return make_exception_future<>(std::current_exception());
     }
@@ -1546,11 +1546,11 @@ future<> table::write_schema_as_cql(sstring dir) const {
 
 }
 
-future<> table::snapshot(sstring name) {
-    return flush().then([this, name = std::move(name)]() {
-       return with_semaphore(_sstable_deletion_sem, 1, [this, name = std::move(name)]() {
+future<> table::snapshot(database& db, sstring name) {
+    return flush().then([this, &db, name = std::move(name)]() {
+       return with_semaphore(_sstable_deletion_sem, 1, [this, &db, name = std::move(name)]() {
         auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
-        return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
+        return do_with(std::move(tables), [this, &db, name](std::vector<sstables::shared_sstable> & tables) {
             auto jsondir = _config.datadir + "/snapshots/" + name;
             return io_check([jsondir] { return recursive_touch_directory(jsondir); }).then([this, name, jsondir, &tables] {
                 return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
@@ -1572,7 +1572,7 @@ future<> table::snapshot(sstring name) {
                 });
             }).then([jsondir, &tables] {
                 return io_check(sync_directory, std::move(jsondir));
-            }).finally([this, &tables, jsondir] {
+            }).finally([this, &tables, &db, jsondir] {
                 auto shard = std::hash<sstring>()(jsondir) % smp::count;
                 std::unordered_set<sstring> table_names;
                 for (auto& sst : tables) {
@@ -1580,7 +1580,7 @@ future<> table::snapshot(sstring name) {
                     auto rf = f.substr(sst->get_dir().size() + 1);
                     table_names.insert(std::move(rf));
                 }
-                return smp::submit_to(shard, [requester = this_shard_id(), jsondir = std::move(jsondir), this,
+                return smp::submit_to(shard, [requester = this_shard_id(), jsondir = std::move(jsondir), this, &db,
                                               tables = std::move(table_names), datadir = _config.datadir] {
 
                     if (pending_snapshots.count(jsondir) == 0) {
@@ -1595,8 +1595,10 @@ future<> table::snapshot(sstring name) {
                     auto my_work = make_ready_future<>();
                     if (requester == this_shard_id()) {
                         my_work = snapshot->requests.wait(smp::count).then([jsondir = std::move(jsondir),
-                                                                            snapshot, this] {
-                            return write_schema_as_cql(jsondir).handle_exception([jsondir](std::exception_ptr ptr) {
+                                                                            &db, snapshot, this] {
+                            // this_shard_id() here == requester == this_shard_id() before submit_to() above,
+                            // so the db reference is still local
+                            return write_schema_as_cql(db, jsondir).handle_exception([jsondir](std::exception_ptr ptr) {
                                 tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
                                 return make_ready_future<>();
                             }).finally([jsondir = std::move(jsondir), snapshot] () mutable {

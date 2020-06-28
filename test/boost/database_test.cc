@@ -361,7 +361,7 @@ future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func) {
 future<> take_snapshot(cql_test_env& e) {
     return e.db().invoke_on_all([] (database& db) {
         auto& cf = db.find_column_family("ks", "cf");
-        return cf.snapshot("test");
+        return cf.snapshot(db, "test");
     });
 }
 
