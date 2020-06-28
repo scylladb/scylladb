@@ -132,6 +132,13 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_div) {
     test_div("-0.25", 10, "-0.02");
     test_div("-0.26", 10, "-0.03");
     test_div("-10E10", 3, "-3E10");
+
+    // Document a small oddity, 1e1 has -1 decimal places, so dividing
+    // it by 2 produces 0. This is not the behavior in cassandra, but
+    // scylla doesn't expose arithmetic operations, so this doesn't
+    // seem to be visible from CQL.
+    test_div("10", 2, "5");
+    test_div("1e1", 2, "0e1");
 }
 
 BOOST_AUTO_TEST_CASE(test_big_decimal_assignadd) {
