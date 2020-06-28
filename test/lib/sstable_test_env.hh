@@ -23,6 +23,8 @@
 
 #include <seastar/core/do_with.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <seastar/core/sharded.hh>
+#include <seastar/util/defer.hh>
 
 #include "sstables/sstables.hh"
 #include "test/lib/tmpdir.hh"
@@ -78,6 +80,16 @@ public:
         return seastar::async([func = std::move(func)] {
             auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
             test_env env;
+            func(env);
+        });
+    }
+
+    static inline future<> do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func) {
+        return seastar::async([func = std::move(func)] {
+            auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
+            sharded<test_env> env;
+            env.start().get();
+            auto stop = defer([&] { env.stop().get(); });
             func(env);
         });
     }
