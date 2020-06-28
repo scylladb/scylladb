@@ -88,16 +88,13 @@ static data_value castas_fctn_simple(data_value from) {
 template<typename ToType>
 static data_value castas_fctn_from_decimal_to_float(data_value from) {
     auto val_from = value_cast<big_decimal>(from);
-    boost::multiprecision::cpp_int ten(10);
-    boost::multiprecision::cpp_rational r = val_from.unscaled_value();
-    r /= boost::multiprecision::pow(ten, val_from.scale());
-    return static_cast<ToType>(r);
+    return static_cast<ToType>(val_from.as_rational());
 }
 
 static utils::multiprecision_int from_decimal_to_cppint(const data_value& from) {
     const auto& val_from = value_cast<big_decimal>(from);
-    boost::multiprecision::cpp_int ten(10);
-    return boost::multiprecision::cpp_int(val_from.unscaled_value() / boost::multiprecision::pow(ten, val_from.scale()));
+    auto r = val_from.as_rational();
+    return utils::multiprecision_int(numerator(r)/denominator(r));
 }
 
 template<typename ToType>
