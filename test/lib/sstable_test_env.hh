@@ -50,6 +50,8 @@ public:
         });
     }
 
+    sstables_manager& manager() { return _mgr; }
+
     future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
         return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
     }
