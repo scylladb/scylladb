@@ -555,6 +555,8 @@ private:
 
 public:
     const bool has_component(component_type f) const;
+    sstables_manager& manager() { return _manager; }
+    const sstables_manager& manager() const { return _manager; }
 private:
     future<file> open_file(component_type, open_flags, file_open_options = {}) noexcept;
 
