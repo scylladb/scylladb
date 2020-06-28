@@ -147,6 +147,7 @@ def test_projection_expression_path(test_table_s):
     # structured the same was as in the original item:
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[0],a.b[1]')['Item'] == {'a': {'b': [2, 4]}}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[0],a.c')['Item'] == {'a': {'b': [2], 'c': 5}}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.c,b')['Item'] == {'a': {'c': 5}, 'b': 'hello'}
     # It is not allowed to read the same path multiple times. The error from
     # DynamoDB looks like: "Invalid ProjectionExpression: Two document paths
     # overlap with each other; must remove or rewrite one of these paths;
@@ -159,6 +160,59 @@ def test_projection_expression_path(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a,a.b[0]')['Item']
 
+# Above in test_projection_expression_toplevel_syntax() we tested how
+# name references (#name) work in top-level attributes. In the following
+# two tests we test how they work in more elaborate paths:
+# 1. Multiple path components can make multiple references, e.g., "#a.#b"
+# 2. Conversely, a single reference, e.g., "#a", is always a single path
+#    component. Even if "#a" is "a.b", this refers to the literal attribute
+#    "a.b" - with a dot in its name - and not to the b element in a.
+@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
+def test_projection_expression_path_references(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': {'b': 1, 'c': 2}, 'b': 'hi'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b')['Item'] == {'a': {'b': 1}}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#n1.b', ExpressionAttributeNames={'#n1': 'a'})['Item'] == {'a': {'b': 1}}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.#n2', ExpressionAttributeNames={'#n2': 'b'})['Item'] == {'a': {'b': 1}}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#n1.#n2', ExpressionAttributeNames={'#n1': 'a', '#n2': 'b'})['Item'] == {'a': {'b': 1}}
+    # Missing or unused names in ExpressionAttributeNames are errors:
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.#n2', ExpressionAttributeNames={'#wrong': 'b'})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.#n2', ExpressionAttributeNames={'#n2': 'b', '#unused': 'x'})
+
+@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
+def test_projection_expression_path_dot(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a.b': 'hi', 'a': {'b': 'yo'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b')['Item'] == {'a': {'b': 'yo'}}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#name', ExpressionAttributeNames={'#name': 'a.b'})['Item'] == {'a.b': 'hi'}
+
+# DynamoDB does not allow "overlapping" paths to be listed in
+# ProjectionExpression. This includes both identical paths, and paths where
+# one is a sub-path of the other - e.g. "a.b" and "a.b.c". As we already saw
+# above, paths with just a common *prefix* - e.g., "a.b, a.c" - are fine.
+@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
+def test_projection_expression_path_overlap(test_table_s):
+    # The overlap is tested symbolically, on the given paths, without any
+    # relation to what the item contains, or whether it even exists. So we
+    # don't even need to create an item for this test. We still need a
+    # key for the GetItem call :-)
+    p = random_string()
+    for expr in ['a, a',
+                 'a.b, a.b',
+                 'a[1], a[1]',
+                 'a, a.b',
+                 'a.b, a',
+                 'a.b, a.b[2]',
+                 'a.b, a.b.c',
+                 'a, a.b[2].c',
+                ]:
+        with pytest.raises(ClientError, match='ValidationException.* overlap'):
+            test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression=expr)
+
+# Above we nested paths in ProjectionExpression, but just for the GetItem
+# request. Let's verify they also work in Query and Scan requests:
 @pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_query_projection_expression_path(test_table):
     p = random_string()
