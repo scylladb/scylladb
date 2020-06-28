@@ -36,6 +36,10 @@ public:
     explicit test_env() : _mgr(test_sstables_manager) { }
     explicit test_env(sstables_manager& mgr) : _mgr(mgr) { }
 
+    future<> stop() {
+        return make_ready_future<>();
+    }
+
     shared_sstable make_sstable(schema_ptr schema, sstring dir, unsigned long generation,
             sstable::version_types v, sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
