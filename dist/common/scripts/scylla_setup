@@ -361,11 +361,11 @@ if __name__ == '__main__':
             selected = []
             dsklist = []
             while True:
-                print('type \'cancel\' to cancel RAID/XFS setup.')
-                print('type \'done\' to finish selection. Selected: {}'.format(selected))
                 if len(dsklist) > 0:
                     dsk = dsklist.pop(0)
                 else:
+                    print('type \'cancel\' to cancel RAID/XFS setup.')
+                    print('type \'done\' to finish selection. Selected: {}'.format(selected))
                     dsk = input('> ')
                 if dsk == 'cancel':
                     raid_setup = 0
