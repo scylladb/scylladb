@@ -41,13 +41,13 @@ protected:
     }
 
 public:
-    future <temporary_buffer<char>> read_exactly(size_t n);
+    future <temporary_buffer<char>> read_exactly(size_t n) noexcept;
 
-    future<> seek(uint64_t pos);
+    future<> seek(uint64_t pos) noexcept;
 
-    bool eof() const { return _in->eof(); }
+    bool eof() const noexcept { return _in->eof(); }
 
-    virtual future<> close();
+    virtual future<> close() noexcept;
 
     virtual ~random_access_reader() {}
 };
@@ -62,7 +62,7 @@ public:
 
     explicit file_random_access_reader(file f, uint64_t file_size, size_t buffer_size = 8192, unsigned read_ahead = 4);
 
-    virtual future<> close() override;
+    virtual future<> close() noexcept override;
 };
 
 }
