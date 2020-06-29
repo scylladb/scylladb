@@ -119,6 +119,10 @@ rjson::value copy(const rjson::value& value);
 // as parse() will allocate member names and values.
 // Throws rjson::error if parsing failed.
 rjson::value parse(std::string_view str);
+// Parses a JSON value returns a disengaged optional on failure.
+// NOTICE: any error context will be lost, so this function should
+// be used only if one does not care why parsing failed.
+std::optional<rjson::value> try_parse(std::string_view str);
 // Needs to be run in thread context
 rjson::value parse_yieldable(std::string_view str);
 

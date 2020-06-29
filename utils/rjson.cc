@@ -141,6 +141,20 @@ rjson::value parse(std::string_view str) {
     return std::move(v);
 }
 
+std::optional<rjson::value> try_parse(std::string_view str) {
+    guarded_yieldable_json_handler<document, false> d(78);
+    try {
+        d.Parse(str.data(), str.size());
+    } catch (const rjson::error&) {
+        return std::nullopt;
+    }
+    if (d.HasParseError()) {
+        return std::nullopt;    
+    }
+    rjson::value& v = d;
+    return std::move(v);
+}
+
 rjson::value parse_yieldable(std::string_view str) {
     guarded_yieldable_json_handler<document, true> d(78);
     d.Parse(str.data(), str.size());
