@@ -5847,3 +5847,48 @@ SEASTAR_TEST_CASE(test_bug_6472) {
         return make_ready_future<>();
     });
 }
+
+SEASTAR_TEST_CASE(sstable_needs_cleanup_test) {
+    test_env env;
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+
+    auto tokens = token_generation_for_current_shard(10);
+
+    auto sst_gen = [&env, s, gen = make_lw_shared<unsigned>(1)] (sstring first, sstring last) mutable {
+        return sstable_for_overlapping_test(env, s, (*gen)++, first, last);
+    };
+    auto token = [&] (size_t index) -> dht::token {
+        return tokens[index].second;
+    };
+    auto key_from_token = [&] (size_t index) -> sstring {
+        return tokens[index].first;
+    };
+    auto token_range = [&] (size_t first, size_t last) -> dht::token_range {
+        return dht::token_range::make(token(first), token(last));
+    };
+
+    {
+        auto local_ranges = { token_range(0, 9) };
+        auto sst = sst_gen(key_from_token(0), key_from_token(9));
+        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges, s));
+    }
+
+    {
+        auto local_ranges = { token_range(0, 1), token_range(3, 4), token_range(5, 6) };
+
+        auto sst = sst_gen(key_from_token(0), key_from_token(1));
+        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges, s));
+
+        auto sst2 = sst_gen(key_from_token(2), key_from_token(2));
+        BOOST_REQUIRE(needs_cleanup(sst2, local_ranges, s));
+
+        auto sst3 = sst_gen(key_from_token(0), key_from_token(6));
+        BOOST_REQUIRE(needs_cleanup(sst3, local_ranges, s));
+
+        auto sst5 = sst_gen(key_from_token(7), key_from_token(7));
+        BOOST_REQUIRE(needs_cleanup(sst5, local_ranges, s));
+    }
+
+    return make_ready_future<>();
+}
