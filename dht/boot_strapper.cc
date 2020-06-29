@@ -59,7 +59,12 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
         return make_exception_future<>(std::runtime_error("Wrong stream_reason provided: it can only be replace or bootstrap"));
     }
     auto streamer = make_lw_shared<range_streamer>(_db, _token_metadata, _abort_source, _tokens, _address, description, reason);
-    streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_gossiper().get_unreachable_members()));
+    auto nodes_to_filter = gms::get_local_gossiper().get_unreachable_members();
+    if (reason == streaming::stream_reason::replace && _db.local().get_replace_address()) {
+        nodes_to_filter.insert(_db.local().get_replace_address().value());
+    }
+    blogger.debug("nodes_to_filter={}", nodes_to_filter);
+    streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(nodes_to_filter));
     auto keyspaces = make_lw_shared<std::vector<sstring>>(_db.local().get_non_system_keyspaces());
     return do_for_each(*keyspaces, [this, keyspaces, streamer] (sstring& keyspace_name) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
