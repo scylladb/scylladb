@@ -493,7 +493,7 @@ indexed_table_select_statement::prepare_command_for_base_query(const query_optio
     return cmd;
 }
 
-future<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>
+future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>
 indexed_table_select_statement::do_execute_base_query(
         service::storage_proxy& proxy,
         dht::partition_range_vector&& partition_ranges,
@@ -501,6 +501,7 @@ indexed_table_select_statement::do_execute_base_query(
         const query_options& options,
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
+    using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
     auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     uint32_t queried_ranges_count = partition_ranges.size();
@@ -550,7 +551,7 @@ indexed_table_select_statement::do_execute_base_query(
             return merger.get();
         });
     }).then([cmd] (foreign_ptr<lw_shared_ptr<query::result>> result) mutable {
-        return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>(std::move(result), std::move(cmd));
+        return make_ready_future<value_type>(value_type(std::move(result), std::move(cmd)));
     });
 }
 
@@ -562,13 +563,13 @@ indexed_table_select_statement::execute_base_query(
         const query_options& options,
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
-    return do_execute_base_query(proxy, std::move(partition_ranges), state, options, now, paging_state).then(
+    return do_execute_base_query(proxy, std::move(partition_ranges), state, options, now, paging_state).then_unpack(
             [this, &proxy, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
         return process_base_query_results(std::move(result), std::move(cmd), proxy, state, options, now, std::move(paging_state));
     });
 }
 
-future<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>
+future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>
 indexed_table_select_statement::do_execute_base_query(
         service::storage_proxy& proxy,
         std::vector<primary_key>&& primary_keys,
@@ -576,6 +577,7 @@ indexed_table_select_statement::do_execute_base_query(
         const query_options& options,
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
+    using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
     auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
 
@@ -625,7 +627,7 @@ indexed_table_select_statement::do_execute_base_query(
         }).then([&merger] () {
             return merger.get();
         }).then([cmd] (foreign_ptr<lw_shared_ptr<query::result>> result) mutable {
-            return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>(std::move(result), std::move(cmd));
+            return make_ready_future<value_type>(value_type(std::move(result), std::move(cmd)));
         });
     });
 }
@@ -638,7 +640,7 @@ indexed_table_select_statement::execute_base_query(
         const query_options& options,
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
-    return do_execute_base_query(proxy, std::move(primary_keys), state, options, now, paging_state).then(
+    return do_execute_base_query(proxy, std::move(primary_keys), state, options, now, paging_state).then_unpack(
             [this, &proxy, &state, &options, now, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result, lw_shared_ptr<query::read_command> cmd) {
         return process_base_query_results(std::move(result), std::move(cmd), proxy, state, options, now, std::move(paging_state));
     });
@@ -990,20 +992,20 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                 };
 
                 if (whole_partitions || partition_slices) {
-                    return find_index_partition_ranges(proxy, state, *internal_options).then(
+                    return find_index_partition_ranges(proxy, state, *internal_options).then_unpack(
                             [this, now, &state, &internal_options, &proxy, consume_results = std::move(consume_results)] (dht::partition_range_vector partition_ranges, lw_shared_ptr<const service::pager::paging_state> paging_state) {
                         bool has_more_pages = paging_state && paging_state->get_remaining() > 0;
                         internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
-                        return do_execute_base_query(proxy, std::move(partition_ranges), state, *internal_options, now, std::move(paging_state)).then(consume_results).then([has_more_pages] {
+                        return do_execute_base_query(proxy, std::move(partition_ranges), state, *internal_options, now, std::move(paging_state)).then_unpack(consume_results).then([has_more_pages] {
                             return stop_iteration(!has_more_pages);
                         });
                     });
                 } else {
-                    return find_index_clustering_rows(proxy, state, *internal_options).then(
+                    return find_index_clustering_rows(proxy, state, *internal_options).then_unpack(
                             [this, now, &state, &internal_options, &proxy, consume_results = std::move(consume_results)] (std::vector<primary_key> primary_keys, lw_shared_ptr<const service::pager::paging_state> paging_state) {
                         bool has_more_pages = paging_state && paging_state->get_remaining() > 0;
                         internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
-                        return this->do_execute_base_query(proxy, std::move(primary_keys), state, *internal_options, now, std::move(paging_state)).then(consume_results).then([has_more_pages] {
+                        return this->do_execute_base_query(proxy, std::move(primary_keys), state, *internal_options, now, std::move(paging_state)).then_unpack(consume_results).then([has_more_pages] {
                             return stop_iteration(!has_more_pages);
                         });
                     });
@@ -1021,13 +1023,13 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     if (whole_partitions || partition_slices) {
         // In this case, can use our normal query machinery, which retrieves
         // entire partitions or the same slice for many partitions.
-        return find_index_partition_ranges(proxy, state, options).then([now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges, lw_shared_ptr<const service::pager::paging_state> paging_state) {
+        return find_index_partition_ranges(proxy, state, options).then_unpack([now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges, lw_shared_ptr<const service::pager::paging_state> paging_state) {
             return this->execute_base_query(proxy, std::move(partition_ranges), state, options, now, std::move(paging_state));
         });
     } else {
         // In this case, we need to retrieve a list of rows (not entire
         // partitions) and then retrieve those specific rows.
-        return find_index_clustering_rows(proxy, state, options).then([now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys, lw_shared_ptr<const service::pager::paging_state> paging_state) {
+        return find_index_clustering_rows(proxy, state, options).then_unpack([now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys, lw_shared_ptr<const service::pager::paging_state> paging_state) {
             return this->execute_base_query(proxy, std::move(primary_keys), state, options, now, std::move(paging_state));
         });
     }
@@ -1180,11 +1182,12 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
 
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
-future<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>
+future<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>
 indexed_table_select_statement::find_index_partition_ranges(service::storage_proxy& proxy,
                                              service::query_state& state,
                                              const query_options& options) const
 {
+    using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     return read_posting_list(proxy, options, get_limit(options), state, now, timeout, false).then(
@@ -1216,15 +1219,16 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
             partition_ranges.emplace_back(range);
         }
         auto paging_state = rows->rs().get_metadata().paging_state();
-        return make_ready_future<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>(std::move(partition_ranges), std::move(paging_state));
+        return make_ready_future<value_type>(value_type(std::move(partition_ranges), std::move(paging_state)));
     });
 }
 
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
-future<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>
+future<std::tuple<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>>
 indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const
 {
+    using value_type = std::tuple<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     return read_posting_list(proxy, options, get_limit(options), state, now, timeout, true).then(
@@ -1247,7 +1251,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
             primary_keys.emplace_back(primary_key{std::move(dk), std::move(ck)});
         }
         auto paging_state = rows->rs().get_metadata().paging_state();
-        return make_ready_future<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>(std::move(primary_keys), std::move(paging_state));
+        return make_ready_future<value_type>(value_type(std::move(primary_keys), std::move(paging_state)));
     });
 }
 
