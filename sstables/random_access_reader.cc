@@ -33,21 +33,27 @@ future <temporary_buffer<char>> random_access_reader::read_exactly(size_t n) {
     return _in->read_exactly(n);
 }
 
+static future<> close_if_needed(std::unique_ptr<input_stream<char>> in) {
+    if (!in) {
+        return make_ready_future<>();
+    }
+    return in->close().finally([in = std::move(in)] {});
+}
+
 void random_access_reader::seek(uint64_t pos) {
     if (_in) {
         // Future is waited on indirectly in `close()` (via `_close_gate`).
         // FIXME: error handling
-        (void)seastar::with_gate(_close_gate, [in = std::move(_in)]() mutable {
-            auto fut = in->close();
-            return fut.then([in = std::move(in)] {});
+        (void)seastar::with_gate(_close_gate, [prev = std::move(_in)] () mutable {
+            return close_if_needed(std::move(prev));
         });
     }
     set(open_at(pos));
 }
 
 future<> random_access_reader::close() {
-    return _close_gate.close().then([this] {
-        return _in->close();
+    return _close_gate.close().then([prev = std::move(_in)] () mutable {
+        return close_if_needed(std::move(prev));
     });
 }
 
