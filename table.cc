@@ -622,7 +622,6 @@ sstables::shared_sstable table::make_sstable() {
 }
 
 void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
-    auto& shards = sst->get_shards_for_this_sstable();
     if (reset_level) {
         // When loading a migrated sstable, set level to 0 because
         // it may overlap with existing tables in levels > 0.
@@ -631,7 +630,7 @@ void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
         // the sstables to level 0.
         sst->set_sstable_level(0);
     }
-    add_sstable(sst, std::move(shards));
+    add_sstable(sst);
 }
 
 void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept {
@@ -648,8 +647,8 @@ inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracke
     tracker.remove_sstable(std::move(sstable));
 }
 
-void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsigned>& shards_for_the_sstable) {
-    if (belongs_to_other_shard(shards_for_the_sstable)) {
+void table::add_sstable(sstables::shared_sstable sstable) {
+    if (belongs_to_other_shard(sstable->get_shards_for_this_sstable())) {
         on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
     }
     // allow in-progress reads to continue using old list
@@ -669,7 +668,7 @@ table::add_sstable_and_update_cache(sstables::shared_sstable sst) {
     return get_row_cache().invalidate([this, sst] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
-        add_sstable(sst, {this_shard_id()});
+        add_sstable(sst);
         trigger_compaction();
     }, dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
 }
@@ -678,7 +677,7 @@ future<>
 table::update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable sst) {
     auto adder = [this, m, sst] {
         auto newtab_ms = sst->as_mutation_source();
-        add_sstable(sst, {this_shard_id()});
+        add_sstable(sst);
         m->mark_flushed(std::move(newtab_ms));
         try_trigger_compaction();
     };
