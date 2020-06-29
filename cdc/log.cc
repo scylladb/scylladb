@@ -853,11 +853,11 @@ public:
         throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
     }
 
-    void begin_timestamp(api::timestamp_type ts, bytes tuuid) override {
+    void begin_timestamp(api::timestamp_type ts) override {
         const auto stream_id = _ctx._cdc_metadata.get_stream(ts, _dk.token());
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
         _ts = ts;
-        _tuuid = std::move(tuuid);
+        _tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
     }
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need

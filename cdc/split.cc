@@ -523,10 +523,9 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
     auto pk = base_mutation.key();
 
     for (auto& [change_ts, btch] : changes) {
-        auto tuuid = timeuuid_type->decompose(generate_timeuuid(change_ts));
         int batch_no = 0;
 
-        processor.begin_timestamp(change_ts, std::move(tuuid));
+        processor.begin_timestamp(change_ts);
 
         for (auto& sr_update : btch.static_updates) {
             mutation m(base_schema, pk);
@@ -597,8 +596,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
 void process_changes_without_splitting(const mutation& base_mutation, change_processor& processor) {
     int batch_no = 0;
     auto ts = find_timestamp(base_mutation);
-    auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
-    processor.begin_timestamp(ts, std::move(tuuid));
+    processor.begin_timestamp(ts);
     processor.process_change(base_mutation, batch_no);
 }
 

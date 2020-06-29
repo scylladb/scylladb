@@ -49,8 +49,7 @@ public:
     // This method must be called in increasing timestamp order.
     // begin_timestamp can be called only once for a given timestamp and change_processor object.
     //   ts - timestamp of mutation parts
-    //   tuuid - corresponds to the cdc$time
-    virtual void begin_timestamp(api::timestamp_type ts, bytes tuuid) = 0;
+    virtual void begin_timestamp(api::timestamp_type ts) = 0;
 
     // Processes a smaller mutation which is a subset of the big mutation.
     // The mutation provided to process_change should be simple enough for it to be possible to convert it
