@@ -983,8 +983,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<request> req) {
         return snap_ctl.local().get_snapshot_details().then([] (std::unordered_map<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& result) {
-            return do_with(std::move(result), [](const std::unordered_map<sstring, std::vector<db::snapshot_ctl::snapshot_details>>& result) {
-                std::function<future<>(output_stream<char>&&)> f = [&result](output_stream<char>&& s) {
+                std::function<future<>(output_stream<char>&&)> f = [result = std::move(result)](output_stream<char>&& s) {
                     return do_with(output_stream<char>(std::move(s)), true, [&result] (output_stream<char>& s, bool& first){
                         return s.write("[").then([&s, &first, &result] {
                             return do_for_each(result, [&s, &result, &first](std::tuple<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& map){
@@ -1016,7 +1015,6 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                 };
 
                 return make_ready_future<json::json_return_type>(std::move(f));
-            });
         });
     });
 
