@@ -1064,8 +1064,9 @@ private:
     // Read rows from sstable until the size of rows exceeds _max_row_buf_size  - current_size
     // This reads rows from where the reader left last time into _row_buf
     // _current_sync_boundary or _last_sync_boundary have no effect on the reader neither.
-    future<std::list<repair_row>, size_t>
+    future<std::tuple<std::list<repair_row>, size_t>>
     read_rows_from_disk(size_t cur_size) {
+        using value_type = std::tuple<std::list<repair_row>, size_t>;
         return do_with(cur_size, size_t(0), std::list<repair_row>(), [this] (size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
             return repeat([this, &cur_size, &cur_rows, &new_rows_size] () mutable {
                 if (cur_size >= _max_row_buf_size) {
@@ -1082,10 +1083,10 @@ private:
             }).then_wrapped([this, &cur_rows, &new_rows_size] (future<> fut) mutable {
                 if (fut.failed()) {
                     _repair_reader.on_end_of_stream();
-                    return make_exception_future<std::list<repair_row>, size_t>(fut.get_exception());
+                    return make_exception_future<value_type>(fut.get_exception());
                 }
                 _repair_reader.pause();
-                return make_ready_future<std::list<repair_row>, size_t>(std::move(cur_rows), new_rows_size);
+                return make_ready_future<value_type>(value_type(std::move(cur_rows), new_rows_size));
             });
         });
     }
@@ -1108,7 +1109,7 @@ private:
         rlogger.trace("SET _last_sync_boundary from {} to {}", _last_sync_boundary, _current_sync_boundary);
         _last_sync_boundary = _current_sync_boundary;
         return row_buf_size().then([this, sb = std::move(skipped_sync_boundary)] (size_t cur_size) {
-            return read_rows_from_disk(cur_size).then([this, sb = std::move(sb)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
+            return read_rows_from_disk(cur_size).then_unpack([this, sb = std::move(sb)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
                 size_t new_rows_nr = new_rows.size();
                 _row_buf.splice(_row_buf.end(), new_rows);
                 return row_buf_csum().then([this, new_rows_size, new_rows_nr, sb = std::move(sb)] (repair_hash row_buf_combined_hash) {
