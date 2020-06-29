@@ -8,11 +8,37 @@ continue to interoperate with Cassandra and other compatible servers
 with no configuration needed; the driver can discover the extensions
 and enable them conditionally.
 
-An extension can be discovered by using the OPTIONS request; the
-returned SUPPORTED response will have zero or more options beginning
-with SCYLLA indicating extensions defined in this documented, in
+An extension can be discovered by the client driver by using the OPTIONS
+request; the returned SUPPORTED response will have zero or more options
+beginning with `SCYLLA` indicating extensions defined in this document, in
 addition to options documented by Cassandra. How to use the extension
 is further explained in this document.
+
+# Extending protocol extensions support
+
+As mentioned above, in order to use a protocol extension feature by both
+server and client, they need to negotiate the used feature set when establishing
+a connection.
+
+The negotiation procedure has the following steps:
+  - Client sends the OPTIONS request to the Scylla instance to get a list of
+    protocol extensions that the server understands.
+  - Server sends the SUPPORTED message in reply to the OPTIONS request. The
+    message body is a string multimap, in which keys describe different
+    extensions and possibly one or more additional values specific to a
+    particular extension (specified as distinct values under a feature key in
+    the following form: `ARG_NAME=VALUE`).
+  - The client determines the set of compatible extensions which it is going
+    to use in the current connection by intersecting known capabilities list
+    with what it has received in SUPPORTED response.
+  - Client driver sends the STARTUP request with additional payload consisting
+    of key-value pairs, each describing a negotiated extension.
+  - Server determines the set of compatible extensions by intersecting known
+    list of protocol extensions with what it has received in STARTUP request.
+
+Both client and server use the same string identifiers for the keys to determine
+negotiated extension set, judging by the presence of a particular key in the
+SUPPORTED/STARTUP messages.
 
 # Intranode sharding
 
@@ -80,3 +106,32 @@ is for Java):
 
 It is recommended that drivers open connections until they have at
 least one connection per shard, then close excess connections.
+
+# LWT prepared statements metadata mark
+
+This extension allows the driver to discover whether LWT statements have a
+special bit set in prepared statement metadata flags, which indicates that
+the driver currently deals with an LWT statement.
+
+Having a designated flag gives the ability to reliably detect LWT statements
+and remove the need to execute custom parsing logic for each query, which is not
+only costly but also error-prone (e.g. parsing the prepared query with regular
+expressions).
+
+The feature is meant to be further utilized by client drivers to use primary
+replicas consistently when dealing with conditional statements.
+
+Choosing primary replicas in a predefined order ensures that in case of multiple
+LWT queries that contend on a single key, these queries will queue up at the
+replica rather than compete: choose the primary replica first, then, if the
+primary is known to be down, the first secondary, then the second secondary, and
+so on.
+This will reduce contention over hot keys and thus increase LWT performance.
+
+The feature is identified by the `SCYLLA_LWT_ADD_METADATA_MARK` key that is
+meant to be sent in the SUPPORTED message along with the following additional
+parameters:
+  - `SCYLLA_LWT_OPTIMIZATION_META_BIT_MASK` is a 32-bit integer that represents
+    the bit mask that should be used by the client to test against when checking
+    prepared statement metadata flags to see if the current query is conditional
+    or not.

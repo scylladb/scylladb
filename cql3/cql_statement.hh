@@ -108,6 +108,10 @@ public:
     virtual bool depends_on_column_family(const sstring& cf_name) const = 0;
 
     virtual shared_ptr<const metadata> get_result_metadata() const = 0;
+
+    virtual bool is_conditional() const {
+        return false;
+    }
 };
 
 class cql_statement_no_metadata : public cql_statement {

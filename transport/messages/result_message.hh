@@ -41,9 +41,12 @@ private:
     cql3::prepared_metadata _metadata;
     ::shared_ptr<const cql3::metadata> _result_metadata;
 protected:
-    prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared)
+    prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared, bool support_lwt_opt)
         : _prepared(std::move(prepared))
-        , _metadata(_prepared->bound_names, _prepared->partition_key_bind_indices)
+        , _metadata(
+            _prepared->bound_names,
+            _prepared->partition_key_bind_indices,
+            support_lwt_opt ? _prepared->statement->is_conditional() : false)
         , _result_metadata{extract_result_metadata(_prepared->statement)}
     { }
 public:
@@ -138,8 +141,8 @@ std::ostream& operator<<(std::ostream& os, const result_message::set_keyspace& m
 class result_message::prepared::cql : public result_message::prepared {
     bytes _id;
 public:
-    cql(const bytes& id, cql3::statements::prepared_statement::checked_weak_ptr p)
-        : result_message::prepared(std::move(p))
+    cql(const bytes& id, cql3::statements::prepared_statement::checked_weak_ptr p, bool support_lwt_opt)
+        : result_message::prepared(std::move(p), support_lwt_opt)
         , _id{id}
     { }
 
@@ -165,8 +168,8 @@ std::ostream& operator<<(std::ostream& os, const result_message::prepared::cql& 
 class result_message::prepared::thrift : public result_message::prepared {
     int32_t _id;
 public:
-    thrift(int32_t id, cql3::statements::prepared_statement::checked_weak_ptr prepared)
-        : result_message::prepared(std::move(prepared))
+    thrift(int32_t id, cql3::statements::prepared_statement::checked_weak_ptr prepared, bool support_lwt_opt)
+        : result_message::prepared(std::move(prepared), support_lwt_opt)
         , _id{id}
     { }
 

@@ -65,6 +65,8 @@
 
 #include "types/user.hh"
 
+#include "transport/cql_protocol_extension.hh"
+
 namespace cql_transport {
 
 static logging::logger clogger("cql_server");
@@ -736,6 +738,13 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
              throw exceptions::protocol_exception(format("Unknown compression algorithm: {}", compression));
          }
     }
+    cql_protocol_extension_enum_set cql_proto_exts;
+    for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
+        if (options.find(protocol_extension_name(ext)) != options.cend()) {
+            cql_proto_exts.set(ext);
+        }
+    }
+    _client_state.set_protocol_extensions(std::move(cql_proto_exts));
     auto& a = client_state.get_auth_service()->underlying_authenticator();
     if (a.require_authentication()) {
         return make_ready_future<std::unique_ptr<cql_server::response>>(make_autheticate(stream, a.qualified_java_name(), trace_state));
@@ -1221,8 +1230,19 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
         opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _server._config.sharding_ignore_msb)});
         opts.insert({"SCYLLA_PARTITIONER", _server._config.partitioner_name});
     }
+    for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
+        const sstring ext_key_name = protocol_extension_name(ext);
+        std::vector<sstring> params = additional_options_for_proto_ext(ext);
+        if (params.empty()) {
+            opts.emplace(ext_key_name, "");
+        } else {
+            for (sstring val : params) {
+                opts.emplace(ext_key_name, std::move(val));
+            }
+        }
+    }
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
-    response->write_string_multimap(opts);
+    response->write_string_multimap(std::move(opts));
     return response;
 }
 

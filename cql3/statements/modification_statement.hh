@@ -184,6 +184,9 @@ public:
     const restrictions::statement_restrictions& restrictions() const {
         return *_restrictions;
     }
+
+    bool is_conditional() const override;
+
 public:
     void add_condition(lw_shared_ptr<column_condition> cond);
 
