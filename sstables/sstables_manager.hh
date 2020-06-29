@@ -80,6 +80,17 @@ public:
     void set_format(sstable_version_types format) { _format = format; }
     sstables::sstable::version_types get_highest_supported_format() const { return _format; }
 
+    // Wait until all sstables managed by this sstables_manager instance
+    // (previously created by make_sstable()) have been disposed of:
+    //   - if they were marked for deletion, the files are deleted
+    //   - in any case, the open file handles are closed
+    //   - all memory resources are freed
+    //
+    // Note that close() will not complete until all references to all
+    // sstables have been destroyed.
+    //
+    // Note: just a stub at this point.
+    future<> close();
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;
