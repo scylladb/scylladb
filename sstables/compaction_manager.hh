@@ -271,3 +271,5 @@ public:
     friend class compaction_weight_registration;
 };
 
+bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges, schema_ptr s);
+
