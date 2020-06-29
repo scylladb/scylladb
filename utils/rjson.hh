@@ -124,8 +124,6 @@ rjson::value parse_yieldable(std::string_view str);
 
 // Creates a JSON value (of JSON string type) out of internal string representations.
 // The string value is copied, so str's liveness does not need to be persisted.
-rjson::value from_string(const std::string& str);
-rjson::value from_string(const sstring& str);
 rjson::value from_string(const char* str, size_t size);
 rjson::value from_string(std::string_view view);
 
@@ -139,13 +137,11 @@ const rjson::value& get(const rjson::value& value, std::string_view name);
 
 // Sets a member in given JSON object by moving the member - allocates the name.
 // Throws if base is not a JSON object.
-void set_with_string_name(rjson::value& base, const std::string& name, rjson::value&& member);
 void set_with_string_name(rjson::value& base, std::string_view name, rjson::value&& member);
 
 // Sets a string member in given JSON object by assigning its reference - allocates the name.
 // NOTICE: member string liveness must be ensured to be at least as long as base's.
 // Throws if base is not a JSON object.
-void set_with_string_name(rjson::value& base, const std::string& name, rjson::string_ref_type member);
 void set_with_string_name(rjson::value& base, std::string_view name, rjson::string_ref_type member);
 
 // Sets a member in given JSON object by moving the member.
