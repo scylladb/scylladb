@@ -36,6 +36,11 @@ class random_access_reader {
 protected:
     virtual input_stream<char> open_at(uint64_t pos) = 0;
 
+    void set(input_stream<char> in) {
+        assert(!_in);
+        _in = std::make_unique<input_stream<char>>(std::move(in));
+    }
+
 public:
     future <temporary_buffer<char>> read_exactly(size_t n);
 

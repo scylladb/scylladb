@@ -42,7 +42,7 @@ void random_access_reader::seek(uint64_t pos) {
             return fut.then([in = std::move(in)] {});
         });
     }
-    _in = std::make_unique < input_stream < char >> (open_at(pos));
+    set(open_at(pos));
 }
 
 future<> random_access_reader::close() {
@@ -53,7 +53,7 @@ future<> random_access_reader::close() {
 
 file_random_access_reader::file_random_access_reader(file f, uint64_t file_size, size_t buffer_size, unsigned read_ahead)
     : _file(std::move(f)), _file_size(file_size), _buffer_size(buffer_size), _read_ahead(read_ahead) {
-    seek(0);
+    set(open_at(0));
 }
 
 input_stream<char> file_random_access_reader::open_at(uint64_t pos) {
