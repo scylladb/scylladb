@@ -239,6 +239,22 @@ def test_scan_projection_expression_path(test_table):
     expected_items = [{'p': p, 'a': {'x': x['a']['x']}} for x in items]
     assert multiset(expected_items) == multiset(got_items)
 
+# BatchGetItem also supports ProjectionExpression, let's test that it
+# applies to all items, and that it correctly suports document paths as well.
+@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
+def test_batch_get_item_projection_expression_path(test_table_s):
+    items = [{'p': random_string(), 'a': {'b': random_string()}, 'c': random_string()} for i in range(3)]
+    with test_table_s.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    got_items = test_table_s.meta.client.batch_get_item(
+        RequestItems = {test_table_s.name: {
+            'Keys': [{'p': item['p']} for item in items],
+            'ProjectionExpression': 'a.b',
+            'ConsistentRead': True}})['Responses'][test_table_s.name]
+    expected_items = [{'a': {'b': item['a']['b']}} for item in items]
+    assert multiset(got_items) == multiset(expected_items)
+
 # It is not allowed to use both ProjectionExpression and its older cousin,
 # AttributesToGet, together. If trying to do this, DynamoDB produces an error
 # like "Can not use both expression and non-expression parameters in the same
