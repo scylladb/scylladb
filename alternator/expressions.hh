@@ -28,7 +28,7 @@
 #include <string_view>
 
 #include "expressions_types.hh"
-#include "rjson.hh"
+#include "utils/rjson.hh"
 
 namespace alternator {
 

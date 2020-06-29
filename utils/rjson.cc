@@ -20,7 +20,6 @@
  */
 
 #include "rjson.hh"
-#include "error.hh"
 #include <seastar/core/print.hh>
 #include <seastar/core/thread.hh>
 

@@ -25,7 +25,7 @@
 #include <seastar/json/json_elements.hh>
 #include "seastarx.hh"
 #include "error.hh"
-#include "rjson.hh"
+#include "utils/rjson.hh"
 #include "auth.hh"
 #include <cctype>
 #include "cql3/query_processor.hh"
