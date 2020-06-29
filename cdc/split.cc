@@ -523,8 +523,6 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
     auto pk = base_mutation.key();
 
     for (auto& [change_ts, btch] : changes) {
-        int batch_no = 0;
-
         processor.begin_timestamp(change_ts);
 
         for (auto& sr_update : btch.static_updates) {
@@ -537,7 +535,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
                 auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
                 m.set_static_cell(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
-            processor.process_change(m, batch_no);
+            processor.process_change(m);
         }
 
         for (auto& cr_insert : btch.clustered_inserts) {
@@ -554,7 +552,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             }
             row.apply(cr_insert.marker);
 
-            processor.process_change(m, batch_no);
+            processor.process_change(m);
         }
 
         for (auto& cr_update : btch.clustered_updates) {
@@ -570,34 +568,33 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
                 row.apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
 
-            processor.process_change(m, batch_no);
+            processor.process_change(m);
         }
 
         for (auto& cr_delete : btch.clustered_row_deletions) {
             mutation m(base_schema, pk);
             m.partition().apply_delete(*base_schema, cr_delete.key, cr_delete.t);
-            processor.process_change(m, batch_no);
+            processor.process_change(m);
         }
 
         for (auto& crange_delete : btch.clustered_range_deletions) {
             mutation m(base_schema, pk);
             m.partition().apply_delete(*base_schema, crange_delete.rt);
-            processor.process_change(m, batch_no);
+            processor.process_change(m);
         }
 
         if (btch.partition_deletions) {
             mutation m(base_schema, pk);
             m.partition().apply(btch.partition_deletions->t);
-            processor.process_change(m, batch_no);
+            processor.process_change(m);
         }
     }
 }
 
 void process_changes_without_splitting(const mutation& base_mutation, change_processor& processor) {
-    int batch_no = 0;
     auto ts = find_timestamp(base_mutation);
     processor.begin_timestamp(ts);
-    processor.process_change(base_mutation, batch_no);
+    processor.process_change(base_mutation);
 }
 
 } // namespace cdc

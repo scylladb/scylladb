@@ -56,8 +56,7 @@ public:
     // into CDC log rows - for example, it cannot represent a write to two columns of the same row, where
     // both columns have different timestamp or TTL set.
     //   m - the small mutation to be converted into CDC log rows.
-    //   batch_no - reference to the cdc$batch_seq_no counter.
-    virtual void process_change(const mutation& m, int& batch_no) = 0;
+    virtual void process_change(const mutation& m) = 0;
 };
 
 bool should_split(const mutation& base_mutation);
