@@ -151,7 +151,8 @@ private:
     std::vector<uint16_t> _partition_key_bind_indices;
 public:
     prepared_metadata(const std::vector<lw_shared_ptr<column_specification>>& names,
-                      const std::vector<uint16_t>& partition_key_bind_indices);
+                      const std::vector<uint16_t>& partition_key_bind_indices,
+                      bool is_conditional);
 
     flag_enum_set flags() const;
     const std::vector<lw_shared_ptr<column_specification>>& names() const;

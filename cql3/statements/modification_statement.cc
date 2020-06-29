@@ -646,6 +646,10 @@ void modification_statement::inc_cql_stats(bool is_internal) const {
     ++_stats.query_cnt(src_sel, _ks_sel, cond_sel, type);
 }
 
+bool modification_statement::is_conditional() const {
+    return has_conditions();
+}
+
 void modification_statement::add_condition(lw_shared_ptr<column_condition> cond) {
     if (cond->column.is_static()) {
         _has_static_column_conditions = true;

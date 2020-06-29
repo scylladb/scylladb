@@ -102,12 +102,17 @@ lw_shared_ptr<const service::pager::paging_state> metadata::paging_state() const
 }
 
 prepared_metadata::prepared_metadata(const std::vector<lw_shared_ptr<column_specification>>& names,
-                                     const std::vector<uint16_t>& partition_key_bind_indices)
+                                     const std::vector<uint16_t>& partition_key_bind_indices,
+                                     bool is_conditional)
     : _names{names}
     , _partition_key_bind_indices{partition_key_bind_indices}
 {
     if (!names.empty() && column_specification::all_in_same_table(_names)) {
         _flags.set<flag::GLOBAL_TABLES_SPEC>();
+    }
+
+    if (is_conditional) {
+        _flags.set<flag::LWT>();
     }
 }
 
