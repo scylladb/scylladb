@@ -1797,6 +1797,10 @@ database::stop() {
         return _streaming_dirty_memory_manager.shutdown();
     }).then([this] {
         return _memtable_controller.shutdown();
+    }).then([this] {
+        return _user_sstables_manager->close();
+    }).then([this] {
+        return _system_sstables_manager->close();
     });
 }
 
