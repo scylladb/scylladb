@@ -305,7 +305,7 @@ sstable_directory::remove_input_sstables_from_reshaping(std::vector<sstables::sh
         return parallel_for_each(std::move(sstlist), [] (sstables::shared_sstable sst) {
             return sst->unlink();
         }).then([] {
-            fmt::print("Finished removing all SSTables\n");
+            dirlog.debug("Finished removing all SSTables");
         });
     });
 }
