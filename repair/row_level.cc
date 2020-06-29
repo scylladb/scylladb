@@ -86,17 +86,18 @@ public:
     void mark_source_closed(unsigned node_idx) {
         _sources_closed[node_idx] = true;
     }
-    future<sink_type, source_type> get_sink_source(gms::inet_address remote_node, unsigned node_idx) {
+    future<std::tuple<sink_type, source_type>> get_sink_source(gms::inet_address remote_node, unsigned node_idx) {
+        using value_type = std::tuple<sink_type, source_type>;
         if (_sinks[node_idx] && _sources[node_idx]) {
-            return make_ready_future<sink_type, source_type>(_sinks[node_idx].value(), _sources[node_idx].value());
+            return make_ready_future<value_type>(value_type(_sinks[node_idx].value(), _sources[node_idx].value()));
         }
         if (_sinks[node_idx] || _sources[node_idx]) {
-            return make_exception_future<sink_type, source_type>(std::runtime_error(format("sink or source is missing for node {}", remote_node)));
+            return make_exception_future<value_type>(std::runtime_error(format("sink or source is missing for node {}", remote_node)));
         }
         return _fn(_repair_meta_id, netw::messaging_service::msg_addr(remote_node)).then_unpack([this, node_idx] (rpc::sink<SinkType> sink, rpc::source<SourceType> source) mutable {
             _sinks[node_idx].emplace(std::move(sink));
             _sources[node_idx].emplace(std::move(source));
-            return make_ready_future<sink_type, source_type>(_sinks[node_idx].value(), _sources[node_idx].value());
+            return make_ready_future<value_type>(value_type(_sinks[node_idx].value(), _sources[node_idx].value()));
         });
     }
     future<> close() {
@@ -1422,7 +1423,7 @@ public:
             return get_full_row_hashes_handler();
         }
         auto current_hashes = make_lw_shared<std::unordered_set<repair_hash>>();
-        return _sink_source_for_get_full_row_hashes.get_sink_source(remote_node, node_idx).then(
+        return _sink_source_for_get_full_row_hashes.get_sink_source(remote_node, node_idx).then_unpack(
                 [this, current_hashes, remote_node, node_idx]
                 (rpc::sink<repair_stream_cmd>& sink, rpc::source<repair_hash_with_cmd>& source) mutable {
             auto source_op = get_full_row_hashes_source_op(current_hashes, remote_node, node_idx, source);
@@ -1702,7 +1703,7 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            auto f = _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx).get();
+            auto f = _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx).get0();
             rpc::sink<repair_hash_with_cmd>& sink = std::get<0>(f);
             rpc::source<repair_row_on_wire_with_cmd>& source = std::get<1>(f);
             auto sink_op = get_row_diff_sink_op(std::move(set_diff), needs_all_rows, sink, remote_node);
@@ -1816,7 +1817,7 @@ public:
                         stats().tx_row_bytes += row_bytes;
                         stats().rpc_call_nr++;
                         return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, node_idx] (repair_rows_on_wire rows)  {
-                            return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then(
+                            return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then_unpack(
                                     [this, rows = std::move(rows), remote_node, node_idx]
                                     (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
                                 auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
