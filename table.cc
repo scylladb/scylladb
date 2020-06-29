@@ -836,7 +836,13 @@ table::stop() {
                     // Nest, instead of using when_all, so we don't lose any exceptions.
                     return _streaming_flush_gate.close();
                 }).then([this] {
-                    return _sstable_deletion_gate.close();
+                    return _sstable_deletion_gate.close().then([this] {
+                        return get_row_cache().invalidate([this] {
+                            _sstables = _compaction_strategy.make_sstable_set(_schema);
+                        }).then([this] {
+                            _cache.refresh_snapshot();
+                        });
+                    });
                 });
             });
         });
