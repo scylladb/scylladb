@@ -751,7 +751,7 @@ utils::UUID generate_timeuuid(api::timestamp_type t) {
     return utils::UUID_gen::get_random_time_UUID_from_micros(t);
 }
 
-class transformer final {
+class transformer final : public change_processor {
 private:
     db_context _ctx;
     schema_ptr _schema;
@@ -953,7 +953,7 @@ public:
         throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
     }
 
-    void begin_timestamp(api::timestamp_type ts, bytes tuuid) {
+    void begin_timestamp(api::timestamp_type ts, bytes tuuid) override {
         const auto stream_id = _ctx._cdc_metadata.get_stream(ts, _dk.token());
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
         _ts = ts;
@@ -962,7 +962,7 @@ public:
 
     // TODO: is pre-image data based on query enough. We only have actual column data. Do we need
     // more details like tombstones/ttl? Probably not but keep in mind.
-    void transform(const mutation& m, int& batch_no) {
+    void process_change(const mutation& m, int& batch_no) override {
         mutation& res = current_mutation();
         const auto rs = _preimage_select_result.get();
         const auto preimage = _schema->cdc_options().preimage();
@@ -1540,17 +1540,10 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 if (should_split(m)) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
                     details.was_split = true;
-                    for_each_change(m, [&] (mutation mm, api::timestamp_type ts, bytes tuuid, int& batch_no) {
-                        trans.begin_timestamp(ts, std::move(tuuid));
-                        trans.transform(std::move(mm), batch_no);
-                    });
+                    process_changes_with_splitting(m, trans);
                 } else {
                     tracing::trace(tr_state, "CDC: No need to split {}", m.decorated_key());
-                    int batch_no = 0;
-                    auto ts = find_timestamp(m);
-                    auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
-                    trans.begin_timestamp(ts, std::move(tuuid));
-                    trans.transform(m, batch_no);
+                    process_changes_without_splitting(m, trans);
                 }
                 auto [log_mut, touched_parts] = std::move(trans).finish();
                 const int generated_count = log_mut.size();

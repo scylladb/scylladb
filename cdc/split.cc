@@ -417,8 +417,7 @@ bool should_split(const mutation& base_mutation) {
     return found_ts == api::missing_timestamp;
 }
 
-void for_each_change(const mutation& base_mutation,
-        seastar::noncopyable_function<void(mutation, api::timestamp_type, bytes, int&)> f) {
+void process_changes_with_splitting(const mutation& base_mutation, change_processor& processor) {
     const auto base_schema = base_mutation.schema();
     auto changes = extract_changes(base_mutation);
     auto pk = base_mutation.key();
@@ -426,6 +425,8 @@ void for_each_change(const mutation& base_mutation,
     for (auto& [change_ts, btch] : changes) {
         auto tuuid = timeuuid_type->decompose(generate_timeuuid(change_ts));
         int batch_no = 0;
+
+        processor.begin_timestamp(change_ts, std::move(tuuid));
 
         for (auto& sr_update : btch.static_updates) {
             mutation m(base_schema, pk);
@@ -437,7 +438,7 @@ void for_each_change(const mutation& base_mutation,
                 auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
                 m.set_static_cell(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
-            f(std::move(m), change_ts, tuuid, batch_no);
+            processor.process_change(m, batch_no);
         }
 
         for (auto& cr_insert : btch.clustered_inserts) {
@@ -454,7 +455,7 @@ void for_each_change(const mutation& base_mutation,
             }
             row.apply(cr_insert.marker);
 
-            f(std::move(m), change_ts, tuuid, batch_no);
+            processor.process_change(m, batch_no);
         }
 
         for (auto& cr_update : btch.clustered_updates) {
@@ -470,27 +471,35 @@ void for_each_change(const mutation& base_mutation,
                 row.apply(cdef, collection_mutation_description{nonatomic_update.t, std::move(nonatomic_update.cells)}.serialize(*cdef.type));
             }
 
-            f(std::move(m), change_ts, tuuid, batch_no);
+            processor.process_change(m, batch_no);
         }
 
         for (auto& cr_delete : btch.clustered_row_deletions) {
             mutation m(base_schema, pk);
             m.partition().apply_delete(*base_schema, cr_delete.key, cr_delete.t);
-            f(std::move(m), change_ts, tuuid, batch_no);
+            processor.process_change(m, batch_no);
         }
 
         for (auto& crange_delete : btch.clustered_range_deletions) {
             mutation m(base_schema, pk);
             m.partition().apply_delete(*base_schema, crange_delete.rt);
-            f(std::move(m), change_ts, tuuid, batch_no);
+            processor.process_change(m, batch_no);
         }
 
         if (btch.partition_deletions) {
             mutation m(base_schema, pk);
             m.partition().apply(btch.partition_deletions->t);
-            f(std::move(m), change_ts, tuuid, batch_no);
+            processor.process_change(m, batch_no);
         }
     }
+}
+
+void process_changes_without_splitting(const mutation& base_mutation, change_processor& processor) {
+    int batch_no = 0;
+    auto ts = find_timestamp(base_mutation);
+    auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
+    processor.begin_timestamp(ts, std::move(tuuid));
+    processor.process_change(base_mutation, batch_no);
 }
 
 } // namespace cdc
