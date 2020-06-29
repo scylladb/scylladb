@@ -986,7 +986,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             std::function<future<>(output_stream<char>&&)> f = [result = std::move(result)](output_stream<char>&& s) {
                 return do_with(output_stream<char>(std::move(s)), true, [&result] (output_stream<char>& s, bool& first){
                     return s.write("[").then([&s, &first, &result] {
-                        return do_for_each(result, [&s, &result, &first](std::tuple<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& map){
+                        return do_for_each(result, [&s, &first](std::tuple<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& map){
                             return do_with(ss::snapshots(), [&s, &first, &map](ss::snapshots& all_snapshots) {
                                 all_snapshots.key = std::get<0>(map);
                                 future<> f = first ? make_ready_future<>() : s.write(", ");
