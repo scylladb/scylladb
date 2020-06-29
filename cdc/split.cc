@@ -129,9 +129,10 @@ extract_row_updates(const row& r, column_kind ckind, const schema& schema) {
     return result;
 };
 
-set_of_changes extract_changes(const mutation& base_mutation, const schema& base_schema) {
+set_of_changes extract_changes(const mutation& base_mutation) {
     set_of_changes res;
     auto& p = base_mutation.partition();
+    const auto& base_schema = *base_mutation.schema();
 
     auto sr_updates = extract_row_updates(p.static_row().get(), column_kind::static_column, base_schema);
     for (auto& [k, up]: sr_updates) {
@@ -264,7 +265,8 @@ set_of_changes extract_changes(const mutation& base_mutation, const schema& base
 
 namespace cdc {
 
-bool should_split(const mutation& base_mutation, const schema& base_schema) {
+bool should_split(const mutation& base_mutation) {
+    const auto& base_schema = *base_mutation.schema();
     auto& p = base_mutation.partition();
 
     api::timestamp_type found_ts = api::missing_timestamp;
@@ -415,9 +417,10 @@ bool should_split(const mutation& base_mutation, const schema& base_schema) {
     return found_ts == api::missing_timestamp;
 }
 
-void for_each_change(const mutation& base_mutation, const schema_ptr& base_schema,
+void for_each_change(const mutation& base_mutation,
         seastar::noncopyable_function<void(mutation, api::timestamp_type, bytes, int&)> f) {
-    auto changes = extract_changes(base_mutation, *base_schema);
+    const auto base_schema = base_mutation.schema();
+    auto changes = extract_changes(base_mutation);
     auto pk = base_mutation.key();
 
     for (auto& [change_ts, btch] : changes) {

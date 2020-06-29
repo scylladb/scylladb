@@ -53,7 +53,7 @@ static cql_test_config mk_cdc_test_config() {
 };
 
 namespace cdc {
-api::timestamp_type find_timestamp(const schema&, const mutation&);
+api::timestamp_type find_timestamp(const mutation&);
 utils::UUID generate_timeuuid(api::timestamp_type);
 }
 
@@ -84,7 +84,7 @@ SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
                  * so we can do it by comparing the returned timestamp with the current time
                  * -- the difference should be small.
                  */
-                auto ts = cdc::find_timestamp(*schema, m);
+                auto ts = cdc::find_timestamp(m);
                 BOOST_REQUIRE(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         api::timestamp_clock::duration(api::new_timestamp() - ts))

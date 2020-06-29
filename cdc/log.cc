@@ -525,8 +525,9 @@ db_context db_context::builder::build() {
 //   split each mutation to a set of mutations, each with a single timestamp.
 // - optionally: here, throw error if multiple timestamps are encountered (may degrade performance).
 // external linkage for testing
-api::timestamp_type find_timestamp(const schema& s, const mutation& m) {
+api::timestamp_type find_timestamp(const mutation& m) {
     auto& p = m.partition();
+    const auto& s = *m.schema();
     api::timestamp_type t = api::missing_timestamp;
 
     t = p.partition_tombstone().timestamp;
@@ -1536,17 +1537,17 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 details.had_preimage |= s->cdc_options().preimage();
                 details.had_postimage |= s->cdc_options().postimage();
                 tracing::trace(tr_state, "CDC: Generating log mutations for {}", m.decorated_key());
-                if (should_split(m, *s)) {
+                if (should_split(m)) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
                     details.was_split = true;
-                    for_each_change(m, s, [&] (mutation mm, api::timestamp_type ts, bytes tuuid, int& batch_no) {
+                    for_each_change(m, [&] (mutation mm, api::timestamp_type ts, bytes tuuid, int& batch_no) {
                         trans.begin_timestamp(ts, std::move(tuuid));
                         trans.transform(std::move(mm), batch_no);
                     });
                 } else {
                     tracing::trace(tr_state, "CDC: No need to split {}", m.decorated_key());
                     int batch_no = 0;
-                    auto ts = find_timestamp(*s, m);
+                    auto ts = find_timestamp(m);
                     auto tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
                     trans.begin_timestamp(ts, std::move(tuuid));
                     trans.transform(m, batch_no);
