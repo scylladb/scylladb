@@ -621,28 +621,6 @@ sstables::shared_sstable table::make_sstable() {
     return make_sstable(_config.datadir);
 }
 
-future<sstables::shared_sstable>
-table::open_sstable(sstables::foreign_sstable_open_info info, sstring dir, int64_t generation,
-        sstables::sstable::version_types v, sstables::sstable::format_types f) {
-    auto sst = make_sstable(dir, generation, v, f);
-    if (!belongs_to_current_shard(info.owners)) {
-        tlogger.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
-        return make_ready_future<sstables::shared_sstable>();
-    }
-    return sst->load(std::move(info)).then([this, sst] () mutable {
-        if (schema()->is_counter() && !sst->has_scylla_component()) {
-            auto error = "Reading non-Scylla SSTables containing counters is not supported.";
-            if (_config.enable_dangerous_direct_import_of_cassandra_counters) {
-                tlogger.info("{} But trying to continue on user's request", error);
-            } else {
-                auto e = std::runtime_error(fmt::format(FMT_STRING("{} Use sstableloader instead"), error));
-                return make_exception_future<sstables::shared_sstable>(std::move(e));
-            }
-        }
-        return make_ready_future<sstables::shared_sstable>(std::move(sst));
-    });
-}
-
 void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
     auto& shards = sst->get_shards_for_this_sstable();
     if (reset_level) {
