@@ -520,6 +520,7 @@ scylla_core = (['database.cc',
                 'utils/updateable_value.cc',
                 'utils/directories.cc',
                 'utils/generation-number.cc',
+                'utils/rjson.cc',
                 'mutation_partition.cc',
                 'mutation_partition_view.cc',
                 'mutation_partition_serializer.cc',
@@ -849,7 +850,6 @@ alternator = [
        'alternator/expressions.cc',
        Antlr3Grammar('alternator/expressions.g'),
        'alternator/conditions.cc',
-       'alternator/rjson.cc',
        'alternator/auth.cc',
 ]
 
