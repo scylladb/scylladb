@@ -32,7 +32,6 @@ namespace sstables {
 
 class random_access_reader {
     std::unique_ptr <input_stream<char>> _in;
-    seastar::gate _close_gate;
 protected:
     virtual input_stream<char> open_at(uint64_t pos) = 0;
 
@@ -44,7 +43,7 @@ protected:
 public:
     future <temporary_buffer<char>> read_exactly(size_t n);
 
-    void seek(uint64_t pos);
+    future<> seek(uint64_t pos);
 
     bool eof() const { return _in->eof(); }
 

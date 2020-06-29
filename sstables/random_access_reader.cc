@@ -40,21 +40,17 @@ static future<> close_if_needed(std::unique_ptr<input_stream<char>> in) {
     return in->close().finally([in = std::move(in)] {});
 }
 
-void random_access_reader::seek(uint64_t pos) {
-    if (_in) {
-        // Future is waited on indirectly in `close()` (via `_close_gate`).
-        // FIXME: error handling
-        (void)seastar::with_gate(_close_gate, [prev = std::move(_in)] () mutable {
-            return close_if_needed(std::move(prev));
-        });
-    }
-    set(open_at(pos));
+future<> random_access_reader::seek(uint64_t pos) {
+        // FIXME: temporary bad indentation.
+        // A following patch will enclose the body of this function
+        // in a try/catch block.
+        auto tmp = std::make_unique<input_stream<char>>(open_at(pos));
+        std::swap(tmp, _in);
+        return close_if_needed(std::move(tmp));
 }
 
 future<> random_access_reader::close() {
-    return _close_gate.close().then([prev = std::move(_in)] () mutable {
-        return close_if_needed(std::move(prev));
-    });
+    return close_if_needed(std::move(_in));
 }
 
 file_random_access_reader::file_random_access_reader(file f, uint64_t file_size, size_t buffer_size, unsigned read_ahead)

@@ -556,11 +556,13 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                 s.positions.push_back(s.header.memory_size);
                 return make_ready_future<>();
             });
+        }).then([&in, &s] {
+            return in.seek(sizeof(summary::header) + s.header.memory_size);
         }).then([v, &schema, &in, &s] {
-            in.seek(sizeof(summary::header) + s.header.memory_size);
             return parse(schema, v, in, s.first_key, s.last_key);
+        }).then([&in, &s] {
+            return in.seek(s.positions[0] + sizeof(summary::header));
         }).then([&schema, &in, &s] {
-            in.seek(s.positions[0] + sizeof(summary::header));
             s.entries.reserve(s.header.size);
 
             return do_with(int(0), [&schema, &in, &s] (int& idx) mutable {
@@ -646,27 +648,27 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
         // See https://github.com/scylladb/scylla/issues/3937
         boost::sort(s.offsets.elements, [] (auto&& e1, auto&& e2) { return e1.first < e2.first; });
         return do_for_each(s.offsets.elements.begin(), s.offsets.elements.end(), [v, &schema, &in, &s] (auto val) mutable {
-            in.seek(val.second);
-
-            switch (val.first) {
+            return in.seek(val.second).then([v, &schema, &in, &s, type = val.first] {
+                switch (type) {
                 case metadata_type::Validation:
-                    return parse<validation_metadata>(schema, v, in, s.contents[val.first]);
+                    return parse<validation_metadata>(schema, v, in, s.contents[type]);
                 case metadata_type::Compaction:
-                    return parse<compaction_metadata>(schema, v, in, s.contents[val.first]);
+                    return parse<compaction_metadata>(schema, v, in, s.contents[type]);
                 case metadata_type::Stats:
-                    return parse<stats_metadata>(schema, v, in, s.contents[val.first]);
+                    return parse<stats_metadata>(schema, v, in, s.contents[type]);
                 case metadata_type::Serialization:
                     if (v != sstable_version_types::mc) {
                         throw std::runtime_error(
                             "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
                     } else {
-                        return parse<serialization_header>(schema, v, in, s.contents[val.first]);
+                        return parse<serialization_header>(schema, v, in, s.contents[type]);
                     }
                     return make_ready_future<>();
                 default:
-                    sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.first));
+                    sstlog.warn("Invalid metadata type at Statistics file: {} ", int(type));
                     return make_ready_future<>();
                 }
+            });
         });
     });
 }
