@@ -60,4 +60,9 @@ sstable_writer_config sstables_manager::configure_writer() const {
     return cfg;
 }
 
+
+future<> sstables_manager::close() {
+    return make_ready_future<>();
+}
+
 }   // namespace sstables
