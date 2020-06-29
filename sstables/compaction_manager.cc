@@ -646,7 +646,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
     return task->compaction_done.get_future().then([task] {});
 }
 
-static bool needs_cleanup(const sstables::shared_sstable& sst,
+bool needs_cleanup(const sstables::shared_sstable& sst,
                    const dht::token_range_vector& owned_ranges,
                    schema_ptr s) {
     auto first = sst->get_first_partition_key();
