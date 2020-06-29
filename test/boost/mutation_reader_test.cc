@@ -2002,6 +2002,7 @@ public:
         promise<> buffer_filled;
         bool destroyed = true;
         bool pending = false;
+        unsigned fast_forward_to = 0;
     };
 
     enum class fill_buffer_action {
@@ -2080,8 +2081,11 @@ public:
         abort();
     }
     virtual void next_partition() override { }
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
-        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point) override {
+        ++_ctrl.fast_forward_to;
+        clear_buffer();
+        _end_of_stream = true;
+        return make_ready_future<>();
     }
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
