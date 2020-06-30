@@ -67,7 +67,7 @@ distributed<db::view::view_update_generator>* _view_update_generator;
 template<class SinkType, class SourceType>
 class sink_source_for_repair {
     uint32_t _repair_meta_id;
-    using get_sink_source_fn_type = std::function<future<rpc::sink<SinkType>, rpc::source<SourceType>> (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr)>;
+    using get_sink_source_fn_type = std::function<future<std::tuple<rpc::sink<SinkType>, rpc::source<SourceType>>> (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr)>;
     using sink_type  = std::reference_wrapper<rpc::sink<SinkType>>;
     using source_type = std::reference_wrapper<rpc::source<SourceType>>;
     // The vectors below store sink and source object for peer nodes.
@@ -86,17 +86,18 @@ public:
     void mark_source_closed(unsigned node_idx) {
         _sources_closed[node_idx] = true;
     }
-    future<sink_type, source_type> get_sink_source(gms::inet_address remote_node, unsigned node_idx) {
+    future<std::tuple<sink_type, source_type>> get_sink_source(gms::inet_address remote_node, unsigned node_idx) {
+        using value_type = std::tuple<sink_type, source_type>;
         if (_sinks[node_idx] && _sources[node_idx]) {
-            return make_ready_future<sink_type, source_type>(_sinks[node_idx].value(), _sources[node_idx].value());
+            return make_ready_future<value_type>(value_type(_sinks[node_idx].value(), _sources[node_idx].value()));
         }
         if (_sinks[node_idx] || _sources[node_idx]) {
-            return make_exception_future<sink_type, source_type>(std::runtime_error(format("sink or source is missing for node {}", remote_node)));
+            return make_exception_future<value_type>(std::runtime_error(format("sink or source is missing for node {}", remote_node)));
         }
-        return _fn(_repair_meta_id, netw::messaging_service::msg_addr(remote_node)).then([this, node_idx] (rpc::sink<SinkType> sink, rpc::source<SourceType> source) mutable {
+        return _fn(_repair_meta_id, netw::messaging_service::msg_addr(remote_node)).then_unpack([this, node_idx] (rpc::sink<SinkType> sink, rpc::source<SourceType> source) mutable {
             _sinks[node_idx].emplace(std::move(sink));
             _sources[node_idx].emplace(std::move(source));
-            return make_ready_future<sink_type, source_type>(_sinks[node_idx].value(), _sources[node_idx].value());
+            return make_ready_future<value_type>(value_type(_sinks[node_idx].value(), _sources[node_idx].value()));
         });
     }
     future<> close() {
@@ -1064,8 +1065,9 @@ private:
     // Read rows from sstable until the size of rows exceeds _max_row_buf_size  - current_size
     // This reads rows from where the reader left last time into _row_buf
     // _current_sync_boundary or _last_sync_boundary have no effect on the reader neither.
-    future<std::list<repair_row>, size_t>
+    future<std::tuple<std::list<repair_row>, size_t>>
     read_rows_from_disk(size_t cur_size) {
+        using value_type = std::tuple<std::list<repair_row>, size_t>;
         return do_with(cur_size, size_t(0), std::list<repair_row>(), [this] (size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
             return repeat([this, &cur_size, &cur_rows, &new_rows_size] () mutable {
                 if (cur_size >= _max_row_buf_size) {
@@ -1082,10 +1084,10 @@ private:
             }).then_wrapped([this, &cur_rows, &new_rows_size] (future<> fut) mutable {
                 if (fut.failed()) {
                     _repair_reader.on_end_of_stream();
-                    return make_exception_future<std::list<repair_row>, size_t>(fut.get_exception());
+                    return make_exception_future<value_type>(fut.get_exception());
                 }
                 _repair_reader.pause();
-                return make_ready_future<std::list<repair_row>, size_t>(std::move(cur_rows), new_rows_size);
+                return make_ready_future<value_type>(value_type(std::move(cur_rows), new_rows_size));
             });
         });
     }
@@ -1108,7 +1110,7 @@ private:
         rlogger.trace("SET _last_sync_boundary from {} to {}", _last_sync_boundary, _current_sync_boundary);
         _last_sync_boundary = _current_sync_boundary;
         return row_buf_size().then([this, sb = std::move(skipped_sync_boundary)] (size_t cur_size) {
-            return read_rows_from_disk(cur_size).then([this, sb = std::move(sb)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
+            return read_rows_from_disk(cur_size).then_unpack([this, sb = std::move(sb)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
                 size_t new_rows_nr = new_rows.size();
                 _row_buf.splice(_row_buf.end(), new_rows);
                 return row_buf_csum().then([this, new_rows_size, new_rows_nr, sb = std::move(sb)] (repair_hash row_buf_combined_hash) {
@@ -1421,7 +1423,7 @@ public:
             return get_full_row_hashes_handler();
         }
         auto current_hashes = make_lw_shared<std::unordered_set<repair_hash>>();
-        return _sink_source_for_get_full_row_hashes.get_sink_source(remote_node, node_idx).then(
+        return _sink_source_for_get_full_row_hashes.get_sink_source(remote_node, node_idx).then_unpack(
                 [this, current_hashes, remote_node, node_idx]
                 (rpc::sink<repair_stream_cmd>& sink, rpc::source<repair_hash_with_cmd>& source) mutable {
             auto source_op = get_full_row_hashes_source_op(current_hashes, remote_node, node_idx, source);
@@ -1701,7 +1703,7 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            auto f = _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx).get();
+            auto f = _sink_source_for_get_row_diff.get_sink_source(remote_node, node_idx).get0();
             rpc::sink<repair_hash_with_cmd>& sink = std::get<0>(f);
             rpc::source<repair_row_on_wire_with_cmd>& source = std::get<1>(f);
             auto sink_op = get_row_diff_sink_op(std::move(set_diff), needs_all_rows, sink, remote_node);
@@ -1815,7 +1817,7 @@ public:
                         stats().tx_row_bytes += row_bytes;
                         stats().rpc_call_nr++;
                         return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node, node_idx] (repair_rows_on_wire rows)  {
-                            return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then(
+                            return  _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx).then_unpack(
                                     [this, rows = std::move(rows), remote_node, node_idx]
                                     (rpc::sink<repair_row_on_wire_with_cmd>& sink, rpc::source<repair_stream_cmd>& source) mutable {
                                 auto source_op = put_row_diff_source_op(remote_node, node_idx, source);
