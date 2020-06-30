@@ -1518,28 +1518,27 @@ raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool includ
 { }
 
 column_computation_ptr column_computation::deserialize(bytes_view raw) {
-    return deserialize(json::to_json_value(sstring(raw.begin(), raw.end())));
+    return deserialize(rjson::parse(std::string_view(reinterpret_cast<const char*>(raw.begin()), reinterpret_cast<const char*>(raw.end()))));
 }
 
-column_computation_ptr column_computation::deserialize(const Json::Value& parsed) {
-    if (!parsed.isObject()) {
-        throw std::runtime_error(format("Invalid column computation value: {}", parsed.toStyledString()));
+column_computation_ptr column_computation::deserialize(const rjson::value& parsed) {
+    if (!parsed.IsObject()) {
+        throw std::runtime_error(format("Invalid column computation value: {}", parsed));
     }
-    Json::Value type_json = parsed.get("type", Json::Value());
-    if (!type_json.isString()) {
-        throw std::runtime_error(format("Type {} is not convertible to string", type_json.toStyledString()));
+    const rjson::value* type_json = rjson::find(parsed, "type");
+    if (!type_json || !type_json->IsString()) {
+        throw std::runtime_error(format("Type {} is not convertible to string", *type_json));
     }
-    sstring type = type_json.asString();
-    if (type == "token") {
+    if (rjson::to_string_view(*type_json) == "token") {
         return std::make_unique<token_column_computation>();
     }
-    throw std::runtime_error(format("Incorrect column computation type {} found when parsing {}", type, parsed.toStyledString()));
+    throw std::runtime_error(format("Incorrect column computation type {} found when parsing {}", *type_json, parsed));
 }
 
 bytes token_column_computation::serialize() const {
-    Json::Value serialized(Json::objectValue);
-    serialized["type"] = Json::Value("token");
-    return to_bytes(json::to_sstring(serialized));
+    rjson::value serialized = rjson::empty_object();
+    rjson::set(serialized, "type", rjson::from_string("token"));
+    return to_bytes(rjson::print(serialized));
 }
 
 bytes_opt token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {

@@ -39,6 +39,7 @@
 #include "test/lib/exception_utils.hh"
 #include "alternator/tags_extension.hh"
 #include "cdc/cdc_extension.hh"
+#include <json/json.h>
 
 static std::ofstream std_cout;
 

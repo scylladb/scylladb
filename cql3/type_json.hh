@@ -22,12 +22,9 @@
 #pragma once
 
 #include "types.hh"
+#include "utils/rjson.hh"
 
-namespace Json {
-class Value;
-}
-
-bytes from_json_object(const abstract_type &t, const Json::Value& value, cql_serialization_format sf);
+bytes from_json_object(const abstract_type &t, const rjson::value& value, cql_serialization_format sf);
 sstring to_json_string(const abstract_type &t, bytes_view bv);
 inline sstring to_json_string(const abstract_type &t, const bytes& b) {
     return to_json_string(t, bytes_view(b));

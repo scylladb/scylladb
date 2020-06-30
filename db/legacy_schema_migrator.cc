@@ -61,7 +61,7 @@
 #include "system_keyspace.hh"
 #include "schema_tables.hh"
 #include "schema_builder.hh"
-#include "json.hh"
+#include "utils/rjson.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/util.hh"
@@ -335,7 +335,8 @@ public:
                     index_name = row.get_as<sstring>("index_name");
                 }
                 if (row.has("index_options")) {
-                    options = json::to_map(row.get_as<sstring>("index_options"), index_options_map());
+                    sstring index_options_str = row.get_as<sstring>("index_options");
+                    options = rjson::parse_to_map<index_options_map>(std::string_view(index_options_str));
                     sstring type;
                     auto i = options.find("index_keys");
                     if (i != options.end()) {
@@ -427,10 +428,11 @@ public:
                 }
             }
             if (td.has("compaction_strategy_options")) {
-                builder.set_compaction_strategy_options(json::to_map(td.get_as<sstring>("compaction_strategy_options")));
+                sstring strategy_options_str = td.get_as<sstring>("compaction_strategy_options");
+                builder.set_compaction_strategy_options(rjson::parse_to_map<std::map<sstring, sstring>>(std::string_view(strategy_options_str)));
             }
             auto comp_param = td.get_as<sstring>("compression_parameters");
-            compression_parameters cp(json::to_map(comp_param));
+            compression_parameters cp(rjson::parse_to_map<std::map<sstring, sstring>>(std::string_view(comp_param)));
             builder.set_compressor_params(cp);
 
             if (td.has("min_index_interval")) {
@@ -518,7 +520,7 @@ public:
     }
 
     future<keyspace> read_keyspace(sstring ks_name, bool durable_writes, sstring strategy_class, sstring strategy_options, time_point timestamp) {
-        auto map = json::to_map(strategy_options);
+        auto map = rjson::parse_to_map<std::map<sstring, sstring>>(std::string_view(strategy_options));
         map.emplace("class", std::move(strategy_class));
         auto ks = ::make_lw_shared<keyspace>(keyspace{timestamp, std::move(ks_name), durable_writes, std::move(map) });
 

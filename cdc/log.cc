@@ -45,7 +45,7 @@
 #include "cql3/tuples.hh"
 #include "cql3/untyped_result_set.hh"
 #include "log.hh"
-#include "json.hh"
+#include "utils/rjson.hh"
 #include "types.hh"
 #include "concrete_types.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
@@ -328,7 +328,7 @@ std::map<sstring, sstring> cdc::options::to_map() const {
 }
 
 sstring cdc::options::to_sstring() const {
-    return json::to_json(to_map());
+    return rjson::print(rjson::from_string_map(to_map()));
 }
 
 bool cdc::options::operator==(const options& o) const {
