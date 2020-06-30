@@ -147,10 +147,14 @@ SEASTAR_TEST_CASE(test_decimal_to_float) {
         e.execute_cql("CREATE TABLE test (key text primary key, value decimal)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k1', 10)").get();
         e.execute_cql("INSERT INTO test (key, value) VALUES ('k2', 1e1)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k3', 100e-1)").get();
+        e.execute_cql("INSERT INTO test (key, value) VALUES ('k4', -1e1)").get();
         auto v = e.execute_cql("SELECT key, CAST(value as float) from test").get0();
         assert_that(v).is_rows().with_rows_ignore_order({
             {{serialized("k1")}, {serialized(float(10))}},
             {{serialized("k2")}, {serialized(float(10))}},
+            {{serialized("k3")}, {serialized(float(10))}},
+            {{serialized("k4")}, {serialized(float(-10))}},
         });
     });
 }
