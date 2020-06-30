@@ -25,6 +25,7 @@
 #include "clustering_ranges_walker.hh"
 #include "schema_upgrader.hh"
 #include <algorithm>
+#include <stack>
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/util/defer.hh>

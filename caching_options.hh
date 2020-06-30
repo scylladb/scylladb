@@ -23,7 +23,7 @@
 #include <seastar/core/sstring.hh>
 #include <boost/lexical_cast.hpp>
 #include "exceptions/exceptions.hh"
-#include "json.hh"
+#include "utils/rjson.hh"
 #include "seastarx.hh"
 
 class schema;
@@ -76,7 +76,7 @@ public:
     }
 
     sstring to_sstring() const {
-        return json::to_json(to_map());
+        return rjson::print(rjson::from_string_map(to_map()));
     }
 
     static caching_options get_disabled_caching_options() {
@@ -97,13 +97,14 @@ public:
             } else if (p.first == "enabled") {
                 e = p.second == "true";
             } else {
-                throw exceptions::configuration_exception("Invalid caching option: " + p.first);
+                throw exceptions::configuration_exception(format("Invalid caching option: {}", p.first));
             }
         }
         return caching_options(k, r, e);
     }
+
     static caching_options from_sstring(const sstring& str) {
-        return from_map(json::to_map(str));
+        return from_map(rjson::parse_to_map<std::map<sstring, sstring>>(str));
     }
 
     bool operator==(const caching_options& other) const {
