@@ -139,9 +139,10 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
         seeds.emplace(gms::inet_address("127.0.0.1"));
     }
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
+    startlog.info("seeds={}, listen_address={}, broadcast_address={}",
+            to_string(seeds), listen_address_in, broadcast_address);
     if (broadcast_address != listen && seeds.count(listen)) {
-        fmt::print("Use broadcast_address instead of listen_address for seeds list: seeds={}, listen_address={}, broadcast_address={}\n",
-                to_string(seeds), listen_address_in, broadcast_address);
+        startlog.error("Use broadcast_address instead of listen_address for seeds list");
         throw std::runtime_error("Use broadcast_address for seeds list");
     }
     if ((!cfg.replace_address_first_boot().empty() || !cfg.replace_address().empty()) && seeds.count(broadcast_address)) {
