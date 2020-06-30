@@ -823,9 +823,6 @@ public:
     // at another shard.
     future<foreign_sstable_open_info> get_open_info() &;
 
-    // returns all info needed for a sstable to be shared with other shards.
-    future<sstable_open_info> load_shared_components();
-
     sstables_stats& get_stats() {
         return _stats;
     }

@@ -445,11 +445,6 @@ private:
     // in all shards at the same time, which makes it hard to store all sstables
     // we need to load later on for all shards.
     std::vector<sstables::shared_sstable> _sstables_opened_but_not_loaded;
-    // sstables that are shared between several shards so we want to rewrite
-    // them (split the data belonging to this shard to a separate sstable),
-    // but for correct compaction we need to start the compaction only after
-    // reading all sstables.
-    std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_need_rewrite;
     // sstables that should not be compacted (e.g. because they need to be used
     // to generate view updates later)
     std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_staging;
@@ -544,19 +539,16 @@ private:
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
     }
-    void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
+    void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept;
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
     // the writes contained in this sstable.
     // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
     // Doesn't trigger compaction.
     // Strong exception guarantees.
-    void add_sstable(sstables::shared_sstable sstable, const std::vector<unsigned>& shards_for_the_sstable);
+    void add_sstable(sstables::shared_sstable sstable);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
-    // returns an empty pointer if sstable doesn't belong to current shard.
-    future<sstables::shared_sstable> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
-        int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
     void load_sstable(sstables::shared_sstable& sstable, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
@@ -588,18 +580,11 @@ private:
     // Rebuilds existing sstable set with new sstables added to it and old sstables removed from it.
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
         const std::vector<sstables::shared_sstable>& old_sstables);
-    // Rebuild sstable list with the deletion semaphore acquired.
-    future<>
-    rebuild_sstable_list_with_deletion_sem(std::vector<sstables::shared_sstable> new_ssts, std::vector<sstables::shared_sstable> old_ssts);
 
     // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
     void on_compaction_completion(sstables::compaction_completion_desc& desc);
 
     void rebuild_statistics();
-
-    // This function replaces new sstables by their ancestors, which are sstables that needed resharding.
-    future<> replace_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors, std::vector<sstables::shared_sstable> new_sstables);
-    future<> remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors);
 private:
     mutation_source_opt _virtual_reader;
     // Creates a mutation reader which covers given sstables.
@@ -621,10 +606,6 @@ private:
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 public:
-    bool has_shared_sstables() const {
-        return bool(_sstables_need_rewrite.size());
-    }
-
     sstring dir() const {
         return _config.datadir;
     }
@@ -869,7 +850,6 @@ public:
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
     std::vector<sstables::shared_sstable> candidates_for_compaction() const;
-    std::vector<sstables::shared_sstable> sstables_need_rewrite() const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;

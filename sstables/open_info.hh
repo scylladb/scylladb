@@ -63,12 +63,4 @@ struct foreign_sstable_open_info {
     uint64_t uncompressed_data_size;
 };
 
-// can only be used locally
-struct sstable_open_info {
-    lw_shared_ptr<shareable_components> components;
-    std::vector<shard_id> owners;
-    file data;
-    file index;
-};
-
 }

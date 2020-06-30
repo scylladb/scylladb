@@ -65,9 +65,6 @@ public:
     static future<> process_sstable_dir(sharded<sstables::sstable_directory>& dir);
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<database>& db, sstring ks_name, sstring cf_name);
 
-    static future<> open_sstable(distributed<database>& db, sstables::entry_descriptor comps,
-        std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func,
-        const io_priority_class& pc = default_priority_class());
     static future<> verify_owner_and_mode(std::filesystem::path path);
 
     static future<size_t> make_sstables_available(sstables::sstable_directory& dir,
@@ -75,7 +72,6 @@ public:
             std::filesystem::path datadir, sstring ks, sstring cf);
     static future<> process_upload_dir(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
             distributed<db::view::view_update_generator>& view_update_generator, sstring ks_name, sstring cf_name);
-    static future<sstables::entry_descriptor> probe_file(distributed<database>& db, sstring sstdir, sstring fname);
     static future<> populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
     static future<> populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name);
     static future<> init_system_keyspace(distributed<database>& db);
@@ -93,5 +89,4 @@ public:
 private:
     static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
     static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);
-    static future<> do_populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
 };
