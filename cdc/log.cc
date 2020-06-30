@@ -738,6 +738,10 @@ private:
 
     stats::part_type_set _touched_parts;
 
+    using cell_map = std::unordered_map<const column_definition*, bytes_opt>;
+    std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality> _clustering_row_states;
+    cell_map _static_row_state;
+
     std::vector<mutation> _result_mutations;
 
     // Keeps the next cdc$batch_seq_no value
@@ -791,6 +795,7 @@ public:
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _op_col(*_log_schema->get_column_definition(log_meta_column_name_bytes("operation")))
         , _ttl_col(*_log_schema->get_column_definition(log_meta_column_name_bytes("ttl")))
+        , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
     {
         if (_schema->cdc_options().ttl()) {
             _cdc_ttl_opt = std::chrono::seconds(_schema->cdc_options().ttl());
