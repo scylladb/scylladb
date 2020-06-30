@@ -58,7 +58,8 @@ public:
     // This method must be called in increasing timestamp order.
     // begin_timestamp can be called only once for a given timestamp and change_processor object.
     //   ts - timestamp of mutation parts
-    virtual void begin_timestamp(api::timestamp_type ts) = 0;
+    //   is_last - determines if this will be the last timestamp to be processed by this change_processor instance.
+    virtual void begin_timestamp(api::timestamp_type ts, bool is_last) = 0;
 
     // Tells the processor to produce a preimage for a given clustering/static row.
     //   ck - clustering key of the row for which to produce a preimage; if nullptr, static row preimage is requested

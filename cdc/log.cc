@@ -749,6 +749,8 @@ private:
     api::timestamp_type _ts;
     // The cdc$time value of changes being currently processed
     bytes _tuuid;
+    // When enabled, process_change will update _clustering_row_states and _static_row_state
+    bool _enable_updating_state = false;
 
     mutation& current_mutation() {
         assert(!_result_mutations.empty());
@@ -859,12 +861,13 @@ public:
         throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
     }
 
-    void begin_timestamp(api::timestamp_type ts) override {
+    void begin_timestamp(api::timestamp_type ts, bool is_last) override {
         const auto stream_id = _ctx._cdc_metadata.get_stream(ts, _dk.token());
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
         _batch_no = 0;
         _ts = ts;
         _tuuid = timeuuid_type->decompose(generate_timeuuid(ts));
+        _enable_updating_state = _schema->cdc_options().postimage() || (!is_last && _schema->cdc_options().preimage());
     }
 
     void produce_preimage(const clustering_key* ck, const one_kind_column_set& columns_to_include) override {
@@ -1110,17 +1113,17 @@ public:
                         }
                     }
 
-                    bytes_opt prev = get_col_from_row_state(row_state, cdef);
-
                     if (is_column_delete) {
                         res.set_cell(log_ck, log_data_column_deleted_name_bytes(cdef.name()), data_value(true), _ts, _cdc_ttl_opt);
-                        // don't merge with pre-image iff column delete
-                        prev = std::nullopt;
                     }
 
                     if (value) {
                         res.set_cell(log_ck, *dst, atomic_cell::make_live(*dst->type, _ts, *value, _cdc_ttl_opt));
                     }
+
+                    if (_enable_updating_state) {
+                    // don't merge with pre-image iff column delete
+                    bytes_opt prev = is_column_delete ? std::nullopt : get_col_from_row_state(row_state, cdef);
 
                     bytes_opt next;
                     if (cdef.is_atomic() && !is_column_delete && value) {
@@ -1138,6 +1141,7 @@ public:
                         row_state = &it->second;
                     }
                     (*row_state)[&cdef] = std::move(next);
+                    }
                 });
 
                 return ttl;
@@ -1174,7 +1178,7 @@ public:
                         _touched_parts.set<stats::part_type::ROW_DELETE>();
                         cdc_op = operation::row_delete;
 
-                        if (row_state) {
+                        if (_enable_updating_state && row_state) {
                             // Erase so that postimage will be empty
                             _clustering_row_states.erase(r.key());
                         }

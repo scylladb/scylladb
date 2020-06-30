@@ -577,8 +577,15 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
     auto changes = extract_changes(base_mutation);
     auto pk = base_mutation.key();
 
+    if (changes.empty()) {
+        return;
+    }
+
+    const auto last_timestamp = changes.rbegin()->first;
+
     for (auto& [change_ts, btch] : changes) {
-        processor.begin_timestamp(change_ts);
+        const bool is_last = change_ts == last_timestamp;
+        processor.begin_timestamp(change_ts, is_last);
 
         clustered_column_set affected_clustered_columns_per_row{clustering_key::less_compare(*base_schema)};
         one_kind_column_set affected_static_columns{base_schema->static_columns_count()};
@@ -675,7 +682,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
 void process_changes_without_splitting(const mutation& base_mutation, change_processor& processor,
         bool enable_preimage, bool enable_postimage) {
     auto ts = find_timestamp(base_mutation);
-    processor.begin_timestamp(ts);
+    processor.begin_timestamp(ts, true);
 
     const auto base_schema = base_mutation.schema();
 
