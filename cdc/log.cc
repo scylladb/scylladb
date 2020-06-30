@@ -1122,25 +1122,25 @@ public:
                     }
 
                     if (_enable_updating_state) {
-                    // don't merge with pre-image iff column delete
-                    bytes_opt prev = is_column_delete ? std::nullopt : get_col_from_row_state(row_state, cdef);
+                        // don't merge with pre-image iff column delete
+                        bytes_opt prev = is_column_delete ? std::nullopt : get_col_from_row_state(row_state, cdef);
 
-                    bytes_opt next;
-                    if (cdef.is_atomic() && !is_column_delete && value) {
-                        next = std::move(value);
-                    } else if (!cdef.is_atomic() && (value || (deleted_elements && prev))) {
-                        next = visit(*cdef.type, [&] (const auto& type) -> bytes {
-                            return merge(type, prev, value, deleted_elements);
-                        });
-                    }
-                    if (!row_state) {
-                        // static row always has a valid state, so this must be
-                        // a clustering row missing
-                        assert(base_ck);
-                        auto [it, inserted] = _clustering_row_states.try_emplace(*base_ck);
-                        row_state = &it->second;
-                    }
-                    (*row_state)[&cdef] = std::move(next);
+                        bytes_opt next;
+                        if (cdef.is_atomic() && !is_column_delete && value) {
+                            next = std::move(value);
+                        } else if (!cdef.is_atomic() && (value || (deleted_elements && prev))) {
+                            next = visit(*cdef.type, [&] (const auto& type) -> bytes {
+                                return merge(type, prev, value, deleted_elements);
+                            });
+                        }
+                        if (!row_state) {
+                            // static row always has a valid state, so this must be
+                            // a clustering row missing
+                            assert(base_ck);
+                            auto [it, inserted] = _clustering_row_states.try_emplace(*base_ck);
+                            row_state = &it->second;
+                        }
+                        (*row_state)[&cdef] = std::move(next);
                     }
                 });
 
