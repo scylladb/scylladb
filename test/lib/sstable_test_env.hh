@@ -65,14 +65,18 @@ public:
     template <typename Func>
     static inline auto do_with(Func&& func) {
         return seastar::do_with(test_env(), [func = std::move(func)] (test_env& env) mutable {
-            return func(env);
+            return func(env).finally([&env] {
+                return env.stop();
+            });
         });
     }
 
     template <typename T, typename Func>
     static inline auto do_with(T&& rval, Func&& func) {
         return seastar::do_with(test_env(), std::forward<T>(rval), [func = std::move(func)] (test_env& env, T& val) mutable {
-            return func(env, val);
+            return func(env, val).finally([&env] {
+                return env.stop();
+            });
         });
     }
 
@@ -80,6 +84,7 @@ public:
         return seastar::async([func = std::move(func)] {
             auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
             test_env env;
+            auto close_env = defer([&] { env.stop().get(); });
             func(env);
         });
     }
