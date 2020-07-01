@@ -732,20 +732,25 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
     return true;
 }
 
-future<> compaction_manager::perform_cleanup(column_family* cf) {
+future<> compaction_manager::perform_cleanup(database& db, column_family* cf) {
     if (check_for_cleanup(cf)) {
         throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
             cf->schema()->ks_name(), cf->schema()->cf_name()));
     }
-    return rewrite_sstables(cf, sstables::compaction_options::make_cleanup(), [this] (const table& table) {
-        auto schema = table.schema();
-        auto sorted_owned_ranges = service::get_local_storage_service().get_local_ranges(schema->ks_name());
+    return seastar::async([this, cf, &db] {
+        auto schema = cf->schema();
+        auto& rs = db.find_keyspace(schema->ks_name()).get_replication_strategy();
+        auto sorted_owned_ranges = rs.get_ranges_in_thread(utils::fb_utilities::get_broadcast_address());
         auto sstables = std::vector<sstables::shared_sstable>{};
-        const auto candidates = table.candidates_for_compaction();
+        const auto candidates = cf->candidates_for_compaction();
         std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&sorted_owned_ranges, schema] (const sstables::shared_sstable& sst) {
+            seastar::thread::maybe_yield();
             return sorted_owned_ranges.empty() || needs_cleanup(sst, sorted_owned_ranges, schema);
         });
         return sstables;
+    }).then([this, cf] (std::vector<sstables::shared_sstable> sstables) {
+        return rewrite_sstables(cf, sstables::compaction_options::make_cleanup(),
+                [sstables = std::move(sstables)] (const table&) { return sstables; });
     });
 }
 
