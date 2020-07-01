@@ -1176,3 +1176,155 @@ SEASTAR_TEST_CASE(test_filtering) {
 
     });
 }
+
+SEASTAR_TEST_CASE(test_filtering_gt_not_capturing_nulls) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int primary key, flt float,"
+                " dbl double, dec decimal, b boolean, ti tinyint, si smallint," 
+                " i int, bi bigint, vi varint, ip inet, u uuid, tu timeuuid,"
+                " t time, d date, a ascii, txt text);").get();
+        e.execute_cql("INSERT INTO cf (pk) VALUES (0);").get();
+        
+        // Now we have all types of NULLs
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE flt > -999.9 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE dbl > -999.9 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE dec > -999.9 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE b > false ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE ti > -99 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE si > -999 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE i > -999 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE bi > -999 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE vi > -999 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE ip > '0.0.0.0' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE u > 123e4567-e89b-12d3-a456-426655440000 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE tu > 123e4567-e89b-12d3-a456-426655440000 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE t > '00:00:00' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE d > '1970-01-01' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE a > '0' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE txt > '0' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_filtering_lt_not_capturing_nulls) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE cf (pk int primary key, flt float,"
+                " dbl double, dec decimal, b boolean, ti tinyint, si smallint," 
+                " i int, bi bigint, vi varint, ip inet, u uuid, tu timeuuid,"
+                " t time, d date, a ascii, txt text);").get();
+        e.execute_cql("INSERT INTO cf (pk) VALUES (0);").get();
+        
+        // Now we have all types of NULLs
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE flt < 999.9 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE dbl < 999.9 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE dec < 999.9 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE b < true ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE ti < 99 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE si < 999 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE i < 999 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE bi < 999 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE vi < 999 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE ip < '255.255.255.255' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE u < ffffffff-e89b-12d3-a456-426655440000 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE tu < ffffffff-e89b-12d3-a456-426655440000 ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE t < '23:59:59' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE d < '2137-01-01' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE a < 'Z' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        {
+            auto msg = e.execute_cql("SELECT * FROM cf WHERE txt < 'Ż' ALLOW FILTERING;").get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+    });
+}
