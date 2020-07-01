@@ -1583,17 +1583,17 @@ void shard_reader::next_partition() {
 future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
     _pr = &pr;
 
-    if (!_reader) {
+    if (!_reader && !_read_ahead) {
         // No need to fast-forward uncreated readers, they will be passed the new
         // range when created.
         return make_ready_future<>();
     }
 
-    _end_of_stream = false;
-    clear_buffer();
-
     auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
     return f.then([this, &pr, timeout] {
+        _end_of_stream = false;
+        clear_buffer();
+
         return smp::submit_to(_shard, [this, &pr, timeout] {
             return _reader->fast_forward_to(pr, timeout);
         });

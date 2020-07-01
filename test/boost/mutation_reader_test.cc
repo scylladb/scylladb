@@ -2000,8 +2000,9 @@ class puppet_reader : public flat_mutation_reader::impl {
 public:
     struct control {
         promise<> buffer_filled;
-        bool destroyed = false;
+        bool destroyed = true;
         bool pending = false;
+        unsigned fast_forward_to = 0;
     };
 
     enum class fill_buffer_action {
@@ -2012,7 +2013,7 @@ public:
 private:
     simple_schema _s;
     control& _ctrl;
-    fill_buffer_action _action;
+    std::vector<fill_buffer_action> _actions;
     std::vector<uint32_t> _pkeys;
     unsigned _partition_index = 0;
 
@@ -2026,27 +2027,27 @@ private:
     }
 
     void do_fill_buffer() {
+        if (!maybe_push_next_partition()) {
+            return;
+        }
         auto ck = uint32_t(0);
         while (!is_buffer_full()) {
             push_mutation_fragment(_s.make_row(_s.make_ckey(ck++), make_random_string(2 << 5)));
         }
 
         push_mutation_fragment(partition_end());
-        maybe_push_next_partition();
     }
 
 public:
-    puppet_reader(simple_schema s, control& ctrl, fill_buffer_action action, std::vector<uint32_t> pkeys)
+    puppet_reader(simple_schema s, control& ctrl, std::vector<fill_buffer_action> actions, std::vector<uint32_t> pkeys)
         : impl(s.schema())
         , _s(std::move(s))
         , _ctrl(ctrl)
-        , _action(action)
+        , _actions(std::move(actions))
         , _pkeys(std::move(pkeys)) {
-        if (maybe_push_next_partition()) {
-            push_mutation_fragment(_s.make_row(_s.make_ckey(0), make_random_string(4)));
-            push_mutation_fragment(partition_end());
-        }
-        maybe_push_next_partition();
+        std::ranges::reverse(_actions);
+        _end_of_stream = false;
+        _ctrl.destroyed = false;
     }
     ~puppet_reader() {
         _ctrl.destroyed = true;
@@ -2056,25 +2057,35 @@ public:
         if (is_end_of_stream() || !is_buffer_empty()) {
             return make_ready_future<>();
         }
+        if (_actions.empty()) {
+            _end_of_stream = true;
+            return make_ready_future<>();
+        }
 
-        _end_of_stream = true;
+        auto action = _actions.back();
+        _actions.pop_back();
 
-        switch (_action) {
+        switch (action) {
         case fill_buffer_action::fill:
             do_fill_buffer();
             return make_ready_future<>();
         case fill_buffer_action::block:
             do_fill_buffer();
+            _ctrl.pending = true;
             return _ctrl.buffer_filled.get_future().then([this] {
                 BOOST_REQUIRE(!_ctrl.destroyed);
+                _ctrl.pending = false;
                 return make_ready_future<>();
             });
         }
         abort();
     }
     virtual void next_partition() override { }
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
-        return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point) override {
+        ++_ctrl.fast_forward_to;
+        clear_buffer();
+        _end_of_stream = true;
+        return make_ready_future<>();
     }
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
@@ -2115,7 +2126,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
             auto control = make_foreign(std::make_unique<puppet_reader::control>());
             auto reader = make_foreign(std::make_unique<flat_mutation_reader>(make_flat_mutation_reader<puppet_reader>(gs.get(),
                     *control,
-                    puppet_reader::fill_buffer_action::block,
+                    std::vector{puppet_reader::fill_buffer_action::fill, puppet_reader::fill_buffer_action::block},
                     std::vector<uint32_t>{0, 1})));
 
             return make_ready_future<std::tuple<control_type, reader_type>>(std::tuple(std::move(control), std::move(reader)));
@@ -2147,6 +2158,80 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
     }).get();
 }
 
+struct multishard_reader_for_read_ahead {
+    static const unsigned min_shards = 3;
+    static const unsigned blocked_shard = 2;
+
+    flat_mutation_reader reader;
+    std::unique_ptr<dht::sharder> sharder;
+    std::vector<foreign_ptr<std::unique_ptr<puppet_reader::control>>> remote_controls;
+    std::unique_ptr<dht::partition_range> pr;
+};
+
+multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(simple_schema& s, test_reader_lifecycle_policy::operations_gate& operations_gate) {
+    auto remote_controls = std::vector<foreign_ptr<std::unique_ptr<puppet_reader::control>>>();
+    remote_controls.reserve(smp::count);
+    for (unsigned i = 0; i < smp::count; ++i) {
+        remote_controls.emplace_back(nullptr);
+    }
+
+    parallel_for_each(std::views::iota(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
+        return smp::submit_to(shard, [] {
+            return make_foreign(std::make_unique<puppet_reader::control>());
+        }).then([shard, &remote_controls] (foreign_ptr<std::unique_ptr<puppet_reader::control>>&& ctr) mutable {
+            remote_controls[shard] = std::move(ctr);
+        });
+    }).get();
+
+    // We need two tokens for each shard
+    std::map<dht::token, unsigned> pkeys_by_tokens;
+    for (unsigned i = 0; i < smp::count * 2; ++i) {
+        pkeys_by_tokens.emplace(s.make_pkey(i).token(), i);
+    }
+
+    auto shard_pkeys = std::vector<std::vector<uint32_t>>(smp::count, std::vector<uint32_t>{});
+    auto i = unsigned(0);
+    for (auto pkey : pkeys_by_tokens | std::views::values) {
+        shard_pkeys[i++ % smp::count].push_back(pkey);
+    }
+
+    auto remote_control_refs = std::vector<puppet_reader::control*>();
+    remote_control_refs.reserve(smp::count);
+    for (auto& rc : remote_controls) {
+        remote_control_refs.push_back(rc.get());
+    }
+
+    auto factory = [gs = global_simple_schema(s), remote_controls = std::move(remote_control_refs), shard_pkeys = std::move(shard_pkeys)] (
+            schema_ptr,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            mutation_reader::forwarding) mutable {
+        const auto shard = this_shard_id();
+        auto actions = [shard] () -> std::vector<puppet_reader::fill_buffer_action> {
+            if (shard < multishard_reader_for_read_ahead::blocked_shard) {
+                return {puppet_reader::fill_buffer_action::fill};
+            } else if (shard == multishard_reader_for_read_ahead::blocked_shard) {
+                return {puppet_reader::fill_buffer_action::block};
+            } else {
+                return {};
+            }
+        }();
+        return make_flat_mutation_reader<puppet_reader>(gs.get(), *remote_controls.at(shard), std::move(actions), shard_pkeys.at(shard));
+    };
+
+    auto pr = std::make_unique<dht::partition_range>(dht::partition_range::make(dht::ring_position::starting_at(pkeys_by_tokens.begin()->first),
+                dht::ring_position::ending_at(pkeys_by_tokens.rbegin()->first)));
+
+    auto sharder = std::make_unique<dummy_sharder>(s.schema()->get_sharder(), std::move(pkeys_by_tokens));
+    auto reader = make_multishard_combining_reader_for_tests(*sharder, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
+            s.schema(), *pr, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
+
+    return {std::move(reader), std::move(sharder), std::move(remote_controls), std::move(pr)};
+}
+
+
 // Test a background pending read-ahead outliving the reader.
 //
 // The multishard reader will issue read-aheads according to its internal
@@ -2160,78 +2245,129 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
 // destoyed objects causing memory errors.
 //
 // Theory of operation:
-// 1) First read a partition from each shard in turn;
-// 2) [shard 1] puppet reader's buffer is empty -> increase concurrency to 2
-//    because we traversed to another shard in the same fill_buffer() call;
+// 1) First read a full buffer from shard 0;
+// 2) Shard 0 has no more data so move on to shard 1; puppet reader's buffer is
+//    empty -> increase concurrency to 2 because we traversed to another shard
+//    in the same fill_buffer() call;
 // 3) [shard 2] puppet reader -> read-ahead launched in the background but it's
 //    blocked;
 // 4) Reader is destroyed;
 // 5) Resume the shard 2's puppet reader -> the now orphan read-ahead fiber
 //    executes;
 //
-// Best run with smp >= 2
+// Best run with smp >= 3
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending_read_ahead) {
-    if (smp::count < 2) {
-        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+    if (smp::count < multishard_reader_for_read_ahead::min_shards) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < " << multishard_reader_for_read_ahead::min_shards << std::endl;
         return;
     }
 
     test_reader_lifecycle_policy::operations_gate operations_gate;
 
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
-        auto remote_controls = std::vector<foreign_ptr<std::unique_ptr<puppet_reader::control>>>();
-        remote_controls.reserve(smp::count);
-        for (unsigned i = 0; i < smp::count; ++i) {
-            remote_controls.emplace_back(nullptr);
-        }
-
-        parallel_for_each(std::views::iota(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
-            return smp::submit_to(shard, [] {
-                return make_foreign(std::make_unique<puppet_reader::control>());
-            }).then([shard, &remote_controls] (foreign_ptr<std::unique_ptr<puppet_reader::control>>&& ctr) mutable {
-                remote_controls[shard] = std::move(ctr);
-            });
-        }).get();
-
         auto s = simple_schema();
 
-        // We need two tokens for each shard
-        std::map<dht::token, unsigned> pkeys_by_tokens;
-        for (unsigned i = 0; i < smp::count * 2; ++i) {
-            pkeys_by_tokens.emplace(s.make_pkey(i).token(), i);
-        }
+        auto [reader, sharder, remote_controls, _] = prepare_multishard_reader_for_read_ahead_test(s, operations_gate);
 
-        auto shard_pkeys = std::vector<std::vector<uint32_t>>(smp::count, std::vector<uint32_t>{});
-        auto i = unsigned(0);
-        for (auto pkey : pkeys_by_tokens | std::views::values) {
-            shard_pkeys[i++ % smp::count].push_back(pkey);
-        }
+        // This will read shard 0's buffer only
+        reader.fill_buffer(db::no_timeout).get();
+        BOOST_REQUIRE(reader.is_buffer_full());
+        reader.detach_buffer();
 
-        auto factory = [gs = global_simple_schema(s), &remote_controls, &shard_pkeys] (
-                schema_ptr,
-                const dht::partition_range& range,
-                const query::partition_slice& slice,
-                const io_priority_class& pc,
-                tracing::trace_state_ptr trace_state,
-                mutation_reader::forwarding) mutable {
-            const auto shard = this_shard_id();
-            auto action = shard == 0 ? puppet_reader::fill_buffer_action::fill : puppet_reader::fill_buffer_action::block;
-            return make_flat_mutation_reader<puppet_reader>(gs.get(), *remote_controls.at(shard), action, shard_pkeys.at(shard));
-        };
+        // This will move to shard 1 and trigger read-ahead on shard 2
+        reader.fill_buffer(db::no_timeout).get();
+        BOOST_REQUIRE(reader.is_buffer_full());
 
-        {
-            dummy_sharder sharder(s.schema()->get_sharder(), std::move(pkeys_by_tokens));
-            auto reader = make_multishard_combining_reader_for_tests(sharder, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
-                    s.schema(), query::full_partition_range, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
-            reader.fill_buffer(db::no_timeout).get();
-            BOOST_REQUIRE(reader.is_buffer_full());
-        }
+        // Check that shard with read-ahead is indeed blocked.
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(multishard_reader_for_read_ahead::blocked_shard,
+                    [control = remote_controls.at(multishard_reader_for_read_ahead::blocked_shard).get()] {
+                return control->pending;
+            }).get0();
+        }));
+
+        // Destroy reader.
+        reader = flat_mutation_reader(nullptr);
 
         parallel_for_each(std::views::iota(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
             return smp::submit_to(shard, [control = remote_controls.at(shard).get()] {
                 control->buffer_filled.set_value();
             });
         }).get();
+
+        BOOST_REQUIRE(eventually_true([&] {
+            return map_reduce(std::views::iota(0u, smp::count), [&] (unsigned shard) {
+                    return smp::submit_to(shard, [&remote_controls, shard] {
+                        return remote_controls.at(shard)->destroyed;
+                    });
+                },
+                true,
+                std::logical_and<bool>()).get0();
+        }));
+
+        return operations_gate.close();
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pending_read_ahead) {
+    if (smp::count < multishard_reader_for_read_ahead::min_shards) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < " << multishard_reader_for_read_ahead::min_shards << std::endl;
+        return;
+    }
+
+    test_reader_lifecycle_policy::operations_gate operations_gate;
+
+    do_with_cql_env([&] (cql_test_env& env) -> future<> {
+        auto s = simple_schema();
+
+        auto [reader, sharder, remote_controls, pr] = prepare_multishard_reader_for_read_ahead_test(s, operations_gate);
+
+        reader.fill_buffer(db::no_timeout).get();
+        BOOST_REQUIRE(reader.is_buffer_full());
+        reader.detach_buffer();
+
+        reader.fill_buffer(db::no_timeout).get();
+        BOOST_REQUIRE(reader.is_buffer_full());
+        reader.detach_buffer();
+
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(multishard_reader_for_read_ahead::blocked_shard,
+                    [control = remote_controls.at(multishard_reader_for_read_ahead::blocked_shard).get()] {
+                return control->pending;
+            }).get0();
+        }));
+
+        auto end_token = dht::token(pr->end()->value().token());
+        ++end_token._data;
+
+        auto next_pr = dht::partition_range::make_starting_with(dht::ring_position::starting_at(end_token));
+        auto fut = reader.fast_forward_to(next_pr, db::no_timeout);
+
+        smp::submit_to(multishard_reader_for_read_ahead::blocked_shard,
+                [control = remote_controls.at(multishard_reader_for_read_ahead::blocked_shard).get()] {
+            control->buffer_filled.set_value();
+        }).get();
+
+        fut.get();
+
+        const auto all_shard_fast_forwarded = map_reduce(
+                std::views::iota(0u, multishard_reader_for_read_ahead::blocked_shard + 1u),
+                [&] (unsigned shard) {
+                    return smp::submit_to(shard, [control = remote_controls.at(shard).get()] {
+                        return control->fast_forward_to == 1;
+                    });
+                },
+                true,
+                std::logical_and<bool>()).get0();
+
+        BOOST_REQUIRE(all_shard_fast_forwarded);
+
+        reader.fill_buffer(db::no_timeout).get();
+
+        BOOST_REQUIRE(reader.is_buffer_empty());
+        BOOST_REQUIRE(reader.is_end_of_stream());
+
+        reader = flat_mutation_reader(nullptr);
 
         BOOST_REQUIRE(eventually_true([&] {
             return map_reduce(std::views::iota(0u, smp::count), [&] (unsigned shard) {
