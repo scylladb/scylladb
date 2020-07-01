@@ -33,13 +33,12 @@
 namespace sstables {
 
 class test_env {
-    sstables_manager& _mgr;
+    sstables_manager _mgr;
 public:
-    explicit test_env() : _mgr(test_sstables_manager) { }
-    explicit test_env(sstables_manager& mgr) : _mgr(mgr) { }
+    explicit test_env() : _mgr(nop_lp_handler, test_db_config, test_feature_service) { }
 
     future<> stop() {
-        return make_ready_future<>();
+        return _mgr.close();
     }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, unsigned long generation,
