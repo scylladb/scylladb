@@ -2594,8 +2594,8 @@ class scylla_fiber(gdb.Command):
 
         if using_seastar_allocator:
             ptr_meta = scylla_ptr.analyze(ptr)
-            if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live or ptr_meta.offset_in_object != 0:
-                self._maybe_log("\t\t\tNot the start of an allocation block or not a live object\n", verbose)
+            if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live:
+                self._maybe_log("\t\t\tNot a live object\n", verbose)
                 return
         else:
             ptr_meta = pointer_metadata(ptr, scanned_region_size)
