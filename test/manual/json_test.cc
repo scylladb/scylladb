@@ -26,7 +26,7 @@
 
 #include <seastar/core/sstring.hh>
 
-#include "json.hh"
+#include "utils/rjson.hh"
 
 using namespace seastar;
 
@@ -56,6 +56,6 @@ BOOST_AUTO_TEST_CASE(test_value_to_quoted_string) {
     };
 
     for (size_t i = 0; i < input.size(); ++i) {
-        BOOST_CHECK_EQUAL(json::value_to_quoted_string(input[i]), expected[i]);
+        BOOST_CHECK_EQUAL(rjson::quote_json_string(input[i]), expected[i]);
     }
 }
