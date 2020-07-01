@@ -269,8 +269,8 @@ void set_storage_service(http_context& ctx, routes& r) {
                 for (auto cf : column_families) {
                     column_families_vec.push_back(&db.find_column_family(keyspace, cf));
                 }
-                return parallel_for_each(column_families_vec, [&cm] (column_family* cf) {
-                    return cm.perform_cleanup(cf);
+                return parallel_for_each(column_families_vec, [&cm, &db] (column_family* cf) {
+                    return cm.perform_cleanup(db, cf);
                 });
             }).then([]{
                 return make_ready_future<json::json_return_type>(0);

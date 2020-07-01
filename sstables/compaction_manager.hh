@@ -175,7 +175,7 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(column_family* cf);
+    future<> perform_cleanup(database& db, column_family* cf);
 
     // Submit a column family to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(column_family* cf, bool exclude_current_version);
