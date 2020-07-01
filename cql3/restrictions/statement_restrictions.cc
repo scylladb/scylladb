@@ -708,6 +708,9 @@ bool single_column_restriction::slice::is_satisfied_by(const schema& schema,
 }
 
 bool single_column_restriction::slice::is_satisfied_by(bytes_view data, const query_options& options) const {
+    if (data.empty()) {
+        return false; // NULL is not contained in any range
+    }
     return to_range(_slice, options, _column_def.name_as_text()).contains(
             data, _column_def.type->underlying_type()->as_tri_comparator());
 }
