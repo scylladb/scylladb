@@ -1050,7 +1050,12 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
       }
       return ::service::get_local_migration_manager().sync_schema(ri.db.local(), neighbors).then([&neighbors, &ri, range, id] {
         return do_for_each(ri.table_ids.begin(), ri.table_ids.end(), [&ri, &neighbors, range] (utils::UUID table_id) {
-            auto cf = ri.db.local().find_column_family(table_id).schema()->cf_name();
+            sstring cf;
+            try {
+                cf = ri.db.local().find_column_family(table_id).schema()->cf_name();
+            } catch (no_such_column_family&) {
+                return make_ready_future<>();
+            }
             ri._sub_ranges_nr++;
             if (ri.row_level_repair()) {
                 if (ri.dropped_tables.count(cf)) {
