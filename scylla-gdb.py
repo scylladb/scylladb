@@ -2526,6 +2526,8 @@ class scylla_fiber(gdb.Command):
                 ("seastar", "future", "thread_wake_task"),
                 ("seastar", "internal", "do_until_state"),
                 ("seastar", "internal", "do_with_state"),
+                ("seastar", "internal", "do_for_each_state"),
+                ("seastar", "parallel_for_each_state"),
                 ("seastar", "internal", "repeat_until_value_state"),
                 ("seastar", "internal", "repeater"),
                 ("seastar", "internal", "when_all_state_component"),
