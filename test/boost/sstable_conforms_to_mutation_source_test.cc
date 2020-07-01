@@ -51,13 +51,11 @@ void test_mutation_source(sstables::test_env& env, sstable_writer_config cfg, ss
 
 
 SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
-    return seastar::async([] {
-        auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    return sstables::test_env::do_with_async([] (sstables::test_env& env) {
         storage_service_for_tests ssft;
-        sstables::test_env env;
         for (auto version : all_sstable_versions) {
             for (auto index_block_size : {1, 128, 64*1024}) {
-                sstable_writer_config cfg = test_sstables_manager.configure_writer();
+                sstable_writer_config cfg = env.manager().configure_writer();
                 cfg.promoted_index_block_size = index_block_size;
                 test_mutation_source(env, cfg, version);
             }
