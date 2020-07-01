@@ -102,6 +102,7 @@ requires ConsumeRowsContext<DataConsumeRowsContext>
 class data_consume_context;
 
 class index_reader;
+class sstables_manager;
 
 extern bool use_binary_search_in_promoted_index;
 
@@ -134,6 +135,7 @@ public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
     using tracker_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+    using manager_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
             sstring dir,
@@ -148,8 +150,6 @@ public:
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
     sstable(sstable&&) = delete;
-
-    ~sstable();
 
     // disk_read_range describes a byte ranges covering part of an sstable
     // row that we need to read from disk. Usually this is the whole byte
@@ -463,6 +463,7 @@ public:
             return touch_directory(std::move(name));
         });
     }
+    future<> close_files();
 private:
     size_t sstable_buffer_size;
 
@@ -541,6 +542,7 @@ private:
         none = 0,
         marked = 1
     } _marked_for_deletion = mark_for_deletion::none;
+    bool _active = true;
 
     gc_clock::time_point _now;
 
@@ -552,12 +554,13 @@ private:
 
     sstables_stats _stats;
     tracker_link_type _tracker_link;
-
+    manager_link_type _manager_link;
 public:
     const bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
 private:
+    void unused(); // Called when reference count drops to zero
     future<file> open_file(component_type, open_flags, file_open_options = {}) noexcept;
 
     template <component_type Type, typename T>
@@ -861,6 +864,7 @@ public:
     friend class index_reader;
     friend class sstable_writer;
     friend class compaction;
+    friend class sstables_manager;
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);
@@ -870,6 +874,7 @@ public:
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&);
+    friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
 };
 
 // Waits for all prior tasks started on current shard related to sstable management to finish.

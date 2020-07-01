@@ -76,6 +76,7 @@
 #include "sstables/sstables_manager.hh"
 #include "utils/UUID_gen.hh"
 #include "database.hh"
+#include "sstables_manager.hh"
 #include <boost/algorithm/string/predicate.hpp>
 #include "tracing/traced_file.hh"
 
@@ -2979,36 +2980,32 @@ int sstable::compare_by_max_timestamp(const sstable& other) const {
     return (ts1 > ts2 ? 1 : (ts1 == ts2 ? 0 : -1));
 }
 
-sstable::~sstable() {
+future<> sstable::close_files() {
+    auto index_closed = make_ready_future<>();
     if (_index_file) {
-        // Registered as background job.
-        (void)_index_file.close().handle_exception([save = _index_file, op = background_jobs().start()] (auto ep) {
+        index_closed = _index_file.close().handle_exception([me = shared_from_this()] (auto ep) {
             sstlog.warn("sstable close index_file failed: {}", ep);
             general_disk_error();
         });
     }
+    auto data_closed = make_ready_future<>();
     if (_data_file) {
-        // Registered as background job.
-        (void)_data_file.close().handle_exception([save = _data_file, op = background_jobs().start()] (auto ep) {
+        data_closed = _data_file.close().handle_exception([me = shared_from_this()] (auto ep) {
             sstlog.warn("sstable close data_file failed: {}", ep);
             general_disk_error();
         });
     }
 
+    auto unlinked = make_ready_future<>();
     if (_marked_for_deletion != mark_for_deletion::none) {
-        // We need to delete the on-disk files for this table. Since this is a
-        // destructor, we can't wait for this to finish, or return any errors,
-        // but just need to do our best. If a deletion fails for some reason we
+        // If a deletion fails for some reason we
         // log and ignore this failure, because on startup we'll again try to
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         sstlog.debug("Deleting sstable that is {}marked for deletion", _marked_for_deletion == mark_for_deletion::implicit ? "implicitly " : "");
         try {
-            // FIXME:
-            // - Longer term fix is to hand off deletion of sstables to a manager that can
-            //   deal with sstable marked to be deleted after the corresponding object is destructed.
-            (void)unlink().handle_exception(
-                        [op = background_jobs().start()] (std::exception_ptr eptr) {
+            unlinked = unlink().handle_exception(
+                        [me = shared_from_this()] (std::exception_ptr eptr) {
                             try {
                                 std::rethrow_exception(eptr);
                             } catch (...) {
@@ -3022,6 +3019,8 @@ sstable::~sstable() {
     }
 
     _on_closed(*this);
+
+    return when_all_succeed(std::move(index_closed), std::move(data_closed), std::move(unlinked)).discard_result();
 }
 
 static inline sstring dirname(const sstring& fname) {
@@ -3588,6 +3587,16 @@ sstable::sstable(schema_ptr schema,
     , _manager(manager)
 {
     tracker.add(*this);
+    manager.add(this);
+}
+
+void sstable::unused() {
+    if (_active) {
+        _active = false;
+        _manager.deactivate(this);
+    } else {
+        _manager.remove(this);
+    }
 }
 
 future<file_writer> file_writer::make(file f, file_output_stream_options options, sstring filename) noexcept {
@@ -3628,7 +3637,7 @@ namespace seastar {
 
 void
 lw_shared_ptr_deleter<sstables::sstable>::dispose(sstables::sstable* s) {
-    delete s;
+    s->unused();
 }
 
 
