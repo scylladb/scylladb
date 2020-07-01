@@ -3021,7 +3021,7 @@ static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
-    auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+    auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager()), column_family::no_commitlog(), *cm, *cl_stats, *tracker);
     cf->mark_ready_for_writes();
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
@@ -3220,7 +3220,7 @@ static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable
 
     sst->write_components(make_combined_reader(s,
         mt1->make_flat_reader(s, tests::make_permit()),
-        mt2->make_flat_reader(s, tests::make_permit())), 1, s, test_sstables_manager.configure_writer(), mt1->get_encoding_stats()).get();
+        mt2->make_flat_reader(s, tests::make_permit())), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
     return tmp;
 }
 
@@ -5104,7 +5104,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
     mt->apply(partition);
     for (auto index_block_size : {1, 128, 64*1024}) {
         tmpdir dir;
-        sstable_writer_config cfg = test_sstables_manager.configure_writer();
+        sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = index_block_size;
         auto sst = env.make_sstable(write_schema,
             dir.path().string(),
@@ -5173,7 +5173,7 @@ struct large_row_handler : public db::large_data_handler {
 }
 
 static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const partition_key& pk,
-        std::vector<clustering_key*> expected, uint64_t threshold, sstable_version_types version) {
+        std::vector<clustering_key*> expected, uint64_t threshold, sstables::sstable_version_types version) {
     unsigned i = 0;
     auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
                      const clustering_key_prefix* clustering_key, uint64_t row_size) {
@@ -5191,21 +5191,20 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
 
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), f);
     sstables_manager manager(handler, test_db_config, test_feature_service);
-    auto env = test_env(manager);
+    auto stop_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
-    auto sst = env.make_sstable(
+    auto sst = manager.make_sstable(
             s, dir.path().string(), 1 /* generation */, version, sstables::sstable::format_types::big);
 
     // The test provides thresholds values for the large row handler. Whether the handler gets
     // trigger depends on the size of rows after they are written in the MC format and that size
     // depends on the encoding statistics (because of variable-length encoding). The original values
     // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-    sst->write_components(mt.make_flat_reader(s, tests::make_permit()), 1, s, test_sstables_manager.configure_writer(), encoding_stats{}).get();
+    sst->write_components(mt.make_flat_reader(s, tests::make_permit()), 1, s, manager.configure_writer(), encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
-    auto abj = defer([] { await_background_jobs().get(); });
     storage_service_for_tests ssft;
     simple_schema s;
     mutation partition = s.new_mutation("pv");
@@ -5249,16 +5248,15 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, f);
     sstables_manager manager(handler, test_db_config, test_feature_service);
-    auto env = test_env(manager);
+    auto close_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
-    auto sst = env.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(sc, tests::make_permit()), 1, sc, test_sstables_manager.configure_writer(), encoding_stats{}).get();
+    auto sst = manager.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
+    sst->write_components(mt->make_flat_reader(sc, tests::make_permit()), 1, sc, manager.configure_writer(), encoding_stats{}).get();
 
     BOOST_REQUIRE_EQUAL(logged, expected);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
-    auto abj = defer([] { await_background_jobs().get(); });
     storage_service_for_tests ssft;
 
     // Generates a pseudo-random number from 1 to 100
