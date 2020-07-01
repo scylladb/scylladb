@@ -57,7 +57,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
                 }
                 created_with_base_schema = env.make_sstable(base, dir.path().string(), gen, version, sstables::sstable::format_types::big);
                 created_with_base_schema->write_components(mt->make_flat_reader(base, tests::make_permit()), base_mutations.size(), base,
-                        test_sstables_manager.configure_writer(), mt->get_encoding_stats()).get();
+                        env.manager().configure_writer(), mt->get_encoding_stats()).get();
                 created_with_base_schema->load().get();
 
                 created_with_changed_schema = env.make_sstable(changed, dir.path().string(), gen, version, sstables::sstable::format_types::big);
