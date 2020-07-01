@@ -101,17 +101,12 @@ static const sstring some_column_family("cf");
 db::nop_large_data_handler nop_lp_handler;
 db::config test_db_config;
 gms::feature_service test_feature_service(gms::feature_config_from_db_config(test_db_config));
-thread_local sstables::sstables_manager test_sstables_manager(nop_lp_handler, test_db_config, test_feature_service);
 
 column_family::config column_family_test_config(sstables::sstables_manager& sstables_manager) {
     column_family::config cfg;
     cfg.sstables_manager = &sstables_manager;
     cfg.compaction_concurrency_semaphore = &tests::semaphore();
     return cfg;
-}
-
-column_family::config column_family_test_config() {
-    return column_family_test_config(test_sstables_manager);
 }
 
 column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sstables_manager)
@@ -132,12 +127,4 @@ column_family_for_tests::column_family_for_tests(sstables::sstables_manager& sst
     _data->cfg.enable_commitlog = false;
     _data->cf = make_lw_shared<column_family>(_data->s, _data->cfg, column_family::no_commitlog(), _data->cm, _data->cl_stats, _data->tracker);
     _data->cf->mark_ready_for_writes();
-}
-
-column_family_for_tests::column_family_for_tests()
-        : column_family_for_tests(test_sstables_manager) {
-}
-
-column_family_for_tests::column_family_for_tests(schema_ptr s)
-        : column_family_for_tests(test_sstables_manager, std::move(s)) {
 }
