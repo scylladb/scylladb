@@ -78,7 +78,7 @@ struct from_json_visitor {
     }
     // default
     void operator()(const abstract_type& t) const {
-        bo.write(from_json_object(t, Json::Value(rjson::print(v)), cql_serialization_format::internal()));
+        bo.write(from_json_object(t, v, cql_serialization_format::internal()));
     }
 };
 

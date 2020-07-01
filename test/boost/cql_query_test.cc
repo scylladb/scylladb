@@ -48,7 +48,7 @@
 #include "cql3/cql_config.hh"
 #include "sstables/compaction_manager.hh"
 #include "test/lib/exception_utils.hh"
-#include "json.hh"
+#include "utils/rjson.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
 #include <regex>
@@ -3578,20 +3578,21 @@ SEASTAR_TEST_CASE(test_rf_expand) {
             auto row0 = rows[0];
             BOOST_REQUIRE_EQUAL(row0.size(), 1);
 
-            return json::to_json_value(sstring(to_sstring_view(*row0[0])))["replication"];
+            auto parsed = rjson::parse(to_sstring_view(*row0[0]));
+            return std::move(rjson::get(parsed, "replication"));
         };
 
         auto assert_replication_contains = [&] (const sstring& ks, const std::map<sstring, sstring>& kvs) {
             auto repl = get_replication(ks);
             for (const auto& [k, v] : kvs) {
-                BOOST_REQUIRE_EQUAL(v, repl[k].asString());
+                BOOST_REQUIRE_EQUAL(v, rjson::to_string_view(rjson::get(repl, k)));
             }
         };
 
         auto assert_replication_not_contains = [&] (const sstring& ks, const std::vector<sstring>& keys) {
             auto repl = get_replication(ks);
             return std::none_of(keys.begin(), keys.end(), [&] (const sstring& k) {
-                return repl.isMember(std::string(k.begin(), k.end()));
+                return repl.HasMember(std::string(k.c_str(), k.size()));
             });
         };
 

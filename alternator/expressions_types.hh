@@ -27,7 +27,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 
-#include "rjson.hh"
+#include "utils/rjson.hh"
 
 /*
  * Parsed representation of expressions and their components.

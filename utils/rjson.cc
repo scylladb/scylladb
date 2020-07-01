@@ -20,7 +20,6 @@
  */
 
 #include "rjson.hh"
-#include "error.hh"
 #include <seastar/core/print.hh>
 #include <seastar/core/thread.hh>
 
@@ -137,6 +136,20 @@ rjson::value parse(std::string_view str) {
     d.Parse(str.data(), str.size());
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
+    }
+    rjson::value& v = d;
+    return std::move(v);
+}
+
+std::optional<rjson::value> try_parse(std::string_view str) {
+    guarded_yieldable_json_handler<document, false> d(78);
+    try {
+        d.Parse(str.data(), str.size());
+    } catch (const rjson::error&) {
+        return std::nullopt;
+    }
+    if (d.HasParseError()) {
+        return std::nullopt;    
     }
     rjson::value& v = d;
     return std::move(v);
@@ -291,6 +304,66 @@ bool single_value_comp::operator()(const rjson::value& r1, const rjson::value& r
    default:
        return false;
    }
+}
+
+rjson::value from_string_map(const std::map<sstring, sstring>& map) {
+    rjson::value v = rjson::empty_object();
+    for (auto& entry : map) {
+        rjson::set_with_string_name(v, std::string_view(entry.first), rjson::from_string(entry.second));
+    }
+    return v;
+}
+
+static inline bool is_control_char(char c) {
+    return c >= 0 && c <= 0x1F;
+}
+
+static inline bool needs_escaping(const sstring& s) {
+    return std::any_of(s.begin(), s.end(), [](char c) {return is_control_char(c) || c == '"' || c == '\\';});
+}
+
+
+sstring quote_json_string(const sstring& value) {
+    if (!needs_escaping(value)) {
+        return format("\"{}\"", value);
+    }
+    std::ostringstream oss;
+    oss << std::hex << std::uppercase << std::setfill('0');
+    oss.put('"');
+    for (char c : value) {
+        switch (c) {
+        case '"':
+            oss.put('\\').put('"');
+            break;
+        case '\\':
+            oss.put('\\').put('\\');
+            break;
+        case '\b':
+            oss.put('\\').put('b');
+            break;
+        case '\f':
+            oss.put('\\').put('f');
+            break;
+        case '\n':
+            oss.put('\\').put('n');
+            break;
+        case '\r':
+            oss.put('\\').put('r');
+            break;
+        case '\t':
+            oss.put('\\').put('t');
+            break;
+        default:
+            if (is_control_char(c)) {
+                oss.put('\\').put('u') << std::setw(4) << static_cast<int>(c);
+            } else {
+                oss.put(c);
+            }
+            break;
+        }
+    }
+    oss.put('"');
+    return oss.str();
 }
 
 } // end namespace rjson

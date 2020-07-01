@@ -48,7 +48,7 @@
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptors.hpp>
 
-#include "json.hh"
+#include "utils/rjson.hh"
 
 const sstring db::index::secondary_index::custom_index_option_name = "class_name";
 const sstring db::index::secondary_index::index_keys_option_name = "index_keys";
@@ -90,19 +90,18 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const sstring
         return info;
     }
 
-    Json::Value json_value;
-    const bool is_json = json::to_json_value(target, json_value);
-    if (is_json && json_value.isObject()) {
-        Json::Value pk = json_value.get(PK_TARGET_KEY, Json::Value(Json::arrayValue));
-        Json::Value ck = json_value.get(CK_TARGET_KEY, Json::Value(Json::arrayValue));
-        if (!pk.isArray() || !ck.isArray()) {
+    std::optional<rjson::value> json_value = rjson::try_parse(target);
+    if (json_value && json_value->IsObject()) {
+        rjson::value* pk = rjson::find(*json_value, PK_TARGET_KEY);
+        rjson::value* ck = rjson::find(*json_value, CK_TARGET_KEY);
+        if (!pk || !ck || !pk->IsArray() || !ck->IsArray()) {
             throw std::runtime_error("pk and ck fields of JSON definition must be arrays");
         }
-        for (auto it = pk.begin(); it != pk.end(); ++it) {
-            info.pk_columns.push_back(get_column(sstring(it->asString())));
+        for (const rjson::value& v : pk->GetArray()) {
+            info.pk_columns.push_back(get_column(sstring(rjson::to_string_view(v))));
         }
-        for (auto it = ck.begin(); it != ck.end(); ++it) {
-            info.ck_columns.push_back(get_column(sstring(it->asString())));
+        for (const rjson::value& v : ck->GetArray()) {
+            info.ck_columns.push_back(get_column(sstring(rjson::to_string_view(v))));
         }
         info.type = index_target::target_type::values;
         return info;
@@ -113,31 +112,28 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const sstring
 }
 
 bool target_parser::is_local(sstring target_string) {
-    Json::Value json_value;
-    const bool is_json = json::to_json_value(target_string, json_value);
-    if (!is_json) {
+    std::optional<rjson::value> json_value = rjson::try_parse(target_string);
+    if (!json_value) {
         return false;
     }
-    Json::Value pk = json_value.get(PK_TARGET_KEY, Json::Value(Json::arrayValue));
-    Json::Value ck = json_value.get(CK_TARGET_KEY, Json::Value(Json::arrayValue));
-    return !pk.empty() && !ck.empty();
+    rjson::value* pk = rjson::find(*json_value, PK_TARGET_KEY);
+    rjson::value* ck = rjson::find(*json_value, CK_TARGET_KEY);
+    return pk && ck && pk->IsArray() && ck->IsArray() && !pk->Empty() && !ck->Empty();
 }
 
 sstring target_parser::get_target_column_name_from_string(const sstring& targets) {
-    Json::Value json_value;
-    const bool is_json = json::to_json_value(targets, json_value);
-
-    if (!is_json) {
+    std::optional<rjson::value> json_value = rjson::try_parse(targets);
+    if (!json_value) {
         return targets;
     }
 
-    Json::Value pk = json_value.get("pk", Json::Value(Json::arrayValue));
-    Json::Value ck = json_value.get("ck", Json::Value(Json::arrayValue));
-    if (ck.isArray() && !ck.empty()) {
-        return ck[0].asString();
+    rjson::value* pk = rjson::find(*json_value, "pk");
+    rjson::value* ck = rjson::find(*json_value, "ck");
+    if (ck && ck->IsArray() && !ck->Empty()) {
+        return sstring(rjson::to_string_view(ck->GetArray()[0]));
     }
-    if (pk.isArray() && !pk.empty()) {
-        return pk[0].asString();
+    if (pk && pk->IsArray() && !pk->Empty()) {
+        return sstring(rjson::to_string_view(pk->GetArray()[0]));
     }
     return targets;
 }
@@ -146,16 +142,16 @@ sstring target_parser::serialize_targets(const std::vector<::shared_ptr<cql3::st
     using cql3::statements::index_target;
 
     struct as_json_visitor {
-        Json::Value operator()(const index_target::multiple_columns& columns) const {
-            Json::Value json_array(Json::arrayValue);
+        rjson::value operator()(const index_target::multiple_columns& columns) const {
+            rjson::value json_array = rjson::empty_array();
             for (const auto& column : columns) {
-                json_array.append(Json::Value(column->to_string()));
+                rjson::push_back(json_array, rjson::from_string(column->to_string()));
             }
             return json_array;
         }
 
-        Json::Value operator()(const index_target::single_column& column) const {
-            return Json::Value(column->to_string());
+        rjson::value operator()(const index_target::single_column& column) const {
+            return rjson::from_string(column->to_string());
         }
     };
 
@@ -163,22 +159,22 @@ sstring target_parser::serialize_targets(const std::vector<::shared_ptr<cql3::st
         return std::get<index_target::single_column>(targets.front()->value)->to_string();
     }
 
-    Json::Value json_map(Json::objectValue);
-    Json::Value pk_json = std::visit(as_json_visitor(), targets.front()->value);
-    if (!pk_json.isArray()) {
-        Json::Value pk_array(Json::arrayValue);
-        pk_array.append(std::move(pk_json));
+    rjson::value json_map = rjson::empty_object();
+    rjson::value pk_json = std::visit(as_json_visitor(), targets.front()->value);
+    if (!pk_json.IsArray()) {
+        rjson::value pk_array = rjson::empty_array();
+        rjson::push_back(pk_array, std::move(pk_json));
         pk_json = std::move(pk_array);
     }
-    json_map[PK_TARGET_KEY] = std::move(pk_json);
+    rjson::set_with_string_name(json_map, PK_TARGET_KEY, std::move(pk_json));
     if (targets.size() > 1) {
-        Json::Value ck_json(Json::arrayValue);
+        rjson::value ck_json = rjson::empty_array();
         for (unsigned i = 1; i < targets.size(); ++i) {
-            ck_json.append(std::visit(as_json_visitor(), targets.at(i)->value));
+            rjson::push_back(ck_json, std::visit(as_json_visitor(), targets.at(i)->value));
         }
-        json_map[CK_TARGET_KEY] = ck_json;
+        rjson::set_with_string_name(json_map, CK_TARGET_KEY, std::move(ck_json));
     }
-    return json::to_sstring(json_map);
+    return rjson::print(json_map);
 }
 
 }
