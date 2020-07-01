@@ -42,6 +42,7 @@ protected:
     std::vector<uint64_t> _shard_start;
 public:
     sharder(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0);
+    virtual ~sharder() = default;
     /**
      * Calculates the shard that handles a particular token.
      */
