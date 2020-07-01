@@ -2605,9 +2605,6 @@ class scylla_fiber(gdb.Command):
         return ptr_meta, maybe_vptr, resolved_symbol
 
     def _do_walk(self, ptr_meta, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
-        if max_depth > -1 and i >= max_depth:
-            return []
-
         ptr = ptr_meta.ptr
         region_start = ptr + self._vptr_type.sizeof # ignore our own vtable
         region_end = region_start + (ptr_meta.size - ptr_meta.size % self._vptr_type.sizeof)
@@ -2619,16 +2616,10 @@ class scylla_fiber(gdb.Command):
 
             res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
 
-            if res is None:
-                continue
+            if not res is None:
+                return res
 
-            tptr_meta, vptr, name = res
-
-            fiber = self._do_walk(tptr_meta, i + 1, max_depth, scanned_region_size, using_seastar_allocator, verbose)
-            fiber.append((maybe_tptr, vptr, name))
-            return fiber
-
-        return []
+        return None
 
     def _walk(self, ptr, max_depth, scanned_region_size, force_fallback_mode, verbose):
         using_seastar_allocator = not force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
@@ -2639,7 +2630,31 @@ class scylla_fiber(gdb.Command):
         if this_task is None:
             gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
 
-        return this_task, reversed(self._do_walk(this_task[0], 0, max_depth, scanned_region_size, using_seastar_allocator, verbose))
+        i = 0
+        tptr_meta = this_task[0]
+        fiber = []
+        known_tasks = set()
+        while True:
+            if max_depth > -1 and i >= max_depth:
+                break
+
+            res = self._do_walk(tptr_meta, i + 1, max_depth, scanned_region_size, using_seastar_allocator, verbose)
+            if res is None:
+                break
+
+            tptr_meta, vptr, name = res
+
+            if tptr_meta.ptr in known_tasks:
+                gdb.write("Stopping because loop is detected: task 0x{:016x} was seen before.\n".format(tptr_meta.ptr))
+                break
+
+            known_tasks.add(tptr_meta.ptr)
+
+            fiber.append((tptr_meta.ptr, vptr, name))
+
+            i += 1
+
+        return this_task, fiber
 
     def invoke(self, arg, for_tty):
         parser = argparse.ArgumentParser(description="scylla fiber")
