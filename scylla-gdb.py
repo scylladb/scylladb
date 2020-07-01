@@ -2574,31 +2574,31 @@ class scylla_fiber(gdb.Command):
         """
         try:
             maybe_vptr = int(gdb.Value(ptr).reinterpret_cast(self._vptr_type).dereference())
-            self._maybe_log(" -> 0x{:016x}".format(maybe_vptr), verbose)
+            self._maybe_log("\t-> 0x{:016x}\n".format(maybe_vptr), verbose)
         except gdb.MemoryError:
-            self._maybe_log(" Not a pointer\n", verbose)
+            self._maybe_log("\tNot a pointer\n", verbose)
             return
 
         resolved_symbol = resolve(maybe_vptr, False)
         if resolved_symbol is None:
-            self._maybe_log(" Not a vtable ptr\n", verbose)
+            self._maybe_log("\t\tNot a vtable ptr\n", verbose)
             return
 
-        self._maybe_log(" => {}".format(resolved_symbol), verbose)
+        self._maybe_log("\t\t=> {}\n".format(resolved_symbol), verbose)
 
         if not self._name_is_on_whitelist(resolved_symbol):
-            self._maybe_log(" Symbol name doesn't match whitelisted symbols\n", verbose)
+            self._maybe_log("\t\t\tSymbol name doesn't match whitelisted symbols\n", verbose)
             return
 
         if using_seastar_allocator:
             ptr_meta = scylla_ptr.analyze(ptr)
             if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live or ptr_meta.offset_in_object != 0:
-                self._maybe_log(" Not the start of an allocation block or not a live object\n", verbose)
+                self._maybe_log("\t\t\tNot the start of an allocation block or not a live object\n", verbose)
                 return
         else:
             ptr_meta = pointer_metadata(ptr, scanned_region_size)
 
-        self._maybe_log(" Task found\n", verbose)
+        self._maybe_log("\t\t\tTask found\n", verbose)
 
         return ptr_meta, maybe_vptr, resolved_symbol
 
@@ -2613,7 +2613,7 @@ class scylla_fiber(gdb.Command):
 
         for it in range(region_start, region_end, self._vptr_type.sizeof):
             maybe_tptr = int(gdb.Value(it).reinterpret_cast(self._vptr_type).dereference())
-            self._maybe_log("0x{:016x}+0x{:04x} -> 0x{:016x}".format(ptr, it - ptr, maybe_tptr), verbose)
+            self._maybe_log("0x{:016x}+0x{:04x} -> 0x{:016x}\n".format(ptr, it - ptr, maybe_tptr), verbose)
 
             res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
 
