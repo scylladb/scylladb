@@ -292,6 +292,14 @@ bool single_value_comp::operator()(const rjson::value& r1, const rjson::value& r
    }
 }
 
+rjson::value from_string_map(const std::map<sstring, sstring>& map) {
+    rjson::value v = rjson::empty_object();
+    for (auto& entry : map) {
+        rjson::set_with_string_name(v, std::string_view(entry.first), rjson::from_string(entry.second));
+    }
+    return v;
+}
+
 } // end namespace rjson
 
 std::ostream& std::operator<<(std::ostream& os, const rjson::value& v) {

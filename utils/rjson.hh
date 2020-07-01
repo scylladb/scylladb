@@ -192,6 +192,9 @@ Map parse_to_map(std::string_view raw) {
     return map;
 }
 
+// This function exists for historical reasons as well.
+rjson::value from_string_map(const std::map<sstring, sstring>& map);
+
 } // end namespace rjson
 
 namespace std {
