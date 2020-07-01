@@ -42,6 +42,7 @@ static schema_ptr get_schema(unsigned shard_count, unsigned sharding_ignore_msb_
 
 void run_sstable_resharding_test() {
     test_env env;
+    auto close_env = defer([&] { env.stop().get(); });
     cache_tracker tracker;
   for (const auto version : all_sstable_versions) {
     storage_service_for_tests ssft;
@@ -49,7 +50,7 @@ void run_sstable_resharding_test() {
     auto s = get_schema();
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
-    auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(), *cm, *cl_stats, tracker);
+    auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager()), column_family::no_commitlog(), *cm, *cl_stats, tracker);
     cf->mark_ready_for_writes();
     std::unordered_map<shard_id, std::vector<mutation>> muts;
     static constexpr auto keys_per_shard = 1000u;
