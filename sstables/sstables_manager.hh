@@ -30,8 +30,11 @@
 #include "sstables/sstables.hh"
 #include "sstables/shareable_components.hh"
 #include "sstables/shared_sstable.hh"
+#include "sstables/sstables.hh"
 #include "sstables/version.hh"
 #include "sstables/component_type.hh"
+
+#include <boost/intrusive/list.hpp>
 
 namespace db {
 
@@ -50,6 +53,10 @@ using shareable_components_ptr = lw_shared_ptr<shareable_components>;
 static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
 class sstables_manager {
+    using list_type = boost::intrusive::list<sstable,
+            boost::intrusive::member_hook<sstable, sstable::manager_link_type, &sstable::_manager_link>,
+            boost::intrusive::constant_time_size<false>>;
+private:
     db::large_data_handler& _large_data_handler;
     const db::config& _db_config;
     gms::feature_service& _features;
@@ -61,8 +68,13 @@ class sstables_manager {
     // in the system table).
     sstable_version_types _format = sstable_version_types::mc;
 
+    list_type _active;
+    list_type _undergoing_close;
+    bool _closing = false;
+    promise<> _done;
 public:
     explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat);
+    ~sstables_manager();
 
     // Constructs a shared sstable
     shared_sstable make_sstable(schema_ptr schema,
@@ -88,13 +100,20 @@ public:
     //
     // Note that close() will not complete until all references to all
     // sstables have been destroyed.
-    //
-    // Note: just a stub at this point.
     future<> close();
+private:
+    void add(sstable* sst);
+    // Transition the sstable to the "inactive" state. It has no
+    // visible references at this point, and only waits for its
+    // files to be deleted (if necessary) and closed.
+    void deactivate(sstable* sst);
+    void remove(sstable* sst);
+    void maybe_done();
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;
     }
+    friend class sstable;
 };
 
 }   // namespace sstables

@@ -35,6 +35,12 @@ sstables_manager::sstables_manager(
     : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat) {
 }
 
+sstables_manager::~sstables_manager() {
+    assert(_closing);
+    assert(_active.empty());
+    assert(_undergoing_close.empty());
+}
+
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         sstring dir,
         int64_t generation,
@@ -61,9 +67,39 @@ sstable_writer_config sstables_manager::configure_writer() const {
     return cfg;
 }
 
+void sstables_manager::add(sstable* sst) {
+    _active.push_back(*sst);
+}
+
+void sstables_manager::deactivate(sstable* sst) {
+    // At this point, sst has a reference count of zero, since we got here from
+    // lw_shared_ptr_deleter<sstables::sstable>::dispose().
+    _active.erase(_active.iterator_to(*sst));
+    _undergoing_close.push_back(*sst);
+    // guard against sstable::close_files() calling shared_from_this() and immediately destroying
+    // the result, which will dispose of the sstable recursively
+    auto ptr = sst->shared_from_this();
+    (void)sst->close_files().finally([ptr] {
+        // destruction of ptr will call maybe_done() and release close()
+    });
+}
+
+void sstables_manager::remove(sstable* sst) {
+    _undergoing_close.erase(_undergoing_close.iterator_to(*sst));
+    delete sst;
+    maybe_done();
+}
+
+void sstables_manager::maybe_done() {
+    if (_closing && _active.empty() && _undergoing_close.empty()) {
+        _done.set_value();
+    }
+}
 
 future<> sstables_manager::close() {
-    return make_ready_future<>();
+    _closing = true;
+    maybe_done();
+    return _done.get_future();
 }
 
 }   // namespace sstables
