@@ -479,13 +479,13 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_serialization_exception_safety) {
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
-    return seastar::async([] {
+    return sstables::test_env::do_with_async([] (sstables::test_env& env) {
     storage_service_for_tests ssft;
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto cf_stats = make_lw_shared<::cf_stats>();
-    column_family::config cfg = column_family_test_config();
+    column_family::config cfg = column_family_test_config(env.manager());
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
@@ -529,6 +529,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
 }
 
 SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
+  return sstables::test_env::do_with([] (sstables::test_env& env) {
     auto s = schema_builder("ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type)
@@ -536,7 +537,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
     auto cf_stats = make_lw_shared<::cf_stats>();
 
-    column_family::config cfg = column_family_test_config();
+    column_family::config cfg = column_family_test_config(env.manager());
     cfg.enable_disk_reads = true;
     cfg.enable_disk_writes = true;
     cfg.enable_cache = true;
@@ -606,16 +607,17 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             flushed.get();
         });
     }).then([cf_stats] {});
+  });
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
-    return seastar::async([] {
+    return sstables::test_env::do_with_async([] (sstables::test_env& env) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
     auto cf_stats = make_lw_shared<::cf_stats>();
 
-    column_family::config cfg = column_family_test_config();
+    column_family::config cfg = column_family_test_config(env.manager());
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
