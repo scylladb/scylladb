@@ -967,7 +967,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
                                 1 /* generation */,
                                 sstables::sstable::version_types::ka,
                                 sstables::sstable::format_types::big);
-        sstable_writer_config cfg = test_sstables_manager.configure_writer();
+        sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
         sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
@@ -1020,7 +1020,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sstable_writer_config cfg = test_sstables_manager.configure_writer();
+        sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
         sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
@@ -1080,7 +1080,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sstable_writer_config cfg = test_sstables_manager.configure_writer();
+        sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
         sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
@@ -1137,7 +1137,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
                                               generation,
                                               version,
                                               sstables::sstable::format_types::big);
-            sstable_writer_config cfg = test_sstables_manager.configure_writer();
+            sstable_writer_config cfg = env.manager().configure_writer();
             cfg.promoted_index_block_size = 1;
             sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, cfg, mt->get_encoding_stats()).get();
             sst->load().get();
@@ -1184,7 +1184,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, test_sstables_manager.configure_writer(), mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
         sst->load().get();
 
         {
@@ -1223,7 +1223,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sstable_writer_config cfg = test_sstables_manager.configure_writer();
+        sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
         sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
@@ -1259,13 +1259,12 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(m);
 
-        sstables::test_env env;
         auto sst = env.make_sstable(s,
                                           dir.path().string(),
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sstable_writer_config cfg = test_sstables_manager.configure_writer();
+        sstable_writer_config cfg = env.manager().configure_writer();
         cfg.correctly_serialize_non_compound_range_tombstones = false;
         sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
@@ -1321,7 +1320,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
                                           sstables::sstable::format_types::big);
         sst->write_components(make_combined_reader(s,
             mt1->make_flat_reader(s, tests::make_permit()),
-            mt2->make_flat_reader(s, tests::make_permit())), 1, s, test_sstables_manager.configure_writer(), encoding_stats{}).get();
+            mt2->make_flat_reader(s, tests::make_permit())), 1, s, env.manager().configure_writer(), encoding_stats{}).get();
         sst->load().get();
 
         assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit()))
@@ -1355,7 +1354,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             ss.add_row(m2, ss.make_ckey(6), "v");
 
             tmpdir dir;
-            auto ms = make_sstable_mutation_source(env, s, dir.path().string(), {m1, m2}, test_sstables_manager.configure_writer(), version);
+            auto ms = make_sstable_mutation_source(env, s, dir.path().string(), {m1, m2}, env.manager().configure_writer(), version);
 
             auto index_accesses = [] {
                 auto&& stats = sstables::shared_index_lists::shard_stats();
@@ -1396,7 +1395,7 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
             }
 
             tmpdir dir;
-            shared_sstable sst = make_sstable(env, s, dir.path().string(), muts, test_sstables_manager.configure_writer(), version);
+            shared_sstable sst = make_sstable(env, s, dir.path().string(), muts, env.manager().configure_writer(), version);
 
             auto max_est = sst->get_estimated_key_count();
             testlog.trace("count = {}", count);
@@ -1504,7 +1503,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
                                       1 /* generation */,
                                       sstable_version_types::ka,
                                       sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, test_sstables_manager.configure_writer(), mt->get_encoding_stats()).get();
+    sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
     sst->load().get();
 
     auto pr = dht::partition_range::make_singular(small_keys[0]);
@@ -1572,7 +1571,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_serialization_header) {
         // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
         auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 2, s, test_sstables_manager.configure_writer(), mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 2, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
     }
 
     auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
@@ -1637,7 +1636,6 @@ SEASTAR_THREAD_TEST_CASE(test_counter_header_size) {
   test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
     storage_service_for_tests ssft;
-    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
 
     auto s = schema_builder("ks", "counter_test")
         .with_column("pk", int32_type, column_kind::partition_key)
@@ -1668,7 +1666,7 @@ SEASTAR_THREAD_TEST_CASE(test_counter_header_size) {
 
     for (const auto version : all_sstable_versions) {
         auto sst = env.make_sstable(s, dir.path().string(), 1, version, sstables::sstable::format_types::big);
-        sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, test_sstables_manager.configure_writer(), mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
         sst->load().get();
 
         assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit()))
@@ -1707,7 +1705,7 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
                 boost::sort(muts, mutation_decorated_key_less_comparator{});
 
                 tmpdir dir;
-                sstable_writer_config cfg = test_sstables_manager.configure_writer();
+                sstable_writer_config cfg = env.manager().configure_writer();
                 cfg.correctly_serialize_static_compact_in_mc = correctly_serialize;
                 auto ms = make_sstable_mutation_source(env, s, dir.path().string(), muts, cfg, version);
 
