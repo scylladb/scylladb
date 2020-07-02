@@ -41,7 +41,7 @@ with open('build/SCYLLA-PRODUCT-FILE') as f:
     product = f.read().strip()
 
 with open('build/python3/SCYLLA-VERSION-FILE') as f:
-    version = f.read().strip()
+    version = f.read().strip().replace('.rc', '~rc').replace('_', '-')
 
 with open('build/python3/SCYLLA-RELEASE-FILE') as f:
     release = f.read().strip()
