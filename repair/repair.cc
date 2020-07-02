@@ -1633,6 +1633,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
             dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tm, tokens, myip);
+            bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
 
             //Active ranges
             auto metadata_clone = tm.clone_only_token_map();
@@ -1719,6 +1720,9 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
                             mandatory_neighbors = get_node_losing_the_ranges(old_endpoints, new_endpoints);
                             neighbors = mandatory_neighbors;
                         } else if (old_endpoints.size() < strat.get_replication_factor()) {
+                          if (!find_node_in_local_dc_only) {
+                            neighbors = old_endpoints;
+                          } else {
                             if (old_endpoints_in_local_dc.size() == rf_in_local_dc) {
                                 // Local DC has enough replica nodes.
                                 mandatory_neighbors = get_node_losing_the_ranges(old_endpoints_in_local_dc, new_endpoints);
@@ -1746,6 +1750,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
                                 throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, wrong number of old_endpoints_in_local_dc={}, rf_in_local_dc={}",
                                         keyspace_name, desired_range, old_endpoints_in_local_dc.size(), rf_in_local_dc));
                             }
+                          }
                         } else {
                             throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, wrong number of old_endpoints={}, rf={}",
                                         keyspace_name, desired_range, old_endpoints, strat.get_replication_factor()));
