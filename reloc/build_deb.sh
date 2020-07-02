@@ -44,15 +44,15 @@ mkdir -p $BUILDDIR/scylla-package
 tar -C $BUILDDIR/scylla-package -xpf $RELOC_PKG
 cd $BUILDDIR/scylla-package
 
-PRODUCT=$(cat scylla/SCYLLA-PRODUCT-FILE)
-SCYLLA_VERSION=$(cat scylla/SCYLLA-VERSION-FILE)
-SCYLLA_RELEASE=$(cat scylla/SCYLLA-RELEASE-FILE)
-
-ln -fv $RELOC_PKG ../$PRODUCT-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz
-
 if $DIST; then
     export DEB_BUILD_OPTIONS="housekeeping"
 fi
 
 mv scylla/debian debian
+
+PKG_NAME=$(dpkg-parsechangelog --show-field Source)
+# XXX: Drop revision number from version string.
+#      Since it always '1', this should be okay for now.
+PKG_VERSION=$(dpkg-parsechangelog --show-field Version |sed -e 's/-1$//')
+ln -fv $RELOC_PKG ../"$PKG_NAME"_"$PKG_VERSION".orig.tar.gz
 debuild -rfakeroot -us -uc

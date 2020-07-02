@@ -98,6 +98,7 @@ fedora_packages=(
     debhelper
     fakeroot
     file
+    dpkg-dev
 )
 
 centos_packages=(
