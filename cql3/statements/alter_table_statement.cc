@@ -291,12 +291,6 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
     }
 
-    const auto& ks = db.find_keyspace(keyspace());
-    auto replication_type = ks.get_replication_strategy().get_type();
-    if (is_local_only && replication_type != locator::replication_strategy_type::local) {
-        throw std::logic_error(format("Internal queries should not try to alter table schema for non-local tables, because it leads to inconsistencies: {}.{}",
-                s->ks_name(), s->cf_name()));
-    }
     auto cfm = schema_builder(s);
 
     if (_properties->get_id()) {
