@@ -1051,7 +1051,7 @@ void token_metadata_impl::update_normal_tokens(const std::unordered_map<inet_add
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
             should_sort_tokens |= prev.second; // new token inserted -> sort
             if (prev.first->second != endpoint) {
-                tlogger.warn("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
+                tlogger.debug("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
                 prev.first->second = endpoint;
             }
         }
