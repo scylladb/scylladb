@@ -9,11 +9,9 @@ print_usage() {
 }
 RELOC_PKG=build/release/scylla-python3-package.tar.gz
 BUILDDIR=build/redhat
-OPTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         "--reloc-pkg")
-            OPTS="$OPTS $1 $(readlink -f $2)"
             RELOC_PKG=$2
             shift 2
             ;;
@@ -33,10 +31,27 @@ if [ ! -e $RELOC_PKG ]; then
     exit 1
 fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
-if [[ ! $OPTS =~ --reloc-pkg ]]; then
-    OPTS="$OPTS --reloc-pkg $RELOC_PKG"
-fi
+RPMBUILD=$(readlink -f $BUILDDIR)
 mkdir -p $BUILDDIR/scylla-python3
 tar -C $BUILDDIR -xpf $RELOC_PKG scylla-python3/SCYLLA-RELOCATABLE-FILE scylla-python3/SCYLLA-RELEASE-FILE scylla-python3/SCYLLA-VERSION-FILE scylla-python3/SCYLLA-PRODUCT-FILE scylla-python3/dist/redhat/python3
 cd $BUILDDIR/scylla-python3
-exec ./dist/redhat/python3/build_rpm.sh $OPTS
+
+RELOC_PKG_BASENAME=$(basename "$RELOC_PKG")
+SCYLLA_VERSION=$(cat SCYLLA-VERSION-FILE)
+SCYLLA_RELEASE=$(cat SCYLLA-RELEASE-FILE)
+PRODUCT=$(cat SCYLLA-PRODUCT-FILE)
+
+RPMBUILD=$(readlink -f ../)
+mkdir -p "$RPMBUILD"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+
+parameters=(
+    -D"name $PRODUCT-python3"
+    -D"version $SCYLLA_VERSION"
+    -D"release $SCYLLA_RELEASE"
+    -D"target /opt/scylladb/python3"
+    -D"reloc_pkg $RELOC_PKG_BASENAME"
+)
+
+ln -fv "$RELOC_PKG" "$RPMBUILD"/SOURCES/
+cp dist/redhat/python3/python.spec "$RPMBUILD"/SPECS/
+rpmbuild "${parameters[@]}" --nodebuginfo -ba --define '_binary_payload w2.xzdio' --define "_build_id_links none" --define "_topdir ${RPMBUILD}" "$RPMBUILD"/SPECS/python.spec
