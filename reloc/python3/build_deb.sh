@@ -8,11 +8,9 @@ print_usage() {
 }
 
 RELOC_PKG=build/release/scylla-python3-package.tar.gz
-OPTS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         "--reloc-pkg")
-            OPTS="$OPTS $1 $(readlink -f $2)"
             RELOC_PKG=$2
             shift 2
             ;;
@@ -28,11 +26,18 @@ if [ ! -e $RELOC_PKG ]; then
     exit 1
 fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
-if [[ ! $OPTS =~ --reloc-pkg ]]; then
-    OPTS="$OPTS --reloc-pkg $RELOC_PKG"
-fi
-rm -rf build/python3/debian
-mkdir -p build/python3/debian/scylla-python3-package
-tar -C build/python3/debian/scylla-python3-package -xpf $RELOC_PKG
-cd build/python3/debian/scylla-python3-package
-exec ./scylla-python3/dist/debian/python3/build_deb.sh $OPTS
+rm -rf build/debian
+mkdir -p build/debian/scylla-python3-package
+tar -C build/debian/scylla-python3-package -xpf $RELOC_PKG
+cd build/debian/scylla-python3-package
+
+PRODUCT=$(cat scylla-python3/SCYLLA-PRODUCT-FILE)
+RELOC_PKG_FULLPATH=$(readlink -f $RELOC_PKG)
+RELOC_PKG_BASENAME=$(basename $RELOC_PKG)
+SCYLLA_VERSION=$(cat scylla-python3/SCYLLA-VERSION-FILE)
+SCYLLA_RELEASE=$(cat scylla-python3/SCYLLA-RELEASE-FILE)
+
+ln -fv $RELOC_PKG_FULLPATH ../$PRODUCT-python3_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz
+
+mv scylla-python3/debian debian
+debuild -rfakeroot -us -uc
