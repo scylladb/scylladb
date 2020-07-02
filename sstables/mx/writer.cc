@@ -192,20 +192,20 @@ public:
 
 template <typename W>
 requires Writer<W>
-static void write(W& out, const clustering_block& block) {
+static void write(sstable_version_types v, W& out, const clustering_block& block) {
     write_vint(out, block.header);
     for (const auto& [value, type]: block.values) {
-        write_cell_value(out, type, value);
+        write_cell_value(v, out, type, value);
     }
 }
 
 template <typename W>
 requires Writer<W>
-void write_clustering_prefix(W& out, const schema& s,
+void write_clustering_prefix(sstable_version_types v, W& out, const schema& s,
     const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full) {
     clustering_blocks_input_range range{s, prefix, is_ephemerally_full};
     for (const auto block: range) {
-        write(out, block);
+        write(v, out, block);
     }
 }
 
@@ -1040,14 +1040,14 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
         if (!is_deleted) {
             assert(!cell.is_counter_update());
             counter_cell_view::with_linearized(cell, [&] (counter_cell_view ccv) {
-                write_counter_value(ccv, writer, sstable_version_types::mc, [] (bytes_ostream& out, uint32_t value) {
+                write_counter_value(ccv, writer, _sst.get_version(), [] (bytes_ostream& out, uint32_t value) {
                     return write_vint(out, value);
                 });
             });
         }
     } else {
         if (has_value) {
-            write_cell_value(writer, *cdef.type, cell.value());
+            write_cell_value(_sst.get_version(), writer, *cdef.type, cell.value());
         }
     }
 
@@ -1256,7 +1256,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
         write(_sst.get_version(), *_data_writer, ext_flags);
     }
 
-    write_clustering_prefix(*_data_writer, _schema, clustered_row.key(), ephemerally_full_prefix{_schema.is_compact_table()});
+    write_clustering_prefix(_sst.get_version(), *_data_writer, _schema, clustered_row.key(), ephemerally_full_prefix{_schema.is_compact_table()});
 
     write_vint(_tmp_bufs, prev_row_size);
     write_row_body(_tmp_bufs, clustered_row, has_complex_deletion);
@@ -1284,17 +1284,17 @@ stop_iteration writer::consume(clustering_row&& cr) {
 // Write clustering prefix along with its bound kind and, if not full, its size
 template <typename W>
 requires Writer<W>
-static void write_clustering_prefix(W& writer, bound_kind_m kind,
+static void write_clustering_prefix(sstable_version_types v, W& writer, bound_kind_m kind,
     const schema& s, const clustering_key_prefix& clustering) {
     assert(kind != bound_kind_m::static_clustering);
-    write(sstable_version_types::mc, writer, kind);
+    write(v, writer, kind);
     auto is_ephemerally_full = ephemerally_full_prefix{s.is_compact_table()};
     if (kind != bound_kind_m::clustering) {
         // Don't use ephemerally full for RT bounds as they're always non-full
         is_ephemerally_full = ephemerally_full_prefix::no;
-        write(sstable_version_types::mc, writer, static_cast<uint16_t>(clustering.size(s)));
+        write(v, writer, static_cast<uint16_t>(clustering.size(s)));
     }
-    write_clustering_prefix(writer, s, clustering, is_ephemerally_full);
+    write_clustering_prefix(v, writer, s, clustering, is_ephemerally_full);
 }
 
 void writer::write_promoted_index() {
@@ -1317,19 +1317,19 @@ void writer::write_pi_block(const pi_block& block) {
     bytes_ostream& blocks = _pi_write_m.blocks;
     uint32_t offset = blocks.size();
     write(_sst.get_version(), _pi_write_m.offsets, offset);
-    write_clustering_prefix(blocks, block.first.kind, _schema, block.first.clustering);
-    write_clustering_prefix(blocks, block.last.kind, _schema, block.last.clustering);
+    write_clustering_prefix(_sst.get_version(), blocks, block.first.kind, _schema, block.first.clustering);
+    write_clustering_prefix(_sst.get_version(), blocks, block.last.kind, _schema, block.last.clustering);
     write_vint(blocks, block.offset);
     write_signed_vint(blocks, block.width - width_base);
     write(_sst.get_version(), blocks, static_cast<std::byte>(block.open_marker ? 1 : 0));
     if (block.open_marker) {
-        write(sstable_version_types::mc, blocks, to_deletion_time(*block.open_marker));
+        write(_sst.get_version(), blocks, to_deletion_time(*block.open_marker));
     }
 }
 
 void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
-    write(sstable_version_types::mc, *_data_writer, row_flags::is_marker);
-    write_clustering_prefix(*_data_writer, marker.kind, _schema, marker.clustering);
+    write(_sst.get_version(), *_data_writer, row_flags::is_marker);
+    write_clustering_prefix(_sst.get_version(), *_data_writer, marker.kind, _schema, marker.clustering);
     auto write_marker_body = [this, &marker] (bytes_ostream& writer) {
         write_delta_deletion_time(writer, marker.tomb);
         _c_stats.update(marker.tomb);

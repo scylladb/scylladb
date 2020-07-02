@@ -525,26 +525,26 @@ void write_column_name(sstable_version_types v, Writer& out, const schema& s, co
 
 template <typename W>
 requires Writer<W>
-void write_cell_value(W& out, const abstract_type& type, bytes_view value) {
+void write_cell_value(sstable_version_types v, W& out, const abstract_type& type, bytes_view value) {
     if (!value.empty()) {
         if (type.value_length_if_fixed()) {
-            write(sstable_version_types::mc, out, value);
+            write(v, out, value);
         } else {
             write_vint(out, value.size());
-            write(sstable_version_types::mc, out, value);
+            write(v, out, value);
         }
     }
 }
 
 template <typename W>
 requires Writer<W>
-void write_cell_value(W& out, const abstract_type& type, atomic_cell_value_view value) {
+void write_cell_value(sstable_version_types v, W& out, const abstract_type& type, atomic_cell_value_view value) {
     if (!value.empty()) {
         if (!type.value_length_if_fixed()) {
             write_vint(out, value.size_bytes());
         }
         using boost::range::for_each;
-        for_each(value, [&] (bytes_view fragment) { write(sstable_version_types::mc, out, fragment); });
+        for_each(value, [&] (bytes_view fragment) { write(v, out, fragment); });
     }
 }
 
