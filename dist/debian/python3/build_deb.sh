@@ -101,7 +101,12 @@ RELOC_PKG_BASENAME=$(basename $RELOC_PKG)
 SCYLLA_VERSION=$(cat scylla-python3/SCYLLA-VERSION-FILE)
 SCYLLA_RELEASE=$(cat scylla-python3/SCYLLA-RELEASE-FILE)
 
-ln -fv $RELOC_PKG_FULLPATH ../$PRODUCT-python3_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz
 
 cp -al scylla-python3/debian debian
+PKG_NAME=$(dpkg-parsechangelog --show-field Source)
+# XXX: Drop revision number from version string.
+#      Since it always '1', this should be okay for now.
+PKG_VERSION=$(dpkg-parsechangelog --show-field Version |sed -e 's/-1$//')
+ln -fv $RELOC_PKG_FULLPATH ../"$PKG_NAME"_"$PKG_VERSION".orig.tar.gz
+
 debuild -rfakeroot -us -uc
