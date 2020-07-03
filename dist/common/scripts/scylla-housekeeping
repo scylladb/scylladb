@@ -61,7 +61,15 @@ def sh_command(*args):
     return out
 
 def get_url(path):
-    return urllib.request.urlopen(path).read().decode('utf-8')
+    # If server returns any error, like 403, or 500 urllib.request throws exception, which is not serializable.
+    # When multiprocessing routines fail to serialize it, it throws ambiguous serialization exception
+    #   from get_json_from_url.
+    # In order to see legit error we catch it from the inside of process, covert to string and
+    #   pass it as part of return value
+    try:
+        return 0, urllib.request.urlopen(path).read().decode('utf-8')
+    except Exception as exc:
+        return 1, str(exc)
 
 def get_json_from_url(path):
     pool = mp.Pool(processes=1)
@@ -71,12 +79,15 @@ def get_json_from_url(path):
     # to enforce a wallclock timeout.
     result = pool.apply_async(get_url, args=(path,))
     try:
-        retval = result.get(timeout=5)
+        status, retval = result.get(timeout=5)
     except mp.TimeoutError as err:
         pool.terminate()
         pool.join()
         raise
+    if status == 1:
+        raise RuntimeError(f'Failed to get "{path}" due to the following error: {retval}')
     return json.loads(retval)
+
 
 def get_api(path):
     return get_json_from_url("http://" + api_address + path)
