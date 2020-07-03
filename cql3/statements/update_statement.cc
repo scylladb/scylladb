@@ -62,20 +62,15 @@ namespace json_helpers {
  * should be treated as case-sensitive, while regular strings should be
  * case-insensitive.
  */
-static std::unordered_map<sstring, Json::Value> handle_case_sensitivity(Json::Value&& value_map) {
-    std::unordered_map<sstring, Json::Value> case_sensitive_map;
-    for (auto it = value_map.begin(); it != value_map.end(); ++it) {
-#if defined(JSONCPP_VERSION_HEXA) && (JSONCPP_VERSION_HEXA >= 0x010600) // >= 1.6.0
-        sstring name = it.name();
-#else
-        // NOTICE(sarna): Unsafe for strings with embedded null character
-        sstring name = it.memberName();
-#endif
+static std::unordered_map<sstring, rjson::value> handle_case_sensitivity(rjson::value&& value_map) {
+    std::unordered_map<sstring, rjson::value> case_sensitive_map;
+    for (auto it = value_map.MemberBegin(); it != value_map.MemberEnd(); ++it) {
+        sstring name(rjson::to_string_view(it->name));
         if (name.size() > 1 && *name.begin() == '"' && name.back() == '"') {
-            case_sensitive_map.emplace(name.substr(1, name.size() - 2), std::move(*it));
+            case_sensitive_map.emplace(name.substr(1, name.size() - 2), std::move(it->value));
         } else {
             std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-            case_sensitive_map.emplace(std::move(name), std::move(*it));
+            case_sensitive_map.emplace(std::move(name), std::move(it->value));
         }
     }
     return case_sensitive_map;
@@ -84,18 +79,17 @@ static std::unordered_map<sstring, Json::Value> handle_case_sensitivity(Json::Va
 std::unordered_map<sstring, bytes_opt>
 parse(const sstring& json_string, const std::vector<column_definition>& expected_receivers, cql_serialization_format sf) {
     std::unordered_map<sstring, bytes_opt> json_map;
-    Json::Value raw_value_map = json::to_json_value(json_string);
-    std::unordered_map<sstring, Json::Value> prepared_map = handle_case_sensitivity(std::move(raw_value_map));
+    auto prepared_map = handle_case_sensitivity(rjson::parse(json_string));
     for (const auto& def : expected_receivers) {
         sstring cql_name = def.name_as_text();
         auto value_it = prepared_map.find(cql_name);
         if (value_it == prepared_map.end()) {
             continue;
-        } else if (value_it->second.isNull()) {
+        } else if (value_it->second.IsNull()) {
             json_map.emplace(std::move(cql_name), bytes_opt{});
             prepared_map.erase(value_it);
         } else {
-            json_map.emplace(std::move(cql_name), from_json_object(*def.type, value_it->second, sf));
+            json_map.emplace(std::move(cql_name), from_json_object(*def.type, std::move(value_it->second), sf));
             prepared_map.erase(value_it);
         }
     }

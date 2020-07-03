@@ -119,13 +119,15 @@ rjson::value copy(const rjson::value& value);
 // as parse() will allocate member names and values.
 // Throws rjson::error if parsing failed.
 rjson::value parse(std::string_view str);
+// Parses a JSON value returns a disengaged optional on failure.
+// NOTICE: any error context will be lost, so this function should
+// be used only if one does not care why parsing failed.
+std::optional<rjson::value> try_parse(std::string_view str);
 // Needs to be run in thread context
 rjson::value parse_yieldable(std::string_view str);
 
 // Creates a JSON value (of JSON string type) out of internal string representations.
 // The string value is copied, so str's liveness does not need to be persisted.
-rjson::value from_string(const std::string& str);
-rjson::value from_string(const sstring& str);
 rjson::value from_string(const char* str, size_t size);
 rjson::value from_string(std::string_view view);
 
@@ -139,13 +141,11 @@ const rjson::value& get(const rjson::value& value, std::string_view name);
 
 // Sets a member in given JSON object by moving the member - allocates the name.
 // Throws if base is not a JSON object.
-void set_with_string_name(rjson::value& base, const std::string& name, rjson::value&& member);
 void set_with_string_name(rjson::value& base, std::string_view name, rjson::value&& member);
 
 // Sets a string member in given JSON object by assigning its reference - allocates the name.
 // NOTICE: member string liveness must be ensured to be at least as long as base's.
 // Throws if base is not a JSON object.
-void set_with_string_name(rjson::value& base, const std::string& name, rjson::string_ref_type member);
 void set_with_string_name(rjson::value& base, std::string_view name, rjson::string_ref_type member);
 
 // Sets a member in given JSON object by moving the member.
@@ -169,6 +169,38 @@ bool remove_member(rjson::value& value, std::string_view name);
 struct single_value_comp {
     bool operator()(const rjson::value& r1, const rjson::value& r2) const;
 };
+
+// Helper function for parsing a JSON straight into a map
+// of strings representing their values - useful for various
+// database helper functions.
+// This function exists for historical reasons - existing infrastructure
+// relies on being able to transform a JSON string into a map of sstrings.
+template<typename Map>
+requires (std::is_same_v<Map, std::map<sstring, sstring>> || std::is_same_v<Map, std::unordered_map<sstring, sstring>>)
+Map parse_to_map(std::string_view raw) {
+    Map map;
+    rjson::value root = rjson::parse(raw);
+    if (root.IsNull()) {
+        return map;
+    }
+    if (!root.IsObject()) {
+        throw rjson::error("Only json objects can be transformed to maps. Encountered: " + std::string(raw));
+    }
+    for (auto it = root.MemberBegin(); it != root.MemberEnd(); ++it) {
+        if (it->value.IsString()) {
+            map.emplace(sstring(rjson::to_string_view(it->name)), sstring(rjson::to_string_view(it->value)));
+        } else {
+            map.emplace(sstring(rjson::to_string_view(it->name)), sstring(rjson::print(it->value)));
+        }
+    }
+    return map;
+}
+
+// This function exists for historical reasons as well.
+rjson::value from_string_map(const std::map<sstring, sstring>& map);
+
+// The function operates on sstrings for historical reasons.
+sstring quote_json_string(const sstring& value);
 
 } // end namespace rjson
 

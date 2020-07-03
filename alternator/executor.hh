@@ -33,7 +33,7 @@
 
 #include "alternator/error.hh"
 #include "stats.hh"
-#include "rjson.hh"
+#include "utils/rjson.hh"
 
 namespace alternator {
 

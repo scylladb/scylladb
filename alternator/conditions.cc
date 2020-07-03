@@ -26,7 +26,7 @@
 #include "alternator/error.hh"
 #include "cql3/constants.hh"
 #include <unordered_map>
-#include "rjson.hh"
+#include "utils/rjson.hh"
 #include "serialization.hh"
 #include "base64.hh"
 #include <stdexcept>

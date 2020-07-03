@@ -26,7 +26,7 @@
 #include "types.hh"
 #include "schema_fwd.hh"
 #include "keys.hh"
-#include "rjson.hh"
+#include "utils/rjson.hh"
 #include "utils/big_decimal.hh"
 
 namespace alternator {

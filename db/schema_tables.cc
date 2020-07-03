@@ -53,7 +53,6 @@
 #include "utils/UUID_gen.hh"
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
-#include "json.hh"
 #include "log.hh"
 #include "frozen_schema.hh"
 #include "schema_registry.hh"
