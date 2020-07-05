@@ -25,6 +25,7 @@ import string
 import os
 import glob
 import shutil
+from pathlib import Path
 
 class DebianFilesTemplate(string.Template):
     delimiter = '%'
@@ -50,18 +51,11 @@ shutil.rmtree('build/debian/debian', ignore_errors=True)
 shutil.copytree('dist/debian/debian', 'build/debian/debian')
 
 if product != 'scylla':
-    for p in glob.glob('build/debian/debian/scylla-*'):
-        shutil.move(p, p.replace('scylla-', '{}-'.format(product)))
-
-shutil.copy('dist/common/sysconfig/scylla-server', 'build/debian/debian/{}-server.default'.format(product))
-if product != 'scylla':
-    shutil.copy('dist/common/systemd/scylla-server.service', 'build/debian/debian/{}-server.scylla-server.service'.format(product))
-else:
-    shutil.copy('dist/common/systemd/scylla-server.service', 'build/debian/debian/scylla-server.service')
-shutil.copy('dist/common/systemd/scylla-housekeeping-daily.service', 'build/debian/debian/{}-server.scylla-housekeeping-daily.service'.format(product))
-shutil.copy('dist/common/systemd/scylla-housekeeping-restart.service', 'build/debian/debian/{}-server.scylla-housekeeping-restart.service'.format(product))
-shutil.copy('dist/common/systemd/scylla-fstrim.service', 'build/debian/debian/{}-server.scylla-fstrim.service'.format(product))
-shutil.copy('dist/common/systemd/node-exporter.service', 'build/debian/debian/{}-server.node-exporter.service'.format(product))
+    for p in Path.glob('build/debian/debian/scylla-*'):
+        if p.endswith('scylla-server.service'):
+            p.rename(p.parent / '{}-server.'.format(product, p.name))
+        else:
+            p.rename(p.parent / p.name.replace('scylla-', f'{product}-'))
 
 s = DebianFilesTemplate(changelog_template)
 changelog_applied = s.substitute(product=product, version=version, release=release, revision='1', codename='stable')
