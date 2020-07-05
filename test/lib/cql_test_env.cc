@@ -112,7 +112,7 @@ static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features,
 
 class single_node_cql_env : public cql_test_env {
 public:
-    static const char* ks_name;
+    static constexpr std::string_view ks_name = "ks";
     static std::atomic<bool> active;
 private:
     sharded<gms::feature_service>& _feature_service;
@@ -629,7 +629,6 @@ public:
     }
 };
 
-const char* single_node_cql_env::ks_name = "ks";
 std::atomic<bool> single_node_cql_env::active = { false };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in) {

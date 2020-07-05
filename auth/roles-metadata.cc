@@ -52,7 +52,7 @@ std::string_view creation_query() {
 }
 
 std::string_view qualified_name() noexcept {
-    static const sstring instance = AUTH_KS + "." + sstring(name);
+    static const sstring instance = make_sstring(meta::AUTH_KS, ".", name);
     return instance;
 }
 

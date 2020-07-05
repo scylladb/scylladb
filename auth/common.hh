@@ -53,10 +53,10 @@ namespace auth {
 
 namespace meta {
 
-extern const sstring DEFAULT_SUPERUSER_NAME;
-extern const sstring AUTH_KS;
-extern const sstring USERS_CF;
-extern const sstring AUTH_PACKAGE_NAME;
+extern const std::string_view DEFAULT_SUPERUSER_NAME;
+extern const std::string_view AUTH_KS;
+extern const std::string_view USERS_CF;
+extern const std::string_view AUTH_PACKAGE_NAME;
 
 }
 

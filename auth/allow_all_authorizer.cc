@@ -27,7 +27,7 @@
 namespace auth {
 
 const sstring& allow_all_authorizer_name() {
-    static const sstring name = meta::AUTH_PACKAGE_NAME + "AllowAllAuthorizer";
+    static const sstring name = make_sstring(meta::AUTH_PACKAGE_NAME, "AllowAllAuthorizer");
     return name;
 }
 
