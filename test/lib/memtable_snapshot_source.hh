@@ -89,9 +89,10 @@ public:
         : _s(s)
         , _compactor(seastar::async([this] () noexcept {
             while (!_closed) {
+                // condition_variable::wait() also allocates memory
+                memory::disable_failure_guard dfg;
                 _should_compact.wait().get();
                 while (should_compact()) {
-                    memory::disable_failure_guard dfg;
                     compact();
                 }
             }
