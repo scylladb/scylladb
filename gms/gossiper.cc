@@ -1002,13 +1002,6 @@ void gossiper::replacement_quarantine(inet_address endpoint) {
     quarantine_endpoint(endpoint, now() + quarantine_delay());
 }
 
-// Runs inside seastar::async context
-void gossiper::replaced_endpoint(inet_address endpoint) {
-    remove_endpoint(endpoint);
-    evict_from_membership(endpoint);
-    replacement_quarantine(endpoint);
-}
-
 void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) {
     int generation = 0;
     int max_version = 0;
