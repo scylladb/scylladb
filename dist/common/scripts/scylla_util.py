@@ -359,10 +359,10 @@ def is_debian_variant():
 
 def is_redhat_variant():
     d = get_id_like() if get_id_like() else distro.id()
-    return ('rhel' in d) or ('fedora' in d) or ('ol') in d
+    return ('rhel' in d) or ('fedora' in d) or ('oracle') in d
 
 def is_amzn2():
-    return ('amzn' in distro.id()) and ('2' in distro.version())
+    return ('amazon' in distro.id()) and ('2' in distro.version())
 
 def is_gentoo_variant():
     return ('gentoo' in distro.id())
