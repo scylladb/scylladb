@@ -59,3 +59,11 @@ BOOST_AUTO_TEST_CASE(test_value_to_quoted_string) {
         BOOST_CHECK_EQUAL(rjson::quote_json_string(input[i]), expected[i]);
     }
 }
+
+BOOST_AUTO_TEST_CASE(test_parsing_map_from_null) {
+    std::map<sstring, sstring> empty_map;
+    auto map1 = rjson::parse_to_map<std::map<sstring, sstring>>("null");
+    auto map2 = rjson::parse_to_map<std::map<sstring, sstring>>("{}");
+    BOOST_REQUIRE(map1 == map2);
+    BOOST_REQUIRE(map1 == empty_map);
+}
