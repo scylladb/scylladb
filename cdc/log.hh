@@ -142,6 +142,5 @@ seastar::sstring log_data_column_deleted_elements_name(std::string_view column_n
 bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name);
 
 utils::UUID generate_timeuuid(api::timestamp_type t);
-api::timestamp_type find_timestamp(const mutation& m);
 
 } // namespace cdc

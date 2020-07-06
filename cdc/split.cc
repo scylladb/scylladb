@@ -265,6 +265,106 @@ set_of_changes extract_changes(const mutation& base_mutation) {
 
 namespace cdc {
 
+/* Find some timestamp inside the given mutation.
+ *
+ * If this mutation was created using a single insert/update/delete statement, then it will have a single,
+ * well-defined timestamp (even if this timestamp occurs multiple times, e.g. in a cell and row_marker).
+ *
+ * This function shouldn't be used for mutations that have multiple different timestamps: the function
+ * would only find one of them. When dealing with such mutations, the caller should first split the mutation
+ * into multiple ones, each with a single timestamp.
+ */
+// TODO: We need to
+// - in the code that calls `augument_mutation_call`, or inside `augument_mutation_call`,
+//   split each mutation to a set of mutations, each with a single timestamp.
+// - optionally: here, throw error if multiple timestamps are encountered (may degrade performance).
+// external linkage for testing
+api::timestamp_type find_timestamp(const mutation& m) {
+    auto& p = m.partition();
+    const auto& s = *m.schema();
+    api::timestamp_type t = api::missing_timestamp;
+
+    t = p.partition_tombstone().timestamp;
+    if (t != api::missing_timestamp) {
+        return t;
+    }
+
+    for (auto& rt: p.row_tombstones()) {
+        t = rt.tomb.timestamp;
+        if (t != api::missing_timestamp) {
+            return t;
+        }
+    }
+
+    auto walk_row = [&t, &s] (const row& r, column_kind ckind) {
+        r.for_each_cell_until([&t, &s, ckind] (column_id id, const atomic_cell_or_collection& cell) {
+            auto& cdef = s.column_at(ckind, id);
+
+            if (cdef.is_atomic()) {
+                t = cell.as_atomic_cell(cdef).timestamp();
+                if (t != api::missing_timestamp) {
+                    return stop_iteration::yes;
+                }
+                return stop_iteration::no;
+            }
+
+            return cell.as_collection_mutation().with_deserialized(*cdef.type,
+                    [&] (collection_mutation_view_description mview) {
+                t = mview.tomb.timestamp;
+                if (t != api::missing_timestamp) {
+                    // A collection tombstone with timestamp T can be created with:
+                    // UPDATE ks.t USING TIMESTAMP T + 1 SET X = null WHERE ...
+                    // where X is a non-atomic column.
+                    // This is, among others, the reason why we show it in the CDC log
+                    // with cdc$time using timestamp T + 1 instead of T.
+                    t += 1;
+                    return stop_iteration::yes;
+                }
+
+                for (auto& kv : mview.cells) {
+                    t = kv.second.timestamp();
+                    if (t != api::missing_timestamp) {
+                        return stop_iteration::yes;
+                    }
+                }
+
+                return stop_iteration::no;
+            });
+        });
+    };
+
+    walk_row(p.static_row().get(), column_kind::static_column);
+    if (t != api::missing_timestamp) {
+        return t;
+    }
+
+    for (const rows_entry& cr : p.clustered_rows()) {
+        const deletable_row& r = cr.row();
+
+        t = r.deleted_at().regular().timestamp;
+        if (t != api::missing_timestamp) {
+            return t;
+        }
+
+        t = r.deleted_at().shadowable().tomb().timestamp;
+        if (t != api::missing_timestamp) {
+            return t;
+        }
+
+        t = r.created_at();
+        if (t != api::missing_timestamp) {
+            return t;
+        }
+
+        walk_row(r.cells(), column_kind::regular_column);
+        if (t != api::missing_timestamp) {
+            return t;
+        }
+    }
+
+    throw std::runtime_error("cdc: could not find timestamp of mutation");
+}
+
 bool should_split(const mutation& base_mutation) {
     const auto& base_schema = *base_mutation.schema();
     auto& p = base_mutation.partition();
