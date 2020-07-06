@@ -2526,6 +2526,8 @@ class scylla_fiber(gdb.Command):
                 ("seastar", "future", "thread_wake_task"),
                 ("seastar", "internal", "do_until_state"),
                 ("seastar", "internal", "do_with_state"),
+                ("seastar", "internal", "do_for_each_state"),
+                ("seastar", "parallel_for_each_state"),
                 ("seastar", "internal", "repeat_until_value_state"),
                 ("seastar", "internal", "repeater"),
                 ("seastar", "internal", "when_all_state_component"),
@@ -2574,38 +2576,35 @@ class scylla_fiber(gdb.Command):
         """
         try:
             maybe_vptr = int(gdb.Value(ptr).reinterpret_cast(self._vptr_type).dereference())
-            self._maybe_log(" -> 0x{:016x}".format(maybe_vptr), verbose)
+            self._maybe_log("\t-> 0x{:016x}\n".format(maybe_vptr), verbose)
         except gdb.MemoryError:
-            self._maybe_log(" Not a pointer\n", verbose)
+            self._maybe_log("\tNot a pointer\n", verbose)
             return
 
         resolved_symbol = resolve(maybe_vptr, False)
         if resolved_symbol is None:
-            self._maybe_log(" Not a vtable ptr\n", verbose)
+            self._maybe_log("\t\tNot a vtable ptr\n", verbose)
             return
 
-        self._maybe_log(" => {}".format(resolved_symbol), verbose)
+        self._maybe_log("\t\t=> {}\n".format(resolved_symbol), verbose)
 
         if not self._name_is_on_whitelist(resolved_symbol):
-            self._maybe_log(" Symbol name doesn't match whitelisted symbols\n", verbose)
+            self._maybe_log("\t\t\tSymbol name doesn't match whitelisted symbols\n", verbose)
             return
 
         if using_seastar_allocator:
             ptr_meta = scylla_ptr.analyze(ptr)
-            if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live or ptr_meta.offset_in_object != 0:
-                self._maybe_log(" Not the start of an allocation block or not a live object\n", verbose)
+            if not ptr_meta.is_managed_by_seastar() or not ptr_meta.is_live:
+                self._maybe_log("\t\t\tNot a live object\n", verbose)
                 return
         else:
             ptr_meta = pointer_metadata(ptr, scanned_region_size)
 
-        self._maybe_log(" Task found\n", verbose)
+        self._maybe_log("\t\t\tTask found\n", verbose)
 
         return ptr_meta, maybe_vptr, resolved_symbol
 
     def _do_walk(self, ptr_meta, i, max_depth, scanned_region_size, using_seastar_allocator, verbose):
-        if max_depth > -1 and i >= max_depth:
-            return []
-
         ptr = ptr_meta.ptr
         region_start = ptr + self._vptr_type.sizeof # ignore our own vtable
         region_end = region_start + (ptr_meta.size - ptr_meta.size % self._vptr_type.sizeof)
@@ -2613,20 +2612,14 @@ class scylla_fiber(gdb.Command):
 
         for it in range(region_start, region_end, self._vptr_type.sizeof):
             maybe_tptr = int(gdb.Value(it).reinterpret_cast(self._vptr_type).dereference())
-            self._maybe_log("0x{:016x}+0x{:04x} -> 0x{:016x}".format(ptr, it - ptr, maybe_tptr), verbose)
+            self._maybe_log("0x{:016x}+0x{:04x} -> 0x{:016x}\n".format(ptr, it - ptr, maybe_tptr), verbose)
 
             res = self._probe_pointer(maybe_tptr, scanned_region_size, using_seastar_allocator, verbose)
 
-            if res is None:
-                continue
+            if not res is None:
+                return res
 
-            tptr_meta, vptr, name = res
-
-            fiber = self._do_walk(tptr_meta, i + 1, max_depth, scanned_region_size, using_seastar_allocator, verbose)
-            fiber.append((maybe_tptr, vptr, name))
-            return fiber
-
-        return []
+        return None
 
     def _walk(self, ptr, max_depth, scanned_region_size, force_fallback_mode, verbose):
         using_seastar_allocator = not force_fallback_mode and scylla_ptr.is_seastar_allocator_used()
@@ -2637,7 +2630,31 @@ class scylla_fiber(gdb.Command):
         if this_task is None:
             gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
 
-        return this_task, reversed(self._do_walk(this_task[0], 0, max_depth, scanned_region_size, using_seastar_allocator, verbose))
+        i = 0
+        tptr_meta = this_task[0]
+        fiber = []
+        known_tasks = set()
+        while True:
+            if max_depth > -1 and i >= max_depth:
+                break
+
+            res = self._do_walk(tptr_meta, i + 1, max_depth, scanned_region_size, using_seastar_allocator, verbose)
+            if res is None:
+                break
+
+            tptr_meta, vptr, name = res
+
+            if tptr_meta.ptr in known_tasks:
+                gdb.write("Stopping because loop is detected: task 0x{:016x} was seen before.\n".format(tptr_meta.ptr))
+                break
+
+            known_tasks.add(tptr_meta.ptr)
+
+            fiber.append((tptr_meta.ptr, vptr, name))
+
+            i += 1
+
+        return this_task, fiber
 
     def invoke(self, arg, for_tty):
         parser = argparse.ArgumentParser(description="scylla fiber")
