@@ -1441,7 +1441,7 @@ future<> view_builder::calculate_shard_build_step(
     // restart a view build at some common token (reshard), and which token
     // to restart at. So we need to wait until all shards have read the view
     // build statuses before they can all proceed to make the (same) decision.
-    // If we don't synchronoize here, a fast shard may make a decision, start
+    // If we don't synchronize here, a fast shard may make a decision, start
     // building and finish a build step - before the slowest shard even read
     // the view build information.
     container().invoke_on(0, [] (view_builder& builder) {
@@ -1484,8 +1484,7 @@ future<> view_builder::calculate_shard_build_step(
 
     auto f = seastar::when_all_succeed(bookkeeping_ops->begin(), bookkeeping_ops->end());
     return f.handle_exception([this, bookkeeping_ops = std::move(bookkeeping_ops)] (std::exception_ptr ep) {
-        log_level severity = _as.abort_requested() ? log_level::warn : log_level::error;
-        vlogger.log(severity, "Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
+        vlogger.warn("Failed to update materialized view bookkeeping while synchronizing view builds on all shards ({}), continuing anyway.", ep);
     });
 }
 
@@ -1820,8 +1819,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
         }
     }
     seastar::when_all_succeed(bookkeeping_ops.begin(), bookkeeping_ops.end()).handle_exception([this] (std::exception_ptr ep) {
-        log_level severity = _as.abort_requested() ? log_level::warn : log_level::error;
-        vlogger.log(severity, "Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
+        vlogger.warn("Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
     }).get();
 }
 
