@@ -4545,3 +4545,21 @@ SEASTAR_TEST_CASE(ck_slice_with_null_is_forbidden) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_impossible_where) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t(p int PRIMARY KEY, r int)");
+        cquery_nofail(e, "INSERT INTO  t(p,r) VALUES (0, 0)");
+        cquery_nofail(e, "INSERT INTO  t(p,r) VALUES (1, 10)");
+        cquery_nofail(e, "INSERT INTO  t(p,r) VALUES (2, 20)");
+        require_rows(e, "SELECT * FROM t WHERE r>10 AND r<10 ALLOW FILTERING", {});
+        require_rows(e, "SELECT * FROM t WHERE r>=10 AND r<=0 ALLOW FILTERING", {});
+
+        cquery_nofail(e, "CREATE TABLE t2(p int, c int, PRIMARY KEY(p, c)) WITH CLUSTERING ORDER BY (c DESC)");
+        cquery_nofail(e, "INSERT INTO  t2(p,c) VALUES (0, 0)");
+        cquery_nofail(e, "INSERT INTO  t2(p,c) VALUES (1, 10)");
+        cquery_nofail(e, "INSERT INTO  t2(p,c) VALUES (2, 20)");
+        require_rows(e, "SELECT * FROM t2 WHERE c>10 AND c<10 ALLOW FILTERING", {});
+        require_rows(e, "SELECT * FROM t2 WHERE c>=10 AND c<=0 ALLOW FILTERING", {});
+    });
+}
