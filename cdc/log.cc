@@ -753,7 +753,7 @@ private:
         return _result_mutations.back();
     }
 
-    clustering_key set_pk_columns() {
+    clustering_key allocate_new_log_row() {
         assert(_batch_no != -1);
         auto& m = current_mutation();
         const auto log_ck = clustering_key::from_exploded(
@@ -875,7 +875,7 @@ public:
         if (p.partition_tombstone()) {
             // Partition deletion
             _touched_parts.set<stats::part_type::PARTITION_DELETE>();
-            auto log_ck = set_pk_columns();
+            auto log_ck = allocate_new_log_row();
             set_operation(log_ck, operation::partition_delete);
         } else if (!p.row_tombstones().empty()) {
             // range deletion
@@ -898,7 +898,7 @@ public:
                     }
                 };
                 {
-                    auto log_ck = set_pk_columns();
+                    auto log_ck = allocate_new_log_row();
                     set_bound(log_ck, rt.start);
                     const auto start_operation = rt.start_kind == bound_kind::incl_start
                             ? operation::range_delete_start_inclusive
@@ -906,7 +906,7 @@ public:
                     set_operation(log_ck, start_operation);
                 }
                 {
-                    auto log_ck = set_pk_columns();
+                    auto log_ck = allocate_new_log_row();
                     set_bound(log_ck, rt.end);
                     const auto end_operation = rt.end_kind == bound_kind::incl_end
                             ? operation::range_delete_end_inclusive
@@ -1107,14 +1107,14 @@ public:
                 }
 
                 if (preimage) {
-                    pikey = set_pk_columns();
+                    pikey = allocate_new_log_row();
                     set_operation(*pikey, operation::pre_image);
                 }
 
-                auto log_ck = set_pk_columns();
+                auto log_ck = allocate_new_log_row();
 
                 if (postimage) {
-                     poikey = set_pk_columns();
+                     poikey = allocate_new_log_row();
                      set_operation(*poikey, operation::post_image);
                 }
 
@@ -1152,14 +1152,14 @@ public:
                     }
 
                     if (preimage) {
-                        pikey = set_pk_columns();
+                        pikey = allocate_new_log_row();
                         set_operation(*pikey, operation::pre_image);
                     }
 
-                    auto log_ck = set_pk_columns();
+                    auto log_ck = allocate_new_log_row();
 
                     if (postimage) {
-                        poikey = set_pk_columns();
+                        poikey = allocate_new_log_row();
                         set_operation(*poikey, operation::post_image);
                     }
 
