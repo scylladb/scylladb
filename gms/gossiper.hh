@@ -316,13 +316,6 @@ private:
      */
     void quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_start);
 
-public:
-    /**
-     * Quarantine endpoint specifically for replacement purposes.
-     * @param endpoint
-     */
-    void replacement_quarantine(inet_address endpoint);
-
 private:
     /**
      * The gossip digest is built based on randomization

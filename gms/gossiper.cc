@@ -996,12 +996,6 @@ void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quaran
     _just_removed_endpoints[endpoint] = quarantine_start;
 }
 
-void gossiper::replacement_quarantine(inet_address endpoint) {
-    // remember, quarantine_endpoint will effectively already add QUARANTINE_DELAY, so this is 2x
-    // logger.debug("");
-    quarantine_endpoint(endpoint, now() + quarantine_delay());
-}
-
 void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) {
     int generation = 0;
     int max_version = 0;
