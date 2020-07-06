@@ -32,7 +32,10 @@
 namespace db::view {
 
 class view_update_generator {
+public:
     static constexpr size_t registration_queue_size = 5;
+
+private:
     database& _db;
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
@@ -51,6 +54,8 @@ public:
     future<> start();
     future<> stop();
     future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<table> table);
+
+    ssize_t available_register_units() const { return _registration_sem.available_units(); }
 private:
     bool should_throttle() const;
 };
