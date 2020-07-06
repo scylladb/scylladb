@@ -1223,9 +1223,8 @@ void token_metadata_impl::add_bootstrap_tokens(std::unordered_set<token> tokens,
 
 void token_metadata_impl::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
     if (tokens.empty()) {
-        auto msg = format("tokens is empty in remove_bootstrap_tokens!");
-        tlogger.error("{}", msg);
-        throw std::runtime_error(msg);
+        tlogger.warn("tokens is empty in remove_bootstrap_tokens!");
+        return;
     }
     for (auto t : tokens) {
         _bootstrap_tokens.erase(t);
