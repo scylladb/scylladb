@@ -4477,10 +4477,10 @@ static void prepared_on_shard(cql_test_env& e, const sstring& query,
 
 SEASTAR_TEST_CASE(test_like_parameter_marker) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, col text)").get();
-        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (1, 'aaa')").get();
-        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (2, 'bbb')").get();
-        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (3, 'ccc')").get();
+        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, col text)");
+        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (1, 'aaa')");
+        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (2, 'bbb')");
+        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (3, 'ccc')");
 
         const sstring query("UPDATE t SET col = ? WHERE pk = ? IF col LIKE ?");
         prepared_on_shard(e, query, {T("err"), I(9), T("e%")}, {{B(false), {}}});
@@ -4494,11 +4494,11 @@ SEASTAR_TEST_CASE(test_like_parameter_marker) {
 
 SEASTAR_TEST_CASE(test_select_serial_consistency) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE t (a int, b int, primary key (a,b))").get();
-        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (1, 1)").get();
-        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (1, 2)").get();
-        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (2, 1)").get();
-        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (2, 2)").get();
+        cquery_nofail(e, "CREATE TABLE t (a int, b int, primary key (a,b))");
+        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (1, 1)");
+        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (1, 2)");
+        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (2, 1)");
+        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (2, 2)");
 
         auto check_fails = [&e] (const sstring& query, const source_location& loc = source_location::current()) {
             try {
@@ -4522,10 +4522,10 @@ SEASTAR_TEST_CASE(test_select_serial_consistency) {
 
 SEASTAR_TEST_CASE(test_range_deletions_for_specific_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE t (pk int, ck int, col text, PRIMARY KEY(pk, ck))").get();
-        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 1, 'aaa')").get();
-        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 2, 'bbb')").get();
-        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 3, 'ccc')").get();
+        cquery_nofail(e, "CREATE TABLE t (pk int, ck int, col text, PRIMARY KEY(pk, ck))");
+        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 1, 'aaa')");
+        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 2, 'bbb')");
+        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 3, 'ccc')");
 
         BOOST_REQUIRE_THROW(e.execute_cql("DELETE col FROM t WHERE pk = 0 AND ck > 1 AND ck <= 3").get(),
                 exceptions::invalid_request_exception);
