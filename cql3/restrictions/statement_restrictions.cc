@@ -697,6 +697,11 @@ static query::range<bytes_view> to_range(const term_slice& slice, const query_op
         extract_bound(statements::bound::END));
 }
 
+static bool contains_without_wraparound(
+        const query::range<bytes_view>& range, bytes_view value, const serialized_tri_compare& cmp) {
+    return !range.is_wrap_around(cmp) && range.contains(value, cmp);
+}
+
 bool single_column_restriction::slice::is_satisfied_by(const schema& schema,
         const partition_key& key,
         const clustering_key_prefix& ckey,
@@ -711,7 +716,8 @@ bool single_column_restriction::slice::is_satisfied_by(const schema& schema,
         return false;
     }
     return cell_value->with_linearized([&] (bytes_view cell_value_bv) {
-        return to_range(_slice, options).contains(cell_value_bv, _column_def.type->as_tri_comparator());
+        return contains_without_wraparound(to_range(_slice, options),
+                cell_value_bv, _column_def.type->as_tri_comparator());
     });
 }
 
@@ -719,7 +725,8 @@ bool single_column_restriction::slice::is_satisfied_by(bytes_view data, const qu
     if (_column_def.type->is_counter()) {
         fail(unimplemented::cause::COUNTERS);
     }
-    return to_range(_slice, options).contains(data, _column_def.type->underlying_type()->as_tri_comparator());
+    return contains_without_wraparound(to_range(_slice, options),
+            data, _column_def.type->underlying_type()->as_tri_comparator());
 }
 
 bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
