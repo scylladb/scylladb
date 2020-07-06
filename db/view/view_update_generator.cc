@@ -38,11 +38,16 @@ future<> view_update_generator::start() {
 
             // If we got here, we will process all tables we know about so far eventually so there
             // is no starvation
-            for (auto& t : _sstables_with_tables | boost::adaptors::map_keys) {
+            for (auto table_it = _sstables_with_tables.begin(); table_it != _sstables_with_tables.end(); table_it = _sstables_with_tables.erase(table_it)) {
+                auto& [t, t_sstables] = *table_it;
                 schema_ptr s = t->schema();
 
+                vug_logger.trace("Processing {}.{}: {} sstables", s->ks_name(), s->cf_name(), t_sstables.size());
+
                 // Copy what we have so far so we don't miss new updates
-                auto sstables = std::exchange(_sstables_with_tables[t], {});
+                auto sstables = std::exchange(t_sstables, {});
+
+                const auto num_sstables = sstables.size();
 
                 try {
                     // temporary: need an sstable set for the flat mutation reader, but the
@@ -81,7 +86,7 @@ future<> view_update_generator::start() {
                     // Move from staging will be retried upon restart.
                     vug_logger.warn("Moving {} from staging failed: {}:{}. Ignoring...", s->ks_name(), s->cf_name(), std::current_exception());
                 }
-                _registration_sem.signal();
+                _registration_sem.signal(num_sstables);
             }
             // For each table, move the processed staging sstables into the table's base dir.
             for (auto it = _sstables_to_move.begin(); it != _sstables_to_move.end(); ) {

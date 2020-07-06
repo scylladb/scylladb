@@ -421,23 +421,49 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
         auto& view_update_generator = e.local_view_update_generator();
         auto s = test_table_schema();
 
+        std::vector<shared_sstable> ssts;
+
+        lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
+
+        auto write_to_sstable = [&] (mutation m) {
+            auto sst = t->make_streaming_staging_sstable();
+            sstables::sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
+            auto& pc = service::get_local_streaming_write_priority();
+
+            sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
+            sst->open_data().get();
+            t->add_sstable_and_update_cache(sst).get();
+            return sst;
+        };
+
         auto key = partition_key::from_exploded(*s, {to_bytes(key1)});
         mutation m(s, key);
         auto col = s->get_column_definition("v");
         for (int i = 1024; i < 1280; ++i) {
             auto& row = m.partition().clustered_row(*s, clustering_key::from_exploded(*s, {to_bytes(fmt::format("c{}", i))}));
             row.cells().apply(*col, atomic_cell::make_live(*col->type, 2345, col->type->decompose(sstring(fmt::format("v{}", i)))));
+            // Scatter the data in a bunch of different sstables, so we
+            // can test the registration semaphore of the view update
+            // generator
+            if (!(i % 10)) {
+                ssts.push_back(write_to_sstable(std::exchange(m, mutation(s, key))));
+            }
         }
-        lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
+        ssts.push_back(write_to_sstable(std::move(m)));
 
-        auto sst = t->make_streaming_staging_sstable();
-        sstables::sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
-        auto& pc = service::get_local_streaming_write_priority();
+        BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
 
-        sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
-        sst->open_data().get();
-        t->add_sstable_and_update_cache(sst).get();
-        view_update_generator.register_staging_sstable(sst, t).get();
+        parallel_for_each(ssts.begin(), ssts.begin() + 10, [&] (shared_sstable& sst) {
+            return view_update_generator.register_staging_sstable(sst, t);
+        }).get();
+
+        BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
+
+        parallel_for_each(ssts.begin() + 10, ssts.end(), [&] (shared_sstable& sst) {
+            return view_update_generator.register_staging_sstable(sst, t);
+        }).get();
+
+        BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
 
         eventually([&, key1, key2] {
             auto msg = e.execute_cql(fmt::format("SELECT * FROM t WHERE p = '{}'", key1)).get0();
@@ -464,5 +490,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
 
             }
         });
+
+        BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
     });
 }
