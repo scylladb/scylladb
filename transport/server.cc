@@ -224,6 +224,9 @@ cql_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credential
     }
     return f.then([this, addr, keepalive](shared_ptr<seastar::tls::server_credentials> creds) {
         listen_options lo;
+        if (_config.cpu_sharding_algorithm_name == "biased-token-source-port"){
+            lo.lba = server_socket::load_balancing_algorithm::port;
+        }
         lo.reuse_address = true;
         server_socket ss;
         try {
@@ -1226,7 +1229,7 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
     if (_server._config.allow_shard_aware_drivers) {
         opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
-        opts.insert({"SCYLLA_SHARDING_ALGORITHM", dht::cpu_sharding_algorithm_name()});
+        opts.insert({"SCYLLA_SHARDING_ALGORITHM",  _server._config.cpu_sharding_algorithm_name});
         opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _server._config.sharding_ignore_msb)});
         opts.insert({"SCYLLA_PARTITIONER", _server._config.partitioner_name});
     }

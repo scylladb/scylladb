@@ -25,10 +25,6 @@
 
 namespace dht {
 
-inline sstring cpu_sharding_algorithm_name() {
-    return "biased-token-round-robin";
-}
-
 std::vector<uint64_t> init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits);
 
 unsigned shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t);

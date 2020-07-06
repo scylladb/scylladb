@@ -71,6 +71,7 @@ future<> controller::do_start_server() {
         cql_server_config.max_request_size = service::get_local_storage_service()._service_memory_total;
         cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(service::get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
         cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
+        cql_server_config.cpu_sharding_algorithm_name = cfg.cpu_sharding_algorithm_name();
         cql_server_config.sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits();
         cql_server_config.partitioner_name = cfg.partitioner();
         smp_service_group_config cql_server_smp_service_group_config;

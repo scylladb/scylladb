@@ -299,6 +299,7 @@ public:
     named_value<bool> enable_sstables_mc_format;
     named_value<bool> enable_dangerous_direct_import_of_cassandra_counters;
     named_value<bool> enable_shard_aware_drivers;
+    named_value<sstring> cpu_sharding_algorithm_name;
     named_value<bool> enable_ipv6_dns_lookup;
     named_value<bool> abort_on_internal_error;
     named_value<uint32_t> max_partition_key_restrictions_per_query;

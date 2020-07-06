@@ -108,6 +108,7 @@ struct cql_server_config {
     sstring partitioner_name;
     unsigned sharding_ignore_msb;
     bool allow_shard_aware_drivers = true;
+    sstring cpu_sharding_algorithm_name;
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
 };
 
