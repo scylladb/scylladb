@@ -406,6 +406,8 @@ class TabularConsoleOutput:
                 print(msg)
                 self.print_newline = False
         else:
+            if hasattr(test, 'time_end') and test.time_end > 0:
+                msg += " {:.2f}s".format(test.time_end - test.time_start)
             print(msg)
 
 
@@ -439,6 +441,8 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
             log.write("{} {}\n".format(test.path, " ".join(test.args)).encode(encoding="UTF-8"))
             log.write("=== TEST.PY TEST OUTPUT ===\n".format(test.id).encode(encoding="UTF-8"))
             log.flush();
+            test.time_start = time.time()
+            test.time_end = 0
             process = await asyncio.create_subprocess_exec(
                 test.path,
                 *test.args,
@@ -452,6 +456,7 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
                 preexec_fn=os.setsid,
             )
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
+            test.time_end = time.time()
             if process.returncode != 0:
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
                 return False
