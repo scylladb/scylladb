@@ -328,6 +328,10 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
             // HH doesn't utilize the flow that benefits from reusing segments.
             // Therefore let's simply disable it to avoid any possible confusion.
             cfg.reuse_segments = false;
+            // HH leaves segments on disk after commitlog shutdown, and later reads
+            // them when commitlog is re-created. This is expected to happen regularly
+            // during standard HH workload, so no need to print a warning about it.
+            cfg.warn_about_segments_left_on_disk_after_shutdown = false;
 
             return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
                 // add_store() is triggered every time hint files are forcefully flushed to I/O (every hints_flush_period).
