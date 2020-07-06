@@ -440,8 +440,8 @@ std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(
     return std::make_unique<partitioned_sstable_set>(std::move(schema));
 }
 
-std::unique_ptr<sstable_set_impl> make_partitioned_sstable_set(schema_ptr schema, bool use_level_metadata) {
-    return std::make_unique<partitioned_sstable_set>(std::move(schema), use_level_metadata);
+sstable_set make_partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata) {
+    return sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata), schema, std::move(all));
 }
 
 compaction_descriptor compaction_strategy_impl::get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) {

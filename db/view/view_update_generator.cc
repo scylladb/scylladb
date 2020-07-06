@@ -50,10 +50,10 @@ future<> view_update_generator::start() {
                 const auto num_sstables = sstables.size();
 
                 try {
-                    // temporary: need an sstable set for the flat mutation reader, but the
-                    // compaction_descriptor takes a vector. Soon this will become a compaction
-                    // so the transformation to the SSTable set will not be needed.
-                    auto ssts = make_lw_shared(t->get_compaction_strategy().make_sstable_set(s));
+                    // Exploit the fact that sstables in the staging directory
+                    // are usually non-overlapping and use a partitioned set for
+                    // the read.
+                    auto ssts = make_lw_shared(sstables::make_partitioned_sstable_set(s, make_lw_shared<sstable_list>(sstable_list{}), false));
                     for (auto& sst : sstables) {
                         ssts->insert(sst);
                     }
