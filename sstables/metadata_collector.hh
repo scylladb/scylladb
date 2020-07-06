@@ -161,7 +161,6 @@ private:
     min_max_tracker<int32_t> _local_deletion_time_tracker{std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max()};
     min_max_tracker<int32_t> _ttl_tracker{0, 0};
     double _compression_ratio = NO_COMPRESSION_RATIO;
-    std::set<int> _ancestors;
     utils::streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
     int _sstable_level = 0;
     std::optional<clustering_key_prefix> _min_clustering_key;
@@ -228,14 +227,6 @@ public:
         _repaired_at = repaired_at;
     }
 
-    void add_ancestor(int generation) {
-        _ancestors.insert(generation);
-    }
-
-    std::set<int> ancestors() const {
-        return _ancestors;
-    }
-
     void set_sstable_level(int sstable_level) {
         _sstable_level = sstable_level;
     }
@@ -261,9 +252,6 @@ public:
     }
 
     void construct_compaction(compaction_metadata& m) {
-        if (!_ancestors.empty()) {
-            m.ancestors.elements = utils::chunked_vector<uint32_t>(_ancestors.begin(), _ancestors.end());
-        }
         auto cardinality = _cardinality.get_bytes();
         m.cardinality.elements = utils::chunked_vector<uint8_t>(cardinality.get(), cardinality.get() + cardinality.size());
     }

@@ -605,7 +605,7 @@ future<> seal_summary(summary& s,
     std::optional<key>&& last_key,
     const index_sampling_state& state);
 
-void seal_statistics(sstable_version_types, statistics&, metadata_collector&,
+void seal_statistics(sstable_version_types, statistics&, metadata_collector&, const std::set<int>& _compaction_ancestors,
     const sstring partitioner, double bloom_filter_fp_chance, schema_ptr,
     const dht::decorated_key& first_key, const dht::decorated_key& last_key, const encoding_stats& enc_stats = {});
 

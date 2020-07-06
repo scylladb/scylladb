@@ -1408,7 +1408,7 @@ void writer::consume_end_of_stream() {
     _sst.set_first_and_last_keys();
 
     _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));
-    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(),
+    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(), _sst.compaction_ancestors(),
         _sst._schema->get_partitioner().name(), _schema.bloom_filter_fp_chance(),
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
     close_data_writer();
