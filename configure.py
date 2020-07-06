@@ -323,6 +323,7 @@ scylla_tests = set([
     'test/boost/idl_test',
     'test/boost/input_stream_test',
     'test/boost/json_cql_query_test',
+    'test/boost/json_test',
     'test/boost/keys_test',
     'test/boost/like_matcher_test',
     'test/boost/limiting_data_source_test',
@@ -391,7 +392,6 @@ scylla_tests = set([
     'test/manual/gossip',
     'test/manual/hint_test',
     'test/manual/imr_test',
-    'test/manual/json_test',
     'test/manual/message',
     'test/manual/partition_data_test',
     'test/manual/row_locker_test',
@@ -943,6 +943,7 @@ pure_boost_tests = set([
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
     'test/boost/idl_test',
+    'test/boost/json_test',
     'test/boost/keys_test',
     'test/boost/like_matcher_test',
     'test/boost/linearizing_input_stream_test',
@@ -956,7 +957,6 @@ pure_boost_tests = set([
     'test/boost/small_vector_test',
     'test/boost/top_k_test',
     'test/boost/vint_serialization_test',
-    'test/manual/json_test',
     'test/manual/streaming_histogram_test',
 ])
 
