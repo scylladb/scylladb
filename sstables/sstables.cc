@@ -2362,6 +2362,9 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     if (cfg.replay_position) {
         get_metadata_collector().set_replay_position(cfg.replay_position.value());
     }
+    if (cfg.sstable_level) {
+        get_metadata_collector().set_sstable_level(cfg.sstable_level.value());
+    }
 }
 
 void sstable_writer::consume_new_partition(const dht::decorated_key& dk) {

@@ -487,8 +487,6 @@ protected:
     void setup_new_sstable(shared_sstable& sst) {
         _info->new_sstables.push_back(sst);
         _new_unused_sstables.push_back(sst);
-        sst->make_metadata_collector();
-        sst->get_metadata_collector().sstable_level(_sstable_level);
         for (auto ancestor : _ancestors) {
             sst->add_ancestor(ancestor);
         }
@@ -506,6 +504,7 @@ protected:
         cfg.monitor = &default_write_monitor();
         cfg.run_identifier = _run_identifier;
         cfg.replay_position = _rp;
+        cfg.sstable_level = _sstable_level;
         return cfg;
     }
 

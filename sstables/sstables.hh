@@ -114,6 +114,7 @@ struct sstable_writer_config {
     bool leave_unsealed = false;
     bool validate_keys;
     std::optional<db::replay_position> replay_position;
+    std::optional<int> sstable_level;
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones;
     bool correctly_serialize_static_compact_in_mc;

@@ -236,7 +236,7 @@ public:
         return _ancestors;
     }
 
-    void sstable_level(int sstable_level) {
+    void set_sstable_level(int sstable_level) {
         _sstable_level = sstable_level;
     }
 
