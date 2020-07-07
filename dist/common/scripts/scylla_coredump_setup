@@ -105,20 +105,47 @@ WantedBy=multi-user.target
 
         print(coreinfo)
         print()
-        res = re.findall(r'Storage:.*\(inaccessible\)$', coreinfo, flags=re.MULTILINE)
-        if (len(res) > 0):
-            print('Does not able to generate coredump file, failed to configure systemd-coredump.')
-            sys.exit(1)
 
+        # "coredumpctl info" behavior had been changed since systemd-v232,
+        # we need to support both version.
+        #
+        # Before systemd-v232, it was simple.
+        # It print 'Coredump' field only when the coredump exists on filesystem.
+        # Otherwise print nothing.
+        #
+        # After the change made on systemd-v232, it become more complex.
+        # It always print 'Storage' field even the coredump does not exists.
+        # Not just available/unavailable, it describe more:
+        #  - Storage: none
+        #  - Storage: journal
+        #  - Storage: /path/to/file (inacessible)
+        #  - Storage: /path/to/file
+        #
+        # reference: https://github.com/systemd/systemd/commit/47f50642075a7a215c9f7b600599cbfee81a2913
+
+        corefail = False
         res = re.findall(r'Storage: (.*)$', coreinfo, flags=re.MULTILINE)
-        if not res:
-            print('Does not able to detect coredump file from coredumpctl, failed to configure systemd-coredump.')
-            sys.exit(1)
+        # v232 or later
+        if res:
+            corepath = res[0]
+            if corepath == 'none' or corepath == 'journal' or corepath.endswith('(inaccessible)'):
+                corefail = True
+        # before v232
+        else:
+            res = re.findall(r'Coredump: (.*)$', coreinfo, flags=re.MULTILINE)
+            if res:
+                corepath = res[0]
+            else:
+                corefail = True
 
-        try:
-            os.remove(res[0])
-        except FileNotFoundError:
-            print('Missing coredump file, failed to configure systemd-coredump.')
+        if not corefail:
+            try:
+                os.remove(corepath)
+            except FileNotFoundError:
+                corefail = True
+
+        if corefail:
+            print('Does not able to detect coredump file, failed to configure systemd-coredump.')
             sys.exit(1)
 
         print('\nsystemd-coredump is working finely.')
