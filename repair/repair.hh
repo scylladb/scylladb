@@ -46,6 +46,14 @@ public:
     repair_stopped_exception() : repair_exception("Repair stopped") { }
 };
 
+struct repair_uniq_id {
+    int id;
+    utils::UUID uuid;
+    friend std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x) {
+        return os << format("[id={}, uuid={}]", x.id, x.uuid);
+    }
+};
+
 // The tokens are the tokens assigned to the bootstrap node.
 future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> bootstrap_tokens);
 future<> decommission_with_repair(seastar::sharded<database>& db, locator::token_metadata tm);
@@ -178,7 +186,7 @@ public:
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;
     std::vector<utils::UUID> table_ids;
-    int id;
+    repair_uniq_id id;
     shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
@@ -212,7 +220,7 @@ public:
             const sstring& keyspace_,
             const dht::token_range_vector& ranges_,
             std::vector<utils::UUID> table_ids_,
-            int id_,
+            repair_uniq_id id_,
             const std::vector<sstring>& data_centers_,
             const std::vector<sstring>& hosts_,
             streaming::stream_reason reason_);
@@ -265,13 +273,13 @@ private:
     // by one shared.
     std::vector<named_semaphore> _range_parallelism_semaphores;
     static constexpr size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
-    void start(int id);
-    void done(int id, bool succeeded);
+    void start(repair_uniq_id id);
+    void done(repair_uniq_id id, bool succeeded);
 public:
     explicit tracker(size_t nr_shards, size_t max_repair_memory);
     ~tracker();
     repair_status get(int id);
-    int next_repair_command();
+    repair_uniq_id next_repair_command();
     future<> shutdown();
     void check_in_shutdown();
     void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
@@ -282,7 +290,7 @@ public:
     void abort_all_repairs();
     named_semaphore& range_parallelism_semaphore();
     static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
-    future<> run(int id, std::function<void ()> func);
+    future<> run(repair_uniq_id id, std::function<void ()> func);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
