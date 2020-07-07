@@ -501,6 +501,14 @@ protected:
         _info->end_size += writer->sst->bytes_on_disk();
     }
 
+    sstable_writer_config make_sstable_writer_config() {
+        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
+        cfg.max_sstable_size = _max_sstable_size;
+        cfg.monitor = &default_write_monitor();
+        cfg.run_identifier = _run_identifier;
+        return cfg;
+    }
+
     api::timestamp_type maximum_timestamp() const {
         auto m = std::max_element(_sstables.begin(), _sstables.end(), [] (const shared_sstable& sst1, const shared_sstable& sst2) {
             return sst1->get_stats_metadata().max_timestamp < sst2->get_stats_metadata().max_timestamp;
@@ -837,10 +845,7 @@ public:
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
 
-        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
-        cfg.max_sstable_size = _max_sstable_size;
-        cfg.monitor = &default_write_monitor();
-        cfg.run_identifier = _run_identifier;
+        sstable_writer_config cfg = make_sstable_writer_config();
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
     }
 
@@ -904,10 +909,8 @@ public:
         _unused_sstables.push_back(sst);
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _cf, maximum_timestamp(), _sstable_level);
-        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
-        cfg.max_sstable_size = _max_sstable_size;
+        sstable_writer_config cfg = make_sstable_writer_config();
         cfg.monitor = monitor.get();
-        cfg.run_identifier = _run_identifier;
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
     }
 
@@ -1374,9 +1377,7 @@ public:
         auto sst = _sstable_creator(shard);
         setup_new_sstable(sst);
 
-        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
-        cfg.max_sstable_size = _max_sstable_size;
-        cfg.monitor = &default_write_monitor();
+        auto cfg = make_sstable_writer_config();
         // sstables generated for a given shard will share the same run identifier.
         cfg.run_identifier = _run_identifiers.at(shard);
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard), sst};
