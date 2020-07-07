@@ -843,8 +843,6 @@ public:
         return _stats;
     }
 
-    void update_stats_on_end_of_stream();
-
     bool has_correct_min_max_column_names() const noexcept {
         return _version >= sstable_version_types::md;
     }
@@ -858,6 +856,7 @@ public:
     friend class test;
 
     friend class components_writer;
+    friend class sstable_writer;
     friend class sstable_writer_k_l;
     friend class mc::writer;
     friend class index_reader;

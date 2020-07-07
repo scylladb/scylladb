@@ -2200,13 +2200,6 @@ sstable::make_metadata_collector() {
     }
 }
 
-void sstable::update_stats_on_end_of_stream()
-{
-    if (_c_stats.capped_local_deletion_time) {
-        _stats.on_capped_local_deletion_time();
-    }
-}
-
 bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {
     if (_version < sstables::sstable_version_types::md) {
         return true;
@@ -2400,7 +2393,9 @@ stop_iteration sstable_writer::consume_end_of_partition() {
 }
 
 void sstable_writer::consume_end_of_stream() {
-    _impl->_sst.update_stats_on_end_of_stream();
+    if (_impl->_sst._c_stats.capped_local_deletion_time) {
+        _impl->_sst.get_stats().on_capped_local_deletion_time();
+    }
     return _impl->consume_end_of_stream();
 }
 
