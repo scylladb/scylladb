@@ -921,6 +921,8 @@ public:
     stop_iteration consume(range_tombstone&& rt);
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
+
+    metadata_collector& get_metadata_collector();
 };
 
 future<> init_metrics();

@@ -2359,6 +2359,9 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     } else {
         _impl = std::make_unique<sstable_writer_k_l>(sst, s, estimated_partitions, cfg, pc, shard);
     }
+    if (cfg.replay_position) {
+        get_metadata_collector().set_replay_position(cfg.replay_position.value());
+    }
 }
 
 void sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
@@ -2397,6 +2400,10 @@ void sstable_writer::consume_end_of_stream() {
         _impl->_sst.get_stats().on_capped_local_deletion_time();
     }
     return _impl->consume_end_of_stream();
+}
+
+metadata_collector& sstable_writer::get_metadata_collector() {
+    return _impl->_sst.get_metadata_collector();
 }
 
 sstable_writer::sstable_writer(sstable_writer&& o) = default;
@@ -2456,9 +2463,6 @@ future<> sstable::write_components(
     assert_large_data_handler_is_running();
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
-        if (cfg.replay_position) {
-            get_metadata_collector().set_replay_position(cfg.replay_position.value());
-        }
         auto validator = mutation_fragment_stream_validating_filter(format("sstable writer {}", get_filename()), *schema,
                 cfg.validate_keys);
         mr.consume_in_thread(std::move(wr), std::move(validator), db::no_timeout);
