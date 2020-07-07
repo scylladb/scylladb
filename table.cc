@@ -327,6 +327,32 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
             fwd_mr);
 }
 
+flat_mutation_reader make_restricted_range_sstable_reader(schema_ptr s,
+        reader_permit permit,
+        lw_shared_ptr<sstables::sstable_set> sstables,
+        const dht::partition_range& pr,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        sstables::read_monitor_generator& monitor_generator)
+{
+    auto ms = mutation_source([sstables=std::move(sstables), &monitor_generator] (
+            schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr) {
+        return make_range_sstable_reader(std::move(s), std::move(permit), std::move(sstables), pr, slice, pc,
+                std::move(trace_state), fwd, fwd_mr, monitor_generator);
+    });
+    return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+}
+
 flat_mutation_reader
 table::make_sstable_reader(schema_ptr s,
                                    reader_permit permit,

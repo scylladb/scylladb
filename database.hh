@@ -1024,7 +1024,26 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         mutation_reader::forwarding fwd_mr,
         sstables::read_monitor_generator& monitor_generator = sstables::default_read_monitor_generator());
 
+/// Read a range from the passed-in sstables.
+///
+/// The reader is unrestricted, but will account its resource usage on the
+/// semaphore belonging to the passed-in permit.
 flat_mutation_reader make_range_sstable_reader(schema_ptr s,
+        reader_permit permit,
+        lw_shared_ptr<sstables::sstable_set> sstables,
+        const dht::partition_range& pr,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        sstables::read_monitor_generator& monitor_generator = sstables::default_read_monitor_generator());
+
+/// Read a range from the passed-in sstables.
+///
+/// The reader is restricted, that is it will wait for admission on the semaphore
+/// belonging to the passed-in permit, before starting to read.
+flat_mutation_reader make_restricted_range_sstable_reader(schema_ptr s,
         reader_permit permit,
         lw_shared_ptr<sstables::sstable_set> sstables,
         const dht::partition_range& pr,
