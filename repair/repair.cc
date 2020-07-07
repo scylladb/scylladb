@@ -352,7 +352,7 @@ future<> tracker::run(int id, std::function<void ()> func) {
             rlogger.info("repair id {} completed successfully", id);
             done(id, true);
         }).handle_exception([this, id] (std::exception_ptr ep) {
-            rlogger.info("repair id {} failed: {}", id, ep);
+            rlogger.warn("repair id {} failed: {}", id, ep);
             done(id, false);
             return make_exception_future(std::move(ep));
         });
@@ -758,7 +758,7 @@ void repair_info::check_failed_ranges() {
     rlogger.info("repair id {} on shard {} stats: ranges_nr={}, sub_ranges_nr={}, {}",
         id, shard, ranges.size(), _sub_ranges_nr, _stats.get_stats());
     if (nr_failed_ranges) {
-        rlogger.info("repair id {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
+        rlogger.warn("repair id {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
         throw std::runtime_error(format("repair {:d} on shard {:d} failed to do checksum for {:d} sub ranges", id, shard, nr_failed_ranges));
     } else {
         if (dropped_tables.size()) {
@@ -1405,7 +1405,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
         repair_tracker().remove_repair_info(ri->id);
         return make_ready_future<>();
     }).handle_exception([ri] (std::exception_ptr eptr) {
-        rlogger.info("repair id {} on shard {} failed: {}", ri->id, this_shard_id(), eptr);
+        rlogger.warn("repair id {} on shard {} failed: {}", ri->id, this_shard_id(), eptr);
         repair_tracker().remove_repair_info(ri->id);
         return make_exception_future<>(std::move(eptr));
     });
@@ -1525,7 +1525,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
             return make_ready_future<>();
         }).get();
     }).handle_exception([id] (std::exception_ptr ep) {
-        rlogger.info("repair_tracker run for repair id {} failed: {}", id, ep);
+        rlogger.warn("repair_tracker run for repair id {} failed: {}", id, ep);
     });
 
     return id;
@@ -1617,7 +1617,7 @@ future<> sync_data_using_repair(seastar::sharded<database>& db,
                 rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id, keyspace, ep);
                 return make_ready_future<>();
             }
-            rlogger.info("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
+            rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
             return make_exception_future<>(ep);
         });
     });
