@@ -759,7 +759,7 @@ void repair_info::check_failed_ranges() {
         id, shard, ranges.size(), _sub_ranges_nr, _stats.get_stats());
     if (nr_failed_ranges) {
         rlogger.warn("repair id {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
-        throw std::runtime_error(format("repair {:d} on shard {:d} failed to do checksum for {:d} sub ranges", id, shard, nr_failed_ranges));
+        throw std::runtime_error(format("repair id {:d} on shard {:d} failed to repair {:d} sub ranges", id, shard, nr_failed_ranges));
     } else {
         if (dropped_tables.size()) {
             rlogger.warn("repair id {} on shard {} completed successfully, keyspace={}, ignoring dropped tables={}", id, shard, keyspace, dropped_tables);
