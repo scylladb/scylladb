@@ -2078,7 +2078,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             // Start a new fiber.
             (void)repair_get_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                     [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
-                rlogger.info("Failed to process get_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
+                rlogger.warn("Failed to process get_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
             });
             return make_ready_future<rpc::sink<repair_row_on_wire_with_cmd>>(sink);
         });
@@ -2089,7 +2089,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             // Start a new fiber.
             (void)repair_put_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                     [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
-                rlogger.info("Failed to process put_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
+                rlogger.warn("Failed to process put_row_diff_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
             });
             return make_ready_future<rpc::sink<repair_stream_cmd>>(sink);
         });
@@ -2100,7 +2100,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             // Start a new fiber.
             (void)repair_get_full_row_hashes_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                     [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
-                rlogger.info("Failed to process get_full_row_hashes_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
+                rlogger.warn("Failed to process get_full_row_hashes_with_rpc_stream_handler from={}, repair_meta_id={}: {}", from, repair_meta_id, ep);
             });
             return make_ready_future<rpc::sink<repair_hash_with_cmd>>(sink);
         });
