@@ -1913,17 +1913,38 @@ future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_d
     });
 }
 
-stop_iteration view_updating_consumer::consume_end_of_partition() {
-    if (_as->abort_requested()) {
-        return stop_iteration::yes;
+const size_t view_updating_consumer::buffer_size_soft_limit{1 * 1024 * 1024};
+const size_t view_updating_consumer::buffer_size_hard_limit{2 * 1024 * 1024};
+
+void view_updating_consumer::do_flush_buffer() {
+    _staging_reader_handle.pause();
+
+    if (_buffer.front().partition().empty()) {
+        // If we flushed mid-partition we can have an empty mutation if we
+        // flushed right before getting the end-of-partition fragment.
+        _buffer.pop_front();
     }
-    try {
-        auto lock_holder = _table->stream_view_replica_updates(_schema, std::move(*_m), db::no_timeout, _excluded_sstables).get();
-    } catch (...) {
-        vlogger.warn("Failed to push replica updates for table {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
+
+    while (!_buffer.empty()) {
+        try {
+            auto lock_holder = _table->stream_view_replica_updates(_schema, std::move(_buffer.front()), db::no_timeout, _excluded_sstables).get();
+        } catch (...) {
+            vlogger.warn("Failed to push replica updates for table {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
+        }
+        _buffer.pop_front();
     }
-    _m.reset();
-    return stop_iteration::no;
+
+    _buffer_size = 0;
+    _m = nullptr;
+}
+
+void view_updating_consumer::maybe_flush_buffer_mid_partition() {
+    if (_buffer_size >= buffer_size_hard_limit) {
+        auto m = mutation(_schema, _m->decorated_key(), mutation_partition(_schema));
+        do_flush_buffer();
+        _buffer.emplace_back(std::move(m));
+        _m = &_buffer.back();
+    }
 }
 
 } // namespace view

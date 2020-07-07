@@ -27,6 +27,8 @@
 #include "sstables/shared_sstable.hh"
 #include "database.hh"
 
+class evictable_reader_handle;
+
 namespace db::view {
 
 /*
@@ -34,22 +36,44 @@ namespace db::view {
  * It is expected to be run in seastar::async threaded context through consume_in_thread()
  */
 class view_updating_consumer {
+public:
+    // We prefer flushing on partition boundaries, so at the end of a partition,
+    // we flush on reaching the soft limit. Otherwise we continue accumulating
+    // data. We flush mid-partition if we reach the hard limit.
+    static const size_t buffer_size_soft_limit;
+    static const size_t buffer_size_hard_limit;
+
+private:
     schema_ptr _schema;
     lw_shared_ptr<table> _table;
     std::vector<sstables::shared_sstable> _excluded_sstables;
     const seastar::abort_source* _as;
-    std::optional<mutation> _m;
+    evictable_reader_handle& _staging_reader_handle;
+    circular_buffer<mutation> _buffer;
+    mutation* _m{nullptr};
+    size_t _buffer_size{0};
+
+private:
+    void do_flush_buffer();
+    void maybe_flush_buffer_mid_partition();
+
 public:
-    view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as)
+    view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
+            evictable_reader_handle& staging_reader_handle)
             : _schema(std::move(schema))
             , _table(table.shared_from_this())
             , _excluded_sstables(std::move(excluded_sstables))
             , _as(&as)
-            , _m()
+            , _staging_reader_handle(staging_reader_handle)
     { }
 
+    view_updating_consumer(view_updating_consumer&&) = default;
+
+    view_updating_consumer& operator=(view_updating_consumer&&) = delete;
+
     void consume_new_partition(const dht::decorated_key& dk) {
-        _m = mutation(_schema, dk, mutation_partition(_schema));
+        _buffer.emplace_back(_schema, dk, mutation_partition(_schema));
+        _m = &_buffer.back();
     }
 
     void consume(tombstone t) {
@@ -60,7 +84,9 @@ public:
         if (_as->abort_requested()) {
             return stop_iteration::yes;
         }
+        _buffer_size += sr.memory_usage(*_schema);
         _m->partition().apply(*_schema, std::move(sr));
+        maybe_flush_buffer_mid_partition();
         return stop_iteration::no;
     }
 
@@ -68,7 +94,9 @@ public:
         if (_as->abort_requested()) {
             return stop_iteration::yes;
         }
+        _buffer_size += cr.memory_usage(*_schema);
         _m->partition().apply(*_schema, std::move(cr));
+        maybe_flush_buffer_mid_partition();
         return stop_iteration::no;
     }
 
@@ -76,14 +104,27 @@ public:
         if (_as->abort_requested()) {
             return stop_iteration::yes;
         }
+        _buffer_size += rt.memory_usage(*_schema);
         _m->partition().apply(*_schema, std::move(rt));
+        maybe_flush_buffer_mid_partition();
         return stop_iteration::no;
     }
 
     // Expected to be run in seastar::async threaded context (consume_in_thread())
-    stop_iteration consume_end_of_partition();
+    stop_iteration consume_end_of_partition() {
+        if (_as->abort_requested()) {
+            return stop_iteration::yes;
+        }
+        if (_buffer_size >= buffer_size_soft_limit) {
+            do_flush_buffer();
+        }
+        return stop_iteration::no;
+    }
 
     stop_iteration consume_end_of_stream() {
+        if (!_buffer.empty()) {
+            do_flush_buffer();
+        }
         return stop_iteration(_as->abort_requested());
     }
 };
