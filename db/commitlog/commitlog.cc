@@ -520,7 +520,7 @@ public:
             _segment_manager->totals.total_size_on_disk -= size_on_disk();
             _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size_bytes());
             _segment_manager->add_file_to_delete(_file_name, _desc);
-        } else {
+        } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
         }
     }
