@@ -761,7 +761,6 @@ public:
         _cfg.monitor->on_write_started(_data_writer->offset_tracker());
         _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::m_format);
         _pi_write_m.desired_block_size = cfg.promoted_index_block_size;
-        _sst._correctly_serialize_non_compound_range_tombstones = _cfg.correctly_serialize_non_compound_range_tombstones;
         _index_sampling_state.summary_byte_cost = _cfg.summary_byte_cost;
         prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
     }

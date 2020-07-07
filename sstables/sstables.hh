@@ -490,10 +490,6 @@ private:
     lw_shared_ptr<file_input_stream_history> _partition_range_history = make_lw_shared<file_input_stream_history>();
     lw_shared_ptr<file_input_stream_history> _index_history = make_lw_shared<file_input_stream_history>();
 
-    //FIXME: Set by sstable_writer to influence sstable writing behavior.
-    //       Remove when doing #3012
-    bool _correctly_serialize_non_compound_range_tombstones;
-
     schema_ptr _schema;
     sstring _dir;
     std::optional<sstring> _temp_dir; // Valid while the sstable is being created, until sealed
