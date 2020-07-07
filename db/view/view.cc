@@ -58,6 +58,7 @@
 #include "cql3/util.hh"
 #include "db/view/view.hh"
 #include "db/view/view_builder.hh"
+#include "db/view/view_updating_consumer.hh"
 #include "db/system_keyspace_view_types.hh"
 #include "db/system_keyspace.hh"
 #include "frozen_mutation.hh"
@@ -1910,6 +1911,19 @@ future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_d
                 false,
                 std::logical_or<bool>());
     });
+}
+
+stop_iteration view_updating_consumer::consume_end_of_partition() {
+    if (_as->abort_requested()) {
+        return stop_iteration::yes;
+    }
+    try {
+        auto lock_holder = _table->stream_view_replica_updates(_schema, std::move(*_m), db::no_timeout, _excluded_sstables).get();
+    } catch (...) {
+        vlogger.warn("Failed to push replica updates for table {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
+    }
+    _m.reset();
+    return stop_iteration::no;
 }
 
 } // namespace view
