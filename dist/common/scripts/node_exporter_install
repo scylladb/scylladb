@@ -42,6 +42,11 @@ if __name__ == '__main__':
     if node_exporter_p.exists() or (bindir_p() / 'prometheus-node_exporter').exists():
         if force:
             print('node_exporter already installed, reinstalling')
+            try:
+                node_exporter = systemd_unit('node-exporter.service')
+                node_exporter.stop()
+            except:
+                pass
         else:
             print('node_exporter already installed, you can use `--force` to force reinstallation')
             sys.exit(1)
