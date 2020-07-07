@@ -56,7 +56,7 @@ future<> sstables_format_selector::maybe_select_format(sstables::sstable_version
 
 future<> sstables_format_selector::do_maybe_select_format(sstables::sstable_version_types new_format) {
     return with_semaphore(_sem, 1, [this, new_format] {
-        if (!sstables::is_later(new_format, _selected_format)) {
+        if (new_format <= _selected_format) {
             return make_ready_future<bool>(false);
         }
         return db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format)).then([this, new_format] {
@@ -98,7 +98,7 @@ future<> sstables_format_selector::select_format(sstables::sstable_version_types
     _selected_format = format;
     return _db.invoke_on_all([this] (database& db) {
         db.set_format(_selected_format);
-        if (sstables::is_later(_selected_format, sstables::sstable_version_types::la)) {
+        if (_selected_format >= sstables::sstable_version_types::mc) {
             _features.local().support(gms::features::UNBOUNDED_RANGE_TOMBSTONES);
         }
     });

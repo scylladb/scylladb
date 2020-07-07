@@ -305,7 +305,7 @@ future<sstables::sstable::version_types>
 highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstable_version_types system_version) {
     using version = sstables::sstable_version_types;
     return dir.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_version_seen), system_version, [] (version a, version b) {
-        return sstables::is_later(a, b) ? a : b;
+        return std::max(a, b);
     });
 }
 

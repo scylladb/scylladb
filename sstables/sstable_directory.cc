@@ -106,7 +106,7 @@ void sstable_directory::validate(sstables::shared_sstable sst) const {
 
 future<>
 sstable_directory::process_descriptor(sstables::entry_descriptor desc, const ::io_priority_class& iop) {
-    if (sstables::is_later(desc.version, _max_version_seen)) {
+    if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
 

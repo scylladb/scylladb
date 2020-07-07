@@ -62,11 +62,11 @@ inline bool is_latest_supported(sstable_version_types format) {
     return format == sstable_version_types::mc;
 }
 
-inline bool is_later(sstable_version_types a, sstable_version_types b) {
+inline int operator<=>(sstable_version_types a, sstable_version_types b) {
     auto to_int = [] (sstable_version_types x) {
         return static_cast<std::underlying_type_t<sstable_version_types>>(x);
     };
-    return to_int(a) > to_int(b);
+    return to_int(a) - to_int(b);
 }
 
 }
