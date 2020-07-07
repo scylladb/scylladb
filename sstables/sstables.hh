@@ -413,17 +413,6 @@ public:
 
     bool requires_view_building() const;
 
-    bool has_metadata_collector() const {
-        return _collector.has_value();
-    }
-
-    metadata_collector& get_metadata_collector() {
-        if (!_collector.has_value()) {
-            on_internal_error(sstlog, "No metadata collector");
-        }
-        return *_collector;
-    }
-
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
     future<> create_links(const sstring& dir, int64_t generation) const;
@@ -480,10 +469,6 @@ private:
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     column_translation _column_translation;
     bool _open = false;
-    // NOTE: _collector and _c_stats are used to generation of statistics file
-    // when writing a new sstable.
-    std::optional<metadata_collector> _collector;
-    column_stats _c_stats;
     // _compaction_ancestors track which sstable generations were used to generate this sstable.
     // it is then used to generate the ancestors metadata in the statistics or scylla components.
     std::set<int> _compaction_ancestors;
@@ -508,32 +493,6 @@ private:
     //FIXME: Set by sstable_writer to influence sstable writing behavior.
     //       Remove when doing #3012
     bool _correctly_serialize_non_compound_range_tombstones;
-
-    // _pi_write is used temporarily for building the promoted
-    // index (column sample) of one partition when writing a new sstable.
-    struct {
-        // Unfortunately we cannot output the promoted index directly to the
-        // index file because it needs to be prepended by its size.
-        bytes_ostream data;
-        uint32_t numblocks;
-        deletion_time deltime;
-        uint64_t block_start_offset;
-        uint64_t block_next_start_offset;
-        bytes block_first_colname;
-        bytes block_last_colname;
-        std::optional<range_tombstone_accumulator> tombstone_accumulator;
-        const schema* schemap;
-        size_t desired_block_size;
-    } _pi_write;
-
-    void maybe_flush_pi_block(file_writer& out,
-            const composite& clustering_key,
-            const std::vector<bytes_view>& column_names,
-            composite::eoc marker = composite::eoc::none);
-
-    void maybe_flush_pi_block(file_writer& out,
-            const composite& clustering_key,
-            bytes colname);
 
     schema_ptr _schema;
     sstring _dir;
@@ -663,24 +622,6 @@ private:
     // FIXME: pending on Bloom filter implementation
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 
-    // NOTE: functions used to generate sstable components.
-    void maybe_write_row_marker(file_writer& out, const schema& schema, const row_marker& marker, const composite& clustering_key);
-    void write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row);
-    void write_static_row(file_writer& out, const schema& schema, const row& static_row);
-    void write_cell(file_writer& out, atomic_cell_view cell, const column_definition& cdef);
-    void write_range_tombstone(file_writer& out, const composite& start, composite::eoc start_marker, const composite& end, composite::eoc end_marker,
-                               std::vector<bytes_view> suffix, const tombstone t, const column_mask = column_mask::range_tombstone);
-    void write_range_tombstone_bound(file_writer& out, const schema& s, const composite& clustering_element, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none);
-    void index_tombstone(file_writer& out, const composite& key, range_tombstone&& rt, composite::eoc marker);
-    void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection);
-    void maybe_write_row_tombstone(file_writer& out, const composite& key, const clustering_row& clustered_row);
-    void write_deletion_time(file_writer& out, const tombstone t);
-
-    void index_and_write_column_name(file_writer& out,
-            const composite& clustering,
-            const std::vector<bytes_view>& column_names,
-            composite::eoc marker = composite::eoc::none);
-
     std::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
     std::optional<std::pair<uint64_t, uint64_t>> get_index_pages_for_range(const dht::token_range& range);
 
@@ -700,8 +641,6 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
-
-    void make_metadata_collector();
 public:
     future<> read_toc() noexcept;
 
