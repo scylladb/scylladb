@@ -447,6 +447,9 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
                 env=dict(os.environ,
                          UBSAN_OPTIONS=":".join(filter(None, UBSAN_OPTIONS)),
                          ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
+                         # TMPDIR env variable is used by any seastar/scylla
+                         # test for directory to store test temporary data.
+                         TMPDIR=os.path.join(options.tmpdir, test.mode),
                          **env,
                          ),
                 preexec_fn=os.setsid,
