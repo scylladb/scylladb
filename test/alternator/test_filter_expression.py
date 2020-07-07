@@ -23,7 +23,6 @@ import pytest
 from botocore.exceptions import ClientError, ParamValidationError
 import random
 from util import full_query, full_scan, random_string, random_bytes, multiset
-from decimal import Decimal
 
 # The test_table_sn_with_data fixture is the regular test_table_sn fixture
 # with a partition inserted with many items. The sort key 'c' of the items

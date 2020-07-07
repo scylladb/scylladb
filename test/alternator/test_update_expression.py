@@ -21,7 +21,6 @@ import random
 import string
 import pytest
 from botocore.exceptions import ClientError
-from decimal import Decimal
 from util import random_string
 
 # The simplest test of using UpdateExpression to set a top-level attribute,
@@ -406,21 +405,6 @@ def test_update_expression_plus_basic(test_table_s):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET b = :val1 + :val2',
             ExpressionAttributeValues={':val1': ['a', 'b'], ':val2': ['1', '2']})
-
-# While most of the Alternator code just saves high-precision numbers
-# unchanged, the "+" and "-" operations need to calculate with them, and
-# we should check the calculation isn't done with some lower-precision
-# representation, e.g., double
-def test_update_expression_plus_precision(test_table_s):
-    p = random_string()
-    test_table_s.update_item(Key={'p': p},
-        UpdateExpression='SET b = :val1 + :val2',
-        ExpressionAttributeValues={':val1': Decimal("1"), ':val2': Decimal("10000000000000000000000")})
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': Decimal("10000000000000000000001")}
-    test_table_s.update_item(Key={'p': p},
-        UpdateExpression='SET b = :val2 - :val1',
-        ExpressionAttributeValues={':val1': Decimal("1"), ':val2': Decimal("10000000000000000000000")})
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'b': Decimal("9999999999999999999999")}
 
 # Test support for "SET a = b + :val2" et al., i.e., a version of the
 # above test_update_expression_plus_basic with read before write.
