@@ -1464,6 +1464,82 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
     });
 }
 
+class components_writer {
+    sstable& _sst;
+    const schema& _schema;
+    file_writer& _out;
+    std::unique_ptr<file_writer> _index;
+    uint64_t _max_sstable_size;
+    bool _tombstone_written;
+    // Remember first and last keys, which we need for the summary file.
+    std::optional<key> _first_key, _last_key;
+    std::optional<key> _partition_key;
+    index_sampling_state _index_sampling_state;
+    range_tombstone_stream _range_tombstones;
+private:
+    void maybe_add_summary_entry(const dht::token& token, bytes_view key);
+    uint64_t get_offset() const;
+    file_writer index_file_writer(sstable& sst, const io_priority_class& pc);
+    // Emits all tombstones which start before pos.
+    void drain_tombstones(position_in_partition_view pos);
+    void drain_tombstones();
+    void write_tombstone(range_tombstone&&);
+    void ensure_tombstone_is_written() {
+        if (!_tombstone_written) {
+            consume(tombstone());
+        }
+    }
+public:
+    components_writer(sstable& sst, const schema& s, file_writer& out, uint64_t estimated_partitions, const sstable_writer_config&, const io_priority_class& pc);
+    ~components_writer();
+    components_writer(components_writer&& o) : _sst(o._sst), _schema(o._schema), _out(o._out), _index(std::move(o._index)),
+        _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
+        _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)),
+        _index_sampling_state(std::move(o._index_sampling_state)), _range_tombstones(std::move(o._range_tombstones)) {
+    }
+
+    void consume_new_partition(const dht::decorated_key& dk);
+    void consume(tombstone t);
+    stop_iteration consume(static_row&& sr);
+    stop_iteration consume(clustering_row&& cr);
+    stop_iteration consume(range_tombstone&& rt);
+    stop_iteration consume_end_of_partition();
+    void consume_end_of_stream();
+
+    static constexpr size_t default_summary_byte_cost = index_sampling_state::default_summary_byte_cost;
+};
+
+class sstable_writer_k_l : public sstable_writer::writer_impl {
+    bool _backup;
+    bool _leave_unsealed;
+    bool _compression_enabled;
+    std::unique_ptr<file_writer> _writer;
+    std::optional<components_writer> _components_writer;
+    shard_id _shard; // Specifies which shard new sstable will belong to.
+    write_monitor* _monitor;
+    bool _correctly_serialize_non_compound_range_tombstones;
+    utils::UUID _run_identifier;
+private:
+    void prepare_file_writer();
+    void finish_file_writer();
+public:
+    sstable_writer_k_l(sstable& sst, const schema& s, uint64_t estimated_partitions,
+            const sstable_writer_config&, const io_priority_class& pc, shard_id shard = this_shard_id());
+    ~sstable_writer_k_l();
+    sstable_writer_k_l(sstable_writer_k_l&& o) : writer_impl(o._sst, o._schema, o._pc, o._cfg), _backup(o._backup),
+            _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
+            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(o._monitor),
+            _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones),
+            _run_identifier(o._run_identifier) { }
+    void consume_new_partition(const dht::decorated_key& dk) override { return _components_writer->consume_new_partition(dk); }
+    void consume(tombstone t) override { _components_writer->consume(t); }
+    stop_iteration consume(static_row&& sr) override { return _components_writer->consume(std::move(sr)); }
+    stop_iteration consume(clustering_row&& cr) override { return _components_writer->consume(std::move(cr)); }
+    stop_iteration consume(range_tombstone&& rt) override { return _components_writer->consume(std::move(rt)); }
+    stop_iteration consume_end_of_partition() override { return _components_writer->consume_end_of_partition(); }
+    void consume_end_of_stream() override;
+};
+
 static composite::eoc bound_kind_to_start_marker(bound_kind start_kind) {
     return start_kind == bound_kind::excl_start
          ? composite::eoc::end
@@ -1923,51 +1999,6 @@ void seal_statistics(sstable_version_types v, statistics& s, metadata_collector&
     populate_statistics_offsets(v, s);
 }
 
-class components_writer {
-    sstable& _sst;
-    const schema& _schema;
-    file_writer& _out;
-    std::unique_ptr<file_writer> _index;
-    uint64_t _max_sstable_size;
-    bool _tombstone_written;
-    // Remember first and last keys, which we need for the summary file.
-    std::optional<key> _first_key, _last_key;
-    std::optional<key> _partition_key;
-    index_sampling_state _index_sampling_state;
-    range_tombstone_stream _range_tombstones;
-private:
-    void maybe_add_summary_entry(const dht::token& token, bytes_view key);
-    uint64_t get_offset() const;
-    file_writer index_file_writer(sstable& sst, const io_priority_class& pc);
-    // Emits all tombstones which start before pos.
-    void drain_tombstones(position_in_partition_view pos);
-    void drain_tombstones();
-    void write_tombstone(range_tombstone&&);
-    void ensure_tombstone_is_written() {
-        if (!_tombstone_written) {
-            consume(tombstone());
-        }
-    }
-public:
-    components_writer(sstable& sst, const schema& s, file_writer& out, uint64_t estimated_partitions, const sstable_writer_config&, const io_priority_class& pc);
-    ~components_writer();
-    components_writer(components_writer&& o) : _sst(o._sst), _schema(o._schema), _out(o._out), _index(std::move(o._index)),
-        _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
-        _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)),
-        _index_sampling_state(std::move(o._index_sampling_state)), _range_tombstones(std::move(o._range_tombstones)) {
-    }
-
-    void consume_new_partition(const dht::decorated_key& dk);
-    void consume(tombstone t);
-    stop_iteration consume(static_row&& sr);
-    stop_iteration consume(clustering_row&& cr);
-    stop_iteration consume(range_tombstone&& rt);
-    stop_iteration consume_end_of_partition();
-    void consume_end_of_stream();
-
-    static constexpr size_t default_summary_byte_cost = index_sampling_state::default_summary_byte_cost;
-};
-
 void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
         uint64_t index_offset, index_sampling_state& state) {
     state.partition_count++;
@@ -2273,37 +2304,6 @@ bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const
             position_in_partition_view::for_range_end(range));
     });
 }
-
-class sstable_writer_k_l : public sstable_writer::writer_impl {
-    bool _backup;
-    bool _leave_unsealed;
-    bool _compression_enabled;
-    std::unique_ptr<file_writer> _writer;
-    std::optional<components_writer> _components_writer;
-    shard_id _shard; // Specifies which shard new sstable will belong to.
-    write_monitor* _monitor;
-    bool _correctly_serialize_non_compound_range_tombstones;
-    utils::UUID _run_identifier;
-private:
-    void prepare_file_writer();
-    void finish_file_writer();
-public:
-    sstable_writer_k_l(sstable& sst, const schema& s, uint64_t estimated_partitions,
-            const sstable_writer_config&, const io_priority_class& pc, shard_id shard = this_shard_id());
-    ~sstable_writer_k_l();
-    sstable_writer_k_l(sstable_writer_k_l&& o) : writer_impl(o._sst, o._schema, o._pc, o._cfg), _backup(o._backup),
-            _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
-            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(o._monitor),
-            _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones),
-            _run_identifier(o._run_identifier) { }
-    void consume_new_partition(const dht::decorated_key& dk) override { return _components_writer->consume_new_partition(dk); }
-    void consume(tombstone t) override { _components_writer->consume(t); }
-    stop_iteration consume(static_row&& sr) override { return _components_writer->consume(std::move(sr)); }
-    stop_iteration consume(clustering_row&& cr) override { return _components_writer->consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone&& rt) override { return _components_writer->consume(std::move(rt)); }
-    stop_iteration consume_end_of_partition() override { return _components_writer->consume_end_of_partition(); }
-    void consume_end_of_stream() override;
-};
 
 void sstable_writer_k_l::prepare_file_writer()
 {
