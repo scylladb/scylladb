@@ -224,7 +224,9 @@ future<> manager::end_point_hints_manager::stop(drain should_drain) noexcept {
         with_lock(file_update_mutex(), [this] {
             if (_hints_store_anchor) {
                 hints_store_ptr tmp = std::exchange(_hints_store_anchor, nullptr);
-                return tmp->shutdown().finally([tmp] {});
+                return tmp->shutdown().finally([tmp] {
+                    return tmp->release();
+                }).finally([tmp] {});
             }
             return make_ready_future<>();
         }).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
@@ -326,6 +328,10 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
             // HH doesn't utilize the flow that benefits from reusing segments.
             // Therefore let's simply disable it to avoid any possible confusion.
             cfg.reuse_segments = false;
+            // HH leaves segments on disk after commitlog shutdown, and later reads
+            // them when commitlog is re-created. This is expected to happen regularly
+            // during standard HH workload, so no need to print a warning about it.
+            cfg.warn_about_segments_left_on_disk_after_shutdown = false;
 
             return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
                 // add_store() is triggered every time hint files are forcefully flushed to I/O (every hints_flush_period).
@@ -352,7 +358,9 @@ future<> manager::end_point_hints_manager::flush_current_hints() noexcept {
         return futurize_invoke([this] {
             return with_lock(file_update_mutex(), [this]() -> future<> {
                 return get_or_load().then([] (hints_store_ptr cptr) {
-                    return cptr->shutdown();
+                    return cptr->shutdown().finally([cptr] {
+                        return cptr->release();
+                    }).finally([cptr] {});
                 }).then([this] {
                     // Un-hold the commitlog object. Since we are under the exclusive _file_update_mutex lock there are no
                     // other hints_store_ptr copies and this would destroy the commitlog shared value.
