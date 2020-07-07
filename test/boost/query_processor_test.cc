@@ -41,8 +41,8 @@
 SEASTAR_TEST_CASE(test_execute_internal_insert) {
     return do_with_cql_env([] (auto& e) {
         auto& qp = e.local_qp();
-        return qp.execute_internal("create table ks.cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").then([](auto rs) {
-            BOOST_REQUIRE(rs->empty());
+        return e.execute_cql("create table ks.cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").then([](auto rs) {
+            BOOST_REQUIRE(dynamic_pointer_cast<cql_transport::messages::result_message::schema_change>(rs));
         }).then([&qp] {
             return qp.execute_internal("insert into ks.cf (p1, c1, r1) values (?, ?, ?);", { sstring("key1"), 1, 100 }).then([](auto rs) {
                 BOOST_REQUIRE(rs->empty());
@@ -69,8 +69,8 @@ SEASTAR_TEST_CASE(test_execute_internal_insert) {
 SEASTAR_TEST_CASE(test_execute_internal_delete) {
     return do_with_cql_env([] (auto& e) {
         auto& qp = e.local_qp();
-        return qp.execute_internal("create table ks.cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").then([](auto rs) {
-            BOOST_REQUIRE(rs->empty());
+        return e.execute_cql("create table ks.cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").then([](auto rs) {
+            BOOST_REQUIRE(dynamic_pointer_cast<cql_transport::messages::result_message::schema_change>(rs));
         }).then([&qp] {
             return qp.execute_internal("insert into ks.cf (p1, c1, r1) values (?, ?, ?);", { sstring("key1"), 1, 100 }).then([](auto rs) {
                 BOOST_REQUIRE(rs->empty());
@@ -90,8 +90,8 @@ SEASTAR_TEST_CASE(test_execute_internal_delete) {
 SEASTAR_TEST_CASE(test_execute_internal_update) {
     return do_with_cql_env([] (auto& e) {
         auto& qp = e.local_qp();
-        return qp.execute_internal("create table ks.cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").then([](auto rs) {
-            BOOST_REQUIRE(rs->empty());
+        return e.execute_cql("create table ks.cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").then([](auto rs) {
+            BOOST_REQUIRE(dynamic_pointer_cast<cql_transport::messages::result_message::schema_change>(rs));
         }).then([&qp] {
             return qp.execute_internal("insert into ks.cf (p1, c1, r1) values (?, ?, ?);", { sstring("key1"), 1, 100 }).then([](auto rs) {
                 BOOST_REQUIRE(rs->empty());
@@ -298,8 +298,8 @@ SEASTAR_TEST_CASE(test_query_counters) {
 SEASTAR_TEST_CASE(test_select_full_scan_metrics) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();
-        qp.execute_internal("create table ks.fsm (pk int, ck int, c1 int, c2 int, PRIMARY KEY(pk, ck));").get();
-        qp.execute_internal("create index on ks.fsm (c1);").get();
+        cquery_nofail(e, "create table ks.fsm (pk int, ck int, c1 int, c2 int, PRIMARY KEY(pk, ck));");
+        cquery_nofail(e, "create index on ks.fsm (c1);");
         qp.execute_internal("insert into ks.fsm (pk, ck, c1, c2) values (?,?,?,?);", { 1, 1, 1, 1 }).get();
         auto stat_bc1 = qp.get_cql_stats().select_bypass_caches;
         qp.execute_internal("select * from ks.fsm bypass cache;").get();

@@ -4575,12 +4575,16 @@ SEASTAR_TEST_CASE(ck_slice_with_null_is_forbidden) {
     });
 }
 
-SEASTAR_TEST_CASE(test_internal_alter_table_on_a_distributed_table) {
+SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&e] {
             cquery_nofail(e, "create table t (p int primary key, v int)");
-            const auto local_err = exception_predicate::message_contains("local");
+            const auto local_err = exception_predicate::message_contains("internal query");
             BOOST_REQUIRE_EXCEPTION(db::execute_cql("alter table ks.t add col abcd").get(), std::logic_error, local_err);
+            BOOST_REQUIRE_EXCEPTION(db::execute_cql("create table ks.t2 (id int primary key)").get(), std::logic_error, local_err);
+            BOOST_REQUIRE_EXCEPTION(db::execute_cql("create index on ks.t(v)").get(), std::logic_error, local_err);
+            BOOST_REQUIRE_EXCEPTION(db::execute_cql("drop table ks.t").get(), std::logic_error, local_err);
+            BOOST_REQUIRE_EXCEPTION(db::execute_cql("drop keyspace ks").get(), std::logic_error, local_err);
         });
     });
 }

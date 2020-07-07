@@ -207,6 +207,12 @@ public:
             service::query_state& query_state,
             query_options& options);
 
+    // NOTICE: Internal queries should be used with care, as they are expected
+    // to be used for local tables (e.g. from the `system` keyspace).
+    // Data modifications will usually be performed with consistency level ONE
+    // and schema changes will not be announced to other nodes.
+    // Because of that, changing global schema state (e.g. modifying non-local tables,
+    // creating namespaces, etc) is explicitly forbidden via this interface.
     future<::shared_ptr<untyped_result_set>>
     execute_internal(const sstring& query_string, const std::initializer_list<data_value>& values = { }) {
         return execute_internal(query_string, db::consistency_level::ONE,
@@ -290,7 +296,12 @@ public:
             const sstring& query_string,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f);
 
-
+    // NOTICE: Internal queries should be used with care, as they are expected
+    // to be used for local tables (e.g. from the `system` keyspace).
+    // Data modifications will usually be performed with consistency level ONE
+    // and schema changes will not be announced to other nodes.
+    // Because of that, changing global schema state (e.g. modifying non-local tables,
+    // creating namespaces, etc) is explicitly forbidden via this interface.
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
