@@ -26,7 +26,7 @@ if [ ! -e $RELOC_PKG ]; then
     exit 1
 fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
-rm -rf build/debian
+rm -rf build/debian/scylla-python3-package
 mkdir -p build/debian/scylla-python3-package
 tar -C build/debian/scylla-python3-package -xpf $RELOC_PKG
 cd build/debian/scylla-python3-package
