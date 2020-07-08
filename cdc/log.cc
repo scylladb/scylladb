@@ -355,17 +355,17 @@ bool is_log_for_some_table(const sstring& ks_name, const std::string_view& table
     if (!is_log_name(table_name)) {
         return false;
     }
-    const auto base_name = sstring(table_name.data(), table_name.size() - cdc_log_suffix.size());
-    const auto& local_db = service::get_local_storage_proxy().get_db().local();
-    if (!local_db.has_schema(ks_name, base_name)) {
-        return false;
-    }
-    const auto base_schema = local_db.find_schema(ks_name, base_name);
+    const auto base_schema = local_db.find_schema(ks_name, base_name(table_name));
     return base_schema->cdc_options().enabled();
 }
 
-sstring log_name(const sstring& table_name) {
-    return table_name + cdc_log_suffix;
+seastar::sstring base_name(std::string_view log_name) {
+    assert(is_log_name(log_name));
+    return sstring(log_name.data(), log_name.size() - cdc_log_suffix.size());
+}
+
+sstring log_name(std::string_view table_name) {
+    return sstring(table_name) + cdc_log_suffix;
 }
 
 sstring log_data_column_name(std::string_view column_name) {
