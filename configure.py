@@ -1742,17 +1742,16 @@ with open(buildfile_tmp, 'w') as f:
           artifact = build/scylla-tools-package.tar.gz
         build dist-tools: phony dist-tools-rpm dist-tools-deb
 
-        rule build-python-reloc
-          command = ./reloc/python3/build_reloc.sh
-        rule build-python-rpm
-          command = ./reloc/python3/build_rpm.sh
-        rule build-python-deb
-          command = ./reloc/python3/build_deb.sh
-
-        build build/release/scylla-python3-package.tar.gz: build-python-reloc
-        build dist-python-rpm: build-python-rpm build/release/scylla-python3-package.tar.gz
-        build dist-python-deb: build-python-deb build/release/scylla-python3-package.tar.gz
+        build tools/python3/build/scylla-python3-package.tar.gz: build-submodule-reloc
+          reloc_dir = tools/python3
+        build dist-python-rpm: build-submodule-rpm tools/python3/build/scylla-python3-package.tar.gz
+          dir = tools/python3
+          artifact = build/scylla-python3-package.tar.gz
+        build dist-python-deb: build-submodule-deb tools/python3/build/scylla-python3-package.tar.gz
+          dir = tools/python3
+          artifact = build/scylla-python3-package.tar.gz
         build dist-python: phony dist-python-rpm dist-python-deb
+
         build dist-deb: phony dist-server-deb dist-python-deb dist-jmx-deb dist-tools-deb
         build dist-rpm: phony dist-server-rpm dist-python-rpm dist-jmx-rpm dist-tools-rpm
         build dist: phony dist-server dist-python dist-jmx dist-tools
