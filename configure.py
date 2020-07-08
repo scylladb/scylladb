@@ -354,6 +354,7 @@ scylla_tests = set([
     'test/boost/range_test',
     'test/boost/range_tombstone_list_test',
     'test/boost/reusable_buffer_test',
+    'test/boost/restrictions_test',
     'test/boost/role_manager_test',
     'test/boost/row_cache_test',
     'test/boost/schema_change_test',

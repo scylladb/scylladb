@@ -4868,6 +4868,16 @@ update lwt set c = 1 where a in () and b = 1 if c = 1;
 	"message" : "exceptions::invalid_request_exception (IN on the partition key is not supported with conditional updates)",
 	"status" : "error"
 }
+update lwt set c = 1 where a = 1 and b IN (1, 2) if c = 1;
+{
+	"message" : "exceptions::invalid_request_exception (IN on the clustering key columns is not supported with conditional updates)",
+	"status" : "error"
+}
+update lwt set c = 1 where a = 1 and (b) IN ((1), (2)) if c = 1;
+{
+	"message" : "exceptions::invalid_request_exception (IN on the clustering key columns is not supported with conditional updates)",
+	"status" : "error"
+}
 drop table lwt;
 {
 	"status" : "ok"

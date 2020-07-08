@@ -135,7 +135,7 @@ public:
      * otherwise.
      */
     bool key_is_in_relation() const {
-        return _partition_key_restrictions->is_IN();
+        return find(_partition_key_restrictions->expression, operator_type::IN);
     }
 
     /**
@@ -145,7 +145,7 @@ public:
      * otherwise.
      */
     bool clustering_key_restrictions_has_IN() const {
-        return _clustering_columns_restrictions->is_IN();
+        return find(_clustering_columns_restrictions->expression, operator_type::IN);
     }
 
     bool clustering_key_restrictions_has_only_eq() const {

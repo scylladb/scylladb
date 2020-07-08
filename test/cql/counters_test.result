@@ -1,4 +1,4 @@
-CREATE TABLE ks.tbl_cnt (pk int PRIMARY KEY, c1 counter, c2 counter);
+CREATE TABLE ks.tbl_cnt (pk int PRIMARY KEY, c1 counter);
 {
 	"status" : "ok"
 }
@@ -109,38 +109,6 @@ SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 = 1 ALLOW FILTERING;
 			"pk" : "1"
 		}
 	]
-}
-
--- now filter through untouched counters `c2` - they should appear as NULLs and evaluate as zeros
-SELECT pk, c1, c2 FROM ks.tbl_cnt WHERE c2 = 0 ALLOW FILTERING;
-{
-	"rows" : 
-	[
-		{
-			"c1" : "1",
-			"pk" : "1"
-		},
-		{
-			"c1" : "2",
-			"pk" : "2"
-		},
-		{
-			"c1" : "4",
-			"pk" : "4"
-		},
-		{
-			"c1" : "3",
-			"pk" : "3"
-		}
-	]
-}
-SELECT pk, c2 FROM ks.tbl_cnt WHERE c2 < 0 ALLOW FILTERING;
-{
-	"rows" : null
-}
-SELECT pk, c2 FROM ks.tbl_cnt WHERE c2 > 0 ALLOW FILTERING;
-{
-	"rows" : null
 }
 
 -- delete `c1` and make sure it doesn't appear in filtering results

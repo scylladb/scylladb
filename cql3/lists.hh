@@ -106,6 +106,9 @@ public:
         virtual bool contains_bind_marker() const override;
         virtual void collect_marker_specification(variable_specifications& bound_names) const override;
         virtual shared_ptr<terminal> bind(const query_options& options) override;
+        const std::vector<shared_ptr<term>>& get_elements() const {
+            return _elements;
+        }
     };
 
     /**
