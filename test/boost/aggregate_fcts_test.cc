@@ -35,6 +35,7 @@
 
 #include <seastar/core/future-util.hh>
 #include "transport/messages/result_message.hh"
+#include "types/set.hh"
 
 #include "db/config.hh"
 
@@ -256,6 +257,32 @@ SEASTAR_TEST_CASE(test_reverse_type_aggregation) {
             auto tp = db_clock::from_time_t({ 0 }) + std::chrono::milliseconds(2);
             auto msg = e.execute_cql("SELECT max(c) FROM test").get0();
             assert_that(msg).is_rows().with_size(1).with_row({{timestamp_type->decompose(tp)}});
+        }
+    });
+}
+
+// Tests #6768
+SEASTAR_TEST_CASE(test_minmax_on_set) {
+    return do_with_cql_env_thread([&] (auto& e) {
+        e.execute_cql("CREATE TABLE test (id int PRIMARY KEY, s1 set<int>, s2 set<blob>);").get();
+        e.execute_cql("INSERT INTO test (id, s1, s2) VALUES (1, {-1, 1}, {0xff, 0x01});").get();
+        e.execute_cql("INSERT INTO test (id, s1, s2) VALUES (2, {-2, 2}, {0xfe, 0x02});").get();
+
+        const auto set_type_int = set_type_impl::get_instance(int32_type, true);
+        const auto set_type_blob = set_type_impl::get_instance(bytes_type, true);
+        {
+            const auto msg = e.execute_cql("SELECT max(s1), max(s2) FROM test;").get0();
+            assert_that(msg).is_rows().with_size(1).with_row({
+                    set_type_int->decompose(make_set_value(set_type_int, {-1, 1})),
+                    set_type_blob->decompose(make_set_value(set_type_blob, {"\x02", "\xfe"}))
+            });
+        }
+        {
+            const auto msg = e.execute_cql("SELECT min(s1), min(s2) FROM test;").get0();
+            assert_that(msg).is_rows().with_size(1).with_row({
+                    set_type_int->decompose(make_set_value(set_type_int, {-2, 2})),
+                    set_type_blob->decompose(make_set_value(set_type_blob, {"\x01", "\xff"}))
+            });
         }
     });
 }
