@@ -53,7 +53,7 @@ static cql_test_config mk_cdc_test_config() {
 };
 
 namespace cdc {
-api::timestamp_type find_timestamp(const schema&, const mutation&);
+api::timestamp_type find_timestamp(const mutation&);
 utils::UUID generate_timeuuid(api::timestamp_type);
 }
 
@@ -84,7 +84,7 @@ SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
                  * so we can do it by comparing the returned timestamp with the current time
                  * -- the difference should be small.
                  */
-                auto ts = cdc::find_timestamp(*schema, m);
+                auto ts = cdc::find_timestamp(m);
                 BOOST_REQUIRE(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         api::timestamp_clock::duration(api::new_timestamp() - ts))
@@ -394,10 +394,8 @@ static size_t column_index(const cql_transport::messages::result_message::rows& 
 }
 
 template<typename Comp = std::equal_to<bytes_opt>>
-static std::vector<std::vector<bytes_opt>> to_bytes_filtered(const cql_transport::messages::result_message::rows& rows, cdc::operation op, const Comp& comp = {}) {
+static std::vector<std::vector<bytes_opt>> filter_by_operation(const cql_transport::messages::result_message::rows& rows, std::vector<std::vector<bytes_opt>> results, cdc::operation op, const Comp& comp = {}) {
     const auto op_type = data_type_for<std::underlying_type_t<cdc::operation>>();
-
-    auto results = to_bytes(rows);
     auto op_index = column_index(rows, cdc::log_meta_column_name("operation"));
     auto op_bytes = op_type->decompose(std::underlying_type_t<cdc::operation>(op));
 
@@ -406,6 +404,11 @@ static std::vector<std::vector<bytes_opt>> to_bytes_filtered(const cql_transport
     }), results.end());
 
     return results;
+}
+
+template<typename Comp = std::equal_to<bytes_opt>>
+static std::vector<std::vector<bytes_opt>> to_bytes_filtered(const cql_transport::messages::result_message::rows& rows, cdc::operation op, const Comp& comp = {}) {
+    return filter_by_operation<Comp>(rows, to_bytes(rows), op, comp);
 }
 
 static void sort_by_time(const cql_transport::messages::result_message::rows& rows, std::vector<std::vector<bytes_opt>>& results) {
@@ -522,7 +525,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
 
             auto rows = select_log(e, "tbl");
 
-            BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
+            BOOST_REQUIRE_EQUAL(!pre_enabled, to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
             BOOST_REQUIRE_EQUAL(!post_enabled, to_bytes_filtered(*rows, cdc::operation::post_image).empty());
 
             auto first = to_bytes_filtered(*rows, cdc::operation::update);
@@ -561,7 +564,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
                 sort_by_time(*rows, post_image);
 
                 if (pre_enabled) {
-                    BOOST_REQUIRE_EQUAL(pre_image.size(), i + 1);
+                    BOOST_REQUIRE_EQUAL(pre_image.size(), i + 2);
 
                     val = *pre_image.back()[val_index];
                     // note: no val2 in pre-image, because we are not modifying it. 
@@ -610,7 +613,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging_static_row) {
 
             auto rows = select_log(e, "tbl");
 
-            BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
+            BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::pre_image).empty() == !enabled);
             BOOST_REQUIRE(to_bytes_filtered(*rows, cdc::operation::post_image).empty() == !enabled);
 
             auto first = to_bytes_filtered(*rows, cdc::operation::update);
@@ -646,7 +649,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging_static_row) {
                     sort_by_time(*rows, second);
                     sort_by_time(*rows, pre_image);
                     sort_by_time(*rows, post_image);
-                    BOOST_REQUIRE_EQUAL(pre_image.size(), i + 1);
+                    BOOST_REQUIRE_EQUAL(pre_image.size(), i + 2);
 
                     s = *pre_image.back()[s_index];
                     BOOST_REQUIRE_EQUAL(data_value(last), s_type->deserialize(bytes_view(s)));
@@ -859,9 +862,7 @@ static void test_collection(cql_test_env& e, data_type val_type, data_type del_t
 
         auto val_index = column_index(*rows, cdc::log_data_column_name("val"));
 
-        if (t.prev.is_null()) {
-            BOOST_REQUIRE(pre_image.empty());
-        } else {
+        if (!t.prev.is_null()) {
             BOOST_REQUIRE_GE(pre_image.size(), t.changes.size());
         }
 
@@ -1595,12 +1596,15 @@ SEASTAR_THREAD_TEST_CASE(test_batch_with_row_delete) {
         auto set_null = data_value::make_null(s_type);
 
         const std::vector<std::vector<data_value>> expected = {
+            // Preimage for (0)
+            {int_null, udt_null, map_null, set_null, oper_ut(cdc::operation::pre_image)},
+            // Update (0)
+            {int32_t(1), make_user_value(udt_type, {1,2}), make_map_value(m_type, {{1,2},{3,4}}), make_set_value(s_type, {1,2,3}), oper_ut(cdc::operation::insert)},
             // Preimage for (1)
-            {int32_t(1), udt_null, map_null, set_null, oper_ut(cdc::operation::pre_image)},
+            {int32_t(1), make_user_value(udt_type, {1,2}), make_map_value(m_type, {{1,2},{3,4}}), make_set_value(s_type, {1,2,3}), oper_ut(cdc::operation::pre_image)},
             // Update (1)
             {int32_t(666), udt_null, map_null, set_null, oper_ut(cdc::operation::update)},
-            // Preimage for (1) + (2)
-            {int32_t(1), make_user_value(udt_type, {1,2}), make_map_value(m_type, {{1,2},{3,4}}), make_set_value(s_type, {1,2,3}), oper_ut(cdc::operation::pre_image)},
+            // No preimage for (1) + (2), because it is in the same group
             // Row delete (2)
             {int_null, udt_null, map_null, set_null, oper_ut(cdc::operation::row_delete)},
         };
@@ -1614,7 +1618,7 @@ SEASTAR_THREAD_TEST_CASE(test_batch_with_row_delete) {
 
         for (size_t idx = 0; idx < expected.size(); ++idx) {
             const auto& er = expected[idx];
-            const auto& r = results[idx + 1]; // We skip first log record because it represents initial insert.
+            const auto& r = results[idx];
             BOOST_REQUIRE_EQUAL(deser(int32_type, r[0]), er[0]);
             BOOST_REQUIRE_EQUAL(deser(udt_type, r[1]), er[1]);
             BOOST_REQUIRE_EQUAL(deser(m_type, r[2]), er[2]);
@@ -1622,4 +1626,350 @@ SEASTAR_THREAD_TEST_CASE(test_batch_with_row_delete) {
             BOOST_REQUIRE_EQUAL(deser(oper_type, r[4]), er[4]);
         }
     }, mk_cdc_test_config()).get();
+}
+
+struct image_set {
+    using image_row = std::vector<data_value>;
+    std::vector<image_row> preimage;
+    std::vector<image_row> postimage;
+};
+
+struct image_persistence_test {
+    std::vector<sstring> updates;
+    std::vector<sstring> column_names;
+    std::vector<image_set> groups;
+};
+
+static void test_pre_post_image(cql_test_env& e, const std::vector<image_persistence_test>& tests,
+        bool preimage, bool postimage) {
+    const auto keyspace_name = "ks"s;
+    const auto base_table_name = "tbl"s;
+    const auto log_table_name = cdc::log_name(base_table_name);
+
+    const auto log_schema = e.local_db().find_schema(keyspace_name, log_table_name);
+
+    std::unordered_set<bytes> processed_times;
+
+    for (const auto& t : tests) {
+        BOOST_TEST_MESSAGE("Starting next test case");
+        for (const auto& update : t.updates) {
+            BOOST_TEST_MESSAGE(format("Executing query {}", update));
+            cquery_nofail(e, update);
+        }
+
+        const auto rows = select_log(e, base_table_name);
+        BOOST_REQUIRE(rows);
+        auto results = to_bytes(*rows);
+        sort_by_time(*rows, results);
+
+        // Indexed by serialized timeuuid of the group
+        std::map<bytes, std::vector<std::vector<bytes_opt>>, serialized_compare> groups(timeuuid_type->as_less_comparator());
+        const auto time_index = column_index(*rows, cdc::log_meta_column_name("time"));
+        for (const auto& row : results) {
+            const auto time = *row[time_index];
+            if (!processed_times.count(time)) {
+                groups[time].push_back(row);
+            }
+        }
+
+        // Register new encountered timestamps so that we won't repeat them in next run
+        for (const auto& time : groups | boost::adaptors::map_keys) {
+            processed_times.insert(time);
+        }
+
+        BOOST_TEST_MESSAGE(format("Returned rows: {}", groups));
+
+        // Assert that there is the same number of groups differentiated by cdc$time
+        BOOST_REQUIRE_EQUAL(groups.size(), t.groups.size());
+
+        auto compare_rows = [&] (const std::vector<std::vector<bytes_opt>>& actual,
+                std::vector<image_set::image_row> expected) {
+            BOOST_REQUIRE_EQUAL(actual.size(), expected.size());
+
+            for (const auto& actual_row : actual) {
+                // Deserialize values in actual_row
+                std::vector<data_value> actual_values;
+                for (const auto& col_name : t.column_names) {
+                    const auto col_def = log_schema->get_column_definition(to_bytes(col_name));
+                    BOOST_REQUIRE(col_def);
+
+                    const auto actual_type = col_def->type;
+                    const auto col_idx_in_result = column_index(*rows, col_name);
+                    const auto actual_data = actual_row[col_idx_in_result];
+                    data_value actual_value = actual_data
+                        ? actual_type->deserialize(*actual_data)
+                        : data_value::make_null(actual_type);
+
+                    actual_values.push_back(std::move(actual_value));
+                }
+
+                BOOST_TEST_MESSAGE(format("Looking up corresponding row to {}", actual_values));
+
+                // Order in pre-postimage is unspecified
+                const auto it = std::find(expected.begin(), expected.end(), actual_values);
+                if (it == expected.end()) {
+                    BOOST_FAIL(format("Failed to find corresponding expected row for {}", actual_values));
+                }
+                expected.erase(it);
+            }
+        };
+
+        auto actual_it = groups.begin();
+        auto expected_it = t.groups.begin();
+
+        while (actual_it != groups.end()) {
+            // Filter preimage and postimage
+            // TODO: Assert that all preimages are at the beginning,
+            // and that postimages are at the end
+            const auto& actual_group_id = actual_it->first;
+            const auto& actual_results = (actual_it++)->second;
+            const auto& expected_set = *expected_it++;
+
+            BOOST_TEST_MESSAGE(format("Checking group {}", actual_group_id));
+
+            const auto actual_preimage = filter_by_operation(*rows, actual_results, cdc::operation::pre_image);
+            if (preimage) {
+                BOOST_TEST_MESSAGE("Checking preimage");
+                compare_rows(actual_preimage, expected_set.preimage);
+            } else {
+                BOOST_TEST_MESSAGE("Preimage should be empty");
+                BOOST_REQUIRE_EQUAL(actual_preimage.size(), 0);
+            }
+
+            const auto actual_postimage = filter_by_operation(*rows, actual_results, cdc::operation::post_image);
+            if (postimage) {
+                BOOST_TEST_MESSAGE("Checking postimage");
+                compare_rows(actual_postimage, expected_set.postimage);
+            } else {
+                BOOST_TEST_MESSAGE("Postimage should be empty");
+                BOOST_REQUIRE_EQUAL(actual_postimage.size(), 0);
+            }
+        }
+    }
+}
+
+void test_batch_images(bool preimage, bool postimage) {
+    do_with_cql_env_thread([preimage, postimage] (cql_test_env& e) {
+        cquery_nofail(e, format(
+                "CREATE TABLE ks.tbl (pk int, ck int, s int STATIC, v1 int, v2 int, vm map<int, int>, PRIMARY KEY(pk, ck))"
+                " WITH cdc = {{'enabled':'true', 'preimage':'{}', 'postimage':'{}'}}",
+                preimage ? "true" : "false", postimage ? "true" : "false"));
+
+        const auto now = api::new_timestamp();
+
+        const auto map_type = map_type_impl::get_instance(int32_type, int32_type, false);
+        const auto map_null = data_value::make_null(map_type);
+        const auto int_null = data_value::make_null(int32_type);
+
+        test_pre_post_image(e, {
+            // Insert multiple clustering rows
+            {
+                {
+                    "BEGIN UNLOGGED BATCH"
+                    "   INSERT INTO ks.tbl (pk, ck, v1) VALUES (0, 1, 10);"
+                    "   INSERT INTO ks.tbl (pk, ck, v1) VALUES (0, 2, 20);"
+                    "APPLY BATCH"
+                },
+                {"ck", "v1"},
+                {
+                    {
+                        .preimage = {
+                            {int32_t(1), int_null},
+                            {int32_t(2), int_null}
+                        },
+                        .postimage = {
+                            {int32_t(1), int32_t(10)},
+                            {int32_t(2), int32_t(20)}
+                        }
+                    }
+                }
+            },
+            // Update multiple clustering rows (same pk as before)
+            {
+                {
+                    "BEGIN UNLOGGED BATCH"
+                    "   UPDATE ks.tbl SET v1 = 11 WHERE pk = 0 AND ck = 1;"
+                    "   UPDATE ks.tbl SET v2 = 22 WHERE pk = 0 AND ck = 2;"
+                    "APPLY BATCH"
+                },
+                {"ck", "v1", "v2"},
+                {
+                    {
+                        .preimage = {
+                            // Preimage only contains columns that are modified,
+                            // therefore the second row does not have value for v1
+                            {int32_t(1), int32_t(10), int_null},
+                            {int32_t(2), int_null, int_null}
+                        },
+                        .postimage = {
+                            {int32_t(1), int32_t(11), int_null},
+                            {int32_t(2), int32_t(20), int32_t(22)}
+                        }
+                    }
+                }
+            },
+            // Delete clustering rows (same pk as before)
+            {
+                {
+                    "BEGIN UNLOGGED BATCH"
+                    "   DELETE FROM ks.tbl WHERE pk = 0 AND ck = 1;"
+                    "   DELETE FROM ks.tbl WHERE pk = 0 AND ck = 2;"
+                    "APPLY BATCH"
+                },
+                {"ck", "v1", "v2"},
+                {
+                    {
+                        .preimage = {
+                            // Preimage for delete contains everything
+                            {int32_t(1), int32_t(11), int_null},
+                            {int32_t(2), int32_t(20), int32_t(22)}
+                        },
+                        .postimage = {
+                            {int32_t(1), int_null, int_null},
+                            {int32_t(2), int_null, int_null}
+                        }
+                    }
+                }
+            },
+            // Clustering row and static row
+            {
+                {
+                    "BEGIN UNLOGGED BATCH"
+                    "   UPDATE ks.tbl SET s = 5 WHERE pk = 1;"
+                    "   UPDATE ks.tbl SET v1 = 10 WHERE pk = 1 AND ck = 1;"
+                    "APPLY BATCH"
+                },
+                {"ck", "s", "v1"},
+                {
+                    {
+                        .preimage = {
+                            {int_null, int_null, int_null},
+                            {int32_t(1), int_null, int_null}
+                        },
+                        .postimage = {
+                            {int_null, int32_t(5), int_null},
+                            {int32_t(1), int_null, int32_t(10)}
+                        }
+                    }
+                }
+            },
+            // Multiple columns in one row, different ttl
+            {
+                {
+                    "BEGIN UNLOGGED BATCH"
+                    "   UPDATE ks.tbl USING TTL 100 SET v1 = 10 WHERE pk = 2 AND ck = 0;"
+                    "   UPDATE ks.tbl USING TTL 200 SET v2 = 20 WHERE pk = 2 AND ck = 0;"
+                    "APPLY BATCH"
+                },
+                {"ck", "v1", "v2"},
+                {
+                    {
+                        .preimage = {
+                            {int32_t(0), int_null, int_null}
+                        },
+                        .postimage = {
+                            {int32_t(0), int32_t(10), int32_t(20)}
+                        }
+                    }
+                }
+            },
+            // Single row and column with multiple ttls (reproduces #6597)
+            {
+                {
+                    "BEGIN UNLOGGED BATCH"
+                    "   UPDATE ks.tbl USING TTL 100 SET vm = vm + {1:2} WHERE pk = 6597 AND ck = 0;"
+                    "   UPDATE ks.tbl USING TTL 200 SET vm = vm + {3:4} WHERE pk = 6597 AND ck = 0;"
+                    "APPLY BATCH"
+                },
+                {"ck", "vm"},
+                {
+                    {
+                        .preimage = {
+                            {int32_t(0), map_null}
+                        },
+                        .postimage = {
+                            {int32_t(0), ::make_map_value(map_type, {{1,2},{3,4}})}
+                        }
+                    }
+                }
+            },
+            // Single row and column, multiple timestamps
+            {
+                {
+                    format("BEGIN UNLOGGED BATCH"
+                        "   UPDATE ks.tbl USING TIMESTAMP {} SET vm = vm + {{1:2}} WHERE pk = 3 AND ck = 0;"
+                        "   UPDATE ks.tbl USING TIMESTAMP {} SET vm = vm + {{3:4}} WHERE pk = 3 AND ck = 0;"
+                        "APPLY BATCH",
+                        now + 1, now + 2)
+                },
+                {"ck", "vm"},
+                {
+                    // First timestamp
+                    {
+                        .preimage = {
+                            {int32_t(0), map_null}
+                        },
+                        .postimage = {
+                            {int32_t(0), ::make_map_value(map_type, {{1,2}})}
+                        }
+                    },
+                    // Second timestamp
+                    {
+                        .preimage = {
+                            {int32_t(0), ::make_map_value(map_type, {{1,2}})}
+                        },
+                        .postimage = {
+                            {int32_t(0), ::make_map_value(map_type, {{1,2},{3,4}})}
+                        }
+                    }
+                }
+            },
+            // Reproducer for #6598
+            {
+                {
+                    // Timestamps are necessary so that the first UPDATE will appear earlier in CDC log
+                    format("UPDATE ks.tbl USING TIMESTAMP {} SET vm = {{1:2}} WHERE pk = 6598 AND ck = 1;", now + 1),
+                    format("BEGIN UNLOGGED BATCH"
+                        "   UPDATE ks.tbl USING TIMESTAMP {} SET vm = {{}} WHERE pk = 6598 AND ck = 0;"
+                        "   UPDATE ks.tbl USING TIMESTAMP {} SET vm = vm + {{3:4}} WHERE pk = 6598 AND ck = 1;"
+                        "APPLY BATCH", now + 2, now + 2)
+                },
+                {"ck", "vm"},
+                {
+                    // Non-batch UPDATE
+                    {
+                        .preimage = {
+                            {int32_t(1), map_null}
+                        },
+                        .postimage = {
+                            {int32_t(1), ::make_map_value(map_type, {{1,2}})}
+                        }
+                    },
+                    // Batch
+                    {
+                        .preimage = {
+                            {int32_t(0), map_null},
+                            {int32_t(1), ::make_map_value(map_type, {{1,2}})}
+                        },
+                        .postimage = {
+                            {int32_t(0), map_null},
+                            {int32_t(1), ::make_map_value(map_type, {{1,2},{3,4}})}
+                        }
+                    },
+                }
+            }
+        }, preimage, postimage);
+    }, mk_cdc_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_batch_pre_image) {
+    test_batch_images(true, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_batch_post_image) {
+    test_batch_images(false, true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_batch_pre_post_image) {
+    test_batch_images(true, true);
 }

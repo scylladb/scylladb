@@ -60,7 +60,7 @@ When a write is performed to a base table, the write is translated to a mutation
 Here's a simplified snippet of code illustrating how the log write's mutation is created (from cdc/log.cc; `m` is the base table mutation):
 ```
     mutation transform(const mutation& m) const {
-        auto ts = find_timestamp(*_schema, m);
+        auto ts = find_timestamp(m);
         auto stream_id = _ctx._cdc_metadata.get_stream(ts, m.token(), _ctx._partitioner);
         mutation res(_log_schema, stream_id.to_partition_key(*_log_schema));
 
