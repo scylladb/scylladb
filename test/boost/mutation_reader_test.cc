@@ -870,8 +870,6 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
     });
 }
 
-static const std::size_t new_reader_base_cost{16 * 1024};
-
 sstables::shared_sstable create_sstable(sstables::test_env& env, simple_schema& sschema, const sstring& path) {
     std::vector<mutation> mutations;
     mutations.reserve(1 << 14);

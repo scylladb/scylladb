@@ -304,6 +304,8 @@ public:
 mutation_source make_empty_mutation_source();
 snapshot_source make_empty_snapshot_source();
 
+extern const ssize_t new_reader_base_cost;
+
 // Creates a restricted reader whose resource usages will be tracked
 // during it's lifetime. If there are not enough resources (dues to
 // existing readers) to create the new reader, it's construction will
