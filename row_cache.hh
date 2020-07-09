@@ -248,28 +248,28 @@ public:
     void insert(rows_entry&) noexcept;
     void on_remove(rows_entry&) noexcept;
     void unlink(rows_entry&) noexcept;
-    void clear_continuity(cache_entry& ce);
-    void on_partition_erase();
-    void on_partition_merge();
-    void on_partition_hit();
-    void on_partition_miss();
-    void on_partition_eviction();
-    void on_row_eviction();
-    void on_row_hit();
-    void on_row_miss();
-    void on_miss_already_populated();
-    void on_mispopulate();
-    void on_row_processed_from_memtable() { ++_stats.rows_processed_from_memtable; }
-    void on_row_dropped_from_memtable() { ++_stats.rows_dropped_from_memtable; }
-    void on_row_merged_from_memtable() { ++_stats.rows_merged_from_memtable; }
-    void pinned_dirty_memory_overload(uint64_t bytes);
-    allocation_strategy& allocator();
-    logalloc::region& region();
-    const logalloc::region& region() const;
-    mutation_cleaner& cleaner() { return _garbage; }
-    mutation_cleaner& memtable_cleaner() { return _memtable_cleaner; }
-    uint64_t partitions() const { return _stats.partitions; }
-    const stats& get_stats() const { return _stats; }
+    void clear_continuity(cache_entry& ce) noexcept;
+    void on_partition_erase() noexcept;
+    void on_partition_merge() noexcept;
+    void on_partition_hit() noexcept;
+    void on_partition_miss() noexcept;
+    void on_partition_eviction() noexcept;
+    void on_row_eviction() noexcept;
+    void on_row_hit() noexcept;
+    void on_row_miss() noexcept;
+    void on_miss_already_populated() noexcept;
+    void on_mispopulate() noexcept;
+    void on_row_processed_from_memtable() noexcept { ++_stats.rows_processed_from_memtable; }
+    void on_row_dropped_from_memtable() noexcept { ++_stats.rows_dropped_from_memtable; }
+    void on_row_merged_from_memtable() noexcept { ++_stats.rows_merged_from_memtable; }
+    void pinned_dirty_memory_overload(uint64_t bytes) noexcept;
+    allocation_strategy& allocator() noexcept;
+    logalloc::region& region() noexcept;
+    const logalloc::region& region() const noexcept;
+    mutation_cleaner& cleaner() noexcept { return _garbage; }
+    mutation_cleaner& memtable_cleaner() noexcept { return _memtable_cleaner; }
+    uint64_t partitions() const noexcept { return _stats.partitions; }
+    const stats& get_stats() const noexcept { return _stats; }
     void set_compaction_scheduling_group(seastar::scheduling_group);
 };
 
