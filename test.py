@@ -173,7 +173,7 @@ class UnitTestSuite(TestSuite):
 
         # Default seastar arguments, if not provided in custom test options,
         # are two cores and 2G of RAM
-        args = self.custom_args.get(shortname, ["-c2 -m2G --fail-on-abandoned-failed-futures=false"])
+        args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
             test = self.create_test(self.next_id, shortname, a, self, mode, options)
             self.tests.append(test)
