@@ -25,6 +25,7 @@
 #include <seastar/util/bool_class.hh>
 #include <boost/range/algorithm/for_each.hpp>
 #include "utils/small_vector.hh"
+#include <absl/container/btree_set.h>
 
 namespace ser {
 
@@ -80,6 +81,17 @@ static inline void serialize_array(Output& out, const Container& v) {
 
 template<typename Container>
 struct container_traits;
+
+template<typename T>
+struct container_traits<absl::btree_set<T>> {
+    struct back_emplacer {
+        absl::btree_set<T>& c;
+        back_emplacer(absl::btree_set<T>& c_) : c(c_) {}
+        void operator()(T&& v) {
+            c.emplace(std::move(v));
+        }
+    };
+};
 
 template<typename T>
 struct container_traits<std::unordered_set<T>> {
@@ -243,6 +255,27 @@ struct serializer<std::list<T>> {
     }
     template<typename Output>
     static void write(Output& out, const std::list<T>& v) {
+        safe_serialize_as_uint32(out, v.size());
+        serialize_array_helper<false, T>::doit(out, v);
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        skip_array<T>(in, sz);
+    }
+};
+
+template<typename T>
+struct serializer<absl::btree_set<T>> {
+    template<typename Input>
+    static absl::btree_set<T> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        absl::btree_set<T> v;
+        deserialize_array_helper<false, T>::doit(in, v, sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const absl::btree_set<T>& v) {
         safe_serialize_as_uint32(out, v.size());
         serialize_array_helper<false, T>::doit(out, v);
     }

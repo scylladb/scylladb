@@ -1192,14 +1192,14 @@ future<partition_checksum> messaging_service::send_repair_checksum_range(
 }
 
 // Wrapper for REPAIR_GET_FULL_ROW_HASHES
-void messaging_service::register_repair_get_full_row_hashes(std::function<future<std::unordered_set<repair_hash>> (const rpc::client_info& cinfo, uint32_t repair_meta_id)>&& func) {
+void messaging_service::register_repair_get_full_row_hashes(std::function<future<repair_hash_set> (const rpc::client_info& cinfo, uint32_t repair_meta_id)>&& func) {
     register_handler(this, messaging_verb::REPAIR_GET_FULL_ROW_HASHES, std::move(func));
 }
 future<> messaging_service::unregister_repair_get_full_row_hashes() {
     return unregister_handler(messaging_verb::REPAIR_GET_FULL_ROW_HASHES);
 }
-future<std::unordered_set<repair_hash>> messaging_service::send_repair_get_full_row_hashes(msg_addr id, uint32_t repair_meta_id) {
-    return send_message<future<std::unordered_set<repair_hash>>>(this, messaging_verb::REPAIR_GET_FULL_ROW_HASHES, std::move(id), repair_meta_id);
+future<repair_hash_set> messaging_service::send_repair_get_full_row_hashes(msg_addr id, uint32_t repair_meta_id) {
+    return send_message<future<repair_hash_set>>(this, messaging_verb::REPAIR_GET_FULL_ROW_HASHES, std::move(id), repair_meta_id);
 }
 
 // Wrapper for REPAIR_GET_COMBINED_ROW_HASH
@@ -1224,13 +1224,13 @@ future<get_sync_boundary_response> messaging_service::send_repair_get_sync_bound
 }
 
 // Wrapper for REPAIR_GET_ROW_DIFF
-void messaging_service::register_repair_get_row_diff(std::function<future<repair_rows_on_wire> (const rpc::client_info& cinfo, uint32_t repair_meta_id, std::unordered_set<repair_hash> set_diff, bool needs_all_rows)>&& func) {
+void messaging_service::register_repair_get_row_diff(std::function<future<repair_rows_on_wire> (const rpc::client_info& cinfo, uint32_t repair_meta_id, repair_hash_set set_diff, bool needs_all_rows)>&& func) {
     register_handler(this, messaging_verb::REPAIR_GET_ROW_DIFF, std::move(func));
 }
 future<> messaging_service::unregister_repair_get_row_diff() {
     return unregister_handler(messaging_verb::REPAIR_GET_ROW_DIFF);
 }
-future<repair_rows_on_wire> messaging_service::send_repair_get_row_diff(msg_addr id, uint32_t repair_meta_id, std::unordered_set<repair_hash> set_diff, bool needs_all_rows) {
+future<repair_rows_on_wire> messaging_service::send_repair_get_row_diff(msg_addr id, uint32_t repair_meta_id, repair_hash_set set_diff, bool needs_all_rows) {
     return send_message<future<repair_rows_on_wire>>(this, messaging_verb::REPAIR_GET_ROW_DIFF, std::move(id), repair_meta_id, std::move(set_diff), needs_all_rows);
 }
 

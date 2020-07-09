@@ -23,6 +23,7 @@
 
 #include <unordered_map>
 #include <exception>
+#include <absl/container/btree_set.h>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/sharded.hh>
@@ -338,6 +339,8 @@ public:
         return os << x.hash;
     }
 };
+
+using repair_hash_set = absl::btree_set<repair_hash>;
 
 enum class repair_row_level_start_status: uint8_t {
     ok,
