@@ -165,7 +165,7 @@ public:
         free(obj, size);
     }
 
-    size_t preferred_max_contiguous_allocation() const {
+    size_t preferred_max_contiguous_allocation() const noexcept {
         return _preferred_max_contiguous_allocation;
     }
 
@@ -173,11 +173,11 @@ public:
     // are invalidated, e.g. due to internal events like compaction or eviction.
     // When the value returned by this method doesn't change, references obtained
     // between invocations remain valid.
-    uint64_t invalidate_counter() const {
+    uint64_t invalidate_counter() const noexcept {
         return _invalidate_counter;
     }
 
-    void invalidate_references() {
+    void invalidate_references() noexcept {
         ++_invalidate_counter;
     }
 };
