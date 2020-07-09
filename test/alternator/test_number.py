@@ -108,11 +108,6 @@ def test_number_precision_not_allowed(test_table_s):
                 UpdateExpression='SET a = :val',
                 ExpressionAttributeValues={':val': num})
 
-# TODO: check that the strings "Infinity" and "NaN" are not supported numbers
-# are neither are random strings like "dog" or numbers with syntax errors.
-# Unfortunately, boto3 tries too hard to "help" the application catch such
-# errors and it's not easy to actually pass them to the server :-(
-
 # While most of the Alternator code just saves high-precision numbers
 # unchanged, the "+" and "-" operations need to calculate with them, and
 # we should check the calculation isn't done with some lower-precision

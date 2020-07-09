@@ -146,3 +146,11 @@ def test_tags_return_empty_body(dynamodb, test_table):
     req = get_signed_request(dynamodb, 'UntagResource', '{"ResourceArn": "' + arn + '", "TagKeys": ["k"]}')
     response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
     assert not response.text
+
+# Test that incorrect number values are detected
+def test_incorrect_numbers(dynamodb, test_table):
+    for incorrect in ["NaN", "Infinity", "-Infinity", "-NaN", "dog", "-dog"]:
+        payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}, "v": {"N": "' + incorrect + '"}}}'
+        req = get_signed_request(dynamodb, 'PutItem', payload)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        assert "ValidationException" in response.text and "numeric" in response.text
