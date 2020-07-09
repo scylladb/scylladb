@@ -45,27 +45,29 @@ public:
 
 private:
     schema_ptr _schema;
-    lw_shared_ptr<table> _table;
-    std::vector<sstables::shared_sstable> _excluded_sstables;
     const seastar::abort_source* _as;
     evictable_reader_handle& _staging_reader_handle;
     circular_buffer<mutation> _buffer;
     mutation* _m{nullptr};
     size_t _buffer_size{0};
+    noncopyable_function<future<row_locker::lock_holder>(mutation)> _view_update_pusher;
 
 private:
     void do_flush_buffer();
     void maybe_flush_buffer_mid_partition();
 
 public:
-    view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
-            evictable_reader_handle& staging_reader_handle)
+    // Push updates with a custom pusher. Mainly for tests.
+    view_updating_consumer(schema_ptr schema, const seastar::abort_source& as, evictable_reader_handle& staging_reader_handle,
+            noncopyable_function<future<row_locker::lock_holder>(mutation)> view_update_pusher)
             : _schema(std::move(schema))
-            , _table(table.shared_from_this())
-            , _excluded_sstables(std::move(excluded_sstables))
             , _as(&as)
             , _staging_reader_handle(staging_reader_handle)
+            , _view_update_pusher(std::move(view_update_pusher))
     { }
+
+    view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
+            evictable_reader_handle& staging_reader_handle);
 
     view_updating_consumer(view_updating_consumer&&) = default;
 

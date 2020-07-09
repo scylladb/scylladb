@@ -1927,7 +1927,7 @@ void view_updating_consumer::do_flush_buffer() {
 
     while (!_buffer.empty()) {
         try {
-            auto lock_holder = _table->stream_view_replica_updates(_schema, std::move(_buffer.front()), db::no_timeout, _excluded_sstables).get();
+            auto lock_holder = _view_update_pusher(std::move(_buffer.front())).get();
         } catch (...) {
             vlogger.warn("Failed to push replica updates for table {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
         }
@@ -1946,6 +1946,15 @@ void view_updating_consumer::maybe_flush_buffer_mid_partition() {
         _m = &_buffer.back();
     }
 }
+
+view_updating_consumer::view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
+        evictable_reader_handle& staging_reader_handle)
+    : view_updating_consumer(std::move(schema), as, staging_reader_handle,
+            [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables)] (mutation m) mutable {
+        auto s = m.schema();
+        return table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, excluded_sstables);
+    })
+{ }
 
 } // namespace view
 } // namespace db
