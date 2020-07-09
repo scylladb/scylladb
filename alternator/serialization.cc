@@ -74,7 +74,11 @@ struct from_json_visitor {
         bo.write(boolean_type->decompose(v.GetBool()));
     }
     void operator()(const decimal_type_impl& t) const {
-        bo.write(t.from_string(sstring_view(v.GetString(), v.GetStringLength())));
+        try {
+            bo.write(t.from_string(sstring_view(v.GetString(), v.GetStringLength())));
+        } catch (const marshal_exception& e) {
+            throw api_error("ValidationException", format("The parameter cannot be converted to a numeric value: {}", v));
+        }
     }
     // default
     void operator()(const abstract_type& t) const {
@@ -253,14 +257,18 @@ big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
     if (it->name != "N") {
         throw api_error("ValidationException", format("{}: expected number, found type '{}'", diagnostic, it->name));
     }
-    if (it->value.IsNumber()) {
-         // FIXME(sarna): should use big_decimal constructor with numeric values directly:
-        return big_decimal(rjson::print(it->value));
+    try {
+        if (it->value.IsNumber()) {
+             // FIXME(sarna): should use big_decimal constructor with numeric values directly:
+            return big_decimal(rjson::print(it->value));
+        }
+        if (!it->value.IsString()) {
+            throw api_error("ValidationException", format("{}: improperly formatted number constant", diagnostic));
+        }
+        return big_decimal(rjson::to_string_view(it->value));
+    } catch (const marshal_exception& e) {
+        throw api_error("ValidationException", format("The parameter cannot be converted to a numeric value: {}", it->value));
     }
-    if (!it->value.IsString()) {
-        throw api_error("ValidationException", format("{}: improperly formatted number constant", diagnostic));
-    }
-    return big_decimal(it->value.GetString());
 }
 
 const std::pair<std::string, const rjson::value*> unwrap_set(const rjson::value& v) {
