@@ -234,7 +234,7 @@ template<typename T>
 inline
 auto current_deleter() {
     auto& alloc = current_allocator();
-    return [&alloc] (T* obj) {
+    return [&alloc] (T* obj) noexcept {
         alloc.destroy(obj);
     };
 }
