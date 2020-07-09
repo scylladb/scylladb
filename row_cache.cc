@@ -899,7 +899,7 @@ void row_cache::invalidate_sync(memtable& m) noexcept {
         // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
         // with_linearized_managed_bytes(), but invalidate() does.
         m.partitions.clear_and_dispose([this, deleter = current_deleter<memtable_entry>(), &blow_cache] (memtable_entry* entry) {
-            with_linearized_managed_bytes([&] {
+            with_linearized_managed_bytes([&] () noexcept {
                 try {
                     invalidate_locked(entry->key());
                 } catch (...) {
