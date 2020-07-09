@@ -141,6 +141,11 @@ struct nonempty : public size_check {
 
 // Check that array has the expected number of elements
 static void verify_operand_count(const rjson::value* array, const size_check& expected, const rjson::value& op) {
+    if (!array && expected(0)) {
+        // If expected() allows an empty AttributeValueList, it is also fine
+        // that it is missing.
+        return;
+    }
     if (!array || !array->IsArray()) {
         throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
     }

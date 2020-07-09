@@ -522,6 +522,15 @@ def test_update_expected_1_null(test_table_s):
             Expected={'a': {'ComparisonOperator': 'NULL', 'AttributeValueList': [2]}}
         )
 
+# When ComparisonOperator = "NULL", AttributeValueList should be empty if it
+# exists, but as this test verifies, it may also be missing completely.
+def test_update_expected_1_null_missing_list(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 2, 'Action': 'PUT'}},
+        Expected={'a': {'ComparisonOperator': 'NULL'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 2
+
 # Tests for Expected with ComparisonOperator = "CONTAINS":
 def test_update_expected_1_contains(test_table_s):
     # true cases. CONTAINS can be used for two unrelated things: check substrings
