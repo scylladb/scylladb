@@ -611,10 +611,10 @@ public:
 
     occupancy_stats occupancy() const;
 
-    allocation_strategy& allocator() {
+    allocation_strategy& allocator() noexcept {
         return *_impl;
     }
-    const allocation_strategy& allocator() const {
+    const allocation_strategy& allocator() const noexcept {
         return *_impl;
     }
 
