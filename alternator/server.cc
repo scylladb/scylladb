@@ -274,7 +274,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     std::vector<std::string_view> split_target = split(target, '.');
     //NOTICE(sarna): Target consists of Dynamo API version followed by a dot '.' and operation type (e.g. CreateTable)
     std::string op = split_target.empty() ? std::string() : std::string(split_target.back());
-    slogger.trace("Request: {} {}", op, req->content);
+    slogger.trace("Request: {} {} {}", op, req->content, req->_headers);
     return verify_signature(*req).then([this, op, req = std::move(req)] () mutable {
         auto callback_it = _callbacks.find(op);
         if (callback_it == _callbacks.end()) {
