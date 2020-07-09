@@ -23,6 +23,7 @@
 
 #include <unordered_map>
 #include <exception>
+#include <absl/container/btree_set.h>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/sharded.hh>
@@ -333,6 +334,8 @@ public:
         return os << x.hash;
     }
 };
+
+using repair_hash_set = absl::btree_set<repair_hash>;
 
 // Return value of the REPAIR_GET_SYNC_BOUNDARY RPC verb
 struct get_sync_boundary_response {
