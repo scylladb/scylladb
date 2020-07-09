@@ -148,8 +148,8 @@ public:
                 _type.begin(k1), _type.end(k1),
                 _type.begin(k2), _type.end(k2),
                 [] (const bytes_view& c1, const bytes_view& c2) -> int {
-                    if (c1.size() != c2.size()) {
-                        return c1.size() < c2.size() ? -1 : 1;
+                    if (c1.size() != c2.size() || !c1.size()) {
+                        return c1.size() < c2.size() ? -1 : c1.size() ? 1 : 0;
                     }
                     return memcmp(c1.begin(), c2.begin(), c1.size());
                 });
