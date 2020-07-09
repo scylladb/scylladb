@@ -398,8 +398,7 @@ SEASTAR_THREAD_TEST_CASE(set_contains) {
                      {{ST({"a1", "b1"})}, {ST({"a2", "b1"})}});
         require_rows(e, "select s from t where s contains null allow filtering",
                      {{ST({"a1", "b1"})}, {ST({"a2", "b1"})}, {ST({"a3", "b3"})}});
-        // TODO: uncomment when #6797 is fixed:
-        // require_rows(e, "select s from t where s contains 'b1' and s contains '' allow filtering", {});
+        require_rows(e, "select s from t where s contains 'b1' and s contains '' allow filtering", {});
         require_rows(e, "select s from t where s contains 'b1' and p contains 4 allow filtering", {});
         cquery_nofail(e, "insert into t (p, c, st) values ({4}, {41}, {104})");
         require_rows(e, "select st from t where st contains 4 allow filtering", {});
