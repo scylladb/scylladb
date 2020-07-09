@@ -377,7 +377,7 @@ private:
             query_ranges_to_vnodes_generator&& ranges_to_vnodes,
             int concurrency_factor,
             tracing::trace_state_ptr trace_state,
-            uint32_t remaining_row_count,
+            uint64_t remaining_row_count,
             uint32_t remaining_partition_count,
             replicas_per_token_range preferred_replicas,
             service_permit permit);

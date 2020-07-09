@@ -1372,7 +1372,7 @@ public:
         auto&& cc = _schema->clustering_key_columns();
 
         std::vector<query::clustering_range> bounds;
-        uint32_t row_limit = query::max_rows;
+        uint64_t row_limit = query::max_rows;
 
         const bool has_only_static_row = !p.static_row().empty() && p.clustered_rows().empty();
         if (cc.empty() || has_only_static_row) {

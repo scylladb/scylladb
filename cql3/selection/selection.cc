@@ -388,11 +388,11 @@ std::unique_ptr<result_set> result_set_builder::build() {
 
 result_set_builder::restrictions_filter::restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions,
         const query_options& options,
-        uint32_t remaining,
+        uint64_t remaining,
         schema_ptr schema,
-        uint32_t per_partition_limit,
+        uint64_t per_partition_limit,
         std::optional<partition_key> last_pkey,
-        uint32_t rows_fetched_for_last_partition)
+        uint64_t rows_fetched_for_last_partition)
     : _restrictions(restrictions)
     , _options(options)
     , _skip_pk_restrictions(!_restrictions->pk_restrictions_need_filtering())

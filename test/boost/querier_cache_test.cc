@@ -152,7 +152,7 @@ public:
         unsigned key;
         dht::partition_range original_range;
         query::partition_slice original_slice;
-        uint32_t row_limit;
+        uint64_t row_limit;
         size_t memory_usage;
 
         dht::partition_range expected_range;
@@ -209,7 +209,7 @@ public:
 
     template <typename Querier>
     entry_info produce_first_page_and_save_querier(unsigned key, const dht::partition_range& range,
-            const query::partition_slice& slice, uint32_t row_limit) {
+            const query::partition_slice& slice, uint64_t row_limit) {
         const auto cache_key = make_cache_key(key);
 
         auto querier = make_querier<Querier>(range);
@@ -255,16 +255,16 @@ public:
     }
 
     entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range,
-            const query::partition_slice& slice, uint32_t row_limit = 5) {
+            const query::partition_slice& slice, uint64_t row_limit = 5) {
         return produce_first_page_and_save_querier<query::data_querier>(key, range, slice, row_limit);
     }
 
-    entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range, uint32_t row_limit = 5) {
+    entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range, uint64_t row_limit = 5) {
         return produce_first_page_and_save_data_querier(key, range, make_default_slice(), row_limit);
     }
 
     // Singular overload
-    entry_info produce_first_page_and_save_data_querier(unsigned key, std::size_t i, uint32_t row_limit = 5) {
+    entry_info produce_first_page_and_save_data_querier(unsigned key, std::size_t i, uint64_t row_limit = 5) {
         return produce_first_page_and_save_data_querier(key, make_singular_partition_range(i), _s.schema()->full_slice(), row_limit);
     }
 
@@ -279,16 +279,16 @@ public:
     }
 
     entry_info produce_first_page_and_save_mutation_querier(unsigned key, const dht::partition_range& range,
-            const query::partition_slice& slice, uint32_t row_limit = 5) {
+            const query::partition_slice& slice, uint64_t row_limit = 5) {
         return produce_first_page_and_save_querier<query::mutation_querier>(key, range, slice, row_limit);
     }
 
-    entry_info produce_first_page_and_save_mutation_querier(unsigned key, const dht::partition_range& range, uint32_t row_limit = 5) {
+    entry_info produce_first_page_and_save_mutation_querier(unsigned key, const dht::partition_range& range, uint64_t row_limit = 5) {
         return produce_first_page_and_save_mutation_querier(key, range, make_default_slice(), row_limit);
     }
 
     // Singular overload
-    entry_info produce_first_page_and_save_mutation_querier(unsigned key, std::size_t i, uint32_t row_limit = 5) {
+    entry_info produce_first_page_and_save_mutation_querier(unsigned key, std::size_t i, uint64_t row_limit = 5) {
         return produce_first_page_and_save_mutation_querier(key, make_singular_partition_range(i), _s.schema()->full_slice(), row_limit);
     }
 
@@ -670,7 +670,8 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 1,
                 utils::make_random_uuid(),
                 query::is_first_page::yes,
-                query::max_result_size(1024 * 1024));
+                query::max_result_size(1024 * 1024),
+                0);
 
         // Should save the querier in cache.
         db.query_mutations(s,
@@ -705,7 +706,8 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 1,
                 utils::make_random_uuid(),
                 query::is_first_page::no,
-                query::max_result_size(1024 * 1024));
+                query::max_result_size(1024 * 1024),
+                0);
 
         // Should evict the already cached querier.
         db.query_mutations(s,
@@ -722,7 +724,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         // as that sadly leads to use-after-free as the database's
         // resource_concurrency_semaphore will be destroyed before some
         // of the tracked buffers.
-        cmd2.row_limit = query::max_rows;
+        cmd2.set_row_limit(query::max_rows);
         cmd2.partition_limit = query::max_partitions;
         cmd2.max_result_size.emplace(query::result_memory_limiter::unlimited_result_size);
         db.query_mutations(s,

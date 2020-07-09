@@ -447,10 +447,10 @@ population_description create_test_table(cql_test_env& env, const sstring& ks_na
     auto res = generate_partitions(env, *pop_desc.schema, *pop_gen, static_insert_id, clustering_insert_id, clustering_delete_id_mappings);
     pop_desc.partitions = std::move(res.partitions);
 
-    size_t live_row_count = 0;
-    size_t dead_row_count = 0;
+    uint64_t live_row_count = 0;
+    uint64_t dead_row_count = 0;
     for (auto& part : pop_desc.partitions) {
-        live_row_count += std::max(part.live_rows.size(), size_t(part.has_static_row));
+        live_row_count += std::max(part.live_rows.size(), uint64_t(part.has_static_row));
         dead_row_count += part.dead_rows.size();
         testlog.trace("Partition {}, has_static_rows={}, rows={}, (of which live={} and dead={})",
                 part.dkey,

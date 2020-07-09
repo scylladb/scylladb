@@ -60,11 +60,13 @@ public:
 private:
     partition_key _partition_key;
     std::optional<clustering_key> _clustering_key;
-    uint32_t _remaining;
+    uint32_t _remaining_low_bits;
     utils::UUID _query_uuid;
     replicas_per_token_range _last_replicas;
     std::optional<db::read_repair_decision> _query_read_repair_decision;
-    uint32_t _rows_fetched_for_last_partition;
+    uint32_t _rows_fetched_for_last_partition_low_bits;
+    uint32_t _remaining_high_bits;
+    uint32_t _rows_fetched_for_last_partition_high_bits;
 
 public:
     paging_state(partition_key pk,
@@ -73,7 +75,17 @@ public:
             utils::UUID reader_recall_uuid,
             replicas_per_token_range last_replicas,
             std::optional<db::read_repair_decision> query_read_repair_decision,
-            uint32_t rows_fetched_for_last_partition);
+            uint32_t rows_fetched_for_last_partition,
+            uint32_t remaining_ext,
+            uint32_t rows_fetched_for_last_partition_high_bits);
+
+    paging_state(partition_key pk,
+            std::optional<clustering_key> ck,
+            uint64_t rem,
+            utils::UUID reader_recall_uuid,
+            replicas_per_token_range last_replicas,
+            std::optional<db::read_repair_decision> query_read_repair_decision,
+            uint64_t rows_fetched_for_last_partition);
 
     void set_partition_key(partition_key pk) {
         _partition_key = std::move(pk);
@@ -83,8 +95,9 @@ public:
         _clustering_key = std::move(ck);
     }
 
-    void set_remaining(uint32_t remaining) {
-        _remaining = remaining;
+    void set_remaining(uint64_t remaining) {
+        _remaining_low_bits = static_cast<uint32_t>(remaining);
+        _remaining_high_bits = static_cast<uint32_t>(remaining >> 32);
     }
 
     /**
@@ -103,12 +116,27 @@ public:
      * Max remaining rows to fetch in total.
      * I.e. initial row_limit - #rows returned so far.
      */
-    uint32_t get_remaining() const {
-        return _remaining;
+    uint32_t get_remaining_low_bits() const {
+        return _remaining_low_bits;
     }
 
-    uint32_t get_rows_fetched_for_last_partition() const {
-        return _rows_fetched_for_last_partition;
+    uint32_t get_rows_fetched_for_last_partition_low_bits() const {
+        return _rows_fetched_for_last_partition_low_bits;
+    }
+    uint32_t get_remaining_high_bits() const {
+        return _remaining_high_bits;
+    }
+
+    uint32_t get_rows_fetched_for_last_partition_high_bits() const {
+        return _rows_fetched_for_last_partition_high_bits;
+    }
+
+    uint64_t get_remaining() const {
+        return (static_cast<uint64_t>(_remaining_high_bits) << 32) | _remaining_low_bits;
+    }
+
+    uint64_t get_rows_fetched_for_last_partition() const {
+        return (static_cast<uint64_t>(_rows_fetched_for_last_partition_high_bits) << 32) | _rows_fetched_for_last_partition_low_bits;
     }
 
     /**

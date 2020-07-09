@@ -2002,7 +2002,7 @@ struct query_state {
             : schema(std::move(s))
             , cmd(cmd)
             , builder(cmd.slice, opts, std::move(memory_accounter))
-            , limit(cmd.row_limit)
+            , limit(cmd.get_row_limit())
             , partition_limit(cmd.partition_limit)
             , current_partition_range(ranges.begin())
             , range_end(ranges.end()){
@@ -2010,12 +2010,12 @@ struct query_state {
     schema_ptr schema;
     const query::read_command& cmd;
     query::result::builder builder;
-    uint32_t limit;
+    uint64_t limit;
     uint32_t partition_limit;
     bool range_empty = false;   // Avoid ubsan false-positive when moving after construction
     dht::partition_range_vector::const_iterator current_partition_range;
     dht::partition_range_vector::const_iterator range_end;
-    uint32_t remaining_rows() const {
+    uint64_t remaining_rows() const {
         return limit - builder.row_count();
     }
     uint32_t remaining_partitions() const {

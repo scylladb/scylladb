@@ -1217,7 +1217,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             cf.as_mutation_source(),
             seastar::cref(range),
             seastar::cref(cmd.slice),
-            cmd.row_limit,
+            cmd.get_row_limit(),
             cmd.partition_limit,
             cmd.timestamp,
             timeout,

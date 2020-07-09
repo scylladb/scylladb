@@ -279,7 +279,7 @@ public:
         }
         void reset(const partition_key* = nullptr) {
         }
-        uint32_t get_rows_dropped() const {
+        uint64_t get_rows_dropped() const {
             return 0;
         }
     };
@@ -290,25 +290,25 @@ public:
         const bool _skip_ck_restrictions;
         mutable bool _current_partition_key_does_not_match = false;
         mutable bool _current_static_row_does_not_match = false;
-        mutable uint32_t _rows_dropped = 0;
-        mutable uint32_t _remaining;
+        mutable uint64_t _rows_dropped = 0;
+        mutable uint64_t _remaining;
         schema_ptr _schema;
-        mutable uint32_t _per_partition_limit;
-        mutable uint32_t _per_partition_remaining;
-        mutable uint32_t _rows_fetched_for_last_partition;
+        mutable uint64_t _per_partition_limit;
+        mutable uint64_t _per_partition_remaining;
+        mutable uint64_t _rows_fetched_for_last_partition;
         mutable std::optional<partition_key> _last_pkey;
         mutable bool _is_first_partition_on_page = true;
     public:
         explicit restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions,
                 const query_options& options,
-                uint32_t remaining,
+                uint64_t remaining,
                 schema_ptr schema,
-                uint32_t per_partition_limit,
+                uint64_t per_partition_limit,
                 std::optional<partition_key> last_pkey = {},
-                uint32_t rows_fetched_for_last_partition = 0);
+                uint64_t rows_fetched_for_last_partition = 0);
         bool operator()(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view* row) const;
         void reset(const partition_key* key = nullptr);
-        uint32_t get_rows_dropped() const {
+        uint64_t get_rows_dropped() const {
             return _rows_dropped;
         }
     private:
@@ -333,7 +333,7 @@ public:
         result_set_builder& _builder;
         const schema& _schema;
         const selection& _selection;
-        uint32_t _row_count;
+        uint64_t _row_count;
         std::vector<bytes> _partition_key;
         std::vector<bytes> _clustering_key;
         Filter _filter;
@@ -366,13 +366,13 @@ public:
             }
         }
 
-        void accept_new_partition(const partition_key& key, uint32_t row_count) {
+        void accept_new_partition(const partition_key& key, uint64_t row_count) {
             _partition_key = key.explode(_schema);
             _row_count = row_count;
             _filter.reset(&key);
         }
 
-        void accept_new_partition(uint32_t row_count) {
+        void accept_new_partition(uint64_t row_count) {
             _row_count = row_count;
             _filter.reset();
         }
@@ -413,7 +413,7 @@ public:
             }
         }
 
-        uint32_t accept_partition_end(const query::result_row_view& static_row) {
+        uint64_t accept_partition_end(const query::result_row_view& static_row) {
             if (_row_count == 0) {
                 if (!_filter(_selection, _partition_key, _clustering_key, static_row, nullptr)) {
                     return _filter.get_rows_dropped();

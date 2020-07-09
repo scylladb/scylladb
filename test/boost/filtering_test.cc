@@ -916,7 +916,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_limit) {
 
         // Assert that with LIMIT 3 and paging 1 we will not extract more than 3 values (issue #4100)
         rows_fetched = 0;
-        uint32_t remaining = 1;
+        uint64_t remaining = 1;
         while (remaining > 0) {
             qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
@@ -1012,7 +1012,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_per_partition_limit) {
                 for (unsigned ppl = 1; ppl < 3; ++ppl) {
                     paging_state = nullptr;
                     rows_fetched = 0;
-                    uint32_t remaining = 1;
+                    uint64_t remaining = 1;
                     while (remaining > 0) {
                         qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
                                 cql3::query_options::specific_options{pg, paging_state, {}, api::new_timestamp()});

@@ -2942,13 +2942,13 @@ future<> storage_service::force_remove_completion() {
  * Takes an ordered list of adjacent tokens and divides them in the specified number of ranges.
  */
 static std::vector<std::pair<dht::token_range, uint64_t>>
-calculate_splits(std::vector<dht::token> tokens, uint32_t split_count, column_family& cf) {
+calculate_splits(std::vector<dht::token> tokens, uint64_t split_count, column_family& cf) {
     auto sstables = cf.get_sstables();
     const double step = static_cast<double>(tokens.size() - 1) / split_count;
     auto prev_token_idx = 0;
     std::vector<std::pair<dht::token_range, uint64_t>> splits;
     splits.reserve(split_count);
-    for (uint32_t i = 1; i <= split_count; ++i) {
+    for (uint64_t i = 1; i <= split_count; ++i) {
         auto index = static_cast<uint32_t>(std::round(i * step));
         dht::token_range range({{ std::move(tokens[prev_token_idx]), false }}, {{ tokens[index], true }});
         // always return an estimate > 0 (see CASSANDRA-7322)
@@ -2994,7 +2994,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
     // split_count should be much smaller than number of key samples, to avoid huge sampling error
     constexpr uint32_t min_samples_per_split = 4;
     uint64_t max_split_count = tokens.size() / min_samples_per_split + 1;
-    uint32_t split_count = std::max(uint32_t(1), static_cast<uint32_t>(std::min(max_split_count, total_row_count_estimate / keys_per_split)));
+    uint64_t split_count = std::max(uint64_t(1), std::min(max_split_count, total_row_count_estimate / keys_per_split));
 
     return calculate_splits(std::move(tokens), split_count, cf);
 };

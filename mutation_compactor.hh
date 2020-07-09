@@ -135,14 +135,14 @@ class compact_mutation_state {
     can_gc_fn _can_gc;
     api::timestamp_type _max_purgeable = api::missing_timestamp;
     const query::partition_slice& _slice;
-    uint32_t _row_limit{};
+    uint64_t _row_limit{};
     uint32_t _partition_limit{};
-    uint32_t _partition_row_limit{};
+    uint64_t _partition_row_limit{};
 
     range_tombstone_accumulator _range_tombstones;
 
     bool _static_row_live{};
-    uint32_t _rows_in_current_partition;
+    uint64_t _rows_in_current_partition;
     uint32_t _current_partition_limit;
     bool _empty_partition{};
     bool _empty_partition_in_gc_consumer{};
@@ -214,7 +214,7 @@ public:
 
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
-    compact_mutation_state(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
+    compact_mutation_state(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
               uint32_t partition_limit)
         : _schema(s)
         , _query_time(query_time)
@@ -424,7 +424,7 @@ public:
     /// tombstones left in the partition.
     template <typename Consumer>
     requires CompactedFragmentsConsumer<Consumer>
-    void start_new_page(uint32_t row_limit,
+    void start_new_page(uint64_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
             mutation_fragment::kind next_fragment_kind,
@@ -472,7 +472,7 @@ class compact_mutation {
     GCConsumer _gc_consumer;
 
 public:
-    compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
+    compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
               uint32_t partition_limit, Consumer consumer, GCConsumer gc_consumer = GCConsumer())
         : _state(make_lw_shared<compact_mutation_state<OnlyLive, SSTableCompaction>>(s, query_time, slice, limit, partition_limit))
         , _consumer(std::move(consumer))
