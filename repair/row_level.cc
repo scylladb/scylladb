@@ -667,7 +667,7 @@ private:
     // Tracks current sync boundary
     std::optional<repair_sync_boundary> _current_sync_boundary;
     // Contains the hashes of rows in the _working_row_buffor for all peer nodes
-    std::vector<std::unordered_set<repair_hash>> _peer_row_hash_sets;
+    std::vector<repair_hash_set> _peer_row_hash_sets;
     // Gate used to make sure pending operation of meta data is done
     seastar::gate _gate;
     sink_source_for_get_full_row_hashes _sink_source_for_get_full_row_hashes;
@@ -887,9 +887,9 @@ public:
     }
 
     // Must run inside a seastar thread
-    static std::unordered_set<repair_hash>
-    get_set_diff(const std::unordered_set<repair_hash>& x, const std::unordered_set<repair_hash>& y) {
-        std::unordered_set<repair_hash> set_diff;
+    static repair_hash_set
+    get_set_diff(const repair_hash_set& x, const repair_hash_set& y) {
+        repair_hash_set set_diff;
         // Note std::set_difference needs x and y are sorted.
         std::copy_if(x.begin(), x.end(), std::inserter(set_diff, set_diff.end()),
                 [&y] (auto& item) { thread::maybe_yield(); return y.find(item) == y.end(); });
@@ -907,14 +907,14 @@ public:
 
     }
 
-    std::unordered_set<repair_hash>& peer_row_hash_sets(unsigned node_idx) {
+    repair_hash_set& peer_row_hash_sets(unsigned node_idx) {
         return _peer_row_hash_sets[node_idx];
     }
 
     // Get a list of row hashes in _working_row_buf
-    future<std::unordered_set<repair_hash>>
+    future<repair_hash_set>
     working_row_hashes() {
-        return do_with(std::unordered_set<repair_hash>(), [this] (std::unordered_set<repair_hash>& hashes) {
+        return do_with(repair_hash_set(), [this] (repair_hash_set& hashes) {
             return do_for_each(_working_row_buf, [&hashes] (repair_row& r) {
                 hashes.emplace(r.hash());
             }).then([&hashes] {
@@ -1201,9 +1201,9 @@ private:
     }
 
     future<std::list<repair_row>>
-    copy_rows_from_working_row_buf_within_set_diff(std::unordered_set<repair_hash> set_diff) {
+    copy_rows_from_working_row_buf_within_set_diff(repair_hash_set set_diff) {
         return do_with(std::list<repair_row>(), std::move(set_diff),
-                [this] (std::list<repair_row>& rows, std::unordered_set<repair_hash>& set_diff) {
+                [this] (std::list<repair_row>& rows, repair_hash_set& set_diff) {
             return do_for_each(_working_row_buf, [this, &set_diff, &rows] (const repair_row& r) {
                 if (set_diff.count(r.hash()) > 0) {
                     rows.push_back(r);
@@ -1218,7 +1218,7 @@ private:
     // Give a set of row hashes, return the corresponding rows
     // If needs_all_rows is set, return all the rows in _working_row_buf, ignore the set_diff
     future<std::list<repair_row>>
-    get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
+    get_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
         if (needs_all_rows) {
             if (!_repair_master || _nr_peer_nodes == 1) {
                 return make_ready_future<std::list<repair_row>>(std::move(_working_row_buf));
@@ -1268,7 +1268,7 @@ private:
                 [this] (const repair_row& x, const repair_row& y) { thread::maybe_yield(); return _cmp(x.boundary(), y.boundary()) < 0; });
         }
         if (update_hash_set) {
-            _peer_row_hash_sets[node_idx] = boost::copy_range<std::unordered_set<repair_hash>>(row_diff |
+            _peer_row_hash_sets[node_idx] = boost::copy_range<repair_hash_set>(row_diff |
                     boost::adaptors::transformed([] (repair_row& r) { thread::maybe_yield(); return r.hash(); }));
         }
         do_apply_rows(row_diff, node_idx, update_buf).get();
@@ -1362,13 +1362,13 @@ private:
 public:
     // RPC API
     // Return the hashes of the rows in _working_row_buf
-    future<std::unordered_set<repair_hash>>
+    future<repair_hash_set>
     get_full_row_hashes(gms::inet_address remote_node) {
         if (remote_node == _myip) {
             return get_full_row_hashes_handler();
         }
         return netw::get_local_messaging_service().send_repair_get_full_row_hashes(msg_addr(remote_node),
-                _repair_meta_id).then([this, remote_node] (std::unordered_set<repair_hash> hashes) {
+                _repair_meta_id).then([this, remote_node] (repair_hash_set hashes) {
             rlogger.debug("Got full hashes from peer={}, nr_hashes={}", remote_node, hashes.size());
             _metrics.rx_hashes_nr += hashes.size();
             stats().rx_hashes_nr += hashes.size();
@@ -1379,7 +1379,7 @@ public:
 
 private:
     future<> get_full_row_hashes_source_op(
-            lw_shared_ptr<std::unordered_set<repair_hash>> current_hashes,
+            lw_shared_ptr<repair_hash_set> current_hashes,
             gms::inet_address remote_node,
             unsigned node_idx,
             rpc::source<repair_hash_with_cmd>& source) {
@@ -1417,12 +1417,12 @@ private:
     }
 
 public:
-    future<std::unordered_set<repair_hash>>
+    future<repair_hash_set>
     get_full_row_hashes_with_rpc_stream(gms::inet_address remote_node, unsigned node_idx) {
         if (remote_node == _myip) {
             return get_full_row_hashes_handler();
         }
-        auto current_hashes = make_lw_shared<std::unordered_set<repair_hash>>();
+        auto current_hashes = make_lw_shared<repair_hash_set>();
         return _sink_source_for_get_full_row_hashes.get_sink_source(remote_node, node_idx).then_unpack(
                 [this, current_hashes, remote_node, node_idx]
                 (rpc::sink<repair_stream_cmd>& sink, rpc::source<repair_hash_with_cmd>& source) mutable {
@@ -1437,7 +1437,7 @@ public:
     }
 
     // RPC handler
-    future<std::unordered_set<repair_hash>>
+    future<repair_hash_set>
     get_full_row_hashes_handler() {
         return with_gate(_gate, [this] {
             return working_row_hashes();
@@ -1587,7 +1587,7 @@ public:
     // RPC API
     // Return rows in the _working_row_buf with hash within the given sef_diff
     // Must run inside a seastar thread
-    void get_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx) {
+    void get_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node, unsigned node_idx) {
         if (needs_all_rows || !set_diff.empty()) {
             if (remote_node == _myip) {
                 return;
@@ -1656,11 +1656,11 @@ private:
     }
 
     future<> get_row_diff_sink_op(
-            std::unordered_set<repair_hash> set_diff,
+            repair_hash_set set_diff,
             needs_all_rows_t needs_all_rows,
             rpc::sink<repair_hash_with_cmd>& sink,
             gms::inet_address remote_node) {
-        return do_with(std::move(set_diff), [needs_all_rows, remote_node, &sink] (std::unordered_set<repair_hash>& set_diff) mutable {
+        return do_with(std::move(set_diff), [needs_all_rows, remote_node, &sink] (repair_hash_set& set_diff) mutable {
             if (inject_rpc_stream_error) {
                 return make_exception_future<>(std::runtime_error("get_row_diff: Inject sender error in sink loop"));
             }
@@ -1687,7 +1687,7 @@ private:
 public:
     // Must run inside a seastar thread
     void get_row_diff_with_rpc_stream(
-            std::unordered_set<repair_hash> set_diff,
+            repair_hash_set set_diff,
             needs_all_rows_t needs_all_rows,
             update_peer_row_hash_sets update_hash_set,
             gms::inet_address remote_node,
@@ -1713,7 +1713,7 @@ public:
     }
 
     // RPC handler
-    future<repair_rows_on_wire> get_row_diff_handler(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows) {
+    future<repair_rows_on_wire> get_row_diff_handler(repair_hash_set set_diff, needs_all_rows_t needs_all_rows) {
         return with_gate(_gate, [this, set_diff = std::move(set_diff), needs_all_rows] () mutable {
             return get_row_diff(std::move(set_diff), needs_all_rows).then([this] (std::list<repair_row> row_diff) {
                 return to_repair_rows_on_wire(std::move(row_diff));
@@ -1723,12 +1723,12 @@ public:
 
     // RPC API
     // Send rows in the _working_row_buf with hash within the given sef_diff
-    future<> put_row_diff(std::unordered_set<repair_hash> set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node) {
+    future<> put_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows, gms::inet_address remote_node) {
         if (!set_diff.empty()) {
             if (remote_node == _myip) {
                 return make_ready_future<>();
             }
-            auto sz = set_diff.size();
+            size_t sz = set_diff.size();
             return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, sz] (std::list<repair_row> row_diff) {
                 if (row_diff.size() != sz) {
                     throw std::runtime_error("row_diff.size() != set_diff.size()");
@@ -1798,14 +1798,14 @@ private:
 
 public:
     future<> put_row_diff_with_rpc_stream(
-            std::unordered_set<repair_hash> set_diff,
+            repair_hash_set set_diff,
             needs_all_rows_t needs_all_rows,
             gms::inet_address remote_node, unsigned node_idx) {
         if (!set_diff.empty()) {
             if (remote_node == _myip) {
                 return make_ready_future<>();
             }
-            auto sz = set_diff.size();
+            size_t sz = set_diff.size();
             return get_row_diff(std::move(set_diff), needs_all_rows).then([this, remote_node, node_idx, sz] (std::list<repair_row> row_diff) {
                 if (row_diff.size() != sz) {
                     throw std::runtime_error("row_diff.size() != set_diff.size()");
@@ -1847,7 +1847,7 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
         rpc::sink<repair_row_on_wire_with_cmd> sink,
         rpc::source<repair_hash_with_cmd> source,
         bool &error,
-        std::unordered_set<repair_hash>& current_set_diff,
+        repair_hash_set& current_set_diff,
         std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt) {
     repair_hash_with_cmd hash_cmd = std::get<0>(hash_cmd_opt.value());
     rlogger.trace("Got repair_hash_with_cmd from peer={}, hash={}, cmd={}", from, hash_cmd.hash, int(hash_cmd.cmd));
@@ -1860,7 +1860,7 @@ static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
         }
         bool needs_all_rows = hash_cmd.cmd == repair_stream_cmd::needs_all_rows;
         _metrics.rx_hashes_nr += current_set_diff.size();
-        auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(current_set_diff)));
+        auto fp = make_foreign(std::make_unique<repair_hash_set>(std::move(current_set_diff)));
         return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, needs_all_rows, fp = std::move(fp)] {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
             if (fp.get_owner_shard() == this_shard_id()) {
@@ -1938,12 +1938,12 @@ static future<stop_iteration> repair_get_full_row_hashes_with_rpc_stream_process
     if (status == repair_stream_cmd::get_full_row_hashes) {
         return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] {
             auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-            return rm->get_full_row_hashes_handler().then([] (std::unordered_set<repair_hash> hashes) {
+            return rm->get_full_row_hashes_handler().then([] (repair_hash_set hashes) {
                 _metrics.tx_hashes_nr += hashes.size();
                 return hashes;
             });
-        }).then([sink] (std::unordered_set<repair_hash> hashes) mutable {
-            return do_with(std::move(hashes), [sink] (std::unordered_set<repair_hash>& hashes) mutable {
+        }).then([sink] (repair_hash_set hashes) mutable {
+            return do_with(std::move(hashes), [sink] (repair_hash_set& hashes) mutable {
                 return do_for_each(hashes, [sink] (const repair_hash& hash) mutable {
                     return sink(repair_hash_with_cmd{repair_stream_cmd::hash_data, hash});
                 }).then([sink] () mutable {
@@ -1966,7 +1966,7 @@ static future<> repair_get_row_diff_with_rpc_stream_handler(
         uint32_t repair_meta_id,
         rpc::sink<repair_row_on_wire_with_cmd> sink,
         rpc::source<repair_hash_with_cmd> source) {
-    return do_with(false, std::unordered_set<repair_hash>(), [from, src_cpu_id, repair_meta_id, sink, source] (bool& error, std::unordered_set<repair_hash>& current_set_diff) mutable {
+    return do_with(false, repair_hash_set(), [from, src_cpu_id, repair_meta_id, sink, source] (bool& error, repair_hash_set& current_set_diff) mutable {
         return repeat([from, src_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] () mutable {
             return source().then([from, src_cpu_id, repair_meta_id, sink, source, &error, &current_set_diff] (std::optional<std::tuple<repair_hash_with_cmd>> hash_cmd_opt) mutable {
                 if (hash_cmd_opt) {
@@ -2109,7 +2109,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
-                return rm->get_full_row_hashes_handler().then([] (std::unordered_set<repair_hash> hashes) {
+                return rm->get_full_row_hashes_handler().then([] (repair_hash_set hashes) {
                     _metrics.tx_hashes_nr += hashes.size();
                     return hashes;
                 });
@@ -2137,11 +2137,11 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
             });
         });
         ms.register_repair_get_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
-                std::unordered_set<repair_hash> set_diff, bool needs_all_rows) {
+                repair_hash_set set_diff, bool needs_all_rows) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
             _metrics.rx_hashes_nr += set_diff.size();
-            auto fp = make_foreign(std::make_unique<std::unordered_set<repair_hash>>(std::move(set_diff)));
+            auto fp = make_foreign(std::make_unique<repair_hash_set>(std::move(set_diff)));
             return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, fp = std::move(fp), needs_all_rows] () mutable {
                 auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
                 if (fp.get_owner_shard() == this_shard_id()) {
@@ -2441,7 +2441,7 @@ private:
             // sequentially because the rows from repair follower 1 to
             // repair master might reduce the amount of missing data
             // between repair master and repair follower 2.
-            std::unordered_set<repair_hash> set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes().get0());
+            repair_hash_set set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes().get0());
             // Request missing sets from peer node
             rlogger.debug("Before get_row_diff to node {}, local={}, peer={}, set_diff={}",
                     node, master.working_row_hashes().get0().size(), master.peer_row_hash_sets(node_idx).size(), set_diff.size());
@@ -2464,9 +2464,9 @@ private:
         // So we can figure out which rows peer node are missing and send the missing rows to them
         check_in_shutdown();
         _ri.check_in_abort();
-        std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes().get0();
+        repair_hash_set local_row_hash_sets = master.working_row_hashes().get0();
         auto sz = _all_live_peer_nodes.size();
-        std::vector<std::unordered_set<repair_hash>> set_diffs(sz);
+        std::vector<repair_hash_set> set_diffs(sz);
         for (size_t idx : boost::irange(size_t(0), sz)) {
             set_diffs[idx] = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
         }
