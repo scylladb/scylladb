@@ -81,11 +81,11 @@ public:
         }
     }
 
-    bool is_minimum() const {
+    bool is_minimum() const noexcept {
         return _kind == kind::before_all_keys;
     }
 
-    bool is_maximum() const {
+    bool is_maximum() const noexcept {
         return _kind == kind::after_all_keys;
     }
 
@@ -162,8 +162,8 @@ public:
 
 };
 
-const token& minimum_token();
-const token& maximum_token();
+const token& minimum_token() noexcept;
+const token& maximum_token() noexcept;
 int tri_compare(const token& t1, const token& t2);
 inline bool operator==(const token& t1, const token& t2) { return tri_compare(t1, t2) == 0; }
 inline bool operator<(const token& t1, const token& t2) { return tri_compare(t1, t2) < 0; }
