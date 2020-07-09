@@ -130,23 +130,23 @@ public:
     // The caller is still responsible for unlinking and destroying this entry.
     void evict(cache_tracker&) noexcept;
 
-    const dht::decorated_key& key() const { return _key; }
-    dht::ring_position_view position() const {
+    const dht::decorated_key& key() const noexcept { return _key; }
+    dht::ring_position_view position() const noexcept {
         if (is_dummy_entry()) {
             return dht::ring_position_view::max();
         }
         return _key;
     }
-    const partition_entry& partition() const { return _pe; }
+    const partition_entry& partition() const noexcept { return _pe; }
     partition_entry& partition() { return _pe; }
-    const schema_ptr& schema() const { return _schema; }
-    schema_ptr& schema() { return _schema; }
+    const schema_ptr& schema() const noexcept { return _schema; }
+    schema_ptr& schema() noexcept { return _schema; }
     flat_mutation_reader read(row_cache&, cache::read_context&);
     flat_mutation_reader read(row_cache&, cache::read_context&, utils::phased_barrier::phase_type);
-    bool continuous() const { return _flags._continuous; }
-    void set_continuous(bool value) { _flags._continuous = value; }
+    bool continuous() const noexcept { return _flags._continuous; }
+    void set_continuous(bool value) noexcept { _flags._continuous = value; }
 
-    bool is_dummy_entry() const { return _flags._dummy_entry; }
+    bool is_dummy_entry() const noexcept { return _flags._dummy_entry; }
 
     struct compare {
         dht::ring_position_less_comparator _c;
