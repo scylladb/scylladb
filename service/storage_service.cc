@@ -2966,6 +2966,10 @@ storage_service::get_ranges_for_endpoint(const sstring& name, const gms::inet_ad
     return _db.local().find_keyspace(name).get_replication_strategy().get_ranges(ep);
 }
 
+dht::token_range_vector storage_service::get_local_ranges(const sstring& keyspace_name) const {
+    return _db.local().get_keyspace_local_ranges(keyspace_name);
+}
+
 dht::token_range_vector
 storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
     if (sorted_tokens.empty())

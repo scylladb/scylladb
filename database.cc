@@ -1888,6 +1888,10 @@ const sstring& database::get_snitch_name() const {
     return _cfg.endpoint_snitch();
 }
 
+dht::token_range_vector database::get_keyspace_local_ranges(sstring ks) {
+    return find_keyspace(ks).get_replication_strategy().get_ranges(utils::fb_utilities::get_broadcast_address());
+}
+
 /*!
  * \brief a helper function that gets a table name and returns a prefix
  * of the directory name of the table.

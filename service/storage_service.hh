@@ -217,9 +217,7 @@ private:
     cdc::metadata _cdc_metadata;
 public:
     std::chrono::milliseconds get_ring_delay();
-    dht::token_range_vector get_local_ranges(const sstring& keyspace_name) const {
-        return get_ranges_for_endpoint(keyspace_name, get_broadcast_address());
-    }
+    dht::token_range_vector get_local_ranges(const sstring& keyspace_name) const;
 private:
 
     std::unordered_set<inet_address> _replicating_nodes;
