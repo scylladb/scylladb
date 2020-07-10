@@ -2309,7 +2309,7 @@ future<> storage_service::rebuild(sstring source_dc) {
             }
             auto keyspaces = make_lw_shared<std::vector<sstring>>(ss._db.local().get_non_system_keyspaces());
             return do_for_each(*keyspaces, [keyspaces, streamer, &ss] (sstring& keyspace_name) {
-                return streamer->add_ranges(keyspace_name, ss.get_local_ranges(keyspace_name));
+                return streamer->add_ranges(keyspace_name, ss.get_ranges_for_endpoint(keyspace_name, utils::fb_utilities::get_broadcast_address()));
             }).then([streamer] {
                 return streamer->stream_async().then([streamer] {
                     slogger.info("Streaming for rebuild successful");
@@ -2964,10 +2964,6 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
 dht::token_range_vector
 storage_service::get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const {
     return _db.local().find_keyspace(name).get_replication_strategy().get_ranges(ep);
-}
-
-dht::token_range_vector storage_service::get_local_ranges(const sstring& keyspace_name) const {
-    return _db.local().get_keyspace_local_ranges(keyspace_name);
 }
 
 dht::token_range_vector
