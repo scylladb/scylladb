@@ -437,7 +437,7 @@ void set_storage_service(http_context& ctx, routes& r) {
             return do_for_each(column_families, [=, &db](sstring cfname) {
                 auto& cm = db.get_compaction_manager();
                 auto& cf = db.find_column_family(keyspace, cfname);
-                return cm.perform_sstable_upgrade(&cf, exclude_current_version);
+                return cm.perform_sstable_upgrade(db, &cf, exclude_current_version);
             });
         }).then([]{
             return make_ready_future<json::json_return_type>(0);

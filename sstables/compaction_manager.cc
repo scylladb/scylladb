@@ -745,9 +745,9 @@ future<> compaction_manager::perform_cleanup(database& db, column_family* cf) {
 }
 
 // Submit a column family to be upgraded and wait for its termination.
-future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exclude_current_version) {
+future<> compaction_manager::perform_sstable_upgrade(database& db, column_family* cf, bool exclude_current_version) {
     using shared_sstables = std::vector<sstables::shared_sstable>;
-    return do_with(shared_sstables{}, [this, cf, exclude_current_version](shared_sstables& tables) {
+    return do_with(shared_sstables{}, [this, &db, cf, exclude_current_version](shared_sstables& tables) {
         // since we might potentially have ongoing compactions, and we
         // must ensure that all sstables created before we run are included
         // in the re-write, we need to barrier out any previously running
@@ -764,14 +764,14 @@ future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exc
                 }
             }
             return make_ready_future<>();
-        }).then([this, cf, &tables] {
+        }).then([this, &db, cf, &tables] {
             // doing a "cleanup" is about as compacting as we need
             // to be, provided we get to decide the tables to process,
             // and ignoring any existing operations.
             // Note that we potentially could be doing multiple
             // upgrades here in parallel, but that is really the users
             // problem.
-            return rewrite_sstables(cf, sstables::compaction_options::make_upgrade(), [&](auto&) mutable {
+            return rewrite_sstables(cf, sstables::compaction_options::make_upgrade(db), [&](auto&) mutable {
                 return std::exchange(tables, {});
             });
         });
