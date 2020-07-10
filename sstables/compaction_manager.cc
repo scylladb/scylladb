@@ -738,8 +738,8 @@ future<> compaction_manager::perform_cleanup(database& db, column_family* cf) {
             return sorted_owned_ranges.empty() || needs_cleanup(sst, sorted_owned_ranges, schema);
         });
         return sstables;
-    }).then([this, cf] (std::vector<sstables::shared_sstable> sstables) {
-        return rewrite_sstables(cf, sstables::compaction_options::make_cleanup(),
+    }).then([this, cf, &db] (std::vector<sstables::shared_sstable> sstables) {
+        return rewrite_sstables(cf, sstables::compaction_options::make_cleanup(db),
                 [sstables = std::move(sstables)] (const table&) { return sstables; });
     });
 }
