@@ -61,7 +61,6 @@
 #include "mutation_reader.hh"
 #include "schema.hh"
 #include "db/system_keyspace.hh"
-#include "service/storage_service.hh"
 #include "service/priority_manager.hh"
 #include "db_clock.hh"
 #include "mutation_compactor.hh"
@@ -1050,12 +1049,19 @@ protected:
         auto ranges_for_for_invalidation = get_ranges_for_invalidation(input_sstables);
         return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges_for_for_invalidation)};
     }
-public:
-    cleanup_compaction(column_family& cf, compaction_descriptor descriptor)
+
+private:
+    cleanup_compaction(database& db, column_family& cf, compaction_descriptor descriptor)
         : regular_compaction(cf, std::move(descriptor))
-        , _owned_ranges(service::get_local_storage_service().get_local_ranges(_schema->ks_name()))
+        , _owned_ranges(db.get_keyspace_local_ranges(_schema->ks_name()))
     {
     }
+
+public:
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_options::cleanup opts)
+        : cleanup_compaction(opts.db, cf, std::move(descriptor)) {}
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_options::upgrade opts)
+        : cleanup_compaction(opts.db, cf, std::move(descriptor)) {}
 
     std::string_view report_start_desc() const override {
         return "Cleaning";
@@ -1429,11 +1435,11 @@ static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::
         std::unique_ptr<compaction> operator()(compaction_options::regular) {
             return std::make_unique<regular_compaction>(cf, std::move(descriptor));
         }
-        std::unique_ptr<compaction> operator()(compaction_options::cleanup) {
-            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor));
+        std::unique_ptr<compaction> operator()(compaction_options::cleanup options) {
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(options));
         }
-        std::unique_ptr<compaction> operator()(compaction_options::upgrade) {
-            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor));
+        std::unique_ptr<compaction> operator()(compaction_options::upgrade options) {
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(options));
         }
         std::unique_ptr<compaction> operator()(compaction_options::scrub scrub_options) {
             return std::make_unique<scrub_compaction>(cf, std::move(descriptor), scrub_options);
