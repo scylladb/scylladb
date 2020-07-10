@@ -228,19 +228,19 @@ private:
     token_bound _token_bound{}; // valid when !_key
     std::optional<partition_key> _key;
 public:
-    static ring_position min() {
+    static ring_position min() noexcept {
         return { minimum_token(), token_bound::start };
     }
 
-    static ring_position max() {
+    static ring_position max() noexcept {
         return { maximum_token(), token_bound::end };
     }
 
-    bool is_min() const {
+    bool is_min() const noexcept {
         return _token.is_minimum();
     }
 
-    bool is_max() const {
+    bool is_max() const noexcept {
         return _token.is_maximum();
     }
 
@@ -348,19 +348,19 @@ public:
     struct after_key_tag {};
     using after_key = bool_class<after_key_tag>;
 
-    static ring_position_view min() {
+    static ring_position_view min() noexcept {
         return { minimum_token(), nullptr, -1 };
     }
 
-    static ring_position_view max() {
+    static ring_position_view max() noexcept {
         return { maximum_token(), nullptr, 1 };
     }
 
-    bool is_min() const {
+    bool is_min() const noexcept {
         return _token->is_minimum();
     }
 
-    bool is_max() const {
+    bool is_max() const noexcept {
         return _token->is_maximum();
     }
 
@@ -465,19 +465,19 @@ public:
     struct after_key_tag {};
     using after_key = bool_class<after_key_tag>;
 
-    static ring_position_ext min() {
+    static ring_position_ext min() noexcept {
         return { minimum_token(), std::nullopt, -1 };
     }
 
-    static ring_position_ext max() {
+    static ring_position_ext max() noexcept {
         return { maximum_token(), std::nullopt, 1 };
     }
 
-    bool is_min() const {
+    bool is_min() const noexcept {
         return _token.is_minimum();
     }
 
-    bool is_max() const {
+    bool is_max() const noexcept {
         return _token.is_maximum();
     }
 

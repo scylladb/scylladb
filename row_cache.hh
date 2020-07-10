@@ -130,23 +130,23 @@ public:
     // The caller is still responsible for unlinking and destroying this entry.
     void evict(cache_tracker&) noexcept;
 
-    const dht::decorated_key& key() const { return _key; }
-    dht::ring_position_view position() const {
+    const dht::decorated_key& key() const noexcept { return _key; }
+    dht::ring_position_view position() const noexcept {
         if (is_dummy_entry()) {
             return dht::ring_position_view::max();
         }
         return _key;
     }
-    const partition_entry& partition() const { return _pe; }
+    const partition_entry& partition() const noexcept { return _pe; }
     partition_entry& partition() { return _pe; }
-    const schema_ptr& schema() const { return _schema; }
-    schema_ptr& schema() { return _schema; }
+    const schema_ptr& schema() const noexcept { return _schema; }
+    schema_ptr& schema() noexcept { return _schema; }
     flat_mutation_reader read(row_cache&, cache::read_context&);
     flat_mutation_reader read(row_cache&, cache::read_context&, utils::phased_barrier::phase_type);
-    bool continuous() const { return _flags._continuous; }
-    void set_continuous(bool value) { _flags._continuous = value; }
+    bool continuous() const noexcept { return _flags._continuous; }
+    void set_continuous(bool value) noexcept { _flags._continuous = value; }
 
-    bool is_dummy_entry() const { return _flags._dummy_entry; }
+    bool is_dummy_entry() const noexcept { return _flags._dummy_entry; }
 
     struct compare {
         dht::ring_position_less_comparator _c;
@@ -248,28 +248,28 @@ public:
     void insert(rows_entry&) noexcept;
     void on_remove(rows_entry&) noexcept;
     void unlink(rows_entry&) noexcept;
-    void clear_continuity(cache_entry& ce);
-    void on_partition_erase();
-    void on_partition_merge();
-    void on_partition_hit();
-    void on_partition_miss();
-    void on_partition_eviction();
-    void on_row_eviction();
-    void on_row_hit();
-    void on_row_miss();
-    void on_miss_already_populated();
-    void on_mispopulate();
-    void on_row_processed_from_memtable() { ++_stats.rows_processed_from_memtable; }
-    void on_row_dropped_from_memtable() { ++_stats.rows_dropped_from_memtable; }
-    void on_row_merged_from_memtable() { ++_stats.rows_merged_from_memtable; }
-    void pinned_dirty_memory_overload(uint64_t bytes);
-    allocation_strategy& allocator();
-    logalloc::region& region();
-    const logalloc::region& region() const;
-    mutation_cleaner& cleaner() { return _garbage; }
-    mutation_cleaner& memtable_cleaner() { return _memtable_cleaner; }
-    uint64_t partitions() const { return _stats.partitions; }
-    const stats& get_stats() const { return _stats; }
+    void clear_continuity(cache_entry& ce) noexcept;
+    void on_partition_erase() noexcept;
+    void on_partition_merge() noexcept;
+    void on_partition_hit() noexcept;
+    void on_partition_miss() noexcept;
+    void on_partition_eviction() noexcept;
+    void on_row_eviction() noexcept;
+    void on_row_hit() noexcept;
+    void on_row_miss() noexcept;
+    void on_miss_already_populated() noexcept;
+    void on_mispopulate() noexcept;
+    void on_row_processed_from_memtable() noexcept { ++_stats.rows_processed_from_memtable; }
+    void on_row_dropped_from_memtable() noexcept { ++_stats.rows_dropped_from_memtable; }
+    void on_row_merged_from_memtable() noexcept { ++_stats.rows_merged_from_memtable; }
+    void pinned_dirty_memory_overload(uint64_t bytes) noexcept;
+    allocation_strategy& allocator() noexcept;
+    logalloc::region& region() noexcept;
+    const logalloc::region& region() const noexcept;
+    mutation_cleaner& cleaner() noexcept { return _garbage; }
+    mutation_cleaner& memtable_cleaner() noexcept { return _memtable_cleaner; }
+    uint64_t partitions() const noexcept { return _stats.partitions; }
+    const stats& get_stats() const noexcept { return _stats; }
     void set_compaction_scheduling_group(seastar::scheduling_group);
 };
 

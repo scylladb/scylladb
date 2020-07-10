@@ -171,7 +171,7 @@ void cache_tracker::insert(cache_entry& entry) {
     _region.allocator().invalidate_references();
 }
 
-void cache_tracker::on_partition_erase() {
+void cache_tracker::on_partition_erase() noexcept {
     --_stats.partitions;
     ++_stats.partition_removals;
     allocator().invalidate_references();
@@ -181,57 +181,57 @@ void cache_tracker::unlink(rows_entry& row) noexcept {
     row._lru_link.unlink();
 }
 
-void cache_tracker::on_partition_merge() {
+void cache_tracker::on_partition_merge() noexcept {
     ++_stats.partition_merges;
 }
 
-void cache_tracker::on_partition_hit() {
+void cache_tracker::on_partition_hit() noexcept {
     ++_stats.partition_hits;
 }
 
-void cache_tracker::on_partition_miss() {
+void cache_tracker::on_partition_miss() noexcept {
     ++_stats.partition_misses;
 }
 
-void cache_tracker::on_partition_eviction() {
+void cache_tracker::on_partition_eviction() noexcept {
     --_stats.partitions;
     ++_stats.partition_evictions;
 }
 
-void cache_tracker::on_row_eviction() {
+void cache_tracker::on_row_eviction() noexcept {
     --_stats.rows;
     ++_stats.row_evictions;
 }
 
-void cache_tracker::on_row_hit() {
+void cache_tracker::on_row_hit() noexcept {
     ++_stats.row_hits;
 }
 
-void cache_tracker::on_row_miss() {
+void cache_tracker::on_row_miss() noexcept {
     ++_stats.row_misses;
 }
 
-void cache_tracker::on_mispopulate() {
+void cache_tracker::on_mispopulate() noexcept {
     ++_stats.mispopulations;
 }
 
-void cache_tracker::on_miss_already_populated() {
+void cache_tracker::on_miss_already_populated() noexcept {
     ++_stats.concurrent_misses_same_key;
 }
 
-void cache_tracker::pinned_dirty_memory_overload(uint64_t bytes) {
+void cache_tracker::pinned_dirty_memory_overload(uint64_t bytes) noexcept {
     _stats.pinned_dirty_memory_overload += bytes;
 }
 
-allocation_strategy& cache_tracker::allocator() {
+allocation_strategy& cache_tracker::allocator() noexcept {
     return _region.allocator();
 }
 
-logalloc::region& cache_tracker::region() {
+logalloc::region& cache_tracker::region() noexcept {
     return _region;
 }
 
-const logalloc::region& cache_tracker::region() const {
+const logalloc::region& cache_tracker::region() const noexcept {
     return _region;
 }
 
@@ -451,7 +451,7 @@ public:
     }
 };
 
-void cache_tracker::clear_continuity(cache_entry& ce) {
+void cache_tracker::clear_continuity(cache_entry& ce) noexcept {
     ce.set_continuous(false);
 }
 
@@ -899,7 +899,7 @@ void row_cache::invalidate_sync(memtable& m) noexcept {
         // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
         // with_linearized_managed_bytes(), but invalidate() does.
         m.partitions.clear_and_dispose([this, deleter = current_deleter<memtable_entry>(), &blow_cache] (memtable_entry* entry) {
-            with_linearized_managed_bytes([&] {
+            with_linearized_managed_bytes([&] () noexcept {
                 try {
                     invalidate_locked(entry->key());
                 } catch (...) {

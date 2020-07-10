@@ -44,12 +44,12 @@ static const token min_token{ token::kind::before_all_keys, 0 };
 static const token max_token{ token::kind::after_all_keys, 0 };
 
 const token&
-minimum_token() {
+minimum_token() noexcept {
     return min_token;
 }
 
 const token&
-maximum_token() {
+maximum_token() noexcept {
     return max_token;
 }
 
