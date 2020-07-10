@@ -2571,8 +2571,8 @@ class scylla_fiber(gdb.Command):
         The pattern we are looking for is:
         ptr -> vtable ptr for a symbol that matches our whitelist
 
-        In addition, ptr has to point to a the beginning of an allocation
-        block, managed by seastar, that contains a live object.
+        In addition, ptr has to point to an allocation block, managed by
+        seastar, that contains a live object.
         """
         try:
             maybe_vptr = int(gdb.Value(ptr).reinterpret_cast(self._vptr_type).dereference())
@@ -2677,13 +2677,20 @@ class scylla_fiber(gdb.Command):
             return
 
         try:
-            this_task, fiber = self._walk(int(gdb.parse_and_eval(args.task)), args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
+            initial_task_ptr = int(gdb.parse_and_eval(args.task))
+            this_task, fiber = self._walk(initial_task_ptr, args.max_depth, args.scanned_region_size, args.force_fallback_mode, args.verbose)
 
             tptr, vptr, name = this_task
             gdb.write("Starting task: (task*) 0x{:016x} 0x{:016x} {}\n".format(tptr.ptr, int(vptr), name))
 
             for i, (tptr, vptr, name) in enumerate(fiber):
                 gdb.write("#{:<2d} (task*) 0x{:016x} 0x{:016x} {}\n".format(i, int(tptr), int(vptr), name))
+
+            gdb.write("\nFound no further pointers to task objects.\n")
+            if not fiber:
+                gdb.write("If this is unexpected, run `scylla fiber 0x{:016x} --verbose` to learn more.\n".format(initial_task_ptr))
+            else:
+                gdb.write("If you think there should be more, run `scylla fiber 0x{:016x} --verbose` to learn more.\n".format(fiber[-1][0]))
         except KeyboardInterrupt:
             return
 
