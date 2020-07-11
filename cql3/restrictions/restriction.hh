@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include <concepts>
 #include <numeric>
 #include <optional>
 #include <sstream>
@@ -165,6 +166,7 @@ extern std::ostream& operator<<(std::ostream&, const expression&);
 
 /// If there is a binary_operator atom b for which f(b) is true, returns it.  Otherwise returns null.
 template<typename Fn>
+requires std::regular_invocable<Fn, const binary_operator&>
 const binary_operator* find_if(const expression& e, Fn f) {
     return std::visit(overloaded_functor{
             [&] (const binary_operator& op) { return f(op) ? &op : nullptr; },
@@ -182,6 +184,7 @@ const binary_operator* find_if(const expression& e, Fn f) {
 
 /// Counts binary_operator atoms b for which f(b) is true.
 template<typename Fn>
+requires std::regular_invocable<Fn, const binary_operator&>
 size_t count_if(const expression& e, Fn f) {
     return std::visit(overloaded_functor{
             [&] (const binary_operator& op) -> size_t { return f(op) ? 1 : 0; },
