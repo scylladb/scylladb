@@ -173,7 +173,7 @@ public:
     }
 
     virtual void merge_with(::shared_ptr<restriction> restriction) override {
-        if (find_if(restriction->expression, [] (const binary_operator& b) {
+        if (find_atom(restriction->expression, [] (const binary_operator& b) {
                     return std::holds_alternative<std::vector<column_value>>(b.lhs)
                             && std::get<std::vector<column_value>>(b.lhs).size() > 1;
                 })) {

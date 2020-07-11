@@ -249,7 +249,7 @@ statement_restrictions::statement_restrictions(database& db,
 
     if (_uses_secondary_indexing || _clustering_columns_restrictions->needs_filtering(*_schema)) {
         _index_restrictions.push_back(_clustering_columns_restrictions);
-    } else if (find_if(_clustering_columns_restrictions->expression, &is_on_collection)) {
+    } else if (find_atom(_clustering_columns_restrictions->expression, &is_on_collection)) {
         fail(unimplemented::cause::INDEXES);
 #if 0
         _index_restrictions.push_back(new Forwardingprimary_key_restrictions() {
@@ -463,7 +463,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool has_qu
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by IN relations when a collection is selected by the query");
     }
-    if (find_if(_clustering_columns_restrictions->expression, is_on_collection)
+    if (find_atom(_clustering_columns_restrictions->expression, is_on_collection)
         && !has_queriable_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
@@ -1153,7 +1153,7 @@ bool is_satisfied_by(
 
 std::vector<bytes_opt> first_multicolumn_bound(
         const expression& restr, const query_options& options, statements::bound bnd) {
-    auto found = find_if(restr, [bnd] (const binary_operator& oper) {
+    auto found = find_atom(restr, [bnd] (const binary_operator& oper) {
         return matches(oper.op, bnd) && std::holds_alternative<std::vector<column_value>>(oper.lhs);
     });
     if (found) {
