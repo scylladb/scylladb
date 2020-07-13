@@ -13,8 +13,8 @@
 	path = abseil
 	url = ../abseil-cpp
 [submodule "scylla-jmx"]
-	path = scylla-jmx
+	path = tools/jmx
 	url = ../scylla-jmx
 [submodule "scylla-tools"]
-	path = scylla-tools
+	path = tools/java
 	url = ../scylla-tools-java

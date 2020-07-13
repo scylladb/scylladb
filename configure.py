@@ -1725,23 +1725,23 @@ with open(buildfile_tmp, 'w') as f:
         rule build-submodule-deb
           command = cd $dir && ./reloc/build_deb.sh --reloc-pkg $artifact
 
-        build scylla-jmx/build/scylla-jmx-package.tar.gz: build-submodule-reloc
-          reloc_dir = scylla-jmx
-        build dist-jmx-rpm: build-submodule-rpm scylla-jmx/build/scylla-jmx-package.tar.gz
-          dir = scylla-jmx
+        build tools/jmx/build/scylla-jmx-package.tar.gz: build-submodule-reloc
+          reloc_dir = tools/jmx
+        build dist-jmx-rpm: build-submodule-rpm tools/jmx/build/scylla-jmx-package.tar.gz
+          dir = tools/jmx
           artifact = build/scylla-jmx-package.tar.gz
-        build dist-jmx-deb: build-submodule-deb scylla-jmx/build/scylla-jmx-package.tar.gz
-          dir = scylla-jmx
+        build dist-jmx-deb: build-submodule-deb tools/jmx/build/scylla-jmx-package.tar.gz
+          dir = tools/jmx
           artifact = build/scylla-jmx-package.tar.gz
         build dist-jmx: phony dist-jmx-rpm dist-jmx-deb
 
-        build scylla-tools/build/scylla-tools-package.tar.gz: build-submodule-reloc
-          reloc_dir = scylla-tools
-        build dist-tools-rpm: build-submodule-rpm scylla-tools/build/scylla-tools-package.tar.gz
-          dir = scylla-tools
+        build tools/java/build/scylla-tools-package.tar.gz: build-submodule-reloc
+          reloc_dir = tools/java
+        build dist-tools-rpm: build-submodule-rpm tools/java/build/scylla-tools-package.tar.gz
+          dir = tools/java
           artifact = build/scylla-tools-package.tar.gz
-        build dist-tools-deb: build-submodule-deb scylla-tools/build/scylla-tools-package.tar.gz
-          dir = scylla-tools
+        build dist-tools-deb: build-submodule-deb tools/java/build/scylla-tools-package.tar.gz
+          dir = tools/java
           artifact = build/scylla-tools-package.tar.gz
         build dist-tools: phony dist-tools-rpm dist-tools-deb
 
