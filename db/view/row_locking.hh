@@ -51,7 +51,7 @@ public:
     struct single_lock_stats {
         uint64_t lock_acquisitions = 0;
         uint64_t operations_currently_waiting_for_lock = 0;
-        utils::estimated_histogram estimated_waiting_for_lock;
+        utils::time_estimated_histogram estimated_waiting_for_lock;
     };
     struct stats {
         single_lock_stats exclusive_row;

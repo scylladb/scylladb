@@ -80,7 +80,7 @@ row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_cl
     // even in the case of rehashing.
     return f.then([this, pk = &i->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] () mutable {
         waiting_latency.stop();
-        single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency(), single_lock_stats.operations_currently_waiting_for_lock);
+        single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
         single_lock_stats.lock_acquisitions++;
         single_lock_stats.operations_currently_waiting_for_lock--;
         return lock_holder(this, pk, exclusive);
@@ -126,7 +126,7 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
         lock1.release();
         lock2.release();
         waiting_latency.stop();
-        single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency(), single_lock_stats.operations_currently_waiting_for_lock);
+        single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency());
         single_lock_stats.lock_acquisitions++;
         single_lock_stats.operations_currently_waiting_for_lock--;
         return lock_holder(this, pk, cpk, exclusive);
