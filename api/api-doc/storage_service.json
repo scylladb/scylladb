@@ -834,6 +834,43 @@
          ]
       },
       {
+         "path":"/storage_service/repair_status/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Query the repair status and return when the repair is finished or timeout",
+               "type":"string",
+               "enum":[
+                  "RUNNING",
+                  "SUCCESSFUL",
+                  "FAILED"
+               ],
+               "nickname":"repair_await_completion",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"id",
+                     "description":"The repair ID to check for status",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"timeout",
+                     "description":"Seconds to wait before the query returns even if the repair is not finished. The value -1 or not providing this parameter means no timeout",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/repair_async/{keyspace}",
          "operations":[
             {
