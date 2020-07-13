@@ -23,10 +23,15 @@ $ ./tools/toolchain/dbuild ./configure.py
 $ ./tools/toolchain/dbuild ninja build/release/scylla
 ```
 
-Please see the [developer documentation] for more information on building Scylla and [packaging documentation] on how to build Scylla packages for different Linux distributions.
+For further information, please see:
+
+* [Developer documentation] for more information on building Scylla.
+* [Packaging documentation] on how to build Scylla packages for different Linux distributions.
+* [Docker image build documentation] for information on how to build Docker images.
 
 [developer documentation]: HACKING.md
 [packaging documentation]: docs/building-packages.md
+[docker image build documentation]: dist/docker/redhat/README.md
 
 ## Running Scylla
 
@@ -74,26 +79,6 @@ Training material and online courses can be found at [Scylla University](https:/
 The courses are free, self-paced and include hands-on examples. They cover a variety of topics including Scylla data modeling, 
 administration, architecture, basic NoSQL concepts, using drivers for application development, Scylla setup, failover, compactions, 
 multi-datacenters and how Scylla integrates with third-party applications.
-
-## Building a CentOS-based Docker image
-
-Build a Docker image with:
-
-```
-cd dist/docker/redhat
-docker build -t <image-name> .
-```
-
-This build is based on executables downloaded from downloads.scylladb.com,
-**not** on the executables built in this source directory. See further
-instructions in dist/docker/redhat/README.md to build a docker image from
-your own executables.
-
-Run the image with:
-
-```
-docker run -p $(hostname -i):9042:9042 -i -t <image name>
-```
 
 ## Contributing to Scylla
 
