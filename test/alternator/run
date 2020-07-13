@@ -28,8 +28,8 @@ fi
 SCYLLA_IP=127.1.$(($$ >> 8 & 255)).$(($$ & 255))
 echo "Running Scylla on $SCYLLA_IP"
 
-tmp_dir=/tmp/alternator-test-$$
-mkdir $tmp_dir
+tmp_dir="$(readlink -e ${TMPDIR-/tmp})"/alternator-test-$$
+mkdir "$tmp_dir"
 
 # We run the cleanup() function on exit for any reason - successful finish
 # of the script, an error (since we have "set -e"), or a signal.
@@ -76,7 +76,7 @@ done
 # argv[0] isn't good enough - because killall inspects the actual executable
 # filename in /proc/<pid>/stat. So we need to name the executable differently.
 # Luckily, using a symbolic link is good enough.
-SCYLLA_LINK=$tmp_dir/test_scylla
+SCYLLA_LINK="$tmp_dir"/test_scylla
 ln -s "$SCYLLA" "$SCYLLA_LINK"
 
 "$SCYLLA_LINK" --options-file "$source_path/conf/scylla.yaml" \
