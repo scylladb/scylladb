@@ -46,6 +46,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
+#include "utils/histogram_metrics_helper.hh"
 
 static logging::logger tlogger("table");
 static seastar::metrics::label column_family_label("cf");
@@ -952,7 +953,7 @@ void table::set_metrics() {
                 ms::make_total_operations(format("row_lock_{}_acquisitions", stat_name), stats.lock_acquisitions, ms::description(format("Row lock acquisitions for {} lock", stat_name)))(cf)(ks),
                 ms::make_queue_length(format("row_lock_{}_operations_currently_waiting_for_lock", stat_name), stats.operations_currently_waiting_for_lock, ms::description(format("Operations currently waiting for {} lock", stat_name)))(cf)(ks),
                 ms::make_histogram(format("row_lock_{}_waiting_time", stat_name), ms::description(format("Histogram representing time that operations spent on waiting for {} lock", stat_name)),
-                        [&stats] {return stats.estimated_waiting_for_lock.get_histogram(std::chrono::microseconds(100));})(cf)(ks)
+                        [&stats] {return to_metrics_histogram(stats.estimated_waiting_for_lock);})(cf)(ks)
             });
         };
         add_row_lock_metrics(_row_locker_stats.exclusive_row, "exclusive_row");
