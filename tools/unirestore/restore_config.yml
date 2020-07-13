@@ -1,0 +1,78 @@
+# Restore configuration file
+
+# Schema dump from the backed up cluster
+schema_file: './db_schema.cql'
+
+# cqlsh access credentials and address. If 'None' specified, will try to
+# access passwordless
+cql_user: None
+cql_password: None
+cql_host: localhost
+
+# URL for the Scylla REST API location, default is localhost:10000
+api_url: 'http://localhost:10000'
+
+# Path to backup files root
+# The directory tree should be organized as follows:
+# Root dir -> | .
+# Host ->     ├── host1
+# Keyspace -> │   ├── ks1
+# Tables ->   │   │   ├── mv1-2fbc4220916611ea83a900000000000b
+#             │   │   ├── tb1-87a38960915911eabf3300000000000a
+#             │   │   ├── tb2-711c39d0915e11ea90c0000000000009
+#             │   │   └── tb3-a24c6390915e11ea89af000000000008
+# Keyspace -> │   └── ks2
+# Tables ->   │       ├── tb1-58c47760916011eaab8c000000000002
+#             │       ├── tb2-78f9b4a0916011ea9dfc000000000004
+#             │       └── tb3-9960fe60916011ea9dfc000000000004
+# Host ->     └── host2
+# Keyspace ->     ├── ks1
+# Tables ->       │   ├── mv1-2fbc4220916611ea83a900000000000b
+#                 │   ├── tb1-87a38960915911eabf3300000000000a
+#                 │   ├── tb2-711c39d0915e11ea90c0000000000009
+#                 │   └── tb3-a24c6390915e11ea89af000000000008
+# Keyspace ->     └── ks2
+# Tables ->           ├── tb1-58c47760916011eaab8c000000000002
+#                     ├── tb2-78f9b4a0916011ea9dfc000000000004
+#                     └── tb3-9960fe60916011ea9dfc000000000004
+backup_root_path: '/home/centos/restore_mc'
+
+# Destination cluster host details
+# All hosts in cluster must have the same credentials for ssh access
+
+# One of the hosts in the destination cluster, ssh accessible using a key or password
+dest_host: '10.0.0.29'
+
+# If specified, only these hosts will be used as restore targets, with all other
+# detected cluster nodes ignored
+#limit_to_nodes:
+#  - '10.0.0.29'
+#  - '10.0.0.182'
+
+# Use 'key' or 'password' to authenticate with a key or password.
+dest_host_auth: 'key'
+dest_ssh_user: 'centos'
+dest_ssh_password: 'MyMegaRestoreNode123!'
+dest_ssh_key_path: '~/.ssh/id_rsa'
+
+# Scylla data path on the destination nodes:
+scylla_data_path: '/var/lib/scylla/data'
+
+# Scylla UID and GID - file owner of the scylla_data_path
+scylla_user: 'scylla'
+scylla_group: 'scylla'
+
+# How much free space should be left on nodes before we pause copying and try to
+# ingest the already copied data
+free_space_percent_allowed: 30
+
+# Limit file copy bandwidth - there will be as many rsync processes running as there
+# are nodes in the cluster, potentially.
+# Default is None.  Value is in kb/second
+rsync_bwlimit: None
+
+# Restrict the amount of simultaneous rsync processes to a limited number.
+# Default is 0 - no restriction.
+copy_processes: 0
+
+
