@@ -71,6 +71,10 @@ enum class repair_status { RUNNING, SUCCESSFUL, FAILED };
 // different CPU (cpu 0) and that might be a deferring operation.
 future<repair_status> repair_get_status(seastar::sharded<database>& db, int id);
 
+// If the repair job is finished (SUCCESSFUL or FAILED), it returns immediately.
+// It blocks if the repair job is still RUNNING until timeout.
+future<repair_status> repair_await_completion(seastar::sharded<database>& db, int id, std::chrono::steady_clock::time_point timeout);
+
 // returns a vector with the ids of the active repairs
 future<std::vector<int>> get_active_repairs(seastar::sharded<database>& db);
 
@@ -265,6 +269,7 @@ private:
     // by one shared.
     std::vector<named_semaphore> _range_parallelism_semaphores;
     static constexpr size_t _max_repair_memory_per_range = 32 * 1024 * 1024;
+    seastar::condition_variable _done_cond;
     void start(int id);
     void done(int id, bool succeeded);
 public:
@@ -283,6 +288,7 @@ public:
     named_semaphore& range_parallelism_semaphore();
     static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
     future<> run(int id, std::function<void ()> func);
+    future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,

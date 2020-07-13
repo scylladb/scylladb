@@ -403,6 +403,39 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
+    ss::repair_await_completion.set(r, [&ctx](std::unique_ptr<request> req) {
+        int id;
+        using clock = std::chrono::steady_clock;
+        clock::time_point expire;
+        try {
+            id = boost::lexical_cast<int>(req->get_query_param("id"));
+            // If timeout is not provided, it means no timeout.
+            sstring s = req->get_query_param("timeout");
+            int64_t timeout = s.empty() ? int64_t(-1) : boost::lexical_cast<int64_t>(s);
+            if (timeout < 0 && timeout != -1) {
+                return make_exception_future<json::json_return_type>(
+                        httpd::bad_param_exception("timeout can only be -1 (means no timeout) or non negative integer"));
+            }
+            if (timeout < 0) {
+                expire = clock::time_point::max();
+            } else {
+                expire = clock::now() + std::chrono::seconds(timeout);
+            }
+        } catch (std::exception& e) {
+            return make_exception_future<json::json_return_type>(httpd::bad_param_exception(e.what()));
+        }
+        return repair_await_completion(ctx.db, id, expire)
+                .then_wrapped([] (future<repair_status>&& fut) {
+            ss::ns_repair_async_status::return_type_wrapper res;
+            try {
+                res = fut.get0();
+            } catch (std::exception& e) {
+                return make_exception_future<json::json_return_type>(httpd::server_error_exception(e.what()));
+            }
+            return make_ready_future<json::json_return_type>(json::json_return_type(res));
+        });
+    });
+
     ss::force_terminate_all_repair_sessions.set(r, [](std::unique_ptr<request> req) {
         return repair_abort_all(service::get_local_storage_service().db()).then([] {
             return make_ready_future<json::json_return_type>(json_void());

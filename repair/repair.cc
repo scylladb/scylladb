@@ -266,6 +266,7 @@ void tracker::done(int id, bool succeeded) {
     } else {
         _status[id] = repair_status::FAILED;
     }
+    _done_cond.broadcast();
 }
 repair_status tracker::get(int id) {
     if (id >= _next_repair_command) {
@@ -277,6 +278,30 @@ repair_status tracker::get(int id) {
     } else {
         return it->second;
     }
+}
+
+future<repair_status> tracker::repair_await_completion(int id, std::chrono::steady_clock::time_point timeout) {
+    return seastar::with_gate(_gate, [this, id, timeout] {
+        if (id >= _next_repair_command) {
+            return make_exception_future<repair_status>(std::runtime_error(format("unknown repair id {:d}", id)));
+        }
+        return repeat_until_value([this, id, timeout] {
+            auto it = _status.find(id);
+            if (it == _status.end()) {
+                return make_ready_future<std::optional<repair_status>>(repair_status::SUCCESSFUL);
+            } else {
+                if (it->second == repair_status::FAILED) {
+                    return make_ready_future<std::optional<repair_status>>(repair_status::FAILED);
+                } else {
+                    return _done_cond.wait(timeout).then([] {
+                        return make_ready_future<std::optional<repair_status>>(std::nullopt);
+                    }).handle_exception_type([] (condition_variable_timed_out&) {
+                        return make_ready_future<std::optional<repair_status>>(repair_status::RUNNING);
+                    });
+                }
+            }
+        });
+    });
 }
 
 int tracker::next_repair_command() {
@@ -1542,6 +1567,12 @@ future<std::vector<int>> get_active_repairs(seastar::sharded<database>& db) {
 future<repair_status> repair_get_status(seastar::sharded<database>& db, int id) {
     return db.invoke_on(0, [id] (database& localdb) {
         return repair_tracker().get(id);
+    });
+}
+
+future<repair_status> repair_await_completion(seastar::sharded<database>& db, int id, std::chrono::steady_clock::time_point timeout) {
+    return db.invoke_on(0, [id, timeout] (database& localdb) {
+        return repair_tracker().repair_await_completion(id, timeout);
     });
 }
 
