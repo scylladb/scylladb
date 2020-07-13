@@ -34,6 +34,12 @@ PR_LOCAL_BRANCH=$PR_LOGIN-$PR_REF
 
 git fetch origin pull/$PR_NUM/head:$PR_LOCAL_BRANCH
 
-git merge --no-ff --log $PR_LOCAL_BRANCH -m "Merge '$PR_TITLE' from $PR_LOGIN" -m "$PR_DESCR"
-git commit --amend # for a manual double-check
+nr_commits=$(git log --pretty=oneline HEAD..$PR_LOCAL_BRANCH | wc -l)
 
+if [[ $nr_commits == 1 ]]; then
+	commit=$(git log --pretty=oneline HEAD..$PR_LOCAL_BRANCH | awk '{print $1}')
+	git cherry-pick $commit
+else
+	git merge --no-ff --log $PR_LOCAL_BRANCH -m "Merge '$PR_TITLE' from $PR_LOGIN" -m "$PR_DESCR"
+fi
+git commit --amend # for a manual double-check
