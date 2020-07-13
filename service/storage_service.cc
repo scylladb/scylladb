@@ -698,6 +698,8 @@ bool storage_service::do_handle_cdc_generation_intercept_nonfatal_errors(db_cloc
         throw cdc_generation_handling_nonfatal_exception(e.what());
     } catch (exceptions::unavailable_exception& e) {
         throw cdc_generation_handling_nonfatal_exception(e.what());
+    } catch (exceptions::read_failure_exception& e) {
+        throw cdc_generation_handling_nonfatal_exception(e.what());
     } catch (...) {
         const auto ep = std::current_exception();
         if (is_timeout_exception(ep)) {
