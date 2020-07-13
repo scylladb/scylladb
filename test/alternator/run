@@ -28,8 +28,8 @@ fi
 SCYLLA_IP=127.1.$(($$ >> 8 & 255)).$(($$ & 255))
 echo "Running Scylla on $SCYLLA_IP"
 
-tmp_dir=/tmp/alternator-test-$$
-mkdir $tmp_dir
+tmp_dir="$(readlink -e ${TMPDIR-/tmp})"/alternator-test-$$
+mkdir "$tmp_dir"
 
 # We run the cleanup() function on exit for any reason - successful finish
 # of the script, an error (since we have "set -e"), or a signal.
