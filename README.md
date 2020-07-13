@@ -1,6 +1,6 @@
 # Scylla
 
-## Quick-start
+## Build Prerequisites
 
 Scylla is fairly fussy about its build environment, requiring very recent
 versions of the C++20 compiler and of many libraries to build. The document
@@ -13,31 +13,37 @@ allows you to avoid changing anything in your build machine to meet Scylla's
 requirements - you just need to meet the frozen toolchain's prerequisites
 (mostly, Docker or Podman being available).
 
-Building and running Scylla with the frozen toolchain is as easy as:
+## Building Scylla
+
+Building Scylla with the frozen toolchain `dbuild` is as easy as:
 
 ```bash
-$ ./tools/toolchain/dbuild ./configure.py
-$ ./tools/toolchain/dbuild ninja build/release/scylla
-$ ./tools/toolchain/dbuild ./build/release/scylla --developer-mode 1
+$ git submodule update --init --force --recursive
+$ ./tools/toolchain/dbuild ./configure.py
+$ ./tools/toolchain/dbuild ninja build/release/scylla
 ```
+
+Please see the [developer documentation] for more information on building Scylla and [packaging documentation] on how to build Scylla packages for different Linux distributions.
+
+[developer documentation]: HACKING.md
+[packaging documentation]: docs/building-packages.md
 
 ## Running Scylla
 
-* Run Scylla
-```
-./build/release/scylla
+To start Scylla server, run:
 
-```
-
-* run Scylla with one CPU and ./tmp as work directory
-
-```
-./build/release/scylla --workdir tmp --smp 1
+```bash
+$ ./tools/toolchain/dbuild ./build/release/scylla --workdir tmp --smp 1 --developer-mode 1
 ```
 
-* For more run options:
-```
-./build/release/scylla --help
+This will start a Scylla node with one CPU core allocated to it and data files stored in the `tmp` directory.
+The `--developer-mode` is needed to disable the various checks Scylla performs at startup to ensure the machine is configured for maximum performance (not relevant on development workstations).
+Please note that you need to run Scylla with `dbuild` if you built it with the frozen toolchain.
+
+For more run options, run:
+
+```bash
+$ ./tools/toolchain/dbuild ./build/release/scylla --help
 ```
 
 ## Testing
