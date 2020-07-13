@@ -32,9 +32,11 @@ def verify_cpu():
         needed_flags = set(['sse4_2', 'pclmulqdq'])
         for line in open('/proc/cpuinfo'):
             if line.startswith('flags'):
-                flags = set(line.split()[2:])
-                if not needed_flags <= flags:
-                    print('Scylla requires the sse4.2 and clmul instruction sets, check your processor and hypervisor')
+                actual_flags = set(line.split()[2:])
+                missing_flags = needed_flags - actual_flags
+                if len(missing_flags) > 0:
+                    print(f"ERROR: You will not be able to run Scylla on this machine because its CPU lacks the following features: {' '.join(missing_flags)}")
+                    print('\nIf this is a virtual machine, please update its CPU feature configuration or upgrade to a newer hypervisor.')
                     sys.exit(1)
 
 if __name__ == '__main__':
