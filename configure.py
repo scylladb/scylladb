@@ -1499,7 +1499,7 @@ with open(buildfile_tmp, 'w') as f:
               description = TEST {mode}
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, **modeval))
         f.write(
-            'build {mode}: phony {artifacts}\n'.format(
+            'build {mode}: phony {artifacts} dist-{mode}\n'.format(
                 mode=mode,
                 artifacts=str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))
             )
@@ -1768,6 +1768,7 @@ with open(buildfile_tmp, 'w') as f:
         '''))
     for mode in build_modes:
         f.write(textwrap.dedent(f'''\
+        build dist-{mode}: phony dist-server-{mode} dist-python dist-tools dist-jmx
         build dist-check-{mode}: dist-check
           mode = {mode}
             '''))
