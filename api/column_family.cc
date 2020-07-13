@@ -249,6 +249,12 @@ static future<json::json_return_type> sum_sstable(http_context& ctx, bool total)
     });
 }
 
+future<json::json_return_type> map_reduce_cf_time_histogram(http_context& ctx, const sstring& name, std::function<utils::time_estimated_histogram(const column_family&)> f) {
+    return map_reduce_cf_raw(ctx, name, utils::time_estimated_histogram(), f, utils::time_estimated_histogram_merge).then([](const utils::time_estimated_histogram& res) {
+        return make_ready_future<json::json_return_type>(time_to_json_histogram(res));
+    });
+}
+
 template <typename T>
 class sum_ratio {
     uint64_t _n = 0;
@@ -796,24 +802,21 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_cas_prepare.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const column_family& cf) {
             return cf.get_stats().estimated_cas_prepare;
-        },
-        utils::estimated_histogram_merge, utils_json::estimated_histogram());
+        });
     });
 
     cf::get_cas_propose.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const column_family& cf) {
             return cf.get_stats().estimated_cas_accept;
-        },
-        utils::estimated_histogram_merge, utils_json::estimated_histogram());
+        });
     });
 
     cf::get_cas_commit.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const column_family& cf) {
             return cf.get_stats().estimated_cas_learn;
-        },
-        utils::estimated_histogram_merge, utils_json::estimated_histogram());
+        });
     });
 
     cf::get_sstables_per_read_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -909,17 +912,15 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_read_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const column_family& cf) {
             return cf.get_stats().estimated_read;
-        },
-        utils::estimated_histogram_merge, utils_json::estimated_histogram());
+        });
     });
 
     cf::get_write_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx, req->param["name"], [](const column_family& cf) {
             return cf.get_stats().estimated_write;
-        },
-        utils::estimated_histogram_merge, utils_json::estimated_histogram());
+        });
     });
 
     cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<request> req) {

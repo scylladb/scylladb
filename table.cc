@@ -968,11 +968,11 @@ void table::set_metrics() {
 
         if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
             _metrics.add_group("column_family", {
-                    ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                    ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                    ms::make_histogram("cas_prepare_latency", ms::description("CAS prepare round latency histogram"), [this] {return _stats.estimated_cas_prepare.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                    ms::make_histogram("cas_propose_latency", ms::description("CAS accept round latency histogram"), [this] {return _stats.estimated_cas_accept.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                    ms::make_histogram("cas_commit_latency", ms::description("CAS learn round latency histogram"), [this] {return _stats.estimated_cas_learn.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
+                    ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_read);})(cf)(ks),
+                    ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_write);})(cf)(ks),
+                    ms::make_histogram("cas_prepare_latency", ms::description("CAS prepare round latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_cas_prepare);})(cf)(ks),
+                    ms::make_histogram("cas_propose_latency", ms::description("CAS accept round latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_cas_accept);})(cf)(ks),
+                    ms::make_histogram("cas_commit_latency", ms::description("CAS learn round latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_cas_learn);})(cf)(ks),
                     ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
             });
         }
@@ -1938,7 +1938,7 @@ void table::do_apply(db::rp_handle&& h, Args&&... args) {
     }
     _stats.writes.mark(lc);
     if (lc.is_start()) {
-        _stats.estimated_write.add(lc.latency(), _stats.writes.hist.count);
+        _stats.estimated_write.add(lc.latency());
     }
 }
 
@@ -2033,7 +2033,7 @@ table::query(schema_ptr s,
         }).finally([lc, this]() mutable {
             _stats.reads.mark(lc);
             if (lc.is_start()) {
-                _stats.estimated_read.add(lc.latency(), _stats.reads.hist.count);
+                _stats.estimated_read.add(lc.latency());
             }
         });
     });
