@@ -99,3 +99,14 @@ docker run -p $(hostname -i):9042:9042 -i -t <image name>
 
 [Hacking howto](HACKING.md)
 [Guidelines for contributing](CONTRIBUTING.md)
+
+## Contact
+
+* The [users mailing list] and [Slack channel] are for users to discuss configuration, management, and operations of the ScyllaDB open source.
+* The [developers mailing list] is for developers and people interested in following the development of ScyllaDB to discuss technical topics.
+
+[Users mailing list]: https://groups.google.com/forum/#!forum/scylladb-users
+
+[Slack channel]: http://slack.scylladb.com/
+
+[Developers mailing list]: https://groups.google.com/forum/#!forum/scylladb-dev
