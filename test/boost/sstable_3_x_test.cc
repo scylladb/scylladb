@@ -3269,6 +3269,19 @@ static void validate_stats_metadata(schema_ptr s, sstable_assertions& written_ss
     check_estimated_histogram(orig_stats.estimated_cells_count, written_stats.estimated_cells_count);
 }
 
+static void check_min_max_column_names(sstable_assertions& written_sst, std::vector<bytes> min_components, std::vector<bytes> max_components) {
+    const auto& st = written_sst.get_stats_metadata();
+    BOOST_TEST_MESSAGE(fmt::format("min {}/{} max {}/{}", st.min_column_names.elements.size(), min_components.size(), st.max_column_names.elements.size(), max_components.size()));
+    BOOST_REQUIRE(st.min_column_names.elements.size() == min_components.size());
+    for (auto i = 0U; i < st.min_column_names.elements.size(); i++) {
+        BOOST_REQUIRE(min_components[i] == st.min_column_names.elements[i].value);
+    }
+    BOOST_REQUIRE(st.max_column_names.elements.size() == max_components.size());
+    for (auto i = 0U; i < st.max_column_names.elements.size(); i++) {
+        BOOST_REQUIRE(max_components[i] == st.max_column_names.elements[i].value);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     auto abj = defer([] { await_background_jobs().get(); });
     sstring table_name = "static_row";
@@ -4118,6 +4131,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
     auto written_sst = validate_read(s, tmp.path(), {mut});
     validate_stats_metadata(s, written_sst, table_name, false);
+    check_min_max_column_names(written_sst, {"aaa"}, {"aaa"});
 }
 
 // Test the case when subsequent RTs have a common clustering but those bounds are both exclusive
@@ -4236,6 +4250,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
     auto written_sst = validate_read(s, tmp.path(), {mut});
     validate_stats_metadata(s, written_sst, table_name, false);
+    check_min_max_column_names(written_sst, {"aaa"}, {"ddd"});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
@@ -4326,6 +4341,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
     auto written_sst = validate_read(s, tmp.path(), {mut});
     validate_stats_metadata(s, written_sst, table_name, false);
+    check_min_max_column_names(written_sst, {"aaa"}, {"aaa"});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
@@ -4365,6 +4381,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
     auto written_sst = validate_read(s, tmp.path(), {mut});
     validate_stats_metadata(s, written_sst, table_name, false);
+    check_min_max_column_names(written_sst, {"aaa", "bbb"}, {"aaa"});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
@@ -4404,6 +4421,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
     auto written_sst = validate_read(s, tmp.path(), {mut});
     validate_stats_metadata(s, written_sst, table_name, false);
+    check_min_max_column_names(written_sst, {"aaa"}, {"aaa", "bbb"});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_overlapped_start_range_tombstones) {
@@ -4504,6 +4522,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
     tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
     auto written_sst = validate_read(s, tmp.path(), {mut});
     validate_stats_metadata(s, written_sst, table_name, false);
+    check_min_max_column_names(written_sst, {"aaa"}, {"aaa"});
 }
 
 // The resulting files are supposed to be identical to the files

@@ -21,6 +21,7 @@
 
 #include "log.hh"
 #include "metadata_collector.hh"
+#include "range_tombstone.hh"
 
 logging::logger mdclogger("metadata_collector");
 
@@ -57,6 +58,26 @@ void metadata_collector::update_min_max_components(const clustering_key_prefix& 
     if (res > 0) {
         mdclogger.trace("{}: setting max_clustering_key={}", _name, clustering_key_prefix::with_schema_wrapper(_schema, key));
         _max_clustering_key.emplace(key);
+    }
+}
+
+void metadata_collector::update_min_max_components(const range_tombstone& rt) {
+    const bound_view::tri_compare cmp(_schema);
+
+    if (!_min_clustering_key) {
+        mdclogger.trace("{}: initializing min_clustering_key to rt.start={}", _name, clustering_key_prefix::with_schema_wrapper(_schema, rt.start));
+        _min_clustering_key.emplace(rt.start);
+    } else if (cmp(rt.start_bound(), bound_view(*_min_clustering_key, bound_kind::incl_start)) < 0) {
+        mdclogger.trace("{}: updating min_clustering_key to rt.start={}", _name, clustering_key_prefix::with_schema_wrapper(_schema, rt.start));
+        _min_clustering_key.emplace(rt.start);
+    }
+
+    if (!_max_clustering_key) {
+        mdclogger.trace("{}: initializing max_clustering_key to rt.end={}", _name, clustering_key_prefix::with_schema_wrapper(_schema, rt.end));
+        _max_clustering_key.emplace(rt.end);
+    } else if (cmp(rt.end_bound(), bound_view(*_max_clustering_key, bound_kind::incl_end)) > 0) {
+        mdclogger.trace("{}: updating max_clustering_key to rt.end={}", _name, clustering_key_prefix::with_schema_wrapper(_schema, rt.end));
+        _max_clustering_key.emplace(rt.end);
     }
 }
 

@@ -50,6 +50,8 @@
 
 #include <algorithm>
 
+class range_tombstone;
+
 namespace sstables {
 
 static constexpr int TOMBSTONE_HISTOGRAM_BIN_SIZE = 100;
@@ -243,6 +245,8 @@ public:
     }
 
     void update_min_max_components(const clustering_key_prefix& key);
+
+    void update_min_max_components(const range_tombstone& rt);
 
     void update(column_stats&& stats) {
         _timestamp_tracker.update(stats.timestamp_tracker);
