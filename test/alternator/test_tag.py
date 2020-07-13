@@ -25,7 +25,7 @@ import pytest
 from botocore.exceptions import ClientError
 import re
 import time
-from util import multiset, create_test_table
+from util import multiset, create_test_table, test_table_name
 
 def delete_tags(table, arn):
     got = table.meta.client.list_tags_of_resource(ResourceArn=arn)
@@ -155,6 +155,56 @@ def test_tag_resource_write_isolation_values(scylla_only, test_table):
         test_table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key':'system:write_isolation', 'Value':i}])
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key':'system:write_isolation', 'Value':'bah'}])
+
+# Test that if trying to create a table with forbidden tags (in this test,
+# a list of tags longer than the maximum allowed of 50 tags), the table
+# is not created at all.
+def test_too_long_tags_from_creation(dynamodb):
+    # The feature of creating a table already with tags was only added to
+    # DynamoDB in April 2019, and to the botocore library in version 1.12.136
+    # so older versions of the library cannot run this test.
+    import botocore
+    from distutils.version import LooseVersion
+    if (LooseVersion(botocore.__version__) < LooseVersion('1.12.136')):
+        pytest.skip("Botocore version 1.12.136 or above required to run this test")
+    name = test_table_name()
+    # Setting 100 tags is not allowed, the following table creation should fail:
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.create_table(TableName=name,
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+            Tags=[{'Key': str(i), 'Value': str(i)} for i in range(100)])
+    # After the table creation failed, the table should not exist.
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        dynamodb.meta.client.describe_table(TableName=name)
+
+# This test is similar to the above, but uses another case of forbidden tags -
+# here an illegal value for the system::write_isolation tag. This is a
+# scylla_only test because only Alternator checks the validity of the
+# system::write_isolation tag.
+# Reproduces issue #6809, where the table creation appeared to fail, but it
+# was actually created (without the tag).
+def test_forbidden_tags_from_creation(scylla_only, dynamodb):
+    # The feature of creating a table already with tags was only added to
+    # DynamoDB in April 2019, and to the botocore library in version 1.12.136
+    # so older versions of the library cannot run this test.
+    import botocore
+    from distutils.version import LooseVersion
+    if (LooseVersion(botocore.__version__) < LooseVersion('1.12.136')):
+        pytest.skip("Botocore version 1.12.136 or above required to run this test")
+    name = test_table_name()
+    # It is not allowed to set the system:write_isolation to "dog", so the
+    # following table creation should fail:
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodb.create_table(TableName=name,
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+            Tags=[{'Key': 'system:write_isolation', 'Value': 'dog'}])
+    # After the table creation failed, the table should not exist.
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        dynamodb.meta.client.describe_table(TableName=name)
 
 # Test checking that unicode tags are allowed
 @pytest.mark.xfail(reason="unicode tags not yet supported")
