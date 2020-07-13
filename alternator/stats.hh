@@ -75,10 +75,10 @@ public:
         uint64_t update_table = 0;
         uint64_t update_time_to_live = 0;
 
-        utils::estimated_histogram put_item_latency;
-        utils::estimated_histogram get_item_latency;
-        utils::estimated_histogram delete_item_latency;
-        utils::estimated_histogram update_item_latency;
+        utils::time_estimated_histogram put_item_latency;
+        utils::time_estimated_histogram get_item_latency;
+        utils::time_estimated_histogram delete_item_latency;
+        utils::time_estimated_histogram update_item_latency;
     } api_operations;
     // Miscellaneous event counters
     uint64_t total_operations = 0;

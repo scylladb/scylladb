@@ -1458,7 +1458,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
         });
     }
     return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
-        _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.put_item_latency._count + 1);
+        _stats.api_operations.put_item_latency.add(std::chrono::steady_clock::now() - start_time);
     });
 }
 
@@ -1541,7 +1541,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
         });
     }
     return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
-        _stats.api_operations.delete_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.delete_item_latency._count + 1);
+        _stats.api_operations.delete_item_latency.add(std::chrono::steady_clock::now() - start_time);
     });
 }
 
@@ -2227,7 +2227,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
         });
     }
     return op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats).finally([op, start_time, this] {
-        _stats.api_operations.update_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.update_item_latency._count + 1);
+        _stats.api_operations.update_item_latency.add(std::chrono::steady_clock::now() - start_time);
     });
 }
 
@@ -2308,7 +2308,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
-        _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time, _stats.api_operations.get_item_latency._count + 1);
+        _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time);
         return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
     });
 }
