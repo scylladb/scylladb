@@ -20,7 +20,7 @@
  */
 
 #include "stats.hh"
-
+#include "utils/histogram_metrics_helper.hh"
 #include <seastar/core/metrics.hh>
 
 namespace alternator {
@@ -37,7 +37,7 @@ stats::stats() : api_operations{} {
                         seastar::metrics::description("number of operations via Alternator API"), {op(CamelCaseName)}),
 #define OPERATION_LATENCY(name, CamelCaseName) \
                 seastar::metrics::make_histogram("op_latency", \
-                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return api_operations.name.get_histogram(1,20);}),
+                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return to_metrics_histogram(api_operations.name);}),
             OPERATION(batch_write_item, "BatchWriteItem")
             OPERATION(create_backup, "CreateBackup")
             OPERATION(create_global_table, "CreateGlobalTable")
