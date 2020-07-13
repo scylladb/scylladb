@@ -486,6 +486,8 @@ arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', def
 arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', default='ragel',
         help='path to ragel executable')
 add_tristate(arg_parser, name='stack-guards', dest='stack_guards', help='Use stack guards')
+arg_parser.add_argument('--verbose', dest='verbose', action='store_true',
+                        help='Make configure.py output more verbose (useful for debugging the build process itself)')
 args = arg_parser.parse_args()
 
 defines = ['XXH_PRIVATE_API',
@@ -1257,7 +1259,8 @@ def configure_seastar(build_dir, mode):
         relative_seastar_build_dir = os.path.join('..', seastar_build_dir)  # relative to seastar/
         seastar_cmd = ['./cooking.sh', '-i', 'dpdk', '-d', relative_seastar_build_dir, '--'] + seastar_cmd[4:]
 
-    print(seastar_cmd)
+    if args.verbose:
+        print(" \\\n  ".join(seastar_cmd))
     os.makedirs(seastar_build_dir, exist_ok=True)
     subprocess.check_call(seastar_cmd, shell=False, cwd=cmake_dir)
 
