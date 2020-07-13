@@ -120,9 +120,7 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
         }).finally([schema, lc] () mutable {
             auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
             stats.cas_prepare.mark(lc.stop().latency());
-            if (lc.is_start()) {
-                stats.estimated_cas_prepare.add(lc.latency(), stats.cas_prepare.hist.count);
-            }
+            stats.estimated_cas_prepare.add(lc.latency());
         });
     });
 }
@@ -162,9 +160,7 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
         }).finally([schema, lc] () mutable {
             auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
             stats.cas_accept.mark(lc.stop().latency());
-            if (lc.is_start()) {
-                stats.estimated_cas_accept.add(lc.latency(), stats.cas_accept.hist.count);
-            }
+            stats.estimated_cas_accept.add(lc.latency());
         });
     });
 }
@@ -214,9 +210,7 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
     }).finally([schema, lc] () mutable {
         auto& stats = get_local_storage_proxy().get_db().local().find_column_family(schema).get_stats();
         stats.cas_learn.mark(lc.stop().latency());
-        if (lc.is_start()) {
-            stats.estimated_cas_learn.add(lc.latency(), stats.cas_learn.hist.count);
-        }
+        stats.estimated_cas_learn.add(lc.latency());
     });
 }
 

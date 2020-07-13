@@ -256,4 +256,6 @@ public:
     operator T() const { return value; }
 };
 
+utils_json::estimated_histogram time_to_json_histogram(const utils::time_estimated_histogram& val);
+
 }
