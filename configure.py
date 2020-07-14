@@ -1439,7 +1439,7 @@ with open(buildfile_tmp, 'w') as f:
             command = $in > $out
             description = GEN $out
         rule copy
-            command = cp $in $out
+            command = cp --reflink=auto $in $out
             description = COPY $out
         rule package
             command = scripts/create-relocatable-package.py --mode $mode $out
