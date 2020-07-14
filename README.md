@@ -1,5 +1,14 @@
 # Scylla
 
+## What is Scylla?
+
+Scylla is the real-time big data database that is API-compatible with Apache Cassandra and Amazon DynamoDB.
+Scylla embraces a shared-nothing approach that increases throughput and storage capacity to realize order-of-magnitude performance improvements and reduce hardware costs.
+
+For more information, please see the [ScyllaDB web site].
+
+[ScyllaDB web site]: https://www.scylladb.com
+
 ## Build Prerequisites
 
 Scylla is fairly fussy about its build environment, requiring very recent
