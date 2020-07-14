@@ -607,11 +607,11 @@ private:
                     } else {
                         dht::ring_position_comparator cmp(*_read_context->schema());
                         auto range = _pr->trim_front(std::optional<dht::partition_range::bound>(_lower_bound), cmp);
-                        if (!range) {
+                        if (range.empty(cmp)) {
                             return std::nullopt;
                         }
                         _lower_bound = dht::partition_range::bound{dht::ring_position::max()};
-                        _secondary_range = std::move(*range);
+                        _secondary_range = std::move(range);
                         _secondary_in_progress = true;
                         return std::nullopt;
                     }

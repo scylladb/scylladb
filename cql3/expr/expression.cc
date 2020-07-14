@@ -483,7 +483,7 @@ struct intersection_visitor {
 
     value_set operator()(const nonwrapping_range<bytes>& a, const nonwrapping_range<bytes>& b) const {
         const auto common_range = a.intersection(b, type->as_tri_comparator());
-        return common_range ? *common_range : empty_value_set;
+        return !common_range.empty(type->as_tri_comparator()) ? std::move(common_range) : empty_value_set;
     }
 };
 

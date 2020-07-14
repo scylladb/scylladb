@@ -343,22 +343,22 @@ BOOST_AUTO_TEST_CASE(test_split_after) {
     BOOST_REQUIRE_EQUAL(nwr1.split_after(2, cmp), nwr1);
     BOOST_REQUIRE_EQUAL(nwr1.split_after(5, cmp), nwr(b(5, false), b(8)));
     BOOST_REQUIRE_EQUAL(nwr1.split_after(6, cmp), nwr(b(6, false), b(8)));
-    BOOST_REQUIRE_EQUAL(nwr1.split_after(8, cmp), std::nullopt);
-    BOOST_REQUIRE_EQUAL(nwr1.split_after(9, cmp), std::nullopt);
+    BOOST_REQUIRE(nwr1.split_after(8, cmp).empty(cmp));
+    BOOST_REQUIRE(nwr1.split_after(9, cmp).empty(cmp));
     auto nwr2 = nwr(b(5, false), b(8, false));
     BOOST_REQUIRE_EQUAL(nwr2.split_after(2, cmp), nwr2);
     BOOST_REQUIRE_EQUAL(nwr2.split_after(5, cmp), nwr(b(5, false), b(8, false)));
     BOOST_REQUIRE_EQUAL(nwr2.split_after(6, cmp), nwr(b(6, false), b(8, false)));
-    BOOST_REQUIRE_EQUAL(nwr2.split_after(8, cmp), std::nullopt);
-    BOOST_REQUIRE_EQUAL(nwr2.split_after(9, cmp), std::nullopt);
+    BOOST_REQUIRE(nwr2.split_after(8, cmp).empty(cmp));
+    BOOST_REQUIRE(nwr2.split_after(9, cmp).empty(cmp));
     auto nwr3 = nwr(b(5, false), std::nullopt);
     BOOST_REQUIRE_EQUAL(nwr3.split_after(2, cmp), nwr3);
     BOOST_REQUIRE_EQUAL(nwr3.split_after(5, cmp), nwr3);
     BOOST_REQUIRE_EQUAL(nwr3.split_after(6, cmp), nwr(b(6, false), std::nullopt));
     auto nwr4 = nwr(std::nullopt, b(5, false));
     BOOST_REQUIRE_EQUAL(nwr4.split_after(2, cmp), nwr(b(2, false), b(5, false)));
-    BOOST_REQUIRE_EQUAL(nwr4.split_after(5, cmp), std::nullopt);
-    BOOST_REQUIRE_EQUAL(nwr4.split_after(6, cmp), std::nullopt);
+    BOOST_REQUIRE(nwr4.split_after(5, cmp).empty(cmp));
+    BOOST_REQUIRE(nwr4.split_after(6, cmp).empty(cmp));
     auto nwr5 = nwr(std::nullopt, std::nullopt);
     BOOST_REQUIRE_EQUAL(nwr5.split_after(2, cmp), nwr(b(2, false), std::nullopt));
 
@@ -399,7 +399,7 @@ BOOST_AUTO_TEST_CASE(test_intersection) {
 
     auto r1 = nwr(b(5), b(10));
     auto r2 = nwr(b(1), b(4));
-    BOOST_REQUIRE_EQUAL(r1.intersection(r2, cmp), std::nullopt);
+    BOOST_REQUIRE(r1.intersection(r2, cmp).empty(cmp));
     auto r3 = nwr(b(1), b(5));
     BOOST_REQUIRE_EQUAL(r1.intersection(r3, cmp), nwr(b(5), b(5)));
     auto r4 = nwr(b(2), b(7));
@@ -415,27 +415,27 @@ BOOST_AUTO_TEST_CASE(test_intersection) {
     auto r9 = nwr(b(10), b(12));
     BOOST_REQUIRE_EQUAL(r1.intersection(r9, cmp), nwr(b(10), b(10)));
     auto r10 = nwr(b(12), b(20));
-    BOOST_REQUIRE_EQUAL(r1.intersection(r10, cmp), std::nullopt);
+    BOOST_REQUIRE(r1.intersection(r10, cmp).empty(cmp));
     auto r11 = nwr(b(1), b(20));
     BOOST_REQUIRE_EQUAL(r1.intersection(r11, cmp), nwr(b(5), b(10)));
 
     auto r12 = nwr(b(1), b(3, false));
-    BOOST_REQUIRE_EQUAL(r12.intersection(nwr(b(3, false), b(5)), cmp), std::nullopt);
-    BOOST_REQUIRE_EQUAL(r12.intersection(nwr(b(3, false), b(5)), cmp), std::nullopt);
+    BOOST_REQUIRE(r12.intersection(nwr(b(3, false), b(5)), cmp).empty(cmp));
+    BOOST_REQUIRE(r12.intersection(nwr(b(3, false), b(5)), cmp).empty(cmp));
     BOOST_REQUIRE_EQUAL(r12.intersection(nwr(b(2), { }), cmp), nwr(b(2), b(3, false)));
     BOOST_REQUIRE_EQUAL(r12.intersection(nwr({ }, b(2)), cmp), nwr(b(1), b(2)));
-    BOOST_REQUIRE_EQUAL(r12.intersection(nwr::make_singular(4), cmp), std::nullopt);
-    BOOST_REQUIRE_EQUAL(r12.intersection(nwr::make_singular(3), cmp), std::nullopt);
+    BOOST_REQUIRE(r12.intersection(nwr::make_singular(4), cmp).empty(cmp));
+    BOOST_REQUIRE(r12.intersection(nwr::make_singular(3), cmp).empty(cmp));
     BOOST_REQUIRE_EQUAL(r12.intersection(nwr::make_singular(2), cmp), nwr(b(2), b(2)));
     BOOST_REQUIRE_EQUAL(r12.intersection(nwr::make_singular(1), cmp), nwr(b(1), b(1)));
-    BOOST_REQUIRE_EQUAL(r12.intersection(nwr::make_singular(0), cmp), std::nullopt);
+    BOOST_REQUIRE(r12.intersection(nwr::make_singular(0), cmp).empty(cmp));
 
     const auto r13 = nwr::make_singular(123);
     BOOST_REQUIRE_EQUAL(r13.intersection(r13, cmp), nwr(b(123), b(123)));
-    BOOST_REQUIRE_EQUAL(r13.intersection(nwr::make_singular(321), cmp), std::nullopt);
+    BOOST_REQUIRE(r13.intersection(nwr::make_singular(321), cmp).empty(cmp));
     BOOST_REQUIRE_EQUAL(r13.intersection(nwr(b(123), b(123)), cmp), nwr(b(123), b(123)));
     BOOST_REQUIRE_EQUAL(r13.intersection(nwr(b(123), b(124, false)), cmp), nwr(b(123), b(123)));
-    BOOST_REQUIRE_EQUAL(r13.intersection(nwr(b(123, false), b(124, false)), cmp), std::nullopt);
-    BOOST_REQUIRE_EQUAL(r13.intersection(nwr(b(0), b(123, false)), cmp), std::nullopt);
+    BOOST_REQUIRE(r13.intersection(nwr(b(123, false), b(124, false)), cmp).empty(cmp));
+    BOOST_REQUIRE(r13.intersection(nwr(b(0), b(123, false)), cmp).empty(cmp));
     BOOST_REQUIRE_EQUAL(r13.intersection(nwr(b(0), b(1000)), cmp), nwr(b(123), b(123)));
 }

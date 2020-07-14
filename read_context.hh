@@ -55,11 +55,11 @@ public:
             if (_last_key) {
                 auto cmp = dht::ring_position_comparator(*_cache._schema);
                 auto&& new_range = _range.split_after(*_last_key, cmp);
-                if (!new_range) {
+                if (new_range.empty(cmp)) {
                     _reader = {};
                     return make_ready_future<mutation_fragment_opt>();
                 }
-                _range = std::move(*new_range);
+                _range = std::move(new_range);
                 _last_key = {};
             }
             if (_reader) {

@@ -191,8 +191,8 @@ selective_token_range_sharder::next() {
         auto intersection = _range.intersection(std::move(candidate), dht::token_comparator());
         _start_token = _sharder.token_for_next_shard(end_token, _shard);
         _start_boundary = range_bound<dht::token>(_start_token);
-        if (intersection) {
-            return *intersection;
+        if (!intersection.empty(dht::token_comparator())) {
+            return intersection;
         }
     }
 
@@ -268,8 +268,8 @@ split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id
             auto end_token = sharder.token_for_next_shard(start_token, next_shard);
             auto candidate = partition_range(std::move(start_boundary), range_bound<ring_position>(ring_position::starting_at(end_token), false));
             auto intersection = pr.intersection(std::move(candidate), cmp);
-            if (intersection) {
-                ret.push_back(std::move(*intersection));
+            if (!intersection.empty(cmp)) {
+                ret.push_back(std::move(intersection));
             }
             start_token = sharder.token_for_next_shard(end_token, shard);
             start_boundary = range_bound<ring_position>(ring_position::starting_at(start_token));

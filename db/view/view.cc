@@ -1073,8 +1073,8 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& 
                     bound_view::to_range_bound<nonwrapping_range>(rt.end_bound()));
             for (auto&& vr : view_row_ranges) {
                 auto overlap = rtr.intersection(vr, cmp);
-                if (overlap) {
-                    row_ranges.push_back(std::move(overlap).value());
+                if (!overlap.empty(cmp)) {
+                    row_ranges.push_back(std::move(overlap));
                 }
             }
         }
@@ -1475,16 +1475,16 @@ void view_builder::reshard(
             return v1->id() == v2->id();
         }
     };
-    std::unordered_map<view_ptr, std::optional<nonwrapping_range<dht::token>>, view_ptr_hash, view_ptr_equals> my_status;
+    std::unordered_map<view_ptr, nonwrapping_range<dht::token>, view_ptr_hash, view_ptr_equals> my_status;
     for (auto& shard_status : view_build_status_per_shard) {
         for (auto& [view, first_token, next_token] : shard_status ) {
             // We start from an open-ended range, which we'll try to restrict.
             auto& my_range = my_status.emplace(
                     std::move(view),
                     nonwrapping_range<dht::token>::make_open_ended_both_sides()).first->second;
-            if (!next_token || !my_range) {
+            if (!next_token || my_range.empty(dht::token_comparator())) {
                 // A previous shard made no progress, so for this view we'll start over.
-                my_range = std::nullopt;
+                my_range = nonwrapping_range<dht::token>::make_empty(dht::token());
                 continue;
             }
             if (first_token == *next_token) {
@@ -1498,23 +1498,24 @@ void view_builder::reshard(
                 // multiple non-contiguous ranges. To avoid the complexity of dealing with more
                 // than one range, we'll just take one of the intersections.
                 auto [bottom_range, top_range] = other_range.unwrap();
-                if (auto bottom_int = my_range->intersection(nonwrapping_interval(std::move(bottom_range)), dht::token_comparator())) {
+                auto bottom_int = my_range.intersection(nonwrapping_interval(std::move(bottom_range)), dht::token_comparator());
+                if (!bottom_int.empty(dht::token_comparator())) {
                     my_range = std::move(bottom_int);
                 } else {
-                    my_range = my_range->intersection(nonwrapping_interval(std::move(top_range)), dht::token_comparator());
+                    my_range = my_range.intersection(nonwrapping_interval(std::move(top_range)), dht::token_comparator());
                 }
             } else {
-                my_range = my_range->intersection(nonwrapping_interval(std::move(other_range)), dht::token_comparator());
+                my_range = my_range.intersection(nonwrapping_interval(std::move(other_range)), dht::token_comparator());
             }
         }
     }
     view_builder::base_to_build_step_type build_step;
-    for (auto& [view, opt_range] : my_status) {
-        if (!opt_range) {
+    for (auto& [view, range] : my_status) {
+        if (range.empty(dht::token_comparator())) {
             continue; // Treat it as a new table.
         }
-        auto start_bound = opt_range->start() ? std::move(opt_range->start()->value()) : dht::minimum_token();
-        auto end_bound = opt_range->end() ? std::move(opt_range->end()->value()) : dht::minimum_token();
+        auto start_bound = range.start() ? std::move(range.start()->value()) : dht::minimum_token();
+        auto end_bound = range.end() ? std::move(range.end()->value()) : dht::minimum_token();
         auto s = view_build_status{std::move(view), std::move(start_bound), std::move(end_bound)};
         load_view_status(std::move(s), loaded_views);
     }
