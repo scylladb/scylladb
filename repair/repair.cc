@@ -47,8 +47,29 @@
 
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/core/metrics_registration.hh>
 
 logging::logger rlogger("repair");
+
+class node_ops_metrics {
+public:
+    node_ops_metrics() {
+        namespace sm = seastar::metrics;
+        _metrics.add_group("node_maintenance_operations", {
+            sm::make_gauge("bootstrap_finished_percentage", sm::description("Number of finished percentage for bootstrap operation on this shard."),
+                [this] { return bootstrap_finished_percentage(); }),
+        });
+    }
+    uint64_t bootstrap_total_ranges{0};
+    uint64_t bootstrap_finished_ranges{0};
+private:
+    seastar::metrics::metric_groups _metrics;
+    float bootstrap_finished_percentage() {
+        return bootstrap_total_ranges == 0 ? 1 : float(bootstrap_finished_ranges) / float(bootstrap_total_ranges);
+    }
+};
+
+static thread_local node_ops_metrics _node_ops_metrics;
 
 template <typename T1, typename T2>
 inline
@@ -1390,7 +1411,11 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                 ri->ranges_index++;
                 rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
                     ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->table_names(), range);
-                return repair_range(*ri, range);
+                return repair_range(*ri, range).then([ri] {
+                    if (ri->reason == streaming::stream_reason::bootstrap) {
+                        _node_ops_metrics.bootstrap_finished_ranges++;
+                    }
+                });
             });
         });
     } else {
@@ -1413,6 +1438,10 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
                 });
+            }).then([ri] {
+                if (ri->reason == streaming::stream_reason::bootstrap) {
+                    _node_ops_metrics.bootstrap_finished_ranges++;
+                }
             });
         }).then([ri] {
             // Do streaming for the remaining ranges we do not stream in
@@ -1662,9 +1691,25 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
     using inet_address = gms::inet_address;
     return seastar::async([&db, tm = std::move(tm), tokens = std::move(bootstrap_tokens)] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
-        rlogger.info("bootstrap_with_repair: started with keyspaces={}", keyspaces);
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto reason = streaming::stream_reason::bootstrap;
+        // Calculate number of ranges to sync data
+        size_t nr_ranges_total = 0;
+        for (auto& keyspace_name : keyspaces) {
+            if (!db.local().has_keyspace(keyspace_name)) {
+                continue;
+            }
+            auto& ks = db.local().find_keyspace(keyspace_name);
+            auto& strat = ks.get_replication_strategy();
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tm, tokens, myip);
+            seastar::thread::maybe_yield();
+            nr_ranges_total += desired_ranges.size();
+        }
+        db.invoke_on_all([nr_ranges_total] (database&) {
+            _node_ops_metrics.bootstrap_finished_ranges = 0;
+            _node_ops_metrics.bootstrap_total_ranges = nr_ranges_total;
+        }).get();
+        rlogger.info("bootstrap_with_repair: started with keyspaces={}, nr_ranges_total={}", keyspaces, nr_ranges_total);
         for (auto& keyspace_name : keyspaces) {
             if (!db.local().has_keyspace(keyspace_name)) {
                 rlogger.info("bootstrap_with_repair: keyspace={} does not exist any more, ignoring it", keyspace_name);
