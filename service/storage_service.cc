@@ -1291,6 +1291,17 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
     }
     auto tokens = get_tokens_for(endpoint);
     slogger.debug("Node {} state left, tokens {}", endpoint, tokens);
+    if (tokens.empty()) {
+        auto eps = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+        if (eps) {
+            slogger.warn("handle_state_left: Tokens for node={} are empty, endpoint_state={}", endpoint, *eps);
+        } else {
+            slogger.warn("handle_state_left: Couldn't find endpoint state for node={}", endpoint);
+        }
+        auto tokens_from_tm = _token_metadata.get_tokens(endpoint);
+        slogger.warn("handle_state_left: Get tokens from token_metadata, node={}, tokens={}", endpoint, tokens_from_tm);
+        tokens = std::unordered_set<dht::token>(tokens_from_tm.begin(), tokens_from_tm.end());
+    }
     excise(tokens, endpoint, extract_expire_time(pieces));
 }
 
