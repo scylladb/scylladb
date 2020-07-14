@@ -52,7 +52,7 @@ using namespace aggregate_fcts;
 
 namespace {
 class impl_count_function : public aggregate_function::aggregate {
-    int64_t _count;
+    int64_t _count = 0;
 public:
     virtual void reset() override {
         _count = 0;
