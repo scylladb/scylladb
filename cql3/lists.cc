@@ -357,7 +357,12 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
 
     collection_mutation_description mut;
     mut.cells.reserve(1);
-    mut.cells.emplace_back(to_bytes(*index), params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
+
+    if (!value) {
+        mut.cells.emplace_back(to_bytes(*index), params.make_dead_cell());
+    } else {
+        mut.cells.emplace_back(to_bytes(*index), params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
+    }
 
     m.set_cell(prefix, column, mut.serialize(*ltype));
 }
