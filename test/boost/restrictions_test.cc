@@ -232,7 +232,7 @@ SEASTAR_THREAD_TEST_CASE(regular_col_slice) {
         require_rows(e, "select * from t where q<11 and q>11 allow filtering", {});
         require_rows(e, "select q from t where q<=12 and r>=21 allow filtering", {{I(11), I(21)}, {I(12), I(22)}});
         cquery_nofail(e, "insert into t(p) values (4)");
-        require_rows(e, "select q from t where q<12 allow filtering", {{std::nullopt}, {I(10)}, {I(11)}});
+        require_rows(e, "select q from t where q<12 allow filtering", {{I(10)}, {I(11)}});
         require_rows(e, "select q from t where q>10 allow filtering", {{I(11)}, {I(12)}, {I(13)}});
         require_rows(e, "select q from t where q<12 and q>10 allow filtering", {{I(11)}});
     }).get();

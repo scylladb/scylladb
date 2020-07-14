@@ -807,7 +807,7 @@ bool limits(const binary_operator& opr, const column_value_eval_bag& bag) {
     } else if (columns.size() == 1) {
         auto lhs = get_value(columns[0], bag);
         if (!lhs) {
-            lhs = bytes(); // Compatible with old code, which feeds null to type comparators.
+            return false; // NULL never compares to anything (#6295)
         }
         const auto tup = get_tuple(*opr.rhs, bag.options);
         auto rhs = (tup && tup->size() == 1) ? tup->get_elements()[0] // Assume an external query WHERE (ck1)>(123).
