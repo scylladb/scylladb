@@ -1721,7 +1721,7 @@ with open(buildfile_tmp, 'w') as f:
         build dist-server: phony dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
-          command = cd $reloc_dir && ./reloc/build_reloc.sh
+          command = cd $reloc_dir && ./reloc/build_reloc.sh --nodeps
         rule build-submodule-rpm
           command = cd $dir && ./reloc/build_rpm.sh --reloc-pkg $artifact
         rule build-submodule-deb
