@@ -91,8 +91,12 @@ multi-datacenters and how Scylla integrates with third-party applications.
 
 ## Contributing to Scylla
 
-[Hacking howto](HACKING.md)
-[Guidelines for contributing](CONTRIBUTING.md)
+If you want to report a bug or submit a pull request or a patch, please read the [contribution guidelines].
+
+If you are a developer working on Scylla, please read the [developer guidelines].
+
+[contribution guidelines]: CONTRIBUTING.md
+[developer guidelines]: HACKING.md
 
 ## Contact
 
