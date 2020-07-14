@@ -28,6 +28,8 @@ else
 fi
 
 bash seastar/install-dependencies.sh
+bash tools/jmx/install-dependencies.sh
+bash tools/java/install-dependencies.sh
 
 debian_base_packages=(
     liblua5.3-dev
