@@ -1737,7 +1737,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
     maybe_write_row_marker(out, schema, clustered_row.marker(), clustering_key);
     maybe_write_row_tombstone(out, clustering_key, clustered_row);
 
-    _collector.update_min_max_components(schema, clustered_row.key());
+    get_metadata_collector().update_min_max_components(*_schema, clustered_row.key());
 
     // Write all cells of a partition's row.
     clustered_row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
@@ -2032,7 +2032,7 @@ void components_writer::consume_new_partition(const dht::decorated_key& dk) {
 
     maybe_add_summary_entry(dk.token(), bytes_view(*_partition_key));
     _sst._components->filter->add(bytes_view(*_partition_key));
-    _sst._collector.add_key(bytes_view(*_partition_key));
+    _sst.get_metadata_collector().add_key(bytes_view(*_partition_key));
 
     auto p_key = disk_string_view<uint16_t>();
     p_key.value = bytes_view(*_partition_key);
@@ -2146,7 +2146,7 @@ stop_iteration components_writer::consume_end_of_partition() {
     _sst.get_large_data_handler().maybe_log_too_many_rows(_sst, *_partition_key, _sst._c_stats.rows_count);
 
     // update is about merging column_stats with the data being stored by collector.
-    _sst._collector.update(std::move(_sst._c_stats));
+    _sst.get_metadata_collector().update(std::move(_sst._c_stats));
     _sst._c_stats.reset();
 
     if (!_first_key) {
@@ -2169,11 +2169,11 @@ void components_writer::consume_end_of_stream() {
     _index.close();
 
     if (_sst.has_component(component_type::CompressionInfo)) {
-        _sst._collector.add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
+        _sst.get_metadata_collector().add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
     }
 
     _sst.set_first_and_last_keys();
-    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst._collector, _schema.get_partitioner().name(), _schema.bloom_filter_fp_chance(),
+    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(), _schema.get_partitioner().name(), _schema.bloom_filter_fp_chance(),
             _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key());
 }
 
@@ -2222,6 +2222,13 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(std::move(identifier));
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
+}
+
+void
+sstable::make_metadata_collector() {
+    if (!_collector) {
+        _collector.emplace();
+    }
 }
 
 void sstable::update_stats_on_end_of_stream()
@@ -2353,6 +2360,7 @@ void sstable_writer_k_l::consume_end_of_stream()
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, const io_priority_class& pc, shard_id shard) {
+    sst.make_metadata_collector();
     if (sst.get_version() == sstable_version_types::mc) {
         _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
     } else {
@@ -2451,11 +2459,11 @@ future<> sstable::write_components(
         encoding_stats stats,
         const io_priority_class& pc) {
     assert_large_data_handler_is_running();
-    if (cfg.replay_position) {
-        _collector.set_replay_position(cfg.replay_position.value());
-    }
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
+        if (cfg.replay_position) {
+            get_metadata_collector().set_replay_position(cfg.replay_position.value());
+        }
         auto validator = mutation_fragment_stream_validating_filter(format("sstable writer {}", get_filename()), *schema,
                 cfg.validate_keys);
         mr.consume_in_thread(std::move(wr), std::move(validator), db::no_timeout);
