@@ -1497,11 +1497,12 @@ with open(buildfile_tmp, 'w') as f:
               description = TEST {mode}
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, **modeval))
         f.write(
-            'build {mode}: phony {artifacts} dist-{mode}\n'.format(
+            'build {mode}-build: phony {artifacts}\n'.format(
                 mode=mode,
                 artifacts=str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))
             )
         )
+        f.write(f'build {mode}: phony {mode}-build dist-{mode}\n')
         compiles = {}
         swaggers = set()
         serializers = {}
@@ -1704,6 +1705,9 @@ with open(buildfile_tmp, 'w') as f:
     mode = 'dev' if 'dev' in modes else modes[0]
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(mode, hh) for hh in headers])))
 
+    f.write(
+            'build build: phony {}\n'.format(' '.join([f'{mode}-build' for mode in modes]))
+    )
     f.write(
             'build test: phony {}\n'.format(' '.join(['{mode}-test'.format(mode=mode) for mode in modes]))
     )
