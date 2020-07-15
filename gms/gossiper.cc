@@ -515,7 +515,6 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
     inet_address to = __live_endpoints[index];
     auto id = get_msg_addr(to);
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
-    _gossiped_to_seed = _seeds.count(to);
     return ms().send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
         // It is normal to reach here because it is normal that a node
         // tries to send a SYN message to a peer node which is down before
@@ -734,8 +733,6 @@ void gossiper::run() {
             if (g_digests.size() > 0) {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
 
-                _gossiped_to_seed = false;
-
                 if (_endpoints_to_talk_with.empty()) {
                     std::shuffle(_live_endpoints.begin(), _live_endpoints.end(), _random_engine);
                     // This guarantees the local node will talk with all nodes
@@ -785,31 +782,6 @@ void gossiper::run() {
                 (void)do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
                     logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
                 });
-
-                /* Gossip to a seed if we did not do so above, or we have seen less nodes
-                   than there are seeds.  This prevents partitions where each group of nodes
-                   is only gossiping to a subset of the seeds.
-
-                   The most straightforward check would be to check that all the seeds have been
-                   verified either as live or unreachable.  To avoid that computation each round,
-                   we reason that:
-
-                   either all the live nodes are seeds, in which case non-seeds that come online
-                   will introduce themselves to a member of the ring by definition,
-
-                   or there is at least one non-seed node in the list, in which case eventually
-                   someone will gossip to it, and then do a gossip to a random seed from the
-                   gossipedToSeed check.
-
-                   See CASSANDRA-150 for more exposition. */
-                logger.trace("gossiped_to_seed={}, _live_endpoints.size={}, _seeds.size={}",
-                             _gossiped_to_seed, _live_endpoints.size(), _seeds.size());
-                if (!_gossiped_to_seed || _live_endpoints.size() < _seeds.size()) {
-                    // Do it in the background.
-                    (void)do_gossip_to_seed(message).handle_exception([] (auto ep) {
-                        logger.trace("Faill to do_gossip_to_seed: {}", ep);
-                    });
-                }
 
                 do_status_check();
             }
@@ -1203,30 +1175,6 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
             logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
                 live_endpoint_count, unreachable_endpoint_count);
             return send_gossip(message, addrs);
-        }
-    }
-    return make_ready_future<>();
-}
-
-future<> gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
-    size_t size = _seeds.size();
-    if (size > 0) {
-        if (size == 1 && _seeds.count(get_broadcast_address())) {
-            return make_ready_future<>();
-        }
-
-        if (_live_endpoints.size() == 0) {
-            logger.trace("do_gossip_to_seed: live_endpoints nr={}, seeds nr={}", 0, _seeds.size());
-            return send_gossip(prod, _seeds);
-        } else {
-            /* Gossip with the seed with some probability. */
-            double probability = _seeds.size() / (double) (_live_endpoints.size() + _unreachable_endpoints.size());
-            std::uniform_real_distribution<double> dist(0, 1);
-            double rand_dbl = dist(_random_engine);
-            if (rand_dbl <= probability) {
-                logger.trace("do_gossip_to_seed: live_endpoints nr={}, seeds nr={}", _live_endpoints.size(), _seeds.size());
-                return send_gossip(prod, _seeds);
-            }
         }
     }
     return make_ready_future<>();
