@@ -56,7 +56,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
     class lsa_partition_reader {
         const schema& _schema;
         reader_permit _permit;
-        rows_entry::compare _less;
+        rows_entry::tri_compare _cmp;
         position_in_partition::equal_compare _eq;
         heap_compare _heap_cmp;
 
@@ -89,10 +89,10 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             }
 
             for (auto&& v : _snapshot->versions()) {
-                auto cr_end = v.partition().upper_bound(_schema, ck_range);
+                mutation_partition::rows_type::const_iterator cr_end = v.partition().upper_bound(_schema, ck_range);
                 auto cr = [&] () -> mutation_partition::rows_type::const_iterator {
                     if (last_row) {
-                        return v.partition().clustered_rows().upper_bound(*last_row, _less);
+                        return v.partition().clustered_rows().upper_bound(*last_row, _cmp);
                     } else {
                         return v.partition().lower_bound(_schema, ck_range);
                     }
@@ -131,7 +131,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                                       bool digest_requested)
             : _schema(s)
             , _permit(std::move(permit))
-            , _less(s)
+            , _cmp(s)
             , _eq(s)
             , _heap_cmp(s)
             , _snapshot(std::move(snp))
