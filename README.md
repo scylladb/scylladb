@@ -66,10 +66,10 @@ See [test.py manual](docs/testing.md).
 
 ## Scylla APIs and compatibility
 By default, Scylla is compatible with Apache Cassandra and its APIs - CQL and
-Thrift. There is also experimental support for the API of Amazon DynamoDB,
-but being experimental it needs to be explicitly enabled to be used. For more
-information on how to enable the experimental DynamoDB compatibility in Scylla,
-and the current limitations of this feature, see
+Thrift. There is also support for the API of Amazon DynamoDB™,
+which needs to be enabled and configured in order to be used. For more
+information on how to enable the DynamoDB™ API in Scylla,
+and the current compatibility of this feature as well as Scylla-specific extensions, see
 [Alternator](docs/alternator/alternator.md) and
 [Getting started with Alternator](docs/alternator/getting-started.md).
 
