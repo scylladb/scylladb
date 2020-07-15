@@ -85,6 +85,7 @@ ln -s "$SCYLLA" "$SCYLLA_LINK"
         --alternator-enforce-authorization=1 \
         --alternator-write-isolation=always_use_lwt \
         --developer-mode=1 \
+        --experimental-features=cdc \
         --ring-delay-ms 0 --collectd 0 \
         --smp 2 -m 1G \
         --overprovisioned --unsafe-bypass-fsync 1 \
