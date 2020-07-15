@@ -195,9 +195,10 @@ private:
      */
     atomic_vector<shared_ptr<i_endpoint_state_change_subscriber>> _subscribers;
 
+    std::list<std::vector<inet_address>> _endpoints_to_talk_with;
+
     /* live member set */
     utils::chunked_vector<inet_address> _live_endpoints;
-    std::list<inet_address> _live_endpoints_just_added;
 
     /* nodes are being marked as alive */
     std::unordered_set<inet_address> _pending_mark_alive_endpoints;
