@@ -57,11 +57,13 @@ class size_calculator {
 public:
     static void print_cache_entry_size() {
         std::cout << prefix() << "sizeof(cache_entry) = " << sizeof(cache_entry) << "\n";
+        std::cout << prefix() << "sizeof(memtable_entry) = " << sizeof(memtable_entry) << "\n";
+        std::cout << prefix() << "sizeof(bptree::node) = " << sizeof(row_cache::partitions_type::outer_tree::node) << "\n";
+        std::cout << prefix() << "sizeof(bptree::data) = " << sizeof(row_cache::partitions_type::outer_tree::data) << "\n";
 
         {
             nest n;
             std::cout << prefix() << "sizeof(decorated_key) = " << sizeof(dht::decorated_key) << "\n";
-            std::cout << prefix() << "sizeof(cache_link_type) = " << sizeof(cache_entry::cache_link_type) << "\n";
             print_mutation_partition_size();
         }
 

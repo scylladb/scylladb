@@ -59,13 +59,7 @@ int tri_compare(const token& t1, const token& t2) {
     } else if (t1._kind > t2._kind) {
             return 1;
     } else if (t1._kind == token_kind::key) {
-        auto l1 = long_token(t1);
-        auto l2 = long_token(t2);
-        if (l1 == l2) {
-            return 0;
-        } else {
-            return l1 < l2 ? -1 : 1;
-        }
+        return tri_compare_raw(long_token(t1), long_token(t2));
     }
     return 0;
 }

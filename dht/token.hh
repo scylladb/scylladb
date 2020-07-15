@@ -160,6 +160,47 @@ public:
         return 0;  // hardcoded for now; unlikely to change
     }
 
+    int64_t raw() const noexcept {
+        if (is_minimum()) {
+            return std::numeric_limits<int64_t>::min();
+        }
+        if (is_maximum()) {
+            return std::numeric_limits<int64_t>::max();
+        }
+
+        return _data;
+    }
+};
+
+static inline int tri_compare_raw(const int64_t l1, const int64_t l2) noexcept {
+    if (l1 == l2) {
+        return 0;
+    } else {
+        return l1 < l2 ? -1 : 1;
+    }
+}
+
+template <typename T>
+concept TokenCarrier = requires (const T& v) {
+    { v.token() } -> std::same_as<const token&>;
+};
+
+struct raw_token_less_comparator {
+    bool operator()(const int64_t k1, const int64_t k2) const noexcept {
+        return dht::tri_compare_raw(k1, k2) < 0;
+    }
+
+    template <typename Key>
+    requires TokenCarrier<Key>
+    bool operator()(const Key& k1, const int64_t k2) const noexcept {
+        return dht::tri_compare_raw(k1.token().raw(), k2) < 0;
+    }
+
+    template <typename Key>
+    requires TokenCarrier<Key>
+    bool operator()(const int64_t k1, const Key& k2) const noexcept {
+        return dht::tri_compare_raw(k1, k2.token().raw()) < 0;
+    }
 };
 
 const token& minimum_token() noexcept;

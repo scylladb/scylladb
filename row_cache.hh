@@ -31,7 +31,6 @@
 
 #include "mutation_reader.hh"
 #include "mutation_partition.hh"
-#include "utils/logalloc.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
 #include "partition_version.hh"
@@ -40,6 +39,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include "flat_mutation_reader.hh"
 #include "mutation_cleaner.hh"
+#include "utils/double-decker.hh"
 
 namespace bi = boost::intrusive;
 
@@ -61,11 +61,6 @@ class lsa_manager;
 //
 // TODO: Make memtables use this format too.
 class cache_entry {
-    // We need auto_unlink<> option on the _cache_link because when entry is
-    // evicted from cache via LRU we don't have a reference to the container
-    // and don't want to store it with each entry.
-    using cache_link_type = bi::set_member_hook<bi::link_mode<bi::auto_unlink>>;
-
     schema_ptr _schema;
     dht::decorated_key _key;
     partition_entry _pe;
@@ -73,14 +68,23 @@ class cache_entry {
     struct {
         bool _continuous : 1;
         bool _dummy_entry : 1;
+        bool _head : 1;
+        bool _tail : 1;
+        bool _train : 1;
     } _flags{};
-    cache_link_type _cache_link;
     friend class size_calculator;
 
     flat_mutation_reader do_read(row_cache&, cache::read_context& reader);
 public:
     friend class row_cache;
     friend class cache_tracker;
+
+    bool is_head() const noexcept { return _flags._head; }
+    void set_head(bool v) noexcept { _flags._head = v; }
+    bool is_tail() const noexcept { return _flags._tail; }
+    void set_tail(bool v) noexcept { _flags._tail = v; }
+    bool with_train() const noexcept { return _flags._train; }
+    void set_train(bool v) noexcept { _flags._train = v; }
 
     struct dummy_entry_tag{};
     struct incomplete_tag{};
@@ -137,6 +141,9 @@ public:
         }
         return _key;
     }
+
+    friend dht::ring_position_view ring_position_view_to_compare(const cache_entry& ce) noexcept { return ce.position(); }
+
     const partition_entry& partition() const noexcept { return _pe; }
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const noexcept { return _schema; }
@@ -147,38 +154,6 @@ public:
     void set_continuous(bool value) noexcept { _flags._continuous = value; }
 
     bool is_dummy_entry() const noexcept { return _flags._dummy_entry; }
-
-    struct compare {
-        dht::ring_position_less_comparator _c;
-
-        compare(schema_ptr s)
-            : _c(*s)
-        {}
-
-        bool operator()(const dht::decorated_key& k1, const cache_entry& k2) const {
-            return _c(k1, k2.position());
-        }
-
-        bool operator()(dht::ring_position_view k1, const cache_entry& k2) const {
-            return _c(k1, k2.position());
-        }
-
-        bool operator()(const cache_entry& k1, const cache_entry& k2) const {
-            return _c(k1.position(), k2.position());
-        }
-
-        bool operator()(const cache_entry& k1, const dht::decorated_key& k2) const {
-            return _c(k1.position(), k2);
-        }
-
-        bool operator()(const cache_entry& k1, dht::ring_position_view k2) const {
-            return _c(k1.position(), k2);
-        }
-
-        bool operator()(dht::ring_position_view k1, dht::ring_position_view k2) const {
-            return _c(k1, k2);
-        }
-    };
 
     friend std::ostream& operator<<(std::ostream&, cache_entry&);
 };
@@ -315,10 +290,9 @@ void cache_tracker::insert(partition_entry& pe) noexcept {
 class row_cache final {
 public:
     using phase_type = utils::phased_barrier::phase_type;
-    using partitions_type = bi::set<cache_entry,
-        bi::member_hook<cache_entry, cache_entry::cache_link_type, &cache_entry::_cache_link>,
-        bi::constant_time_size<false>, // we need this to have bi::auto_unlink on hooks
-        bi::compare<cache_entry::compare>>;
+    using partitions_type = double_decker<int64_t, cache_entry,
+                            dht::raw_token_less_comparator, dht::ring_position_comparator,
+                            16, bplus::key_search::linear>;
     friend class cache::autoupdating_underlying_reader;
     friend class single_partition_populating_reader;
     friend class cache_entry;
