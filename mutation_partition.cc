@@ -180,7 +180,9 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
     try {
         for(auto&& r : ck_ranges) {
             for (const rows_entry& e : x.range(schema, r)) {
-                _rows.insert(_rows.end(), *current_allocator().construct<rows_entry>(schema, e), rows_entry::compare(schema));
+                auto ce = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(schema, e));
+                _rows.insert(_rows.end(), *ce, rows_entry::compare(schema));
+                ce.release();
             }
             for (auto&& rt : x._row_tombstones.slice(schema, r)) {
                 _row_tombstones.apply(schema, rt);
@@ -247,8 +249,10 @@ mutation_partition::operator=(mutation_partition&& x) noexcept {
 void mutation_partition::ensure_last_dummy(const schema& s) {
     check_schema(s);
     if (_rows.empty() || !_rows.rbegin()->is_last_dummy()) {
-        _rows.insert_before(_rows.end(),
-            *current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::yes));
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+                current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::yes));
+        _rows.insert_before(_rows.end(), *e);
+        e.release();
     }
 }
 
@@ -2398,8 +2402,10 @@ mutation_partition::mutation_partition(mutation_partition::incomplete_tag, const
     , _schema_version(s.version())
 #endif
 {
-    _rows.insert_before(_rows.end(),
-        *current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::no));
+    auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::no));
+    _rows.insert_before(_rows.end(), *e);
+    e.release();
 }
 
 bool mutation_partition::is_fully_continuous() const {
@@ -2437,13 +2443,19 @@ void mutation_partition::set_continuity(const schema& s, const position_range& p
 
     auto end = _rows.lower_bound(pr.end(), less);
     if (end == _rows.end() || cmp(pr.end(), end->position()) < 0) {
-        end = _rows.insert_before(end, *current_allocator().construct<rows_entry>(s, pr.end(), is_dummy::yes,
-            end == _rows.end() ? is_continuous::yes : end->continuous()));
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+                current_allocator().construct<rows_entry>(s, pr.end(), is_dummy::yes,
+                    end == _rows.end() ? is_continuous::yes : end->continuous()));
+        end = _rows.insert_before(end, *e);
+        e.release();
     }
 
     auto i = _rows.lower_bound(pr.start(), less);
     if (cmp(pr.start(), i->position()) < 0) {
-        i = _rows.insert_before(i, *current_allocator().construct<rows_entry>(s, pr.start(), is_dummy::yes, i->continuous()));
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+                current_allocator().construct<rows_entry>(s, pr.start(), is_dummy::yes, i->continuous()));
+        i = _rows.insert_before(i, *e);
+        e.release();
     }
 
     assert(i != end);
