@@ -232,7 +232,7 @@ SEASTAR_THREAD_TEST_CASE(regular_col_slice) {
         require_rows(e, "select * from t where q<11 and q>11 allow filtering", {});
         require_rows(e, "select q from t where q<=12 and r>=21 allow filtering", {{I(11), I(21)}, {I(12), I(22)}});
         cquery_nofail(e, "insert into t(p) values (4)");
-        require_rows(e, "select q from t where q<12 allow filtering", {{std::nullopt}, {I(10)}, {I(11)}});
+        require_rows(e, "select q from t where q<12 allow filtering", {{I(10)}, {I(11)}});
         require_rows(e, "select q from t where q>10 allow filtering", {{I(11)}, {I(12)}, {I(13)}});
         require_rows(e, "select q from t where q<12 and q>10 allow filtering", {{I(11)}});
     }).get();
@@ -260,7 +260,47 @@ SEASTAR_THREAD_TEST_CASE(regular_col_neq) {
 }
 #endif // 0
 
-SEASTAR_THREAD_TEST_CASE(null) {
+namespace {
+/// The `op` argument can be one of: "<", "<=", ">", ">=", "=". Remove float args to use "!=".
+future<> test_lhs_null_with_operator(sstring op) {
+    return do_with_cql_env_thread([op = std::move(op)] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE cf (pk int primary key, flt float,"
+                " dbl double, dec decimal, b boolean, ti tinyint, si smallint," 
+                " i int, bi bigint, vi varint, ip inet, u uuid, tu timeuuid,"
+                " t time, d date, a ascii, txt text);");
+        cquery_nofail(e, "INSERT INTO cf (pk) VALUES (0);");
+        
+        // Now we have all types of NULLs
+        require_rows(e, format("SELECT * FROM cf WHERE flt {} 99.9 ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE dbl {} 99.9 ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE dec {} 99.9 ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE b   {} true ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE ti  {} 99   ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE si  {} 999  ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE i   {} 999  ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE bi  {} 999  ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE vi  {} 999  ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE ip  {} '255.255.255.255' ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE u   {} ffffffff-e89b-12d3-a456-426655440000 ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE tu  {} ffffffff-e89b-12d3-a456-426655440000 ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE t   {} '23:59:59'   ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE d   {} '2137-01-01' ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE a   {} 'Z'          ALLOW FILTERING;", op), {});
+        require_rows(e, format("SELECT * FROM cf WHERE txt {} 'Ż'          ALLOW FILTERING;", op), {});
+    });
+}
+} // anon. namespace
+
+// This test checks that NULLs on LHS of comparison operator never evaluate to `true` (#6295).
+// The expected behavior aligns with C*, but the test also ensures that NULLs are not converted
+// to empty buffers somewhere along the way (since empty buffers would lexicographically
+// precede anything).
+SEASTAR_THREAD_TEST_CASE(null_lhs) {
+    test_lhs_null_with_operator("<").get();
+    test_lhs_null_with_operator(">").get();
+}
+
+SEASTAR_THREAD_TEST_CASE(null_rhs) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table t (pk1 int, pk2 int, ck1 float, ck2 float, r text, primary key((pk1,pk2),ck1,ck2))");
         const auto q = [&] (const char* stmt) { return e.execute_cql(stmt).get(); };
