@@ -87,6 +87,10 @@ static std::vector<sstring> list_column_families(const database& db, const sstri
     return ret;
 }
 
+std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x) {
+    return os << format("[id={}, uuid={}]", x.id, x.uuid);
+}
+
 // Must run inside a seastar thread
 static std::vector<utils::UUID> get_table_ids(const database& db, const sstring& keyspace, const std::vector<sstring>& tables) {
     std::vector<utils::UUID> table_ids;
@@ -256,15 +260,15 @@ tracker::~tracker() {
     _the_tracker = nullptr;
 }
 
-void tracker::start(int id) {
-    _status[id] = repair_status::RUNNING;
+void tracker::start(repair_uniq_id id) {
+    _status[id.id] = repair_status::RUNNING;
 }
 
-void tracker::done(int id, bool succeeded) {
+void tracker::done(repair_uniq_id id, bool succeeded) {
     if (succeeded) {
-        _status.erase(id);
+        _status.erase(id.id);
     } else {
-        _status[id] = repair_status::FAILED;
+        _status[id.id] = repair_status::FAILED;
     }
     _done_cond.broadcast();
 }
@@ -304,8 +308,8 @@ future<repair_status> tracker::repair_await_completion(int id, std::chrono::stea
     });
 }
 
-int tracker::next_repair_command() {
-    return _next_repair_command++;
+repair_uniq_id tracker::next_repair_command() {
+    return repair_uniq_id{_next_repair_command++, utils::make_random_uuid()};
 }
 
 future<> tracker::shutdown() {
@@ -370,7 +374,7 @@ named_semaphore& tracker::range_parallelism_semaphore() {
     return _range_parallelism_semaphores[this_shard_id()];
 }
 
-future<> tracker::run(int id, std::function<void ()> func) {
+future<> tracker::run(repair_uniq_id id, std::function<void ()> func) {
     return seastar::with_gate(_gate, [this, id, func =std::move(func)] {
         start(id);
         return seastar::async([func = std::move(func)] { func(); }).then([this, id] {
@@ -715,7 +719,7 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     const sstring& keyspace_,
     const dht::token_range_vector& ranges_,
     std::vector<utils::UUID> table_ids_,
-    int id_,
+    repair_uniq_id id_,
     const std::vector<sstring>& data_centers_,
     const std::vector<sstring>& hosts_,
     streaming::stream_reason reason_)
@@ -736,8 +740,8 @@ repair_info::repair_info(seastar::sharded<database>& db_,
 future<> repair_info::do_streaming() {
     size_t ranges_in = 0;
     size_t ranges_out = 0;
-    _sp_in = make_lw_shared<streaming::stream_plan>(format("repair-in-id-{:d}-shard-{:d}-index-{:d}", id, shard, sp_index), streaming::stream_reason::repair);
-    _sp_out = make_lw_shared<streaming::stream_plan>(format("repair-out-id-{:d}-shard-{:d}-index-{:d}", id, shard, sp_index), streaming::stream_reason::repair);
+    _sp_in = make_lw_shared<streaming::stream_plan>(format("repair-in-id-{:d}-shard-{:d}-index-{:d}", id.id, shard, sp_index), streaming::stream_reason::repair);
+    _sp_out = make_lw_shared<streaming::stream_plan>(format("repair-out-id-{:d}-shard-{:d}-index-{:d}", id.id, shard, sp_index), streaming::stream_reason::repair);
 
     for (auto& x : ranges_need_repair_in) {
         auto& peer = x.first;
@@ -1424,14 +1428,14 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
 static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
-    repair_tracker().add_repair_info(ri->id, ri);
+    repair_tracker().add_repair_info(ri->id.id, ri);
     return do_repair_ranges(ri).then([ri] {
         ri->check_failed_ranges();
-        repair_tracker().remove_repair_info(ri->id);
+        repair_tracker().remove_repair_info(ri->id.id);
         return make_ready_future<>();
     }).handle_exception([ri] (std::exception_ptr eptr) {
         rlogger.warn("repair id {} on shard {} failed: {}", ri->id, this_shard_id(), eptr);
-        repair_tracker().remove_repair_info(ri->id);
+        repair_tracker().remove_repair_info(ri->id.id);
         return make_exception_future<>(std::move(eptr));
     });
 }
@@ -1451,7 +1455,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // nothing to repair, and return 0. "nodetool repair" prints in this case
     // that "Nothing to repair for keyspace '...'". We don't have such a case
     // yet. Real ids returned by next_repair_command() will be >= 1.
-    int id = repair_tracker().next_repair_command();
+    auto id = repair_tracker().next_repair_command();
     rlogger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
 
     if (!gms::get_local_gossiper().is_normal(utils::fb_utilities::get_broadcast_address())) {
@@ -1516,7 +1520,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         options.column_families.size() ? options.column_families : list_column_families(db.local(), keyspace);
     if (cfs.empty()) {
         rlogger.info("repair id {} completed successfully: no tables to repair", id);
-        return id;
+        return id.id;
     }
 
     // Do it in the background.
@@ -1553,7 +1557,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         rlogger.warn("repair_tracker run for repair id {} failed: {}", id, ep);
     });
 
-    return id;
+    return id.id;
 }
 
 future<int> repair_start(seastar::sharded<database>& db, sstring keyspace,
@@ -1604,7 +1608,7 @@ future<> sync_data_using_repair(seastar::sharded<database>& db,
         return make_ready_future<>();
     }
     return smp::submit_to(0, [&db, keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason] () mutable {
-        int id = repair_tracker().next_repair_command();
+        repair_uniq_id id = repair_tracker().next_repair_command();
         rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
         return repair_tracker().run(id, [id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason] () mutable {
             auto cfs = list_column_families(db.local(), keyspace);
