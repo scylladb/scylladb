@@ -150,7 +150,7 @@ public:
         static const std::string FILENAME_PREFIX;
         static const std::string FILENAME_EXTENSION;
 
-        descriptor(descriptor&&) = default;
+        descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;
         descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = 1, sstring = {});
         descriptor(replay_position p, const std::string& fname_prefix = FILENAME_PREFIX);
