@@ -1508,6 +1508,7 @@ with open(buildfile_tmp, 'w') as f:
               depfile = $out.d
             rule test.{mode}
               command = ./test.py --mode={mode}
+              pool = console
               description = TEST {mode}
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, **modeval))
         f.write(
