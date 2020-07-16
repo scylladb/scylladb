@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             auto version = netw::messaging_service::current_version;
             auto bm = bp.get_batch_log_mutation_for({ m }, s->id(), version, db_clock::now() - db_clock::duration(3h));
 
-            return qp.proxy().mutate_locally(bm, tracing::trace_state_ptr()).then([&bp] () mutable {
+            return qp.proxy().mutate_locally(bm, tracing::trace_state_ptr(), db::commitlog::force_sync::no).then([&bp] () mutable {
                 return bp.count_all_batches().then([](auto n) {
                     BOOST_CHECK_EQUAL(n, 1);
                 }).then([&bp] () mutable {
