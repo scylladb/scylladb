@@ -713,35 +713,26 @@ bool equal(const bytes_opt& rhs, const column_value& lhs, const column_value_eva
     return get_value_comparator(lhs)->equal(*value, *rhs);
 }
 
+/// Convenience overload for term.
+bool equal(term& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
+    return equal(to_bytes_opt(rhs.bind_and_get(bag.options)), lhs, bag);
+}
+
 /// True iff columns' values equal t.
-bool equal(::shared_ptr<term> t, const std::vector<column_value>& columns, const column_value_eval_bag& bag) {
-    if (columns.size() > 1) {
-        const auto tup = get_tuple(*t, bag.options);
-        if (!tup) {
-            throw exceptions::invalid_request_exception("multi-column equality has right-hand side that isn't a tuple");
-        }
-        const auto& rhs = tup->get_elements();
-        if (rhs.size() != columns.size()) {
-            throw exceptions::invalid_request_exception(
-                    format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
-                           columns.size(), rhs.size()));
-        }
-        return boost::equal(rhs, columns, [&] (const bytes_opt& rhs, const column_value& lhs) {
-            return equal(rhs, lhs, bag);
-        });
-    } else if (columns.size() == 1) {
-        const auto tup = get_tuple(*t, bag.options);
-        if (tup && tup->size() == 1) {
-            // Assume this is an external query WHERE (ck1)=(123), rather than an internal query WHERE
-            // col=(123), because internal queries have no reason to use single-element tuples.
-            //
-            // TODO: make the two cases distinguishable.
-            return equal(tup->get_elements()[0], columns[0], bag);
-        }
-        return equal(to_bytes_opt(t->bind_and_get(bag.options)), columns[0], bag);
-    } else {
-        throw std::logic_error("empty tuple on LHS of =");
+bool equal(term& t, const std::vector<column_value>& columns, const column_value_eval_bag& bag) {
+    const auto tup = get_tuple(t, bag.options);
+    if (!tup) {
+        throw exceptions::invalid_request_exception("multi-column equality has right-hand side that isn't a tuple");
     }
+    const auto& rhs = tup->get_elements();
+    if (rhs.size() != columns.size()) {
+        throw exceptions::invalid_request_exception(
+                format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
+                       columns.size(), rhs.size()));
+    }
+    return boost::equal(rhs, columns, [&] (const bytes_opt& b, const column_value& lhs) {
+        return equal(b, lhs, bag);
+    });
 }
 
 /// True iff lhs is limited by rhs in the manner prescribed by op.
@@ -759,66 +750,63 @@ bool limits(bytes_view lhs, const operator_type& op, bytes_view rhs, const abstr
     }
 }
 
-/// True iff the value of opr.lhs (which must be column_values) is limited by opr.rhs in the manner prescribed
-/// by opr.op.
-bool limits(const binary_operator& opr, const column_value_eval_bag& bag) {
-    if (!opr.op->is_slice()) { // For EQ or NEQ, use equal().
+/// True iff the column value is limited by rhs in the manner prescribed by op.
+bool limits(const column_value& col, const operator_type& op, term& rhs, const column_value_eval_bag& bag) {
+    if (!op.is_slice()) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
-    const auto& columns = std::get<0>(opr.lhs);
-    if (columns.size() > 1) {
-        const auto tup = get_tuple(*opr.rhs, bag.options);
-        if (!tup) {
-            throw exceptions::invalid_request_exception("multi-column comparison has right-hand side that isn't a tuple");
-        }
-        const auto& rhs = tup->get_elements();
-        if (rhs.size() != columns.size()) {
-            throw exceptions::invalid_request_exception(
-                    format("tuple comparison size mismatch: {} elements on left-hand side, {} on right",
-                           columns.size(), rhs.size()));
-        }
-        for (size_t i = 0; i < rhs.size(); ++i) {
-            const auto cmp = get_value_comparator(columns[i])->compare(
-                    // CQL dictates that columns[i] is a clustering column and non-null.
-                    *get_value(columns[i], bag),
-                    *rhs[i]);
-            // If the components aren't equal, then we just learned the LHS/RHS order.
-            if (cmp < 0) {
-                if (*opr.op == operator_type::LT || *opr.op == operator_type::LTE) {
-                    return true;
-                } else if (*opr.op == operator_type::GT || *opr.op == operator_type::GTE) {
-                    return false;
-                } else {
-                    throw std::logic_error("Unknown slice operator");
-                }
-            } else if (cmp > 0) {
-                if (*opr.op == operator_type::LT || *opr.op == operator_type::LTE) {
-                    return false;
-                } else if (*opr.op == operator_type::GT || *opr.op == operator_type::GTE) {
-                    return true;
-                } else {
-                    throw std::logic_error("Unknown slice operator");
-                }
-            }
-            // Otherwise, we don't know the LHS/RHS order, so check the next component.
-        }
-        // Getting here means LHS == RHS.
-        return *opr.op == operator_type::LTE || *opr.op == operator_type::GTE;
-    } else if (columns.size() == 1) {
-        auto lhs = get_value(columns[0], bag);
-        if (!lhs) {
-            return false; // NULL never compares to anything (#6295)
-        }
-        const auto tup = get_tuple(*opr.rhs, bag.options);
-        auto rhs = (tup && tup->size() == 1) ? tup->get_elements()[0] // Assume an external query WHERE (ck1)>(123).
-                : to_bytes_opt(opr.rhs->bind_and_get(bag.options));
-        if (!rhs) {
-            return false;
-        }
-        return limits(*lhs, *opr.op, *rhs, *get_value_comparator(columns[0]));
-    } else {
-        throw std::logic_error("empty tuple on LHS of an inequality");
+    auto lhs = get_value(col, bag);
+    if (!lhs) {
+        return false;
     }
+    const auto b = to_bytes_opt(rhs.bind_and_get(bag.options));
+    return b ? limits(*lhs, op, *b, *get_value_comparator(col)) : false;
+}
+
+/// True iff the column values are limited by t in the manner prescribed by op.
+bool limits(const std::vector<column_value>& columns, const operator_type& op, term& t,
+            const column_value_eval_bag& bag) {
+    if (!op.is_slice()) { // For EQ or NEQ, use equal().
+        throw std::logic_error("limits() called on non-slice op");
+    }
+    const auto tup = get_tuple(t, bag.options);
+    if (!tup) {
+        throw exceptions::invalid_request_exception(
+                "multi-column comparison has right-hand side that isn't a tuple");
+    }
+    const auto& rhs = tup->get_elements();
+    if (rhs.size() != columns.size()) {
+        throw exceptions::invalid_request_exception(
+                format("tuple comparison size mismatch: {} elements on left-hand side, {} on right",
+                       columns.size(), rhs.size()));
+    }
+    for (size_t i = 0; i < rhs.size(); ++i) {
+        const auto cmp = get_value_comparator(columns[i])->compare(
+                // CQL dictates that columns[i] is a clustering column and non-null.
+                *get_value(columns[i], bag),
+                *rhs[i]);
+        // If the components aren't equal, then we just learned the LHS/RHS order.
+        if (cmp < 0) {
+            if (op == operator_type::LT || op == operator_type::LTE) {
+                return true;
+            } else if (op == operator_type::GT || op == operator_type::GTE) {
+                return false;
+            } else {
+                throw std::logic_error("Unknown slice operator");
+            }
+        } else if (cmp > 0) {
+            if (op == operator_type::LT || op == operator_type::LTE) {
+                return false;
+            } else if (op == operator_type::GT || op == operator_type::GTE) {
+                return true;
+            } else {
+                throw std::logic_error("Unknown slice operator");
+            }
+        }
+        // Otherwise, we don't know the LHS/RHS order, so check the next component.
+    }
+    // Getting here means LHS == RHS.
+    return op == operator_type::LTE || op == operator_type::GTE;
 }
 
 /// True iff collection (list, set, or map) contains value.
@@ -849,40 +837,34 @@ bool contains(const data_value& collection, const raw_value_view& value) {
     });
 }
 
-/// True iff columns is a single collection containing value.
-bool contains(const raw_value_view& value, const std::vector<column_value>& columns, const column_value_eval_bag& bag) {
-    if (columns.size() != 1) {
-        throw exceptions::unsupported_operation_exception("tuple CONTAINS not allowed");
-    }
-    if (columns[0].sub) {
+/// True iff a column is a collection containing value.
+bool contains(const column_value& col, const raw_value_view& value, const column_value_eval_bag& bag) {
+    if (col.sub) {
         throw exceptions::unsupported_operation_exception("CONTAINS lhs is subscripted");
     }
-    const auto collection = get_value(columns[0], bag);
+    const auto collection = get_value(col, bag);
     if (collection) {
-        return contains(columns[0].col->type->deserialize(*collection), value);
+        return contains(col.col->type->deserialize(*collection), value);
     } else {
         return false;
     }
 }
 
-/// True iff \p columns has a single element that's a map containing \p key.
-bool contains_key(const std::vector<column_value>& columns, cql3::raw_value_view key, const column_value_eval_bag& bag) {
-    if (columns.size() != 1) {
-        throw exceptions::unsupported_operation_exception("CONTAINS KEY on a tuple");
-    }
-    if (columns[0].sub) {
+/// True iff a column is a map containing \p key.
+bool contains_key(const column_value& col, cql3::raw_value_view key, const column_value_eval_bag& bag) {
+    if (col.sub) {
         throw exceptions::unsupported_operation_exception("CONTAINS KEY lhs is subscripted");
     }
     if (!key) {
         return true; // Compatible with old code, which skips null terms in key comparisons.
     }
-    auto cdef = columns[0].col;
-    const auto collection = get_value(columns[0], bag);
+    auto type = col.col->type;
+    const auto collection = get_value(col, bag);
     if (!collection) {
         return false;
     }
-    const auto data_map = value_cast<map_type_impl::native_type>(cdef->type->deserialize(*collection));
-    auto key_type = static_pointer_cast<const collection_type_impl>(cdef->type)->name_comparator();
+    const auto data_map = value_cast<map_type_impl::native_type>(type->deserialize(*collection));
+    auto key_type = static_pointer_cast<const collection_type_impl>(type)->name_comparator();
     auto found = with_linearized(*key, [&] (bytes_view k_bv) {
         using entry = std::pair<data_value, data_value>;
         return std::find_if(data_map.begin(), data_map.end(), [&] (const entry& element) {
@@ -948,45 +930,31 @@ bool like(const column_value& cv, const bytes_opt& pattern, const column_value_e
     return (pattern && value) ? like_matcher(*pattern)(*value) : false;
 }
 
-/// True iff columns' values match rhs pattern(s) as defined by CQL LIKE.
-bool like(const std::vector<column_value>& columns, term& rhs, const column_value_eval_bag& bag) {
-    if (columns.size() > 1) {
-        if (const auto tup = get_tuple(rhs, bag.options)) {
-            const auto& elements = tup->get_elements();
-            if (elements.size() != columns.size()) {
-                throw exceptions::invalid_request_exception(
-                        format("LIKE tuple size mismatch: {} elements on left-hand side, {} on right",
-                               columns.size(), elements.size()));
-            }
-            return boost::equal(columns, elements, [&] (const column_value& cv, const bytes_opt& pattern) {
-                return like(cv, pattern, bag);
+/// True iff the column value is in the set defined by rhs.
+bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& bag) {
+    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
+    if (auto dv = dynamic_cast<lists::delayed_value*>(&rhs)) {
+        // This is `a IN (1,2,3)`.  RHS elements are themselves terms.
+        return boost::algorithm::any_of(dv->get_elements(), [&] (const ::shared_ptr<term>& t) {
+                return equal(*t, col, bag);
             });
-        } else {
-            throw exceptions::invalid_request_exception("multi-column LIKE has right-hand side that isn't a tuple");
-        }
-    } else if (columns.size() == 1) {
-        return like(columns[0], to_bytes_opt(rhs.bind_and_get(bag.options)), bag);
-    } else {
-        throw exceptions::invalid_request_exception("empty tuple on left-hand side of LIKE");
+    } else if (auto mkr = dynamic_cast<lists::marker*>(&rhs)) {
+        // This is `a IN ?`.  RHS elements are values representable as bytes_opt.
+        const auto values = static_pointer_cast<lists::value>(mkr->bind(bag.options));
+        return boost::algorithm::any_of(values->get_elements(), [&] (const bytes_opt& b) {
+                return equal(b, col, bag);
+            });
     }
+    throw std::logic_error("unexpected term type in is_one_of(single column)");
 }
 
 /// True iff the tuple of column values is in the set defined by rhs.
 bool is_one_of(const std::vector<column_value>& cvs, term& rhs, const column_value_eval_bag& bag) {
     // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
     if (auto dv = dynamic_cast<lists::delayed_value*>(&rhs)) {
-        // This is either `a IN (1,2,3)` or `(a,b) IN ((1,1),(2,2),(3,3))`.  RHS elements are themselves terms.
+        // This is `(a,b) IN ((1,1),(2,2),(3,3))`.  RHS elements are themselves terms.
         return boost::algorithm::any_of(dv->get_elements(), [&] (const ::shared_ptr<term>& t) {
-                return equal(t, cvs, bag);
-            });
-    } else if (auto mkr = dynamic_cast<lists::marker*>(&rhs)) {
-        // This is `a IN ?`.  RHS elements are values representable as bytes_opt.
-        if (cvs.size() != 1) {
-            throw std::logic_error("too many columns for lists::marker in is_one_of");
-        }
-        const auto values = static_pointer_cast<lists::value>(mkr->bind(bag.options));
-        return boost::algorithm::any_of(values->get_elements(), [&] (const bytes_opt& b) {
-                return equal(b, cvs[0], bag);
+                return equal(*t, cvs, bag);
             });
     } else if (auto mkr = dynamic_cast<tuples::in_marker*>(&rhs)) {
         // This is `(a,b) IN ?`.  RHS elements are themselves tuples, represented as vector<bytes_opt>.
@@ -997,7 +965,7 @@ bool is_one_of(const std::vector<column_value>& cvs, term& rhs, const column_val
                 });
             });
     }
-    throw std::logic_error("unexpected term type in is_one_of");
+    throw std::logic_error("unexpected term type in is_one_of(multi-column)");
 }
 
 /// True iff op means bnd type of bound.
@@ -1043,23 +1011,35 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
 
 bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& bag) {
     return std::visit(overloaded_functor{
+            [&] (const column_value& col) {
+                if (*opr.op == operator_type::EQ) {
+                    return equal(*opr.rhs, col, bag);
+                } else if (*opr.op == operator_type::NEQ) {
+                    return !equal(*opr.rhs, col, bag);
+                } else if (opr.op->is_slice()) {
+                    return limits(col, *opr.op, *opr.rhs, bag);
+                } else if (*opr.op == operator_type::CONTAINS) {
+                    return contains(col, opr.rhs->bind_and_get(bag.options), bag);
+                } else if (*opr.op == operator_type::CONTAINS_KEY) {
+                    return contains_key(col, opr.rhs->bind_and_get(bag.options), bag);
+                } else if (*opr.op == operator_type::LIKE) {
+                    return like(col, to_bytes_opt(opr.rhs->bind_and_get(bag.options)), bag);
+                } else if (*opr.op == operator_type::IN) {
+                    return is_one_of(col, *opr.rhs, bag);
+                } else {
+                    throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
+                }
+            },
             [&] (const std::vector<column_value>& cvs) {
                 if (*opr.op == operator_type::EQ) {
-                    return equal(opr.rhs, cvs, bag);
-                } else if (*opr.op == operator_type::NEQ) {
-                    return !equal(opr.rhs, cvs, bag);
+                    return equal(*opr.rhs, cvs, bag);
                 } else if (opr.op->is_slice()) {
-                    return limits(opr, bag);
-                } else if (*opr.op == operator_type::CONTAINS) {
-                    return contains(opr.rhs->bind_and_get(bag.options), cvs, bag);
-                } else if (*opr.op == operator_type::CONTAINS_KEY) {
-                    return contains_key(cvs, opr.rhs->bind_and_get(bag.options), bag);
-                } else if (*opr.op == operator_type::LIKE) {
-                    return like(cvs, *opr.rhs, bag);
+                    return limits(cvs, *opr.op, *opr.rhs, bag);
                 } else if (*opr.op == operator_type::IN) {
                     return is_one_of(cvs, *opr.rhs, bag);
                 } else {
-                    throw exceptions::unsupported_operation_exception("Unhandled binary_operator");
+                    throw exceptions::unsupported_operation_exception(
+                            format("Unhandled multi-column binary_operator: {}", opr));
                 }
             },
             [] (const token& tok) -> bool {
@@ -1088,8 +1068,7 @@ bytes_opt get_kth(size_t k, const query_options& options, const ::shared_ptr<ter
     if (auto tup = dynamic_pointer_cast<tuples::value>(bound)) {
         return tup->get_elements()[k];
     } else {
-        assert(k == 0 && "non-tuple RHS for multi-column IN");
-        return to_bytes_opt(bound->get(options));
+        throw std::logic_error("non-tuple RHS for multi-column IN");
     }
 }
 
@@ -1100,22 +1079,37 @@ value_list to_sorted_vector(const Range& r, const serialized_compare& comparator
     return value_list(unique.begin(), unique.end());
 }
 
-/// Returns possible values for k-th column from t, which must be RHS of IN.
-value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_options& options,
-                         const serialized_compare& comparator) {
-    const auto non_null = filtered([] (const bytes_opt& b) { return b.has_value(); });
-    const auto deref = transformed([] (const bytes_opt& b) { return b.value(); });
+const auto non_null = filtered([] (const bytes_opt& b) { return b.has_value(); });
+
+const auto deref = transformed([] (const bytes_opt& b) { return b.value(); });
+
+/// Returns possible values from t, which must be RHS of IN.
+value_list get_IN_values(
+        const ::shared_ptr<term>& t, const query_options& options, const serialized_compare& comparator) {
     // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
     if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
-        // Case `a IN (1,2,3)` or `(a,b) in ((1,1),(2,2),(3,3)).  Get kth value from each term element.
+        // Case `a IN (1,2,3)`.
         const auto result_range = dv->get_elements()
-                | transformed(std::bind_front(get_kth, k, options)) | non_null | deref;
+                | transformed([&] (const ::shared_ptr<term>& t) { return to_bytes_opt(t->bind_and_get(options)); })
+                | non_null | deref;
         return to_sorted_vector(result_range, comparator);
     } else if (auto mkr = dynamic_pointer_cast<lists::marker>(t)) {
         // Case `a IN ?`.  Collect all list-element values.
-        assert(k == 0 && "lists::marker is for single-column IN");
         const auto val = static_pointer_cast<lists::value>(mkr->bind(options));
         return to_sorted_vector(val->get_elements() | non_null | deref, comparator);
+    }
+    throw std::logic_error(format("get_IN_values(single column) on invalid term {}", *t));
+}
+
+/// Returns possible values for k-th column from t, which must be RHS of IN.
+value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_options& options,
+                         const serialized_compare& comparator) {
+    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
+    if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
+        // Case `(a,b) in ((1,1),(2,2),(3,3))`.  Get kth value from each term element.
+        const auto result_range = dv->get_elements()
+                | transformed(std::bind_front(get_kth, k, options)) | non_null | deref;
+        return to_sorted_vector(result_range, comparator);
     } else if (auto mkr = dynamic_pointer_cast<tuples::in_marker>(t)) {
         // Case `(a,b) IN ?`.  Get kth value from each vector<bytes> element.
         const auto val = static_pointer_cast<tuples::in_value>(mkr->bind(options));
@@ -1123,7 +1117,23 @@ value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_opti
                 | transformed([k] (const std::vector<bytes_opt>& v) { return v[k]; }) | non_null | deref;
         return to_sorted_vector(result_range, comparator);
     }
-    throw std::logic_error(format("get_IN_values on invalid term {}", *t));
+    throw std::logic_error(format("get_IN_values(multi-column) on invalid term {}", *t));
+}
+
+static constexpr bool inclusive = true, exclusive = false;
+
+/// A range of all X such that X op val.
+nonwrapping_range<bytes> to_range(const operator_type& op, const bytes& val) {
+    if (op == operator_type::GT) {
+        return nonwrapping_range<bytes>::make_starting_with(range_bound(val, exclusive));
+    } else if (op == operator_type::GTE) {
+        return nonwrapping_range<bytes>::make_starting_with(range_bound(val, inclusive));
+    } else if (op == operator_type::LT) {
+        return nonwrapping_range<bytes>::make_ending_with(range_bound(val, exclusive));
+    } else if (op == operator_type::LTE) {
+        return nonwrapping_range<bytes>::make_ending_with(range_bound(val, inclusive));
+    }
+    throw std::logic_error(format("to_range: unknown comparison operator {}", op));
 }
 
 } // anonymous namespace
@@ -1177,8 +1187,23 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         });
             },
             [&] (const binary_operator& oper) -> value_set {
-                static constexpr bool inclusive = true, exclusive = false;
                 return std::visit(overloaded_functor{
+                        [&] (const column_value& col) -> value_set {
+                            if (!cdef || cdef != col.col) {
+                                return unbounded_value_set;
+                            }
+                            if (oper.op->is_compare()) {
+                                const auto val = to_bytes_opt(oper.rhs->bind_and_get(options));
+                                if (!val) {
+                                    return empty_value_set; // All NULL comparisons fail; no column values match.
+                                }
+                                return *oper.op == operator_type::EQ ? value_set(value_list{*val})
+                                        : to_range(*oper.op, *val);
+                            } else if (*oper.op == operator_type::IN) {
+                                return get_IN_values(oper.rhs, options, type->as_less_comparator());
+                            }
+                            throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
+                        },
                         [&] (const std::vector<column_value>& cvs) -> value_set {
                             if (!cdef) {
                                 return unbounded_value_set;
@@ -1190,9 +1215,8 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             }
                             const auto column_index_on_lhs = std::distance(cvs.begin(), found);
                             if (oper.op->is_compare()) {
-                                const auto tup = get_tuple(*oper.rhs, options);
-                                bytes_opt val = tup ? tup->get_elements()[column_index_on_lhs]
-                                        : to_bytes_opt(oper.rhs->bind_and_get(options));
+                                // RHS must be a tuple due to upstream checks.
+                                bytes_opt val = get_tuple(*oper.rhs, options)->get_elements()[column_index_on_lhs];
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
@@ -1204,17 +1228,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                     // comparison is lexicographical.
                                     return unbounded_value_set;
                                 }
-                                if (*oper.op == operator_type::GT) {
-                                    return nonwrapping_range<bytes>::make_starting_with(range_bound(*val, exclusive));
-                                } else if (*oper.op == operator_type::GTE) {
-                                    return nonwrapping_range<bytes>::make_starting_with(range_bound(*val, inclusive));
-                                } else if (*oper.op == operator_type::LT) {
-                                    return nonwrapping_range<bytes>::make_ending_with(range_bound(*val, exclusive));
-                                } else if (*oper.op == operator_type::LTE) {
-                                    return nonwrapping_range<bytes>::make_ending_with(range_bound(*val, inclusive));
-                                }
-                                throw std::logic_error(
-                                        format("get_column_interval unknown comparison operator {}", *oper.op));
+                                return to_range(*oper.op, *val);
                             } else if (*oper.op == operator_type::IN) {
                                 return get_IN_values(oper.rhs, column_index_on_lhs, options, type->as_less_comparator());
                             }
@@ -1291,12 +1305,17 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                 return boost::algorithm::all_of(conj.children, std::bind(is_supported_by, _1, idx));
             },
             [&] (const binary_operator& oper) {
-                if (auto cvs = std::get_if<std::vector<column_value>>(&oper.lhs)) {
-                    return boost::algorithm::any_of(*cvs, [&] (const column_value& c) {
-                        return idx.supports_expression(*c.col, *oper.op);
-                    });
-                }
-                return false;
+                return std::visit(overloaded_functor{
+                        [&] (const column_value& col) {
+                            return idx.supports_expression(*col.col, *oper.op);
+                        },
+                        [&] (const std::vector<column_value>& cvs) {
+                            return boost::algorithm::any_of(cvs, [&] (const column_value& c) {
+                                return idx.supports_expression(*c.col, *oper.op);
+                            });
+                        },
+                        [&] (const token&) { return false; },
+                    }, oper.lhs);
             },
             [] (const auto& default_case) { return false; }
         }, expr);
@@ -1329,11 +1348,11 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (const binary_operator& opr) {
                 std::visit(overloaded_functor{
                         [&] (const token& t) { os << "TOKEN"; },
+                        [&] (const column_value& col) {
+                            fmt::print(os, "({})", col);
+                        },
                         [&] (const std::vector<column_value>& cvs) {
-                            const bool multi = cvs.size() != 1;
-                            os << (multi ? "(" : "");
-                            fmt::print(os, "({})", fmt::join(cvs, ","));
-                            os << (multi ? ")" : "");
+                            fmt::print(os, "(({}))", fmt::join(cvs, ","));
                         },
                     }, opr.lhs);
                 os << ' ' << *opr.op << ' ' << *opr.rhs;
@@ -1366,11 +1385,11 @@ expression replace_column_def(const expression& expr, const column_definition* n
             },
             [&] (const binary_operator& oper) {
                 return std::visit(overloaded_functor{
-                        [&] (const std::vector<column_value>& cvs) {
-                            if (cvs.size() != 1) {
-                                throw std::logic_error(format("replace_column_def invalid LHS: {}", to_string(oper)));
-                            }
-                            return expression(binary_operator{std::vector{column_value{new_cdef}}, oper.op, oper.rhs});
+                        [&] (const column_value& col) {
+                            return expression(binary_operator{column_value{new_cdef}, oper.op, oper.rhs});
+                        },
+                        [&] (const std::vector<column_value>& cvs) -> expression {
+                            throw std::logic_error(format("replace_column_def invalid LHS: {}", to_string(oper)));
                         },
                         [&] (const token&) { return expr; },
                     }, oper.lhs);

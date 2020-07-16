@@ -93,7 +93,7 @@ struct token {};
 
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
-    std::variant<std::vector<column_value>, token> lhs;
+    std::variant<column_value, std::vector<column_value>, token> lhs;
     const operator_type* op; // Pointer because operator_type isn't copyable or assignable.
     ::shared_ptr<term> rhs;
 };
@@ -225,7 +225,7 @@ extern expression replace_column_def(const expression&, const column_definition*
 
 /// Makes a binary_operator on a column_definition.
 inline expression make_column_op(const column_definition* cdef, const operator_type& op, ::shared_ptr<term> value) {
-    return binary_operator{std::vector{column_value(cdef)}, &op, std::move(value)};
+    return binary_operator{column_value(cdef), &op, std::move(value)};
 }
 
 inline const operator_type* pick_operator(statements::bound b, bool inclusive) {
