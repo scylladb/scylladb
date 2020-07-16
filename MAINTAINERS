@@ -28,7 +28,6 @@ F: service/storage_proxy*
 
 COMPACTION
 R: Raphael S. Carvalho <raphaelsc@scylladb.com>
-R: Glauber Costa <glauber@scylladb.com>
 R: Nadav Har'El <nyh@scylladb.com>
 F: sstables/compaction*
 
@@ -92,7 +91,6 @@ F: cql3/statements/*index*
 SSTABLES
 M: Tomasz Grabiec <tgrabiec@scylladb.com>
 R: Raphael S. Carvalho <raphaelsc@scylladb.com>
-R: Glauber Costa <glauber@scylladb.com>
 R: Nadav Har'El <nyh@scylladb.com>
 F: sstables/*
 
