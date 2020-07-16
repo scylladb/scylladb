@@ -795,7 +795,7 @@ double compaction_backlog_tracker::backlog() const {
 }
 
 void compaction_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
-    if (_disabled) {
+    if (_disabled || !sstable_belongs_to_tracker(sst)) {
         return;
     }
     _ongoing_writes.erase(sst);
@@ -808,7 +808,7 @@ void compaction_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
 }
 
 void compaction_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
-    if (_disabled) {
+    if (_disabled || !sstable_belongs_to_tracker(sst)) {
         return;
     }
 
@@ -819,6 +819,10 @@ void compaction_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
         cmlog.warn("Disabling backlog tracker due to exception {}", std::current_exception());
         disable();
     }
+}
+
+bool compaction_backlog_tracker::sstable_belongs_to_tracker(const sstables::shared_sstable& sst) {
+    return !sst->requires_view_building();
 }
 
 void compaction_backlog_tracker::register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp) {
