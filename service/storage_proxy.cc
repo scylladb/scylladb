@@ -1773,11 +1773,15 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
 }
 
 future<>
-storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout) {
+storage_proxy::mutate_locally(const mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
-        return db.apply(s, m, db::commitlog::force_sync::no, timeout);
+    return _db.invoke_on(shard, {_write_smp_service_group, timeout},
+            [s = global_schema_ptr(m.schema()),
+             m = freeze(m),
+             timeout,
+             sync] (database& db) mutable -> future<> {
+        return db.apply(s, m, sync, timeout);
     });
 }
 
@@ -1794,7 +1798,7 @@ future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations, clock_type::time_point timeout) {
     return do_with(std::move(mutations), [this, timeout] (std::vector<mutation>& pmut){
         return parallel_for_each(pmut.begin(), pmut.end(), [this, timeout] (const mutation& m) {
-            return mutate_locally(m, timeout);
+            return mutate_locally(m, db::commitlog::force_sync::no, timeout);
         });
     });
 }
