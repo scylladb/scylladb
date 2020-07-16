@@ -2030,7 +2030,7 @@ static map_type_impl::native_type prepare_rows_merged(std::unordered_map<int32_t
     return tmp;
 }
 
-future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
+future<> update_compaction_history(utils::UUID uuid, sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
                                    std::unordered_map<int32_t, int64_t> rows_merged)
 {
     // don't write anything when the history table itself is compacted, since that would in turn cause new compactions
@@ -2044,7 +2044,7 @@ future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compa
                     , COMPACTION_HISTORY);
 
     db_clock::time_point tp{db_clock::duration{compacted_at}};
-    return execute_cql(req, utils::UUID_gen::get_time_UUID(), ksname, cfname, tp, bytes_in, bytes_out,
+    return execute_cql(req, uuid, ksname, cfname, tp, bytes_in, bytes_out,
                        make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result().handle_exception([] (auto ep) {
         slogger.error("update compaction history failed: {}: ignored", ep);
     });

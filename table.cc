@@ -1115,7 +1115,7 @@ table::compact_sstables(sstables::compaction_descriptor descriptor) {
         // shows how many sstables each row is merged from. This information
         // cannot be accessed until we make combined_reader more generic,
         // for example, by adding a reducer method.
-        return db::system_keyspace::update_compaction_history(info.ks_name, info.cf_name, info.ended_at,
+        return db::system_keyspace::update_compaction_history(info.compaction_uuid, info.ks_name, info.cf_name, info.ended_at,
             info.start_size, info.end_size, std::unordered_map<int32_t, int64_t>{});
     });
 }

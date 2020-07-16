@@ -88,6 +88,7 @@ namespace sstables {
         sstring stop_requested;
         bool tracking = true;
         utils::UUID run_identifier;
+        utils::UUID compaction_uuid;
         struct replacement {
             const std::vector<shared_sstable> removed;
             const std::vector<shared_sstable> added;
