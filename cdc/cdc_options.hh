@@ -27,10 +27,17 @@
 
 namespace cdc {
 
+enum class delta_mode {
+    off,
+    keys,
+    full,
+};
+
 class options final {
     bool _enabled = false;
     bool _preimage = false;
     bool _postimage = false;
+    delta_mode _delta_mode = delta_mode::full;
     int _ttl = 86400; // 24h in seconds
 public:
     options() = default;
@@ -42,6 +49,7 @@ public:
     bool enabled() const { return _enabled; }
     bool preimage() const { return _preimage; }
     bool postimage() const { return _postimage; }
+    delta_mode get_delta_mode() const { return _delta_mode; }
     int ttl() const { return _ttl; }
 
     void enabled(bool b) { _enabled = b; }

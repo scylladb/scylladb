@@ -292,6 +292,21 @@ future<> cdc::cdc_service::stop() {
 
 cdc::cdc_service::~cdc_service() = default;
 
+namespace {
+const sstring delta_mode_string_off  = "off";
+const sstring delta_mode_string_keys = "keys";
+const sstring delta_mode_string_full = "full";
+
+sstring to_string(cdc::delta_mode dm) {
+    switch (dm) {
+        case cdc::delta_mode::off  : return delta_mode_string_off;
+        case cdc::delta_mode::keys : return delta_mode_string_keys;
+        case cdc::delta_mode::full : return delta_mode_string_full;
+    }
+    throw std::logic_error("Impossible value of cdc::delta_mode");
+}
+} // anon. namespace
+
 cdc::options::options(const std::map<sstring, sstring>& map) {
     if (map.find("enabled") == std::end(map)) {
         return;
@@ -304,6 +319,14 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
             _preimage = p.second == "true";
         } else if (p.first == "postimage") {
             _postimage = p.second == "true";
+        } else if (p.first == "delta") {
+            if (p.second == delta_mode_string_keys) {
+                _delta_mode = delta_mode::keys;
+            } else if (p.second == delta_mode_string_off) {
+                _delta_mode = delta_mode::off;
+            } else if (p.second != delta_mode_string_full) {
+                throw exceptions::configuration_exception("Invalid value for CDC option \"delta\": " + p.second);
+            }
         } else if (p.first == "ttl") {
             _ttl = std::stoi(p.second);
             if (_ttl < 0) {
@@ -312,6 +335,11 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
         } else {
             throw exceptions::configuration_exception("Invalid CDC option: " + p.first);
         }
+    }
+
+    if (_enabled && !_preimage && !_postimage && _delta_mode == delta_mode::off) {
+        throw exceptions::configuration_exception("Invalid combination of CDC options: neither of"
+                " {preimage, postimage, delta} is enabled");
     }
 }
 
@@ -323,6 +351,7 @@ std::map<sstring, sstring> cdc::options::to_map() const {
         { "enabled", _enabled ? "true" : "false" },
         { "preimage", _preimage ? "true" : "false" },
         { "postimage", _postimage ? "true" : "false" },
+        { "delta", to_string(_delta_mode) },
         { "ttl", std::to_string(_ttl) },
     };
 }
@@ -332,7 +361,8 @@ sstring cdc::options::to_sstring() const {
 }
 
 bool cdc::options::operator==(const options& o) const {
-    return _enabled == o._enabled && _preimage == o._preimage && _postimage == o._postimage && _ttl == o._ttl;
+    return _enabled == o._enabled && _preimage == o._preimage && _postimage == o._postimage && _ttl == o._ttl
+            && _delta_mode == o._delta_mode;
 }
 bool cdc::options::operator!=(const options& o) const {
     return !(*this == o);
