@@ -5583,9 +5583,9 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
             auto old_sstables = std::move(desc.old_sstables);
             auto new_sstables = std::move(desc.new_sstables);
             // expired_sst is exhausted, and new sstable is written with mut 2.
-            BOOST_REQUIRE(old_sstables.size() == 1);
+            BOOST_REQUIRE_EQUAL(old_sstables.size(), 1);
             BOOST_REQUIRE(old_sstables.front() == expired_sst);
-            BOOST_REQUIRE(new_sstables.size() == 2);
+            BOOST_REQUIRE_EQUAL(new_sstables.size(), 2);
             for (auto& new_sstable : new_sstables) {
                 if (new_sstable->get_max_local_deletion_time() == deletion_time) { // Skipping GC SSTable.
                     continue;
