@@ -441,6 +441,7 @@ protected:
         _info->type = descriptor.options.type();
         _info->run_identifier = _run_identifier;
         _info->cf = &cf;
+        _info->compaction_uuid = utils::UUID_gen::get_time_UUID();
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
         }
