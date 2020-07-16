@@ -1259,43 +1259,15 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
     }
 }
 
-/// \brief Helper for ensuring a file is closed if an exception is thrown.
-///
-/// The file provided by the file_fut future is passed to func.
-/// * If func throws an exception E, the file is closed and we return
-///   a failed future with E.
-/// * If func returns a value V, the file is not closed and we return
-///   a future with V.
-/// Note that when an exception is not thrown, it is the
-/// responsibility of func to make sure the file will be closed. It
-/// can close the file itself, return it, or store it somewhere.
-///
-/// \tparam Func The type of function this wraps
-/// \param file_fut A future that produces a file
-/// \param func A function that uses a file
-/// \return A future that passes the file produced by file_fut to func
-///         and closes it if func fails
-template <typename Func>
-static auto close_on_failure(future<file> file_fut, Func func) {
-    return file_fut.then([func = std::move(func)](file f) {
-        return futurize_invoke(func, f).handle_exception([f] (std::exception_ptr e) mutable {
-            return f.close().then_wrapped([f, e = std::move(e)] (future<> x) {
-                using futurator = futurize<std::result_of_t<Func(file)>>;
-                return futurator::make_exception_future(e);
-            });
-        });
-    });
-}
-
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, sstring filename, open_flags flags) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
-    auto fut = do_io_check(commit_error_handler, [this, filename, flags, opt] {
+    auto fut = do_io_check(commit_error_handler, [this, filename, flags, opt] () mutable {
         auto fut = open_file_dma(filename, flags, opt);
         if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
             for (auto * ext : cfg.extensions->commitlog_file_extensions()) {
-                fut = close_on_failure(std::move(fut), [ext, filename, flags](file f) {
-                   return ext->wrap_file(filename, f, flags).then([f](file nf) mutable {
+                fut = with_file_close_on_failure(std::move(fut), [ext, filename = std::move(filename), flags](file f) mutable {
+                   return ext->wrap_file(std::move(filename), f, flags).then([f](file nf) mutable {
                        return nf ? nf : std::move(f);
                    });
                 });
@@ -1304,7 +1276,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         return fut;
     });
 
-    return close_on_failure(std::move(fut), [this, d, filename, flags] (file f) {
+    return with_file_close_on_failure(std::move(fut), [this, d = std::move(d), filename = std::move(filename), flags] (file f) mutable {
         f = make_checked_file(commit_error_handler, f);
         // xfs doesn't like files extended betond eof, so enlarge the file
         auto fut = make_ready_future<>();
@@ -1345,7 +1317,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                                 v.emplace_back(iovec{ buf.get_write(), s});
                                 m += s;
                             }
-                            return f.dma_write(max_size - rem, std::move(v), service::get_local_commitlog_priority()).then([&rem](size_t s) {
+                            return f.dma_write(max_size - rem, std::move(v), service::get_local_commitlog_priority()).then([&rem](size_t s) mutable {
                                 rem -= s;
                                 return stop_iteration::no;
                             });
@@ -1356,7 +1328,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         } else {
             fut = f.truncate(max_size);
         }
-        return fut.then([this, d, f] () mutable {
+        return fut.then([this, d = std::move(d), f = std::move(f)] () mutable {
             auto s = make_shared<segment>(shared_from_this(), std::move(d), std::move(f));
             return make_ready_future<sseg_ptr>(s);
         });
