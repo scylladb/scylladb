@@ -74,6 +74,25 @@ namespace sstables {
 
 logging::logger clogger("compaction");
 
+static std::string_view to_string(compaction_type type) {
+    switch (type) {
+    case compaction_type::Compaction: return "Compact";
+    case compaction_type::Cleanup: return "Cleanup";
+    case compaction_type::Validation: return "Validate";
+    case compaction_type::Scrub: return "Scrub";
+    case compaction_type::Index_build: return "Index_build";
+    case compaction_type::Reshard: return "Reshard";
+    case compaction_type::Upgrade: return "Upgrade";
+    case compaction_type::Reshape: return "Reshape";
+    }
+    __builtin_unreachable();
+}
+
+std::ostream& operator<<(std::ostream& os, compaction_type type) {
+    os << to_string(type);
+    return os;
+}
+
 std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
     static constexpr const char* suffixes[] = { " bytes", "kB", "MB", "GB", "TB", "PB" };
 
@@ -555,7 +574,7 @@ private:
         _info->sstables = _sstables.size();
         _info->ks_name = _schema->ks_name();
         _info->cf_name = _schema->cf_name();
-        clogger.info(formatted_msg.c_str(), report_start_desc());
+        log_info(formatted_msg, report_start_desc());
 
         _compacting = std::move(ssts);
 
@@ -603,7 +622,7 @@ private:
         // - add support to merge summary (message: Partition merge counts were {%s}.).
         // - there is no easy way, currently, to know the exact number of total partitions.
         // By the time being, using estimated key count.
-        clogger.info("{} {} sstables to [{}]. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
+        log_info("{} {} sstables to [{}]. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
                 report_finish_desc(),
                 _info->sstables, new_sstables_msg, pretty_printed_data_size(_info->start_size), pretty_printed_data_size(_info->end_size), int(ratio * 100),
                 std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_info->end_size, duration),
@@ -659,9 +678,42 @@ private:
         // was either stopped abruptly (e.g. out of disk space) or deliberately
         // (e.g. nodetool stop COMPACTION).
         for (auto& sst : _new_unused_sstables) {
-            clogger.debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _info->ks_name, _info->cf_name);
+            log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _info->ks_name, _info->cf_name);
             sst->mark_for_deletion();
         }
+    }
+protected:
+    template <typename... Args>
+    void log(log_level level, std::string_view fmt, const Args&... args) const {
+        if (clogger.is_enabled(level)) {
+            auto msg = fmt::format(fmt, args...);
+            clogger.log(level, "[{} {}.{} {}] {}", _info->type, _info->ks_name, _info->cf_name, _info->compaction_uuid, msg);
+        }
+    }
+
+    template <typename... Args>
+    void log_error(std::string_view fmt, Args&&... args) const {
+        log(log_level::error, std::move(fmt), std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    void log_warning(std::string_view fmt, Args&&... args) const {
+        log(log_level::warn, std::move(fmt), std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    void log_info(std::string_view fmt, Args&&... args) const {
+        log(log_level::info, std::move(fmt), std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    void log_debug(std::string_view fmt, Args&&... args) const {
+        log(log_level::debug, std::move(fmt), std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    void log_trace(std::string_view fmt, Args&&... args) const {
+        log(log_level::trace, std::move(fmt), std::forward<Args>(args)...);
     }
 public:
     garbage_collected_sstable_writer make_garbage_collected_sstable_writer() {
@@ -1003,12 +1055,12 @@ public:
     flat_mutation_reader::filter make_partition_filter() const override {
         return [this] (const dht::decorated_key& dk) {
             if (dht::shard_of(*_schema, dk.token()) != this_shard_id()) {
-                clogger.trace("Token {} does not belong to CPU {}, skipping", dk.token(), this_shard_id());
+                log_trace("Token {} does not belong to CPU {}, skipping", dk.token(), this_shard_id());
                 return false;
             }
 
             if (!belongs_to_current_node(dk.token(), _owned_ranges)) {
-                clogger.trace("Token {} does not belong to this node, skipping", dk.token());
+                log_trace("Token {} does not belong to this node, skipping", dk.token());
                 return false;
             }
             return true;
@@ -1145,8 +1197,8 @@ class scrub_compaction final : public regular_compaction {
             : impl(underlying.schema())
             , _skip_corrupted(skip_corrupted)
             , _reader(std::move(underlying))
-            , _validator(*_schema) {
-        }
+            , _validator(*_schema)
+        { }
         virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
             return repeat([this, timeout] {
                 return _reader.fill_buffer(timeout).then([this] {

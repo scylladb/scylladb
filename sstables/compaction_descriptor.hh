@@ -46,6 +46,8 @@ enum class compaction_type {
     Reshape = 7,
 };
 
+std::ostream& operator<<(std::ostream& os, compaction_type type);
+
 struct compaction_completion_desc {
     // Old, existing SSTables that should be deleted and removed from the SSTable set.
     std::vector<shared_sstable> old_sstables;
@@ -142,6 +144,7 @@ struct compaction_descriptor {
     compaction_sstable_replacer_fn replacer;
 
     ::io_priority_class io_priority = default_priority_class();
+
     compaction_descriptor() = default;
 
     static constexpr int default_level = 0;
