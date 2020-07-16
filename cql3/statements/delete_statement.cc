@@ -100,7 +100,7 @@ const column_definition* single_column(const binary_operator& oper) {
 /// See #6493.
 bool bounded_ck(const expression& expr) {
     return std::visit(overloaded_functor{
-            [] (bool b) { return !b; },
+            [] (bool b) { return true; }, // false means empty, true means no bounds at all; both fit the condition.
             [] (const binary_operator& oper) {
                 return *oper.op == operator_type::EQ; // Without EQ, one side must be unbounded.
             },

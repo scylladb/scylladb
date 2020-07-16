@@ -58,7 +58,7 @@ class statement_restrictions::initial_key_restrictions : public primary_key_rest
 public:
     initial_key_restrictions(bool allow_filtering)
         : _allow_filtering(allow_filtering) {
-        this->expression = conjunction{};
+        this->expression = true;
     }
     using bounds_range_type = typename primary_key_restrictions<T>::bounds_range_type;
 
