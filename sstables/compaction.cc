@@ -515,7 +515,7 @@ private:
     requires CompactedFragmentsConsumer<GCConsumer>
     future<> setup(GCConsumer gc_consumer) {
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_schema));
-        sstring formatted_msg = "[";
+        sstring formatted_msg = "{} [";
         auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - _schema->gc_grace_seconds());
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
@@ -555,7 +555,7 @@ private:
         _info->sstables = _sstables.size();
         _info->ks_name = _schema->ks_name();
         _info->cf_name = _schema->cf_name();
-        report_start(formatted_msg);
+        clogger.info(formatted_msg.c_str(), report_start_desc());
 
         _compacting = std::move(ssts);
 
@@ -603,12 +603,11 @@ private:
         // - add support to merge summary (message: Partition merge counts were {%s}.).
         // - there is no easy way, currently, to know the exact number of total partitions.
         // By the time being, using estimated key count.
-        sstring formatted_msg = fmt::format("{} sstables to [{}]. {} to {} (~{}% of original) in {}ms = {}. " \
-            "~{} total partitions merged to {}.",
-            _info->sstables, new_sstables_msg, pretty_printed_data_size(_info->start_size), pretty_printed_data_size(_info->end_size), int(ratio * 100),
-            std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_info->end_size, duration),
-            _info->total_partitions, _info->total_keys_written);
-        report_finish(formatted_msg, ended_at);
+        clogger.info("{} {} sstables to [{}]. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
+                report_finish_desc(),
+                _info->sstables, new_sstables_msg, pretty_printed_data_size(_info->start_size), pretty_printed_data_size(_info->end_size), int(ratio * 100),
+                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_info->end_size, duration),
+                _info->total_partitions, _info->total_keys_written);
 
         backlog_tracker_adjust_charges();
 
@@ -617,8 +616,8 @@ private:
         return std::move(*info);
     }
 
-    virtual void report_start(const sstring& formatted_msg) const = 0;
-    virtual void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const = 0;
+    virtual std::string_view report_start_desc() const = 0;
+    virtual std::string_view report_finish_desc() const = 0;
     virtual void backlog_tracker_adjust_charges() { };
 
     std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() {
@@ -760,12 +759,12 @@ public:
                 default_read_monitor_generator());
     }
 
-    void report_start(const sstring& formatted_msg) const override {
-        clogger.info("Reshaping {}", formatted_msg);
+    std::string_view report_start_desc() const override {
+        return "Reshaping";
     }
 
-    void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        clogger.info("Reshaped {}", formatted_msg);
+    std::string_view report_finish_desc() const override {
+        return "Reshaped";
     }
 
     virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
@@ -810,12 +809,12 @@ public:
                 _monitor_generator);
     }
 
-    void report_start(const sstring& formatted_msg) const override {
-        clogger.info("Compacting {}", formatted_msg);
+    std::string_view report_start_desc() const override {
+        return "Compacting";
     }
 
-    void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        clogger.info("Compacted {}", formatted_msg);
+    std::string_view report_finish_desc() const override {
+        return "Compacted";
     }
 
     void backlog_tracker_adjust_charges() override {
@@ -993,12 +992,12 @@ public:
     {
     }
 
-    void report_start(const sstring& formatted_msg) const override {
-        clogger.info("Cleaning {}", formatted_msg);
+    std::string_view report_start_desc() const override {
+        return "Cleaning";
     }
 
-    void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        clogger.info("Cleaned {}", formatted_msg);
+    std::string_view report_finish_desc() const override {
+        return "Cleaned";
     }
 
     flat_mutation_reader::filter make_partition_filter() const override {
@@ -1196,12 +1195,12 @@ public:
         , _options(options) {
     }
 
-    void report_start(const sstring& formatted_msg) const override {
-        clogger.info("Scrubbing {}", formatted_msg);
+    std::string_view report_start_desc() const override {
+        return "Scrubbing";
     }
 
-    void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        clogger.info("Finished scrubbing {}", formatted_msg);
+    std::string_view report_finish_desc() const override {
+        return "Finished scrubbing";
     }
 
     flat_mutation_reader make_sstable_reader() const override {
@@ -1289,12 +1288,12 @@ public:
         return true;
     }
 
-    void report_start(const sstring& formatted_msg) const override {
-        clogger.info("Resharding {}", formatted_msg);
+    std::string_view report_start_desc() const override {
+        return "Resharding";
     }
 
-    void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        clogger.info("Resharded {}", formatted_msg);
+    std::string_view report_finish_desc() const override {
+        return "Resharded";
     }
 
     void backlog_tracker_adjust_charges() override { }
