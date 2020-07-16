@@ -92,6 +92,9 @@ public:
     void transfer_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges = true);
     void revert_charges(sstables::shared_sstable sst);
 private:
+    // Returns true if this SSTable can be added or removed from the tracker.
+    bool sstable_belongs_to_tracker(const sstables::shared_sstable& sst);
+
     void disable() {
         _disabled = true;
         _ongoing_writes = {};
