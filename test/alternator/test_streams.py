@@ -15,7 +15,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-# Tests for stream operations: ListStreams, DescribeStream, GetShardIterator.
+# Tests for stream operations: ListStreams, DescribeStream, GetShardIterator,
+# GetRecords.
 
 import pytest
 import time
@@ -211,8 +212,8 @@ def test_describe_stream(dynamodb, dynamodbstreams):
         assert desc;
         assert desc.get('StreamDescription')
         # note these are non-required attributes
-        assert desc['StreamDescription'].get('StreamLabel')
-        assert desc['StreamDescription'].get('CreationRequestDateTime')
+        assert 'StreamLabel' in desc['StreamDescription']
+        assert 'CreationRequestDateTime' in desc['StreamDescription']
 
 def test_describe_nonexistent_stream(dynamodb, dynamodbstreams):
     with pytest.raises(ClientError, match='ResourceNotFoundException' if is_local_java(dynamodbstreams) else 'ValidationException'):
