@@ -361,7 +361,7 @@ if __name__ == '__main__':
                 print('Please select unmounted disks from the following list: {}'.format(devices))
             selected = []
             dsklist = []
-            while True:
+            while raid_setup:
                 if len(dsklist) > 0:
                     dsk = dsklist.pop(0)
                 else:
