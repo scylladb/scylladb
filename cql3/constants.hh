@@ -46,6 +46,7 @@
 #include "cql3/operation.hh"
 #include "cql3/values.hh"
 #include "cql3/term.hh"
+#include "mutation.hh"
 #include <seastar/core/shared_ptr.hh>
 
 namespace cql3 {

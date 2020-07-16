@@ -48,6 +48,8 @@
 #include "tombstone.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/query_options.hh"
+#include "query-request.hh"
+#include "query-result.hh"
 
 namespace cql3 {
 

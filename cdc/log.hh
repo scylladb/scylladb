@@ -63,6 +63,7 @@ class query_state;
 
 class mutation;
 class partition_key;
+class database;
 
 namespace cdc {
 
