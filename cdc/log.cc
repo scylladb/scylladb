@@ -371,7 +371,16 @@ schema_ptr get_base_table(const database& db, sstring_view ks_name,std::string_v
     if (!is_log_name(table_name)) {
         return nullptr;
     }
-    return db.find_schema(sstring(ks_name), base_name(table_name));
+    // Note: It is legal for a user to directly create a table with name
+    // `X_scylla_cdc_log`. A table with name `X` might be present (but with
+    // cdc log disabled), or not present at all when creating `X_scylla_cdc_log`.
+    // Therefore, existence of `X_scylla_cdc_log` does not imply existence of `X`
+    // and, in order not to throw, we explicitly need to check for existence of 'X'.
+    const auto table_base_name = base_name(table_name);
+    if (!db.has_schema(ks_name, table_base_name)) {
+        return nullptr;
+    }
+    return db.find_schema(sstring(ks_name), table_base_name);
 }
 
 seastar::sstring base_name(std::string_view log_name) {
