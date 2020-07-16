@@ -865,3 +865,24 @@ SEASTAR_THREAD_TEST_CASE(token) {
         require_rows(e, stmt, {}, {I(10)}, {});
     }).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(tuples) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table t (p int primary key, q tuple<int>, r tuple<int,int>)");
+        cquery_nofail(e, "insert into t (p,q,r) values (1,(1),(1,1));");
+        cquery_nofail(e, "insert into t (p,q,r) values (2,(2),(2,2));");
+        require_rows(e, "select r from t where r=(1,1) allow filtering",
+                     {{make_tuple({int32_type, int32_type}, {1, 1})}});
+        require_rows(e, "select r from t where r<(2,2) allow filtering",
+                     {{make_tuple({int32_type, int32_type}, {1, 1})}});
+        require_rows(e, "select r from t where r<(1,99) allow filtering",
+                     {{make_tuple({int32_type, int32_type}, {1, 1})}});
+        require_rows(e, "select r from t where r<=(2, 2) allow filtering",
+                     {{make_tuple({int32_type, int32_type}, {1, 1})}, {make_tuple({int32_type, int32_type}, {2, 2})}});
+        require_rows(e, "select q from t where q=(1) allow filtering", {{make_tuple({int32_type}, {1})}});
+        require_rows(e, "select q from t where q>=(1) allow filtering",
+                     {{make_tuple({int32_type}, {1})}, {make_tuple({int32_type}, {2})}});
+        require_rows(e, "select q from t where q>=(2) allow filtering", {{make_tuple({int32_type}, {2})}});
+        require_rows(e, "select q from t where q>(99) allow filtering", {});
+    }).get();
+}

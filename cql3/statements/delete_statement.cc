@@ -88,10 +88,12 @@ namespace {
 
 using namespace restrictions;
 
-/// True iff parameters indicate a multi-column comparison.
-bool is_multi_column(size_t column_count, const term* t) {
-    return column_count > 1 || dynamic_cast<const tuples::value*>(t) || dynamic_cast<const tuples::marker*>(t)
-            || dynamic_cast<const tuples::delayed_value*>(t);
+/// If oper.lhs is a single column, returns it; otherwise, returns null.
+const column_definition* single_column(const binary_operator& oper) {
+    if (auto c = std::get_if<column_value>(&oper.lhs)) {
+        return c->col;
+    }
+    return nullptr;
 }
 
 /// True iff expr bounds clustering key from both above and below OR it has no clustering-key bounds at all.
@@ -109,21 +111,22 @@ bool bounded_ck(const expression& expr) {
                 for (const auto& child : conj.children) {
                     std::visit(overloaded_functor{
                             [&] (const binary_operator& oper) {
-                                if (auto cvs = std::get_if<std::vector<column_value>>(&oper.lhs)) {
-                                    // The rules of multi-column comparison imply that any multi-column
-                                    // expression sets a bound for the entire clustering key.  Therefore, we
-                                    // represent any such expression with special pointer value nullptr.
-                                    auto col = is_multi_column(cvs->size(), oper.rhs.get()) ? nullptr : cvs->front().col;
-                                    if (col && !col->is_clustering_key()) {
-                                        return;
-                                    }
-                                    if (*oper.op == operator_type::EQ) {
-                                        found_bounds[col] = UPPER | LOWER;
-                                    } else if (*oper.op == operator_type::LT || *oper.op == operator_type::LTE) {
-                                        found_bounds[col] |= UPPER;
-                                    } else if (*oper.op == operator_type::GTE || *oper.op == operator_type::GT) {
-                                        found_bounds[col] |= LOWER;
-                                    }
+                                if (std::holds_alternative<token>(oper.lhs)) {
+                                    return;
+                                }
+                                // The rules of multi-column comparison imply that any multi-column
+                                // expression sets a bound for the entire clustering key.  Therefore, we
+                                // represent any such expression with special pointer value nullptr.
+                                auto col = single_column(oper);
+                                if (col && !col->is_clustering_key()) {
+                                    return;
+                                }
+                                if (*oper.op == operator_type::EQ) {
+                                    found_bounds[col] = UPPER | LOWER;
+                                } else if (*oper.op == operator_type::LT || *oper.op == operator_type::LTE) {
+                                    found_bounds[col] |= UPPER;
+                                } else if (*oper.op == operator_type::GTE || *oper.op == operator_type::GT) {
+                                    found_bounds[col] |= LOWER;
                                 }
                             },
                             [] (const auto& default_case) {}, // Assumes conjunctions are flattened.
