@@ -1803,12 +1803,16 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
 }
 
 future<>
-storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
+storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {_write_smp_service_group, timeout},
-            [s = global_schema_ptr(m.schema()), m = freeze(m), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout] (database& db) mutable -> future<> {
-        return db.apply(s, m, gtr.get(), db::commitlog::force_sync::no, timeout);
+            [s = global_schema_ptr(m.schema()),
+             m = freeze(m),
+             gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
+             timeout,
+             sync] (database& db) mutable -> future<> {
+        return db.apply(s, m, gtr.get(), sync, timeout);
     });
 }
 
@@ -1826,7 +1830,7 @@ future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     return do_with(std::move(mutations), [this, timeout, tr_state = std::move(tr_state)] (std::vector<mutation>& pmut) mutable {
         return parallel_for_each(pmut.begin(), pmut.end(), [this, tr_state = std::move(tr_state), timeout] (const mutation& m) mutable {
-            return mutate_locally(m, tr_state, timeout);
+            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout);
         });
     });
 }
