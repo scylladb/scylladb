@@ -139,7 +139,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     auto e = cfs.end();
 
     if (limit < 1) {
-        throw validation_exception("Limit must be 1 or more");
+        throw api_error::validation("Limit must be 1 or more");
     }
 
     // TODO: the unordered_map here is not really well suited for partial
@@ -372,11 +372,11 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     }
  
     if (!schema || !bs || !is_alternator_keyspace(schema->ks_name())) {
-        throw resource_not_found_exception("Invalid StreamArn");
+        throw api_error::resource_not_found("Invalid StreamArn");
     }
 
     if (limit < 1) {
-        throw validation_exception("Limit must be 1 or more");
+        throw api_error::validation("Limit must be 1 or more");
     }
 
     std::optional<shard_id> shard_start;
@@ -568,10 +568,10 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     auto seq_num = rjson::get_opt<utils::UUID>(request, "SequenceNumber");
     
     if (type < shard_iterator_type::TRIM_HORIZON && !seq_num) {
-        throw validation_exception("Missing required parameter \"SequenceNumber\"");
+        throw api_error::validation("Missing required parameter \"SequenceNumber\"");
     }
     if (type >= shard_iterator_type::TRIM_HORIZON && seq_num) {
-        throw validation_exception("Iterator of this type should not have sequence number");
+        throw api_error::validation("Iterator of this type should not have sequence number");
     }
 
     auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
@@ -587,7 +587,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     } catch (...) {
     }
     if (!schema || !cdc::get_base_table(db, *schema) || !is_alternator_keyspace(schema->ks_name()) || sid->table != schema->id()) {
-        throw resource_not_found_exception("Invalid StreamArn");
+        throw api_error::resource_not_found("Invalid StreamArn");
     }
 
     utils::UUID threshold;
@@ -650,7 +650,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     auto limit = rjson::get_opt<size_t>(request, "Limit").value_or(1000);
 
     if (limit < 1) {
-        throw validation_exception("Limit must be 1 or more");
+        throw api_error::validation("Limit must be 1 or more");
     }
 
     auto& db = _proxy.get_db().local();
@@ -663,7 +663,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     }
 
     if (!schema || !base || !is_alternator_keyspace(schema->ks_name())) {
-        throw resource_not_found_exception(boost::lexical_cast<std::string>(iter.shard.table));
+        throw api_error::resource_not_found(boost::lexical_cast<std::string>(iter.shard.table));
     }
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
@@ -858,7 +858,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
 void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder) {
     auto stream_enabled = rjson::find(stream_specification, "StreamEnabled");
     if (!stream_enabled || !stream_enabled->IsBool()) {
-        throw validation_exception("StreamSpecification needs boolean StreamEnabled");
+        throw api_error::validation("StreamSpecification needs boolean StreamEnabled");
     }
 
     if (stream_enabled->GetBool()) {

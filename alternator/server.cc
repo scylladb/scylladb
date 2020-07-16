@@ -75,20 +75,19 @@ public:
                  // returned to the client as expected. Other types of
                  // exceptions are unexpected, and returned to the user
                  // as an internal server error:
-                 api_error ret;
                  try {
                      resf.get();
                  } catch (api_error &ae) {
-                     ret = ae;
+                     generate_error_reply(*rep, ae);
                  } catch (rjson::error & re) {
-                     ret = api_error("ValidationException", re.what());
+                     generate_error_reply(*rep,
+                             api_error("ValidationException", re.what()));
                  } catch (...) {
-                     ret = api_error(
-                             "Internal Server Error",
+                     generate_error_reply(*rep,
+                             api_error("Internal Server Error",
                              format("Internal server error: {}", std::current_exception()),
-                             reply::status_type::internal_server_error);
+                             reply::status_type::internal_server_error));
                  }
-                 generate_error_reply(*rep, ret);
                  return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
              }
              auto res = resf.get0();

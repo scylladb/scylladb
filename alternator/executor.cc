@@ -160,7 +160,7 @@ static std::optional<std::string> find_table_name(const rjson::value& request) {
         return std::nullopt;
     }
     if (!table_name_value->IsString()) {
-        throw validation_exception("Non-string TableName field in request");
+        throw api_error::validation("Non-string TableName field in request");
     }
     std::string table_name = table_name_value->GetString();
     validate_table_name(table_name);
@@ -170,7 +170,7 @@ static std::optional<std::string> find_table_name(const rjson::value& request) {
 static std::string get_table_name(const rjson::value& request) {
     auto name = find_table_name(request);
     if (!name) {
-        throw validation_exception("Missing TableName field in request");
+        throw api_error::validation("Missing TableName field in request");
     }
     return *name;
 }
@@ -998,7 +998,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     std::string table_name = get_table_name(request);
     if (table_name.find(INTERNAL_TABLE_PREFIX) == 0) {
-        return make_ready_future<request_return_type>(validation_exception(
+        return make_ready_future<request_return_type>(api_error::validation(
                 format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
     }
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
@@ -1024,7 +1024,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     for (auto& s : unsupported) {
         if (rjson::find(request, s)) {
-            throw validation_exception(s + " not supported");
+            throw api_error::validation(s + " not supported");
         }
     }
 
