@@ -270,9 +270,8 @@ public:
         : _u(o._u)
     {
         if (external()) {
-            if (_u.ptr) {
-                _u.ptr->backref = &_u.ptr;
-            }
+            // _u.ptr cannot be null
+            _u.ptr->backref = &_u.ptr;
         }
         o._u.small.size = 0;
     }
