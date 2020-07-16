@@ -713,6 +713,13 @@ bool equal(const bytes_opt& rhs, const column_value& lhs, const column_value_eva
     return get_value_comparator(lhs)->equal(*value, *rhs);
 }
 
+#if 0 // Will uncomment in the next pach.
+/// Convenience overload for term.
+bool equal(term& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
+    return equal(to_bytes_opt(rhs.bind_and_get(bag.options)), lhs, bag);
+}
+#endif //0
+
 /// True iff columns' values equal t.
 bool equal(::shared_ptr<term> t, const std::vector<column_value>& columns, const column_value_eval_bag& bag) {
     if (columns.size() > 1) {
@@ -758,6 +765,21 @@ bool limits(bytes_view lhs, const operator_type& op, bytes_view rhs, const abstr
         return op == operator_type::LTE || op == operator_type::GTE || op == operator_type::EQ;
     }
 }
+
+#if 0 // Will uncomment in the next pach.
+/// True iff the column value is limited by rhs in the manner prescribed by op.
+bool limits(const column_value& col, const operator_type& op, term& rhs, const column_value_eval_bag& bag) {
+    if (!op.is_slice()) { // For EQ or NEQ, use equal().
+        throw std::logic_error("limits() called on non-slice op");
+    }
+    auto lhs = get_value(col, bag);
+    if (!lhs) {
+        lhs = bytes(); // Compatible with old code, which feeds null to type comparators.
+    }
+    const auto b = to_bytes_opt(rhs.bind_and_get(bag.options));
+    return b ? limits(*lhs, op, *b, *get_value_comparator(col)) : false;
+}
+#endif //0
 
 /// True iff the value of opr.lhs (which must be column_values) is limited by opr.rhs in the manner prescribed
 /// by opr.op.
@@ -971,6 +993,26 @@ bool like(const std::vector<column_value>& columns, term& rhs, const column_valu
     }
 }
 
+#if 0 // Will uncomment in the next pach.
+/// True iff the column value is in the set defined by rhs.
+bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& bag) {
+    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
+    if (auto dv = dynamic_cast<lists::delayed_value*>(&rhs)) {
+        // This is `a IN (1,2,3)`.  RHS elements are themselves terms.
+        return boost::algorithm::any_of(dv->get_elements(), [&] (const ::shared_ptr<term>& t) {
+                return equal(*t, col, bag);
+            });
+    } else if (auto mkr = dynamic_cast<lists::marker*>(&rhs)) {
+        // This is `a IN ?`.  RHS elements are values representable as bytes_opt.
+        const auto values = static_pointer_cast<lists::value>(mkr->bind(bag.options));
+        return boost::algorithm::any_of(values->get_elements(), [&] (const bytes_opt& b) {
+                return equal(b, col, bag);
+            });
+    }
+    throw std::logic_error("unexpected term type in is_one_of(single column)");
+}
+#endif //0
+
 /// True iff the tuple of column values is in the set defined by rhs.
 bool is_one_of(const std::vector<column_value>& cvs, term& rhs, const column_value_eval_bag& bag) {
     // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
@@ -1100,11 +1142,33 @@ value_list to_sorted_vector(const Range& r, const serialized_compare& comparator
     return value_list(unique.begin(), unique.end());
 }
 
+const auto non_null = filtered([] (const bytes_opt& b) { return b.has_value(); });
+
+const auto deref = transformed([] (const bytes_opt& b) { return b.value(); });
+
+#if 0 // Will uncomment in the next pach.
+/// Returns possible values from t, which must be RHS of IN.
+value_list get_IN_values(
+        const ::shared_ptr<term>& t, const query_options& options, const serialized_compare& comparator) {
+    // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
+    if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
+        // Case `a IN (1,2,3)`.
+        const auto result_range = dv->get_elements()
+                | transformed([&] (const ::shared_ptr<term>& t) { return to_bytes_opt(t->bind_and_get(options)); })
+                | non_null | deref;
+        return to_sorted_vector(result_range, comparator);
+    } else if (auto mkr = dynamic_pointer_cast<lists::marker>(t)) {
+        // Case `a IN ?`.  Collect all list-element values.
+        const auto val = static_pointer_cast<lists::value>(mkr->bind(options));
+        return to_sorted_vector(val->get_elements() | non_null | deref, comparator);
+    }
+    throw std::logic_error(format("get_IN_values(single column) on invalid term {}", *t));
+}
+#endif //0
+
 /// Returns possible values for k-th column from t, which must be RHS of IN.
 value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_options& options,
                          const serialized_compare& comparator) {
-    const auto non_null = filtered([] (const bytes_opt& b) { return b.has_value(); });
-    const auto deref = transformed([] (const bytes_opt& b) { return b.value(); });
     // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
     if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
         // Case `a IN (1,2,3)` or `(a,b) in ((1,1),(2,2),(3,3)).  Get kth value from each term element.
