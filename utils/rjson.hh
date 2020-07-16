@@ -80,6 +80,21 @@ using string_buffer = rapidjson::GenericStringBuffer<encoding>;
 using writer = rapidjson::Writer<string_buffer, encoding>;
 using type = rapidjson::Type;
 
+/** 
+ * exception specializations. 
+ */
+class malformed_value : public error {
+public:
+    malformed_value(std::string_view name, const rjson::value& value);
+    malformed_value(std::string_view name, std::string_view value);
+};
+
+class missing_value : public error {
+public:
+    missing_value(std::string_view name);
+};
+
+
 // Returns an object representing JSON's null
 inline rjson::value null_value() {
     return rjson::value(rapidjson::kNullType);
@@ -139,6 +154,38 @@ const rjson::value* find(const rjson::value& value, std::string_view name);
 rjson::value& get(rjson::value& value, std::string_view name);
 const rjson::value& get(const rjson::value& value, std::string_view name);
 
+/**
+ * Type conversion getter. 
+ * Will typically require an existing rapidjson::internal::TypeHelper<...>
+ * to exist for the type queried. 
+ */
+template<typename T>
+T get(const rjson::value& value, std::string_view name) {
+    auto& v = get(value, name);
+    try {
+        return v.Get<T>();
+    } catch (...) {
+        std::throw_with_nested(malformed_value(name, v));
+    }
+}
+
+/**
+ * Type conversion opt getter. 
+ * Will typically require an existing rapidjson::internal::TypeHelper<...>
+ * to exist for the type queried. 
+ * 
+ * Return std::nullopt if value does not exist. 
+ */
+template<typename T>
+std::optional<T> get_opt(const rjson::value& value, std::string_view name) {
+    auto* v = find(value, name);
+    try {
+        return v ? std::optional<T>(v->Get<T>()) : std::nullopt;
+    } catch (...) {
+        std::throw_with_nested(malformed_value(name, *v));
+    }
+}
+
 // Sets a member in given JSON object by moving the member - allocates the name.
 // Throws if base is not a JSON object.
 void set_with_string_name(rjson::value& base, std::string_view name, rjson::value&& member);
@@ -158,6 +205,24 @@ void set(rjson::value& base, rjson::string_ref_type name, rjson::value&& member)
 // NOTICE: member liveness must be ensured to be at least as long as base's.
 // Throws if base is not a JSON object.
 void set(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type member);
+
+/**
+ * Type conversion setter. 
+ * Will typically require an existing rapidjson::internal::TypeHelper<...>
+ * to exist for the type written. 
+ * 
+ * (Note: order is important. Need to be after set(..., rjson::value), 
+ *  otherwise the enable_if must be expanded)
+ */
+template<typename T>
+std::enable_if_t<!std::is_constructible_v<string_ref_type, T>> 
+set(rjson::value& base, rjson::string_ref_type name, T&& member) {
+    extern allocator the_allocator;
+
+    rjson::value v;
+    v.Set(std::forward<T>(member), the_allocator);
+    set(base, std::move(name), std::move(v));
+}
 
 // Adds a value to a JSON list by moving the item to its end.
 // Throws if base_array is not a JSON array.

@@ -316,6 +316,7 @@ public:
     named_value<sstring> alternator_address;
     named_value<bool> alternator_enforce_authorization;
     named_value<sstring> alternator_write_isolation;
+    named_value<uint32_t> alternator_streams_time_window_s;
 
     named_value<bool> abort_on_ebadf;
 

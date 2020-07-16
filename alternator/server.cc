@@ -350,6 +350,9 @@ server::server(executor& exec)
         {"DeleteTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.delete_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
+        {"UpdateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.update_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
+        }},
         {"PutItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.put_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
@@ -388,6 +391,18 @@ server::server(executor& exec)
         }},
         {"ListTagsOfResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
             return e.list_tags_of_resource(client_state, std::move(permit), std::move(json_request));
+        }},
+        {"ListStreams", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.list_streams(client_state, std::move(permit), std::move(json_request));
+        }},
+        {"DescribeStream", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.describe_stream(client_state, std::move(permit), std::move(json_request));
+        }},
+        {"GetShardIterator", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.get_shard_iterator(client_state, std::move(permit), std::move(json_request));
+        }},
+        {"GetRecords", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
+            return e.get_records(client_state, std::move(trace_state), std::move(permit), std::move(json_request));
         }},
     } {
 }

@@ -1180,6 +1180,11 @@ const cdc::options& schema::cdc_options() const {
     return default_cdc_options;
 }
 
+schema_builder& schema_builder::with_cdc_options(const cdc::options& opts) {
+    add_extension(cdc::cdc_extension::NAME, ::make_shared<cdc::cdc_extension>(opts));
+    return *this;
+}
+
 schema_ptr schema_builder::build(compact_storage cp) {
     return with(cp).build();
 }

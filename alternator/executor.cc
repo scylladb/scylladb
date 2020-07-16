@@ -73,22 +73,19 @@ static const column_definition& attrs_column(const schema& schema) {
     return *cdef;
 }
 
-struct make_jsonable : public json::jsonable {
-    rjson::value _value;
-public:
-    explicit make_jsonable(rjson::value&& value) : _value(std::move(value)) {}
-    virtual std::string to_json() const override {
-        return rjson::print(_value);
-    }
-};
-struct json_string : public json::jsonable {
-    std::string _value;
-public:
-    explicit json_string(std::string&& value) : _value(std::move(value)) {}
-    virtual std::string to_json() const override {
-        return _value;
-    }
-};
+make_jsonable::make_jsonable(rjson::value&& value)
+    : _value(std::move(value))
+{}
+std::string make_jsonable::to_json() const {
+    return rjson::print(_value);
+}
+
+json_string::json_string(std::string&& value)
+    : _value(std::move(value))
+{}
+std::string json_string::to_json() const {
+    return _value;
+}
 
 static void supplement_table_info(rjson::value& descr, const schema& schema) {
     rjson::set(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
@@ -157,15 +154,25 @@ static std::string lsi_name(const std::string& table_name, const std::string& in
  *  and api_error in case the table name is missing or not a string, or
  *  doesn't pass validate_table_name().
  */
-static std::string get_table_name(const rjson::value& request) {
-    const rjson::value& table_name_value = rjson::get(request, "TableName");
-    if (!table_name_value.IsString()) {
-        throw api_error("ValidationException",
-                "Missing or non-string TableName field in request");
+static std::optional<std::string> find_table_name(const rjson::value& request) {
+    const rjson::value* table_name_value = rjson::find(request, "TableName");
+    if (!table_name_value) {
+        return std::nullopt;
     }
-    std::string table_name = table_name_value.GetString();
+    if (!table_name_value->IsString()) {
+        throw validation_exception("Non-string TableName field in request");
+    }
+    std::string table_name = table_name_value->GetString();
     validate_table_name(table_name);
     return table_name;
+}
+
+static std::string get_table_name(const rjson::value& request) {
+    auto name = find_table_name(request);
+    if (!name) {
+        throw validation_exception("Missing TableName field in request");
+    }
+    return *name;
 }
 
 /** Extract table schema from a request.
@@ -175,14 +182,27 @@ static std::string get_table_name(const rjson::value& request) {
  *  name is missing, invalid or the table doesn't exist. If everything is
  *  successful, it returns the table's schema.
  */
-static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request) {
-    std::string table_name = get_table_name(request);
+schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::value& request) {
+    auto table_name = find_table_name(request);
+    if (!table_name) {
+        return nullptr;
+    }
     try {
-        return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(table_name), table_name);
+        return proxy.get_db().local().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(*table_name), *table_name);
     } catch(no_such_column_family&) {
         throw api_error("ResourceNotFoundException",
-                format("Requested resource not found: Table: {} not found", table_name));
+                format("Requested resource not found: Table: {} not found", *table_name));
     }
+}
+
+static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request) {
+    auto schema = executor::find_table(proxy, request);
+    if (!schema) {
+        // if we get here then the name was missing, since syntax or missing actual CF 
+        // checks throw. Slow path, but just call get_table_name to generate exception. 
+        get_table_name(request);        
+    }
+    return schema;
 }
 
 static std::tuple<bool, std::string_view, std::string_view> try_get_internal_table(std::string_view table_name) {
@@ -311,22 +331,25 @@ static std::optional<int> get_int_attribute(const rjson::value& value, std::stri
 // attributes of the the given schema as being either HASH or RANGE keys.
 // Additionally, adds to a given map mappings between the key attribute
 // names and their type (as a DynamoDB type string).
-static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>& attribute_types) {
+void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>* attribute_types) {
     rjson::value key_schema = rjson::empty_array();
     for (const column_definition& cdef : schema.partition_key_columns()) {
         rjson::value key = rjson::empty_object();
         rjson::set(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
         rjson::set(key, "KeyType", "HASH");
         rjson::push_back(key_schema, std::move(key));
-        attribute_types[cdef.name_as_text()] = type_to_string(cdef.type);
-
+        if (attribute_types) {
+            (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
+        }
     }
     for (const column_definition& cdef : schema.clustering_key_columns()) {
         rjson::value key = rjson::empty_object();
         rjson::set(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
         rjson::set(key, "KeyType", "RANGE");
         rjson::push_back(key_schema, std::move(key));
-        attribute_types[cdef.name_as_text()] = type_to_string(cdef.type);
+        if (attribute_types) {
+            (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
+        }
         // FIXME: this "break" can avoid listing some clustering key columns
         // we added for GSIs just because they existed in the base table -
         // but not in all cases. We still have issue #5320. See also
@@ -337,8 +360,24 @@ static void describe_key_schema(rjson::value& parent, const schema& schema, std:
 
 }
 
+void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>& attribute_types) {
+    describe_key_schema(parent, schema, &attribute_types);
+}
+
 static rjson::value generate_arn_for_table(const schema& schema) {
     return rjson::from_string(format("arn:scylla:alternator:{}:scylla:table/{}", schema.ks_name(), schema.cf_name()));
+}
+
+bool executor::is_alternator_keyspace(const sstring& ks_name) {
+    return ks_name.find(KEYSPACE_NAME_PREFIX) == 0;
+}
+
+sstring executor::table_name(const schema& s) {
+    return s.cf_name();
+}
+
+sstring executor::make_keyspace_name(const sstring& table_name) {
+    return sstring(KEYSPACE_NAME_PREFIX) + table_name;
 }
 
 future<executor::request_return_type> executor::describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
@@ -659,7 +698,7 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
 // are fixed, this issue will automatically get fixed as well.
 static future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
     schema_builder builder(schema);
-    builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>(std::move(tags_map))}});
+    builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(std::move(tags_map)));
     return mm.announce_column_family_update(builder.build(), false, std::vector<view_ptr>(), false);
 }
 
@@ -893,18 +932,10 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     if (rjson::find(request, "SSESpecification")) {
         return make_ready_future<request_return_type>(api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported."));
     }
-    // We don't yet support streams (CDC), but a StreamSpecification asking
-    // *not* to use streams should be accepted:
+    
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
-        rjson::value* stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
-        if (!stream_enabled || !stream_enabled->IsBool()) {
-            return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification needs boolean StreamEnabled"));
-        }
-        if (stream_enabled->GetBool()) {
-            // TODO: support streams
-            return make_ready_future<request_return_type>(api_error("ValidationException", "StreamSpecification: streams (CDC) is not yet supported."));
-        }
+        add_stream_options(*stream_specification, builder);
     }
 
     // Parse the "Tags" parameter early, so we can avoid creating the table
@@ -915,7 +946,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     }
 
-    builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
+    builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>());
     schema_ptr schema = builder.build();
     auto where_clause_it = where_clauses.begin();
     for (auto& view_builder : view_builders) {
@@ -929,7 +960,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
         }
         const bool include_all_columns = true;
         view_builder.with_view_info(*schema, include_all_columns, *where_clause_it);
-        view_builder.set_extensions(schema::extensions_map{{sstring(tags_extension::NAME), ::make_shared<tags_extension>()}});
+        view_builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>());
         ++where_clause_it;
     }
 
@@ -958,6 +989,54 @@ future<executor::request_return_type> executor::create_table(client_state& clien
                     api_error("ResourceInUseException",
                             format("Table {} already exists", table_name)));
         });
+    });
+}
+
+future<executor::request_return_type> executor::update_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
+    _stats.api_operations.update_table++;
+    elogger.trace("Updating table {}", request);
+
+    std::string table_name = get_table_name(request);
+    if (table_name.find(INTERNAL_TABLE_PREFIX) == 0) {
+        return make_ready_future<request_return_type>(validation_exception(
+                format("Prefix {} is reserved for accessing internal tables", INTERNAL_TABLE_PREFIX)));
+    }
+    std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
+    tracing::add_table_name(trace_state, keyspace_name, table_name);
+
+    auto& db = _proxy.get_db().local();
+    auto& cf = db.find_column_family(keyspace_name, table_name);
+
+    schema_builder builder(cf.schema());
+
+    rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
+    if (stream_specification && stream_specification->IsObject()) {
+        add_stream_options(*stream_specification, builder);
+    }
+
+    static const std::vector<sstring> unsupported = {
+        "AttributeDefinitions", "BillingMode",
+        "GlobalSecondaryIndexUpdates", 
+        "ProvisionedThroughput",
+        "ReplicaUpdates",
+        "SSESpecification", 
+    };
+
+    for (auto& s : unsupported) {
+        if (rjson::find(request, s)) {
+            throw validation_exception(s + " not supported");
+        }
+    }
+
+    auto schema = builder.build();
+
+    return _mm.announce_column_family_update(schema, false, {}).then([this] {
+        return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
+    }).then([table_info = std::move(request), schema] () mutable {
+        rjson::value status = rjson::empty_object();
+        supplement_table_info(table_info, *schema);
+        rjson::set(status, "TableDescription", std::move(table_info));
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(status)));
     });
 }
 
@@ -1134,15 +1213,18 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) {
 
 // The DynamoDB API doesn't let the client control the server's timeout.
 // Let's pick something reasonable:
-static db::timeout_clock::time_point default_timeout() {
+db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + 10s;
 }
-
-static std::optional<rjson::value> describe_single_item(schema_ptr schema,
-        const query::partition_slice& slice,
-        const cql3::selection::selection& selection,
-        const query::result& query_result,
-        std::unordered_set<std::string>&& attrs_to_get);
+        
+static future<std::unique_ptr<rjson::value>> get_previous_item(
+        service::storage_proxy& proxy,
+        service::client_state& client_state,
+        schema_ptr schema,
+        const partition_key& pk,
+        const clustering_key& ck,
+        service_permit permit,
+        alternator::stats& stats);
 
 static lw_shared_ptr<query::read_command> previous_item_read_command(schema_ptr schema,
         const clustering_key& ck,
@@ -1210,7 +1292,7 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
 std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) {
     if (qr->row_count()) {
         auto selection = cql3::selection::selection::wildcard(_schema);
-        auto previous_item = describe_single_item(_schema, slice, *selection, *qr, {});
+        auto previous_item = executor::describe_single_item(_schema, slice, *selection, *qr, {});
         if (previous_item) {
             return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts);
         }
@@ -1276,9 +1358,9 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     auto command = previous_item_read_command(schema, ck, selection);
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
-    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
+    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
             [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
+        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
         if (previous_item) {
             return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
         } else {
@@ -1307,7 +1389,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error("ConditionalCheckFailedException", "Failed condition."));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
+                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
                     return rmw_operation_return(std::move(_return_attributes));
                 });
             });
@@ -1315,13 +1397,13 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         assert(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
+        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit)).then([this] () mutable {
             return rmw_operation_return(std::move(_return_attributes));
         });
     }
     // If we're still here, we need to do this write using LWT:
     stats.write_using_lwt++;
-    auto timeout = default_timeout();
+    auto timeout = executor::default_timeout();
     auto selection = cql3::selection::selection::wildcard(schema());
     auto read_command = needs_read_before_write ?
             previous_item_read_command(schema(), _ck, selection) :
@@ -1598,7 +1680,7 @@ public:
 
 static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, dht::decorated_key dk, std::vector<put_or_delete_item>&& mutation_builders,
         service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
-    auto timeout = default_timeout();
+    auto timeout = executor::default_timeout();
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
     return proxy.cas(schema, op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
@@ -1654,7 +1736,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         }
         return proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
-                default_timeout(),
+                executor::default_timeout(),
                 trace_state,
                 std::move(permit));
     } else {
@@ -1822,11 +1904,57 @@ std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, 
     return {};
 }
 
-static std::optional<rjson::value> describe_single_item(schema_ptr schema,
+/**
+ * Helper routine to extract data when we already have 
+ * row, etc etc.
+ * 
+ * Note: include_all_embedded_attributes means we should
+ * include all values in the `ATTRS_COLUMN_NAME` map column.
+ * 
+ * We could change the behaviour to simply include all values 
+ * from this column if the `ATTRS_COLUMN_NAME` is explicit in 
+ * `attrs_to_get`, but I am scared to do that now in case 
+ * there is some corner case in existing code.
+ * 
+ * Explicit bool means we can be sure all previous calls are 
+ * as before.
+ */ 
+void executor::describe_single_item(const cql3::selection::selection& selection,
+    const std::vector<bytes_opt>& result_row,
+    const std::unordered_set<std::string>& attrs_to_get,
+    rjson::value& item,
+    bool include_all_embedded_attributes) 
+{
+    const auto& columns = selection.get_columns();
+    auto column_it = columns.begin();
+    for (const bytes_opt& cell : result_row) {
+        std::string column_name = (*column_it)->name_as_text();
+        if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
+            if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
+                rjson::set_with_string_name(item, column_name, rjson::empty_object());
+                rjson::value& field = item[column_name.c_str()];
+                rjson::set_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(*cell, **column_it));
+            }
+        } else if (cell) {
+            auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
+            auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
+            for (auto entry : keys_and_values) {
+                std::string attr_name = value_cast<sstring>(entry.first);
+                if (include_all_embedded_attributes || attrs_to_get.empty() || attrs_to_get.count(attr_name) > 0) {
+                    bytes value = value_cast<bytes>(entry.second);
+                    rjson::set_with_string_name(item, attr_name, deserialize_item(value));
+                }
+            }
+        }
+        ++column_it;
+    }
+}
+
+std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        std::unordered_set<std::string>&& attrs_to_get) {
+        const std::unordered_set<std::string>& attrs_to_get) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
@@ -1841,29 +1969,7 @@ static std::optional<rjson::value> describe_single_item(schema_ptr schema,
     // FIXME: I think this can't really be a loop, there should be exactly
     // one result after above we handled the 0 result case
     for (auto& result_row : result_set->rows()) {
-        const auto& columns = selection.get_columns();
-        auto column_it = columns.begin();
-        for (const bytes_opt& cell : result_row) {
-            std::string column_name = (*column_it)->name_as_text();
-            if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
-                if (attrs_to_get.empty() || attrs_to_get.count(column_name) > 0) {
-                    rjson::set_with_string_name(item, column_name, rjson::empty_object());
-                    rjson::value& field = item[column_name.c_str()];
-                    rjson::set_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(*cell, **column_it));
-                }
-            } else if (cell) {
-                auto deserialized = attrs_type()->deserialize(*cell, cql_serialization_format::latest());
-                auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
-                for (auto entry : keys_and_values) {
-                    std::string attr_name = value_cast<sstring>(entry.first);
-                    if (attrs_to_get.empty() || attrs_to_get.count(attr_name) > 0) {
-                        bytes value = value_cast<bytes>(entry.second);
-                        rjson::set_with_string_name(item, attr_name, deserialize_item(value));
-                    }
-                }
-            }
-            ++column_it;
-        }
+        describe_single_item(selection, result_row, attrs_to_get, item);
     }
     return item;
 }
@@ -2257,8 +2363,8 @@ static rjson::value describe_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        std::unordered_set<std::string>&& attrs_to_get) {
-    std::optional<rjson::value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), std::move(attrs_to_get));
+        const std::unordered_set<std::string>& attrs_to_get) {
+    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get);
     if (!opt_item) {
         // If there is no matching item, we're supposed to return an empty
         // object without an Item member - not one with an empty Item member
@@ -2306,7 +2412,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "GetItem");
 
-    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
+    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time);
         return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
@@ -2370,7 +2476,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
-            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(default_timeout(), permit, client_state)).then(
+            future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
                 std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get));
                 return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(
@@ -2664,7 +2770,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
     auto p = service::pager::query_pagers::pager(schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
-    return p->fetch_page(limit, gc_clock::now(), default_timeout()).then(
+    return p->fetch_page(limit, gc_clock::now(), executor::default_timeout()).then(
             [p, schema, cql_stats, partition_slice = std::move(partition_slice),
              selection = std::move(selection), query_state_ptr = std::move(query_state_ptr),
              attrs_to_get = std::move(attrs_to_get),

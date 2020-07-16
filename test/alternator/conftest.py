@@ -82,6 +82,25 @@ def dynamodb(request):
             region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
             config=botocore.client.Config(retries={"max_attempts": 3}))
 
+@pytest.fixture(scope="session")
+def dynamodbstreams(request):
+    if request.config.getoption('aws'):
+        return boto3.client('dynamodbstreams')
+    else:
+        # Even though we connect to the local installation, Boto3 still
+        # requires us to specify dummy region and credential parameters,
+        # otherwise the user is forced to properly configure ~/.aws even
+        # for local runs.
+        if request.config.getoption('url') != None:
+            local_url = request.config.getoption('url')
+        else:
+            local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
+        # Disable verifying in order to be able to use self-signed TLS certificates
+        verify = not request.config.getoption('https')
+        return boto3.client('dynamodbstreams', endpoint_url=local_url, verify=verify,
+            region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
+            config=botocore.client.Config(retries={"max_attempts": 3}))
+
 # "test_table" fixture: Create and return a temporary table to be used in tests
 # that need a table to work on. The table is automatically deleted at the end.
 # We use scope="session" so that all tests will reuse the same client object.

@@ -30,16 +30,46 @@
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
+#include "db/timeout_clock.hh"
 
 #include "alternator/error.hh"
 #include "stats.hh"
 #include "utils/rjson.hh"
 
+namespace db {
+    class system_distributed_keyspace;
+}
+
+namespace query {
+class partition_slice;
+class result;
+}
+
+namespace cql3::selection {
+    class selection;
+}
+
 namespace alternator {
+
+class rmw_operation;
+
+struct make_jsonable : public json::jsonable {
+    rjson::value _value;
+public:
+    explicit make_jsonable(rjson::value&& value);
+    std::string to_json() const override;
+};
+struct json_string : public json::jsonable {
+    std::string _value;
+public:
+    explicit json_string(std::string&& value);
+    std::string to_json() const override;
+};
 
 class executor : public peering_sharded_service<executor> {
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
+    db::system_distributed_keyspace& _sdks;
     // An smp_service_group to be used for limiting the concurrency when
     // forwarding Alternator request between shards - if necessary for LWT.
     smp_service_group _ssg;
@@ -52,12 +82,13 @@ public:
     static constexpr auto KEYSPACE_NAME_PREFIX = "alternator_";
     static constexpr std::string_view INTERNAL_TABLE_PREFIX = ".scylla.alternator.";
 
-    executor(service::storage_proxy& proxy, service::migration_manager& mm, smp_service_group ssg)
-        : _proxy(proxy), _mm(mm), _ssg(ssg) {}
+    executor(service::storage_proxy& proxy, service::migration_manager& mm, db::system_distributed_keyspace& sdks, smp_service_group ssg)
+        : _proxy(proxy), _mm(mm), _sdks(sdks), _ssg(ssg) {}
 
     future<request_return_type> create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
+    future<request_return_type> update_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
@@ -71,6 +102,10 @@ public:
     future<request_return_type> tag_resource(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> untag_resource(client_state& client_state, service_permit permit, rjson::value request);
     future<request_return_type> list_tags_of_resource(client_state& client_state, service_permit permit, rjson::value request);
+    future<request_return_type> list_streams(client_state& client_state, service_permit permit, rjson::value request);
+    future<request_return_type> describe_stream(client_state& client_state, service_permit permit, rjson::value request);
+    future<request_return_type> get_shard_iterator(client_state& client_state, service_permit permit, rjson::value request);
+    future<request_return_type> get_records(client_state& client_state, tracing::trace_state_ptr, service_permit permit, rjson::value request);
 
     future<> start();
     future<> stop() { return make_ready_future<>(); }
@@ -78,6 +113,35 @@ public:
     future<> create_keyspace(std::string_view keyspace_name);
 
     static tracing::trace_state_ptr maybe_trace_query(client_state& client_state, sstring_view op, sstring_view query);
+
+    static sstring table_name(const schema&);
+    static db::timeout_clock::time_point default_timeout();
+    static schema_ptr find_table(service::storage_proxy&, const rjson::value& request);
+
+private:
+    friend class rmw_operation;
+
+    static bool is_alternator_keyspace(const sstring& ks_name);
+    static sstring make_keyspace_name(const sstring& table_name);
+    static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
+    static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);
+    
+public:    
+    static std::optional<rjson::value> describe_single_item(schema_ptr,
+        const query::partition_slice&,
+        const cql3::selection::selection&,
+        const query::result&,
+        const std::unordered_set<std::string>&);
+
+    static void describe_single_item(const cql3::selection::selection&,
+        const std::vector<bytes_opt>&,
+        const std::unordered_set<std::string>&,
+        rjson::value&,
+        bool = false);
+
+
+
+    static void add_stream_options(const rjson::value& stream_spec, schema_builder&);
 };
 
 }
