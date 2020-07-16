@@ -1356,7 +1356,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         } else {
             fut = f.truncate(max_size);
         }
-        return fut.then([this, d, f, filename] () mutable {
+        return fut.then([this, d, f] () mutable {
             auto s = make_shared<segment>(shared_from_this(), d, std::move(f));
             return make_ready_future<sseg_ptr>(s);
         });
