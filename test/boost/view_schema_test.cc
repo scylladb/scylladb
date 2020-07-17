@@ -36,6 +36,7 @@
 #include "db/config.hh"
 #include "types/set.hh"
 #include "types/list.hh"
+#include "types/map.hh"
 
 using namespace std::literals::chrono_literals;
 

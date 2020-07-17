@@ -24,6 +24,7 @@
 #include "database.hh"
 #include "db/view/view_builder.hh"
 #include "db/system_keyspace.hh"
+#include "db/config.hh"
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"

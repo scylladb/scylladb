@@ -39,6 +39,7 @@
 #include "dht/boot_strapper.hh"
 #include "dht/range_streamer.hh"
 #include "gms/failure_detector.hh"
+#include "gms/gossiper.hh"
 #include "log.hh"
 #include "db/config.hh"
 #include "database.hh"

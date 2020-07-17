@@ -32,6 +32,7 @@
 #include "service/migration_manager.hh"
 #include "schema_builder.hh"
 #include "schema_registry.hh"
+#include "db/schema_tables.hh"
 #include "types/list.hh"
 #include "types/user.hh"
 #include "db/config.hh"
