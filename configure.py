@@ -1344,14 +1344,8 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  # Must link with static version of libzstd, since
                  # experimental APIs that we use are only present there.
                  maybe_static(True, '-lzstd'),
-                 maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc'), ])
-
-pkgconfig_libs = [
-    'libxxhash',
-]
-
-args.user_cflags += ' ' + ' '.join([pkg_config(lib, '--cflags') for lib in pkgconfig_libs])
-libs += ' ' + ' '.join([pkg_config(lib, '--libs') for lib in pkgconfig_libs])
+                 maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc'),
+                 '-lxxhash'])
 
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
