@@ -26,9 +26,9 @@
 #include "database_fwd.hh"
 #include "mutation_partition_view.hh"
 #include "mutation_fragment.hh"
-#include "flat_mutation_reader.hh"
 
 class mutation;
+class flat_mutation_reader;
 
 namespace ser {
 class mutation_view;

@@ -37,7 +37,6 @@
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics_registration.hh>
-#include "flat_mutation_reader.hh"
 #include "mutation_cleaner.hh"
 #include "utils/double-decker.hh"
 
@@ -46,6 +45,7 @@ namespace bi = boost::intrusive;
 class row_cache;
 class memtable_entry;
 class cache_tracker;
+class flat_mutation_reader;
 
 namespace cache {
 

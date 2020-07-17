@@ -33,12 +33,12 @@
 #include "db/commitlog/rp_set.hh"
 #include "utils/extremum_tracking.hh"
 #include "partition_version.hh"
-#include "flat_mutation_reader.hh"
 #include "mutation_cleaner.hh"
 #include "sstables/types.hh"
 #include "utils/double-decker.hh"
 
 class frozen_mutation;
+class flat_mutation_reader;
 
 
 namespace bi = boost::intrusive;
