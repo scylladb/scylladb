@@ -91,6 +91,8 @@
 #include "cdc/log.hh"
 #include "cdc/stats.hh"
 #include "utils/histogram_metrics_helper.hh"
+#include "service/paxos/prepare_summary.hh"
+#include "service/paxos/proposal.hh"
 
 namespace bi = boost::intrusive;
 

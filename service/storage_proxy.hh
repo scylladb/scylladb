@@ -62,9 +62,7 @@
 #include "storage_proxy_stats.hh"
 #include "cache_temperature.hh"
 #include "service_permit.hh"
-#include "service/paxos/proposal.hh"
 #include "service/client_state.hh"
-#include "service/paxos/prepare_summary.hh"
 #include "cdc/stats.hh"
 
 class reconcilable_result;
@@ -93,6 +91,11 @@ namespace cdc {
 }
 
 namespace service {
+
+namespace paxos {
+    class prepare_summary;
+    class proposal;
+}
 
 class abstract_write_response_handler;
 class paxos_response_handler;
