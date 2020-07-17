@@ -58,7 +58,6 @@
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics.hh>
-#include "frozen_mutation.hh"
 #include "storage_proxy_stats.hh"
 #include "cache_temperature.hh"
 #include "service_permit.hh"
@@ -66,6 +65,8 @@
 #include "cdc/stats.hh"
 
 class reconcilable_result;
+class frozen_mutation_and_schema;
+class frozen_mutation;
 
 namespace seastar::rpc {
 
