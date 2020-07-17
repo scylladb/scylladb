@@ -106,6 +106,11 @@ static thread_local sstable_tracker tracker;
 
 // Because this is a noop and won't hold any state, it is better to use a global than a
 // thread_local. It will be faster, specially on non-x86.
+struct noop_write_monitor final : public write_monitor {
+    virtual void on_write_started(const writer_offset_tracker&) { };
+    virtual void on_data_write_completed() override { }
+    virtual void write_failed() override { }
+};
 static noop_write_monitor default_noop_write_monitor;
 write_monitor& default_write_monitor() {
     return default_noop_write_monitor;
