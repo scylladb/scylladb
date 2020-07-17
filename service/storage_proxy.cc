@@ -44,6 +44,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "storage_proxy.hh"
 #include "unimplemented.hh"
+#include "mutation.hh"
 #include "frozen_mutation.hh"
 #include "supervisor.hh"
 #include "query_result_merger.hh"
@@ -1749,6 +1750,15 @@ void storage_proxy_stats::global_write_stats::register_stats() {
 
 void storage_proxy_stats::global_stats::register_stats() {
     global_write_stats::register_stats();
+}
+
+// A helper structure for differentiating hints from mutations in overload resolution
+struct hint_wrapper {
+    mutation mut;
+};
+
+inline std::ostream& operator<<(std::ostream& os, const hint_wrapper& h) {
+    return os << "hint_wrapper{" << h.mut << "}";
 }
 
 using namespace std::literals::chrono_literals;

@@ -38,6 +38,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "mutation.hh"
 #include "modification_statement.hh"
 #include "cas_request.hh"
 #include <seastar/core/sleep.hh>
