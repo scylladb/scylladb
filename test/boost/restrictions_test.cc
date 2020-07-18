@@ -39,11 +39,12 @@ using std::experimental::source_location;
 using boost::adaptors::transformed;
 
 std::unique_ptr<cql3::query_options> to_options(
+        const cql3::cql_config& cfg,
         std::optional<std::vector<sstring_view>> names,
         std::vector<cql3::raw_value> values) {
     static auto& d = cql3::query_options::DEFAULT;
     return std::make_unique<cql3::query_options>(
-            cql3::cql_config{},
+            cfg,
             d.get_consistency(), d.get_timeout_config(), std::move(names), std::move(values), d.skip_metadata(),
             d.get_specific_options(), d.get_cql_serialization_format());
 }
@@ -57,7 +58,8 @@ void require_rows(cql_test_env& e,
                   const std::experimental::source_location& loc = source_location::current()) {
     // This helps compiler pick the right overload for make_value:
     const auto rvals = values | transformed([] (const bytes_opt& v) { return cql3::raw_value::make_value(v); });
-    auto opts = to_options(std::move(names), std::vector(rvals.begin(), rvals.end()));
+    cql3::cql_config cfg;
+    auto opts = to_options(cfg, std::move(names), std::vector(rvals.begin(), rvals.end()));
     try {
         assert_that(e.execute_prepared_with_qo(id, std::move(opts)).get0()).is_rows().with_rows_ignore_order(expected);
     } catch (const std::exception& e) {
