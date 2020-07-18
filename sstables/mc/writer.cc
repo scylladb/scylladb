@@ -773,9 +773,6 @@ public:
 };
 
 writer::~writer() {
-    if (_data_writer != nullptr) {
-        _cfg.monitor->write_failed();
-    }
     auto close_writer = [](auto& writer) {
         if (writer) {
             try {
