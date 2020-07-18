@@ -353,6 +353,10 @@ public:
         shared_sstable _sst;
         std::optional<sstable_writer> _writer;
         utils::UUID _run_identifier = utils::make_random_uuid();
+        sstable_writer& writer() {
+            return *_writer;
+        }
+
     public:
         explicit data(compaction& c) : _c(&c) {
         }
@@ -379,6 +383,9 @@ public:
     };
 private:
     garbage_collected_sstable_writer::data* _data = nullptr;
+    sstable_writer& writer() {
+        return _data->writer();
+    }
 public:
     explicit garbage_collected_sstable_writer() = default;
     explicit garbage_collected_sstable_writer(garbage_collected_sstable_writer::data& data) : _data(&data) {}
@@ -391,16 +398,16 @@ public:
 
     void consume_new_partition(const dht::decorated_key& dk) {
         _data->maybe_create_new_sstable_writer();
-        _data->_writer->consume_new_partition(dk);
+        writer().consume_new_partition(dk);
     }
 
-    void consume(tombstone t) { _data->_writer->consume(t); }
-    stop_iteration consume(static_row&& sr, tombstone, bool) { return _data->_writer->consume(std::move(sr)); }
-    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _data->_writer->consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone&& rt) { return _data->_writer->consume(std::move(rt)); }
+    void consume(tombstone t) { writer().consume(t); }
+    stop_iteration consume(static_row&& sr, tombstone, bool) { return writer().consume(std::move(sr)); }
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return writer().consume(std::move(cr)); }
+    stop_iteration consume(range_tombstone&& rt) { return writer().consume(std::move(rt)); }
 
     stop_iteration consume_end_of_partition() {
-        _data->_writer->consume_end_of_partition();
+        writer().consume_end_of_partition();
         return stop_iteration::no;
     }
 
@@ -785,7 +792,7 @@ void garbage_collected_sstable_writer::data::maybe_create_new_sstable_writer() {
 
 void garbage_collected_sstable_writer::data::finish_sstable_writer() {
     if (_writer) {
-        _writer->consume_end_of_stream();
+        writer().consume_end_of_stream();
         _writer = std::nullopt;
         _sst->open_data().get0();
         _unused_garbage_collected_sstables.push_back(std::move(_sst));
