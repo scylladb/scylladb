@@ -44,7 +44,7 @@ This package installs all required packages for ScyllaDB,  including
 %defattr(-,root,root)
 
 %prep
-%setup -n scylla
+%setup -q -n scylla
 
 %package        server
 Group:          Applications/Databases
