@@ -164,7 +164,7 @@ fi
 
 cd "$script_path"
 set +e
-pytest --url $alternator_url "$@"
+pytest --url $alternator_url -o junit_family=xunit2 "$@"
 code=$?
 case $code in
 0) summary="Alternator tests pass";;
