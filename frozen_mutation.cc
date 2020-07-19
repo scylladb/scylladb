@@ -38,6 +38,7 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
+#include "flat_mutation_reader.hh"
 
 //
 // Representation layout:

@@ -30,9 +30,14 @@
 #include <seastar/core/future.hh>
 
 #include "database_fwd.hh"
-#include "flat_mutation_reader.hh"
+#include "frozen_mutation.hh"
 #include "utils/UUID.hh"
+#include "utils/hash.hh"
 #include "streaming/stream_plan.hh"
+
+class flat_mutation_reader;
+
+namespace locator { class token_metadata; }
 
 class repair_exception : public std::exception {
 private:

@@ -44,14 +44,19 @@
 #include <type_traits>
 #include "service/migration_listener.hh"
 #include "gms/endpoint_state.hh"
-#include "db/schema_tables.hh"
 #include <seastar/core/distributed.hh>
+#include <seastar/core/abort_source.hh>
 #include "gms/inet_address.hh"
+#include "gms/feature.hh"
 #include "message/msg_addr.hh"
 #include "utils/UUID.hh"
 #include "utils/serialized_action.hh"
 
 #include <vector>
+
+class canonical_mutation;
+class frozen_mutation;
+namespace cql3 { namespace functions { class user_function; }}
 
 namespace service {
 

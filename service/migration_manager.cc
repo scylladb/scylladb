@@ -51,6 +51,7 @@
 #include "view_info.hh"
 #include "schema_builder.hh"
 #include "database.hh"
+#include "db/schema_tables.hh"
 #include "types/user.hh"
 
 namespace service {

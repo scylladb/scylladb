@@ -28,6 +28,7 @@
 #include "position_in_partition.hh"
 #include "mutation_fragment.hh"
 #include "tracing/trace_state.hh"
+#include "mutation.hh"
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/file.hh>

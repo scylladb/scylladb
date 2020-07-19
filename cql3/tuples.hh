@@ -42,6 +42,7 @@
 #include "term.hh"
 #include "abstract_marker.hh"
 #include "types/tuple.hh"
+#include "types/collection.hh"
 
 class list_type_impl;
 

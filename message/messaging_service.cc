@@ -32,6 +32,8 @@
 #include "query-request.hh"
 #include "query-result.hh"
 #include <seastar/rpc/rpc.hh>
+#include "canonical_mutation.hh"
+#include "schema_mutations.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/view/view_update_backlog.hh"
@@ -95,6 +97,7 @@
 #include "flat_mutation_reader.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
+#include "locator/snitch_base.hh"
 
 namespace netw {
 

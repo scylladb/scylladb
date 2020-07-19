@@ -58,16 +58,15 @@
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics.hh>
-#include "frozen_mutation.hh"
 #include "storage_proxy_stats.hh"
 #include "cache_temperature.hh"
-#include "mutation_query.hh"
 #include "service_permit.hh"
-#include "service/paxos/proposal.hh"
 #include "service/client_state.hh"
-#include "service/paxos/prepare_summary.hh"
 #include "cdc/stats.hh"
 
+class reconcilable_result;
+class frozen_mutation_and_schema;
+class frozen_mutation;
 
 namespace seastar::rpc {
 
@@ -94,11 +93,17 @@ namespace cdc {
 
 namespace service {
 
+namespace paxos {
+    class prepare_summary;
+    class proposal;
+}
+
 class abstract_write_response_handler;
 class paxos_response_handler;
 class abstract_read_executor;
 class mutation_holder;
 class view_update_write_response_handler;
+struct hint_wrapper;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
 
@@ -111,15 +116,6 @@ struct view_update_backlog_timestamped {
     db::view::update_backlog backlog;
     api::timestamp_type ts;
 };
-
-// A helper structure for differentiating hints from mutations in overload resolution
-struct hint_wrapper {
-    mutation mut;
-};
-
-inline std::ostream& operator<<(std::ostream& os, const hint_wrapper& h) {
-    return os << "hint_wrapper{" << h.mut << "}";
-}
 
 struct allow_hints_tag {};
 using allow_hints = bool_class<allow_hints_tag>;

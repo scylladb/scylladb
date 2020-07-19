@@ -74,6 +74,7 @@
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
+#include "db/schema_tables.hh"
 #include "distributed_loader.hh"
 #include "database.hh"
 #include <seastar/core/metrics.hh>
