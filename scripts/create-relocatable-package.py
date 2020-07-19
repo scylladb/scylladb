@@ -32,9 +32,11 @@ import pathlib
 RELOC_PREFIX='scylla'
 def reloc_add(self, name, arcname=None, recursive=True, *, filter=None):
     if arcname:
-        return self.add(name, arcname="{}/{}".format(RELOC_PREFIX, arcname))
+        return self.add(name, arcname="{}/{}".format(RELOC_PREFIX, arcname),
+                        filter=filter)
     else:
-        return self.add(name, arcname="{}/{}".format(RELOC_PREFIX, name))
+        return self.add(name, arcname="{}/{}".format(RELOC_PREFIX, name),
+                        filter=filter)
 
 tarfile.TarFile.reloc_add = reloc_add
 
@@ -150,7 +152,11 @@ ar.reloc_add('ORIGIN')
 ar.reloc_add('licenses')
 ar.reloc_add('swagger-ui')
 ar.reloc_add('api')
-ar.reloc_add('tools')
+def exclude_submodules(tarinfo):
+    if tarinfo.name in ('scylla/tools/jmx', 'scylla/tools/java'):
+        return None
+    return tarinfo
+ar.reloc_add('tools', filter=exclude_submodules)
 ar.reloc_add('scylla-gdb.py')
 ar.reloc_add('build/debian/debian', arcname='debian')
 
