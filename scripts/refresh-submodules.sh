@@ -26,8 +26,8 @@ set -euo pipefail
 
 submodules=(
     seastar
-    scylla-jmx
-    scylla-tools
+    tools/jmx
+    tools/java
 )
 
 for submodule in "${submodules[@]}"; do
