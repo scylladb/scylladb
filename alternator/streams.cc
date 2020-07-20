@@ -37,6 +37,8 @@
 #include "cql3/type_json.hh"
 #include "schema_builder.hh"
 #include "service/storage_service.hh"
+#include "gms/feature.hh"
+#include "gms/feature_service.hh"
 
 #include "executor.hh"
 #include "tags_extension.hh"
@@ -875,6 +877,12 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
     }
 
     if (stream_enabled->GetBool()) {
+        auto& db = _proxy.get_db().local();
+
+        if (!db.features().cluster_supports_cdc()) {
+            throw api_error::validation("StreamSpecification: streams (CDC) feature not enabled in cluster.");
+        }
+
         cdc::options opts;
         opts.enabled(true);
         auto type = rjson::get_opt<stream_view_type>(stream_specification, "StreamViewType").value_or(stream_view_type::KEYS_ONLY);
