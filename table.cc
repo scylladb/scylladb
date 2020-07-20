@@ -127,13 +127,17 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
     };
     sstables.erase(boost::remove_if(sstables, sstable_has_not_key), sstables.end());
 
+    // no clustering filtering is applied if schema defines no clustering key or
+    // compaction strategy thinks it will not benefit from such an optimization.
+    if (!schema->clustering_key_size() || !cf.get_compaction_strategy().use_clustering_key_filter()) {
+        return sstables;
+    }
+
     // FIXME: Workaround for https://github.com/scylladb/scylla/issues/3552
     // and https://github.com/scylladb/scylla/issues/3553
     const bool filtering_broken = true;
 
-    // no clustering filtering is applied if schema defines no clustering key or
-    // compaction strategy thinks it will not benefit from such an optimization.
-    if (filtering_broken || !schema->clustering_key_size() || !cf.get_compaction_strategy().use_clustering_key_filter()) {
+    if (filtering_broken) {
          return sstables;
     }
     ::cf_stats* stats = cf.cf_stats();
