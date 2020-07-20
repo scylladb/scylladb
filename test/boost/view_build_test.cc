@@ -27,12 +27,15 @@
 #include "db/config.hh"
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/sstable_utils.hh"
 #include "schema_builder.hh"
 #include "service/priority_manager.hh"
 #include "test/lib/test_services.hh"
+#include "test/lib/data_model.hh"
+#include "test/lib/log.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -494,4 +497,78 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
 
         BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
+    cql_test_config test_cfg;
+    auto& db_cfg = *test_cfg.db_config;
+
+    db_cfg.enable_cache(false);
+    db_cfg.enable_commitlog(false);
+
+    test_cfg.dbcfg.emplace();
+    test_cfg.dbcfg->available_memory = memory::stats().total_memory();
+    test_cfg.dbcfg->statement_scheduling_group = seastar::create_scheduling_group("statement", 1000).get0();
+    test_cfg.dbcfg->streaming_scheduling_group = seastar::create_scheduling_group("streaming", 200).get0();
+
+    do_with_cql_env([] (cql_test_env& e) -> future<> {
+        e.execute_cql("create table t (p text, c text, v text, primary key (p, c))").get();
+        e.execute_cql("create materialized view tv as select * from t "
+                      "where p is not null and c is not null and v is not null "
+                      "primary key (v, c, p)").get();
+
+        auto msb = e.local_db().get_config().murmur3_partitioner_ignore_msb_bits();
+        auto key1 = token_generation_for_shard(1, this_shard_id(), msb).front().first;
+
+        for (auto i = 0; i < 1024; ++i) {
+            e.execute_cql(fmt::format("insert into t (p, c, v) values ('{}', 'c{}', 'x')", key1, i)).get();
+        }
+
+        // We need data on the disk so that the pre-image reader is forced to go to disk.
+        e.db().invoke_on_all([] (database& db) {
+            return db.flush_all_memtables();
+        }).get();
+
+        auto& view_update_generator = e.local_view_update_generator();
+        auto s = test_table_schema();
+
+        lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
+
+        auto key = partition_key::from_exploded(*s, {to_bytes(key1)});
+        mutation m(s, key);
+        auto col = s->get_column_definition("v");
+        const auto filler_val_size = 4 * 1024;
+        const auto filler_val = sstring(filler_val_size, 'a');
+        for (int i = 0; i < 1024; ++i) {
+            auto& row = m.partition().clustered_row(*s, clustering_key::from_exploded(*s, {to_bytes(fmt::format("c{}", i))}));
+            row.cells().apply(*col, atomic_cell::make_live(*col->type, 2345, col->type->decompose(filler_val)));
+        }
+
+        auto sst = t->make_streaming_staging_sstable();
+        sstables::sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
+        auto& pc = service::get_local_streaming_priority();
+
+        sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
+        sst->open_data().get();
+        t->add_sstable_and_update_cache(sst).get();
+
+        auto& sem = *with_scheduling_group(e.local_db().get_streaming_scheduling_group(), [&] () {
+            return &e.local_db().make_query_class_config().semaphore;
+        }).get0();
+
+        // consume all units except what is needed to admit a single reader.
+        sem.consume(sem.initial_resources() - reader_resources{1, new_reader_base_cost});
+
+        testlog.info("res = [.count={}, .memory={}]", sem.available_resources().count, sem.available_resources().memory);
+
+        BOOST_REQUIRE_EQUAL(sem.get_inactive_read_stats().permit_based_evictions, 0);
+
+        view_update_generator.register_staging_sstable(sst, t).get();
+
+        eventually_true([&] {
+            return sem.get_inactive_read_stats().permit_based_evictions > 0;
+        });
+
+        return make_ready_future<>();
+    }, std::move(test_cfg)).get();
 }
