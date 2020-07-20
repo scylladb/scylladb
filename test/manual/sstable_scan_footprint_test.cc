@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
         ("read-concurrency", bpo::value<unsigned>()->default_value(1), "Concurrency of reads, the amount of reads to fire at once")
         ("sstables", bpo::value<uint64_t>()->default_value(100), "")
         ("sstable-size", bpo::value<uint64_t>()->default_value(10000000), "")
-        ("sstable-format", bpo::value<std::string>()->default_value("mc"), "Sstable format version to use during population")
+        ("sstable-format", bpo::value<std::string>()->default_value("md"), "Sstable format version to use during population")
         ("collect-stats", "Enable collecting statistics.")
         ("stats-file", bpo::value<sstring>()->default_value("stats.csv"), "Store statistics in the specified file.")
         ("stats-period-ms", bpo::value<unsigned>()->default_value(100), "Tick period of the stats collection.")

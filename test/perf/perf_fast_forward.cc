@@ -1774,7 +1774,7 @@ int main(int argc, char** argv) {
         ("test-case-duration", bpo::value<double>()->default_value(1), "Duration in seconds of a single test case (0 for a single run).")
         ("data-directory", bpo::value<sstring>()->default_value("./perf_large_partition_data"), "Data directory")
         ("output-directory", bpo::value<sstring>()->default_value("./perf_fast_forward_output"), "Results output directory (for 'json')")
-        ("sstable-format", bpo::value<std::string>()->default_value("mc"), "Sstable format version to use during population")
+        ("sstable-format", bpo::value<std::string>()->default_value("md"), "Sstable format version to use during population")
         ("use-binary-search-in-promoted-index", bpo::value<bool>()->default_value(true), "Use binary search based variant of the promoted index cursor")
         ("dump-all-results", "Write results of all iterations of all tests to text files in the output directory")
         ;
