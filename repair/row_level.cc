@@ -772,7 +772,7 @@ public:
         node_repair_meta_id id{from, repair_meta_id};
         auto it = repair_meta_map().find(id);
         if (it == repair_meta_map().end()) {
-            throw std::runtime_error(format("get_repair_meta: repair_meta_id {:d} for node {} does not exist", id.repair_meta_id, id.ip));
+            throw std::runtime_error(format("get_repair_meta: repair_meta_id {} for node {} does not exist", id.repair_meta_id, id.ip));
         } else {
             return it->second;
         }
