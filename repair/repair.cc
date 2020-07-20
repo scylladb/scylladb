@@ -274,7 +274,7 @@ void tracker::done(repair_uniq_id id, bool succeeded) {
 }
 repair_status tracker::get(int id) {
     if (id >= _next_repair_command) {
-        throw std::runtime_error(format("unknown repair id {:d}", id));
+        throw std::runtime_error(format("unknown repair id {}", id));
     }
     auto it = _status.find(id);
     if (it == _status.end()) {
@@ -287,7 +287,7 @@ repair_status tracker::get(int id) {
 future<repair_status> tracker::repair_await_completion(int id, std::chrono::steady_clock::time_point timeout) {
     return seastar::with_gate(_gate, [this, id, timeout] {
         if (id >= _next_repair_command) {
-            return make_exception_future<repair_status>(std::runtime_error(format("unknown repair id {:d}", id)));
+            return make_exception_future<repair_status>(std::runtime_error(format("unknown repair id {}", id)));
         }
         return repeat_until_value([this, id, timeout] {
             auto it = _status.find(id);
@@ -546,7 +546,7 @@ future<partition_checksum> partition_checksum::compute(flat_mutation_reader m, r
     switch (hash_version) {
     case repair_checksum::legacy: return compute_legacy(std::move(m));
     case repair_checksum::streamed: return compute_streamed(std::move(m));
-    default: throw std::runtime_error(format("Unknown hash version: {:d}", static_cast<int>(hash_version)));
+    default: throw std::runtime_error(format("Unknown hash version: {}", static_cast<int>(hash_version)));
     }
 }
 
@@ -740,8 +740,8 @@ repair_info::repair_info(seastar::sharded<database>& db_,
 future<> repair_info::do_streaming() {
     size_t ranges_in = 0;
     size_t ranges_out = 0;
-    _sp_in = make_lw_shared<streaming::stream_plan>(format("repair-in-id-{:d}-shard-{:d}-index-{:d}", id.id, shard, sp_index), streaming::stream_reason::repair);
-    _sp_out = make_lw_shared<streaming::stream_plan>(format("repair-out-id-{:d}-shard-{:d}-index-{:d}", id.id, shard, sp_index), streaming::stream_reason::repair);
+    _sp_in = make_lw_shared<streaming::stream_plan>(format("repair-in-id-{}-shard-{}-index-{}", id.id, shard, sp_index), streaming::stream_reason::repair);
+    _sp_out = make_lw_shared<streaming::stream_plan>(format("repair-out-id-{}-shard-{}-index-{}", id.id, shard, sp_index), streaming::stream_reason::repair);
 
     for (auto& x : ranges_need_repair_in) {
         auto& peer = x.first;
@@ -788,7 +788,7 @@ void repair_info::check_failed_ranges() {
         id, shard, ranges.size(), _sub_ranges_nr, _stats.get_stats());
     if (nr_failed_ranges) {
         rlogger.warn("repair id {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
-        throw std::runtime_error(format("repair id {:d} on shard {:d} failed to repair {:d} sub ranges", id, shard, nr_failed_ranges));
+        throw std::runtime_error(format("repair id {} on shard {} failed to repair {} sub ranges", id, shard, nr_failed_ranges));
     } else {
         if (dropped_tables.size()) {
             rlogger.warn("repair id {} on shard {} completed successfully, keyspace={}, ignoring dropped tables={}", id, shard, keyspace, dropped_tables);
@@ -831,7 +831,7 @@ void repair_info::abort() {
 
 void repair_info::check_in_abort() {
     if (aborted) {
-        throw std::runtime_error(format("repair id {:d} is aborted on shard {:d}", id, shard));
+        throw std::runtime_error(format("repair id {} is aborted on shard {}", id, shard));
     }
 }
 
@@ -1255,7 +1255,7 @@ struct repair_options {
         int parallelism = PARALLEL;
         int_opt(parallelism, options, PARALLELISM_KEY);
         if (parallelism != PARALLEL && parallelism != SEQUENTIAL) {
-            throw std::runtime_error(format("unsupported repair parallelism: {:d}", parallelism));
+            throw std::runtime_error(format("unsupported repair parallelism: {}", parallelism));
         }
         string_opt(start_token, options, START_TOKEN);
         string_opt(end_token, options, END_TOKEN);
