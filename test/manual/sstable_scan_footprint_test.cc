@@ -229,10 +229,15 @@ int main(int argc, char** argv) {
         db_cfg.virtual_dirty_soft_limit(1.0);
 
         auto sstable_format_name = app.configuration()["sstable-format"].as<std::string>();
-        if (sstable_format_name == "mc") {
+        if (sstable_format_name == "md") {
             db_cfg.enable_sstables_mc_format(true);
+            db_cfg.enable_sstables_md_format(true);
+        } else if (sstable_format_name == "mc") {
+            db_cfg.enable_sstables_mc_format(true);
+            db_cfg.enable_sstables_md_format(false);
         } else if (sstable_format_name == "la") {
             db_cfg.enable_sstables_mc_format(false);
+            db_cfg.enable_sstables_md_format(false);
         } else {
             throw std::runtime_error(format("Unsupported sstable format: {}", sstable_format_name));
         }

@@ -101,6 +101,11 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
     fcfg._disabled_features = std::move(disabled);
 
     if (!cfg.enable_sstables_mc_format()) {
+        if (cfg.enable_sstables_md_format()) {
+            throw std::runtime_error(
+                    "You must use both enable_sstables_mc_format and enable_sstables_md_format "
+                    "to enable SSTables md format support");
+        }
         fcfg._disabled_features.insert(sstring(gms::features::MC_SSTABLE));
     }
     if (!cfg.enable_user_defined_functions()) {

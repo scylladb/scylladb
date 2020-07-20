@@ -59,6 +59,7 @@
 #include "service/storage_service.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "db/sstables-format-selector.hh"
 
 using namespace std::chrono_literals;
 
