@@ -109,7 +109,6 @@ static thread_local sstable_tracker tracker;
 struct noop_write_monitor final : public write_monitor {
     virtual void on_write_started(const writer_offset_tracker&) { };
     virtual void on_data_write_completed() override { }
-    virtual void write_failed() override { }
 };
 static noop_write_monitor default_noop_write_monitor;
 write_monitor& default_write_monitor() {

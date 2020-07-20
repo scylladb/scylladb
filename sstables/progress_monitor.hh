@@ -37,7 +37,6 @@ public:
     virtual ~write_monitor() { }
     virtual void on_write_started(const writer_offset_tracker&) = 0;
     virtual void on_data_write_completed() = 0;
-    virtual void write_failed() = 0;
 };
 
 write_monitor& default_write_monitor();
