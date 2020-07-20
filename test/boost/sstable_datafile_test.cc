@@ -3694,6 +3694,20 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
                     BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
                     check_min_max_column_names(sst, {"a"}, {});
                 }
+
+                {
+                    auto mt = make_lw_shared<memtable>(s);
+                    mutation m(s, key);
+                    m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+                    tombstone tomb(api::new_timestamp(), gc_clock::now());
+                    m.partition().apply_delete(*s, clustering_key_prefix::make_empty(), tomb);
+                    mt->apply(std::move(m));
+                    auto sst = env.make_sstable(s, tmp.path().string(), 12, version, big);
+                    write_memtable_to_sstable_for_test(*mt, sst).get();
+                    sst = env.reusable_sst(s, tmp.path().string(), 12, version).get0();
+                    BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
+                    check_min_max_column_names(sst, {}, {});
+                }
             }
         }
     });
