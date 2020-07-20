@@ -286,7 +286,7 @@ void schema::rebuild() {
     }
 
     _v3_columns = v3_columns::from_v2_schema(*this);
-    _full_slice = make_shared(partition_slice_builder(*this).build());
+    _full_slice = make_shared<query::partition_slice>(partition_slice_builder(*this).build());
 }
 
 const column_mapping& schema::get_column_mapping() const {

@@ -413,7 +413,8 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
         startlog.info("Shutting down {} was successful", what);
     };
 
-    return ::make_shared(deferred_action(std::move(vfunc)));
+    auto ret = deferred_action(std::move(vfunc));
+    return ::make_shared<decltype(ret)>(std::move(ret));
 }
 
 int main(int ac, char** av) {

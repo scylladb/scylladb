@@ -323,7 +323,7 @@ public:
                 } catch (marshal_exception& e) {
                     throw exceptions::invalid_request_exception(e.what());
                 }
-                return make_shared(value::from_serialized(*value, type));
+                return make_shared<tuples::value>(value::from_serialized(*value, type));
             }
         }
     };

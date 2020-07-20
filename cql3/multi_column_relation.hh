@@ -64,6 +64,8 @@ private:
     std::vector<shared_ptr<term::multi_column_raw>> _in_values;
     shared_ptr<tuples::in_raw> _in_marker;
 
+public:
+
     multi_column_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
         const operator_type& relation_type, shared_ptr<term::multi_column_raw> values_or_marker,
         std::vector<shared_ptr<term::multi_column_raw>> in_values, shared_ptr<tuples::in_raw> in_marker)
@@ -78,11 +80,10 @@ private:
         std::vector<shared_ptr<column_identifier::raw>> entities, const operator_type& relation_type,
         shared_ptr<term::multi_column_raw> values_or_marker, std::vector<shared_ptr<term::multi_column_raw>> in_values,
         shared_ptr<tuples::in_raw> in_marker) {
-        return ::make_shared(multi_column_relation(std::move(entities), relation_type, std::move(values_or_marker),
-            std::move(in_values), std::move(in_marker)));
+        return ::make_shared<multi_column_relation>(std::move(entities), relation_type, std::move(values_or_marker),
+            std::move(in_values), std::move(in_marker));
     }
 
-public:
     /**
      * Creates a multi-column EQ, LT, LTE, GT, or GTE relation.
      * For example: "SELECT ... WHERE (a, b) > (0, 1)"

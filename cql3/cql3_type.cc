@@ -348,22 +348,22 @@ cql3_type::raw::user_type(ut_name name) {
 
 shared_ptr<cql3_type::raw>
 cql3_type::raw::map(shared_ptr<raw> t1, shared_ptr<raw> t2) {
-    return make_shared(raw_collection(abstract_type::kind::map, std::move(t1), std::move(t2)));
+    return ::make_shared<raw_collection>(abstract_type::kind::map, std::move(t1), std::move(t2));
 }
 
 shared_ptr<cql3_type::raw>
 cql3_type::raw::list(shared_ptr<raw> t) {
-    return make_shared(raw_collection(abstract_type::kind::list, {}, std::move(t)));
+    return ::make_shared<raw_collection>(abstract_type::kind::list, nullptr, std::move(t));
 }
 
 shared_ptr<cql3_type::raw>
 cql3_type::raw::set(shared_ptr<raw> t) {
-    return make_shared(raw_collection(abstract_type::kind::set, {}, std::move(t)));
+    return ::make_shared<raw_collection>(abstract_type::kind::set, nullptr, std::move(t));
 }
 
 shared_ptr<cql3_type::raw>
 cql3_type::raw::tuple(std::vector<shared_ptr<raw>> ts) {
-    return make_shared(raw_tuple(std::move(ts)));
+    return ::make_shared<raw_tuple>(std::move(ts));
 }
 
 shared_ptr<cql3_type::raw>

@@ -66,7 +66,7 @@ private:
     ::shared_ptr<term::raw> _map_key;
     ::shared_ptr<term::raw> _value;
     std::vector<::shared_ptr<term::raw>> _in_values;
-private:
+public:
     single_column_relation(::shared_ptr<column_identifier::raw> entity, ::shared_ptr<term::raw> map_key,
         const operator_type& type, ::shared_ptr<term::raw> value, std::vector<::shared_ptr<term::raw>> in_values)
             : relation(type)
@@ -75,7 +75,7 @@ private:
             , _value(std::move(value))
             , _in_values(std::move(in_values))
     { }
-public:
+
     /**
      * Creates a new relation.
      *
@@ -102,7 +102,7 @@ public:
 
     static ::shared_ptr<single_column_relation> create_in_relation(::shared_ptr<column_identifier::raw> entity,
                                                                    std::vector<::shared_ptr<term::raw>> in_values) {
-        return ::make_shared(single_column_relation(std::move(entity), {}, operator_type::IN, {}, std::move(in_values)));
+        return ::make_shared<single_column_relation>(std::move(entity), nullptr, operator_type::IN, nullptr, std::move(in_values));
     }
 
     ::shared_ptr<column_identifier::raw> get_entity() {
@@ -190,8 +190,8 @@ protected:
 
     virtual ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) override {
         return *_entity == from
-            ? ::make_shared(single_column_relation(
-                  ::make_shared<column_identifier::raw>(std::move(to)), _map_key, _relation_type, _value, _in_values))
+            ? ::make_shared<single_column_relation>(
+                  ::make_shared<column_identifier::raw>(std::move(to)), _map_key, _relation_type, _value, _in_values)
             : static_pointer_cast<single_column_relation>(shared_from_this());
     }
 

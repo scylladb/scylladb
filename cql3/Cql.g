@@ -1332,7 +1332,7 @@ setOrMapLiteral[shared_ptr<cql3::term::raw> t] returns [shared_ptr<cql3::term::r
       { $value = ::make_shared<cql3::maps::literal>(std::move(m)); }
     | { s.push_back(t); }
           ( ',' tn=term { s.push_back(tn); } )*
-      { $value = make_shared(cql3::sets::literal(std::move(s))); }
+      { $value = ::make_shared<cql3::sets::literal>(std::move(s)); }
     ;
 
 collectionLiteral returns [shared_ptr<cql3::term::raw> value]
@@ -1343,7 +1343,7 @@ collectionLiteral returns [shared_ptr<cql3::term::raw> value]
     | '{' t=term v=setOrMapLiteral[t] { $value = v; } '}'
     // Note that we have an ambiguity between maps and set for "{}". So we force it to a set literal,
     // and deal with it later based on the type of the column (SetLiteral.java).
-    | '{' '}' { $value = make_shared(cql3::sets::literal({})); }
+    | '{' '}' { $value = ::make_shared<cql3::sets::literal>(std::vector<shared_ptr<cql3::term::raw>>()); }
     ;
 
 usertypeLiteral returns [shared_ptr<cql3::user_types::literal> ut]

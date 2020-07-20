@@ -454,7 +454,7 @@ batch_statement::prepare(database& db, cql_stats& stats) {
     if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
         partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(*batch_statement_.get_statements()[0].statement->s);
     }
-    return std::make_unique<prepared_statement>(make_shared(std::move(batch_statement_)),
+    return std::make_unique<prepared_statement>(make_shared<cql3::statements::batch_statement>(std::move(batch_statement_)),
                                                      bound_names.get_specifications(),
                                                      std::move(partition_key_bind_indices));
 }
