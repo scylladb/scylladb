@@ -78,13 +78,6 @@ filter_sstable_for_reader_by_ck(std::vector<sstables::shared_sstable>&& sstables
         return sstables;
     }
 
-    // FIXME: Workaround for https://github.com/scylladb/scylla/issues/3552
-    // and https://github.com/scylladb/scylla/issues/3553
-    const bool filtering_broken = true;
-
-    if (filtering_broken) {
-         return sstables;
-    }
     ::cf_stats* stats = cf.cf_stats();
     stats->clustering_filter_count++;
     stats->sstables_checked_by_clustering_filter += sstables.size();
