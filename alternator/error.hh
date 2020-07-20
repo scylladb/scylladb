@@ -53,6 +53,9 @@ public:
     static api_error resource_not_found(std::string msg) {
         return api_error("ResourceNotFoundException", std::move(msg));
     }
+    static api_error resource_in_use(std::string msg) {
+        return api_error("ResourceInUseException", std::move(msg));
+    }
     static api_error invalid_signature(std::string msg) {
         return api_error("InvalidSignatureException", std::move(msg));
     }
@@ -61,6 +64,12 @@ public:
     }
     static api_error unknown_operation(std::string msg) {
         return api_error("UnknownOperationException", std::move(msg));
+    }
+    static api_error access_denied(std::string msg) {
+        return api_error("AccessDeniedException", std::move(msg));
+    }
+    static api_error conditional_check_failed(std::string msg) {
+        return api_error("ConditionalCheckFailedException", std::move(msg));
     }
     static api_error internal(std::string msg) {
         return api_error("InternalServerError", std::move(msg), reply::status_type::internal_server_error);
