@@ -401,7 +401,7 @@ public:
 };
 
 template <typename Func>
-inline auto defer_verbose_shutdown(const char* what, Func&& func) {
+static auto defer_verbose_shutdown(const char* what, Func&& func) {
     auto vfunc = [what, func = std::forward<Func>(func)] () mutable {
         startlog.info("Shutting down {}", what);
         try {
@@ -413,7 +413,7 @@ inline auto defer_verbose_shutdown(const char* what, Func&& func) {
         startlog.info("Shutting down {} was successful", what);
     };
 
-    return deferred_action(std::move(vfunc));
+    return ::make_shared(deferred_action(std::move(vfunc)));
 }
 
 int main(int ac, char** av) {
@@ -594,9 +594,9 @@ int main(int ac, char** av) {
             std::any stop_prometheus;
             if (pport) {
                 prometheus_server.start("prometheus").get();
-                stop_prometheus = ::make_shared(defer_verbose_shutdown("prometheus API server", [&prometheus_server, pport] {
+                stop_prometheus = defer_verbose_shutdown("prometheus API server", [&prometheus_server, pport] {
                     prometheus_server.stop().get();
-                }));
+                });
 
                 //FIXME discarded future
                 prometheus::config pctx;
@@ -1148,9 +1148,9 @@ int main(int ac, char** av) {
                 }).get();
 
                 // FIXME -- this should be done via client hooks instead
-                stop_cql = ::make_shared(defer_verbose_shutdown("native transport", [&cql_server_ctl] {
+                stop_cql = defer_verbose_shutdown("native transport", [&cql_server_ctl] {
                     cql_server_ctl.stop().get();
-                }));
+                });
             }
 
             api::set_transport_controller(ctx, cql_server_ctl).get();
@@ -1171,9 +1171,9 @@ int main(int ac, char** av) {
                 }).get();
 
                 // FIXME -- this should be done via client hooks instead
-                stop_rpc = ::make_shared(defer_verbose_shutdown("rpc server", [&thrift_ctl] {
+                stop_rpc = defer_verbose_shutdown("rpc server", [&thrift_ctl] {
                     thrift_ctl.stop().get();
-                }));
+                });
             }
 
             api::set_rpc_controller(ctx, thrift_ctl).get();
