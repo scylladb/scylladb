@@ -53,6 +53,18 @@ public:
     static api_error resource_not_found(std::string msg) {
         return api_error("ResourceNotFoundException", std::move(msg));
     }
+    static api_error invalid_signature(std::string msg) {
+        return api_error("InvalidSignatureException", std::move(msg));
+    }
+    static api_error unrecognized_client(std::string msg) {
+        return api_error("UnrecognizedClientException", std::move(msg));
+    }
+    static api_error unknown_operation(std::string msg) {
+        return api_error("UnknownOperationException", std::move(msg));
+    }
+    static api_error internal(std::string msg) {
+        return api_error("InternalServerError", std::move(msg), reply::status_type::internal_server_error);
+    }
 };
 
 }
