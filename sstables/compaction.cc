@@ -231,25 +231,25 @@ struct compaction_writer {
 
 class compacting_sstable_writer {
     compaction& _c;
-    std::optional<compaction_writer> _writer = {};
+    std::optional<compaction_writer> _compaction_writer = {};
 private:
     inline void maybe_abort_compaction();
 public:
     explicit compacting_sstable_writer(compaction& c) : _c(c) { }
     void consume_new_partition(const dht::decorated_key& dk);
 
-    void consume(tombstone t) { _writer->writer.consume(t); }
+    void consume(tombstone t) { _compaction_writer->writer.consume(t); }
     stop_iteration consume(static_row&& sr, tombstone, bool) {
         maybe_abort_compaction();
-        return _writer->writer.consume(std::move(sr));
+        return _compaction_writer->writer.consume(std::move(sr));
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
         maybe_abort_compaction();
-        return _writer->writer.consume(std::move(cr));
+        return _compaction_writer->writer.consume(std::move(cr));
     }
     stop_iteration consume(range_tombstone&& rt) {
         maybe_abort_compaction();
-        return _writer->writer.consume(std::move(rt));
+        return _compaction_writer->writer.consume(std::move(rt));
     }
 
     stop_iteration consume_end_of_partition();
@@ -352,10 +352,10 @@ public:
         std::vector<shared_sstable> _unused_garbage_collected_sstables;
         // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
         std::vector<shared_sstable> _used_garbage_collected_sstables;
-        std::optional<compaction_writer> _writer;
+        std::optional<compaction_writer> _compaction_writer;
         utils::UUID _run_identifier = utils::make_random_uuid();
         sstable_writer& writer() {
-            return _writer->writer;
+            return _compaction_writer->writer;
         }
 
     public:
@@ -752,34 +752,34 @@ void compacting_sstable_writer::maybe_abort_compaction() {
 
 void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
     maybe_abort_compaction();
-    if (!_writer) {
-        _writer = _c.create_compaction_writer(dk);
+    if (!_compaction_writer) {
+        _compaction_writer = _c.create_compaction_writer(dk);
     }
 
     _c.on_new_partition();
-    _writer->writer.consume_new_partition(dk);
+    _compaction_writer->writer.consume_new_partition(dk);
     _c._info->total_keys_written++;
 }
 
 stop_iteration compacting_sstable_writer::consume_end_of_partition() {
-    auto ret = _writer->writer.consume_end_of_partition();
+    auto ret = _compaction_writer->writer.consume_end_of_partition();
     if (ret == stop_iteration::yes) {
         // stop sstable writer being currently used.
-        _c.stop_sstable_writer(&*_writer);
-        _writer = std::nullopt;
+        _c.stop_sstable_writer(&*_compaction_writer);
+        _compaction_writer = std::nullopt;
     }
     return ret;
 }
 
 void compacting_sstable_writer::consume_end_of_stream() {
-    if (_writer) {
-        _c.stop_sstable_writer(&*_writer);
-        _writer = std::nullopt;
+    if (_compaction_writer) {
+        _c.stop_sstable_writer(&*_compaction_writer);
+        _compaction_writer = std::nullopt;
     }
 }
 
 void garbage_collected_sstable_writer::data::maybe_create_new_sstable_writer() {
-    if (!_writer) {
+    if (!_compaction_writer) {
         auto sst = _c->_sstable_creator(this_shard_id());
 
         auto&& priority = _c->_io_priority;
@@ -788,16 +788,16 @@ void garbage_collected_sstable_writer::data::maybe_create_new_sstable_writer() {
         cfg.run_identifier = _run_identifier;
         cfg.monitor = monitor.get();
         auto writer = sst->get_writer(*_c->schema(), _c->partitions_per_sstable(), cfg, _c->get_encoding_stats(), priority);
-        _writer.emplace(std::move(monitor), std::move(writer), std::move(sst));
+        _compaction_writer.emplace(std::move(monitor), std::move(writer), std::move(sst));
     }
 }
 
 void garbage_collected_sstable_writer::data::finish_sstable_writer() {
-    if (_writer) {
+    if (_compaction_writer) {
         writer().consume_end_of_stream();
-        auto sst = std::move(_writer->sst);
+        auto sst = std::move(_compaction_writer->sst);
         sst->open_data().get0();
-        _writer = std::nullopt;
+        _compaction_writer = std::nullopt;
         _unused_garbage_collected_sstables.push_back(std::move(sst));
     }
 }
