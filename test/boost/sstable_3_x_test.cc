@@ -61,12 +61,12 @@ class sstable_assertions final {
     test_env _env;
     shared_sstable _sst;
 public:
-    sstable_assertions(schema_ptr schema, const sstring& path, int generation = 1)
+    sstable_assertions(schema_ptr schema, const sstring& path, sstable_version_types version = sstable_version_types::mc, int generation = 1)
         : _env()
         , _sst(_env.make_sstable(std::move(schema),
                             path,
                             generation,
-                            sstable_version_types::mc,
+                            version,
                             sstable_format_types::big,
                             1))
     { }
@@ -99,6 +99,10 @@ public:
 
     const stats_metadata& get_stats_metadata() const {
         return _sst->get_stats_metadata();
+    }
+
+    const shared_sstable get_sstable() const noexcept {
+        return _sst;
     }
 
     flat_mutation_reader read_range_rows_flat(
@@ -3153,6 +3157,7 @@ SEASTAR_THREAD_TEST_CASE(compact_deleted_cell) {
 }
 
 static void compare_files(sstring filename1, sstring filename2) {
+    BOOST_TEST_MESSAGE(format("comparing {} to {}", filename1, filename2));
     std::ifstream ifs1;
     ifs1.exceptions(std::ifstream::failbit | std::ifstream::badbit);
     ifs1.open(filename1, std::ios_base::in | std::ios_base::binary);
@@ -3171,7 +3176,7 @@ static sstring get_write_test_path(sstring table_name) {
 }
 
 // This method should not be called for compressed sstables because compression is not deterministic
-static void compare_sstables(const std::filesystem::path& result_path, sstring table_name) {
+static void compare_sstables(const std::filesystem::path& result_path, sstring table_name, sstable_version_types version) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
                            component_type::Digest,
@@ -3180,15 +3185,15 @@ static void compare_sstables(const std::filesystem::path& result_path, sstring t
                 sstable::filename(get_write_test_path(table_name),
                                   "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         auto result_filename =
-                sstable::filename(result_path.string(), "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
+                sstable::filename(result_path.string(), "ks", table_name, version, 1, big, file_type);
         compare_files(orig_filename, result_filename);
     }
 }
 
-static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2) {
+static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2, sstable_version_types version) {
     storage_service_for_tests ssft;
     tmpdir tmp;
-    auto sst = env.make_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
+    auto sst = env.make_sstable(s, tmp.path().string(), 1, version, sstable::format_types::big, 4096);
 
     sst->write_components(make_combined_reader(s,
         mt1->make_flat_reader(s, tests::make_permit()),
@@ -3199,30 +3204,30 @@ static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable
 // Can be useful if we want, e.g., to avoid range tombstones de-overlapping
 // that otherwise takes place for RTs put into one and the same memtable
 static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2,
-                                         sstring table_name) {
+                                         sstring table_name, sstable_version_types version) {
     test_env env;
-    auto tmp = write_sstables(env, std::move(s), std::move(mt1), std::move(mt2));
-    compare_sstables(tmp.path(), table_name);
+    auto tmp = write_sstables(env, std::move(s), std::move(mt1), std::move(mt2), version);
+    compare_sstables(tmp.path(), table_name, version);
     return tmp;
 }
 
-static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable> mt) {
+static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable> mt, sstable_version_types version) {
     storage_service_for_tests ssft;
     tmpdir tmp;
-    auto sst = env.make_sstable(s, tmp.path().string(), 1, sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
+    auto sst = env.make_sstable(s, tmp.path().string(), 1, version, sstable::format_types::big, 4096);
     write_memtable_to_sstable_for_test(*mt, sst).get();
     return tmp;
 }
 
-static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name) {
+static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name, sstable_version_types version) {
     test_env env;
-    auto tmp = write_sstables(env, std::move(s), std::move(mt));
-    compare_sstables(tmp.path(), table_name);
+    auto tmp = write_sstables(env, std::move(s), std::move(mt), version);
+    compare_sstables(tmp.path(), table_name, version);
     return tmp;
 }
 
-static sstable_assertions validate_read(schema_ptr s, const std::filesystem::path& path, std::vector<mutation> mutations) {
-    sstable_assertions sst(s, path.string(), 1);
+static sstable_assertions validate_read(schema_ptr s, const std::filesystem::path& path, std::vector<mutation> mutations, sstable_version_types version) {
+    sstable_assertions sst(s, path.string(), version);
     sst.load();
 
     auto assertions = assert_that(sst.read_rows_flat());
@@ -3234,13 +3239,45 @@ static sstable_assertions validate_read(schema_ptr s, const std::filesystem::pat
     return sst;
 }
 
+constexpr std::array<sstable_version_types, 2> test_sstable_versions = {
+    sstable_version_types::mc,
+    sstable_version_types::md,
+};
+
+static void write_mut_and_compare_sstables_version(schema_ptr s, mutation& mut, const sstring& table_name,
+        sstable_version_types version) {
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+    mt->apply(mut);
+
+    (void)write_and_compare_sstables(s, mt, table_name, version);
+}
+
+static void write_mut_and_compare_sstables(schema_ptr s, mutation& mut, const sstring& table_name) {
+    for (auto version : test_sstable_versions) {
+        write_mut_and_compare_sstables_version(s, mut, table_name, version);
+    }
+}
+
+static void write_muts_and_compare_sstables_version(schema_ptr s, mutation& mut1, mutation& mut2, const sstring& table_name,
+        sstable_version_types version) {
+    lw_shared_ptr<memtable> mt1 = make_lw_shared<memtable>(s);
+    lw_shared_ptr<memtable> mt2 = make_lw_shared<memtable>(s);
+    mt1->apply(mut1);
+    mt2->apply(mut2);
+
+    (void)write_and_compare_sstables(s, mt1, mt2, table_name, version);
+}
+
+static void write_muts_and_compare_sstables(schema_ptr s, mutation& mut1, mutation& mut2, const sstring& table_name) {
+    for (auto version : test_sstable_versions) {
+        write_muts_and_compare_sstables_version(s, mut1, mut2, table_name, version);
+    }
+}
+
 static constexpr api::timestamp_type write_timestamp = 1525385507816568;
 static constexpr gc_clock::time_point write_time_point = gc_clock::time_point{} + gc_clock::duration{1525385507};
 
-// FIXME: base validation of min_max_column_names on sstable has_correct_min_max_column_names()
-// when we generate md format sstables with correct min/max_column_names metadata.
-static void validate_stats_metadata(schema_ptr s, sstable_assertions& written_sst, sstring table_name,
-        bool do_validate_min_max_column_names = true) {
+static void do_validate_stats_metadata(schema_ptr s, sstable_assertions& written_sst, sstring table_name) {
     auto orig_sst = written_sst.get_env().reusable_sst(s, get_write_test_path(table_name), 1, sstable_version_types::mc).get0();
 
     const auto& orig_stats = orig_sst->get_stats_metadata();
@@ -3259,7 +3296,7 @@ static void validate_stats_metadata(schema_ptr s, sstable_assertions& written_ss
     BOOST_REQUIRE_EQUAL(orig_stats.max_local_deletion_time, written_stats.max_local_deletion_time);
     BOOST_REQUIRE_EQUAL(orig_stats.min_ttl, written_stats.min_ttl);
     BOOST_REQUIRE_EQUAL(orig_stats.max_ttl, written_stats.max_ttl);
-    if (do_validate_min_max_column_names) {
+    if (orig_sst->has_correct_min_max_column_names() && written_sst.get_sstable()->has_correct_min_max_column_names()) {
         BOOST_REQUIRE(orig_stats.min_column_names.elements == written_stats.min_column_names.elements);
         BOOST_REQUIRE(orig_stats.max_column_names.elements == written_stats.max_column_names.elements);
     }
@@ -3282,6 +3319,67 @@ static void check_min_max_column_names(sstable_assertions& written_sst, std::vec
     }
 }
 
+struct validate_stats_metadata_tag { };
+using validate_stats_metadata = bool_class<validate_stats_metadata_tag>;
+
+static void write_mut_and_validate_version(schema_ptr s, const sstring& table_name, mutation& mut,
+        sstable_version_types version, validate_stats_metadata validate_flag) {
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+    mt->apply(mut);
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name, version);
+    auto written_sst = validate_read(s, tmp.path(), {mut}, version);
+    if (validate_flag) {
+        do_validate_stats_metadata(s, written_sst, table_name);
+    }
+}
+
+static void write_mut_and_validate(schema_ptr s, const sstring& table_name, mutation& mut,
+        validate_stats_metadata validate_flag = validate_stats_metadata::no) {
+    for (auto version : test_sstable_versions) {
+        write_mut_and_validate_version(s, table_name, mut, version, validate_flag);
+    }
+}
+
+static void write_mut_and_validate_version(schema_ptr s, const sstring& table_name, mutation& mut,
+        sstable_version_types version, std::vector<bytes> min_components, std::vector<bytes> max_components) {
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+    mt->apply(mut);
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name, version);
+    auto written_sst = validate_read(s, tmp.path(), {mut}, version);
+    do_validate_stats_metadata(s, written_sst, table_name);
+    check_min_max_column_names(written_sst, std::move(min_components), std::move(max_components));
+}
+
+static void write_mut_and_validate(schema_ptr s, const sstring& table_name, mutation& mut,
+        std::vector<bytes> min_components, std::vector<bytes> max_components) {
+    for (auto version : test_sstable_versions) {
+        write_mut_and_validate_version(s, table_name, mut, version, min_components, max_components);
+    }
+}
+
+static void write_mut_and_validate_version(schema_ptr s, const sstring& table_name, std::vector<mutation> muts,
+        sstable_version_types version, validate_stats_metadata validate_flag) {
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+    for (auto& mut : muts) {
+        mt->apply(mut);
+    }
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name, version);
+    auto written_sst = validate_read(s, tmp.path(), muts, version);
+    if (validate_flag) {
+        do_validate_stats_metadata(s, written_sst, table_name);
+    }
+}
+
+static void write_mut_and_validate(schema_ptr s, const sstring& table_name, std::vector<mutation> muts,
+        validate_stats_metadata validate_flag = validate_stats_metadata::no) {
+    for (auto version : test_sstable_versions) {
+        write_mut_and_validate_version(s, table_name, muts, version, validate_flag);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     auto abj = defer([] { await_background_jobs().get(); });
     sstring table_name = "static_row";
@@ -3294,18 +3392,13 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // INSERT INTO static_row (pk, st1, st2) values ('key1', 1135, 'hello') USING TIMESTAMP 1525385507816568;
     auto key = make_dkey(s, {to_bytes("key1")});
     mutation mut{s, key};
     mut.set_static_cell("st1", data_value{1135}, write_timestamp);
     mut.set_static_cell("st2", data_value{"hello"}, write_timestamp);
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
@@ -3323,8 +3416,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // INSERT INTO composite_partition_key (a,b,c,d,e,f,g) values (1, 'hello', true, 2, 'dear', 3, 'world') USING TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, { data_value{1}, data_value{"hello"}, data_value{true} });
     mutation mut{s, key};
@@ -3332,11 +3423,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "f", data_value{3}, write_timestamp);
     mut.set_cell(ckey, "g", data_value{"world"}, write_timestamp);
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
@@ -3353,8 +3441,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // INSERT INTO composite_clustering_key (a,b,c,d,e,f) values (1, 'hello', 2, 'dear', 3, 'world') USING TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
@@ -3362,11 +3448,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "e", data_value{3}, write_timestamp);
     mut.set_cell(ckey, "f", data_value{"world"}, write_timestamp);
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
@@ -3381,7 +3464,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
     api::timestamp_type ts = write_timestamp;
     sstring ck_base(1024, 'a');
     sstring rc_base(1024, 'b');
@@ -3395,7 +3477,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
             mut1.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
             seastar::thread::yield();
         }
-        mt->apply(mut1);
         ts += 10;
     }
     auto key2 = make_dkey(s, {to_bytes("key2")});
@@ -3408,12 +3489,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
             mut2.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
             seastar::thread::yield();
         }
-        mt->apply(mut2);
     }
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut1, mut2});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, {mut1, mut2});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
@@ -3426,8 +3504,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
     builder.with_column("rc", int32_type);
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
-
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     // INSERT INTO ttled_row (pk, ck, rc) VALUES ( 1, 2, 3) USING TTL 1135 AND TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
@@ -3444,11 +3520,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
     bytes value = column_def->type->decompose(data_value{3});
     auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, tp + ttl, ttl);
     mut.set_clustered_cell(ckey, *column_def, std::move(cell));
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
@@ -3460,8 +3533,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
     builder.with_column("rc", int32_type);
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
-
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     // UPDATE ttled_column USING TTL 1135 AND TIMESTAMP 1525385507816568 SET rc = 1 WHERE pk='key';
     auto key = make_dkey(s, {to_bytes("key")});
@@ -3476,11 +3547,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
     bytes value = column_def->type->decompose(data_value{1});
     auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, tp + ttl, ttl);
     mut.set_clustered_cell(clustering_key::make_empty(), *column_def, std::move(cell));
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
@@ -3493,8 +3561,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // DELETE rc FROM deleted_column USING TIMESTAMP 1525385507816568 WHERE pk=1;
     gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543905926};
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
@@ -3504,11 +3570,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
         throw std::runtime_error("no column definition found");
     }
     mut.set_cell(clustering_key::make_empty(), *column_def, atomic_cell::make_dead(write_timestamp, tp));
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
@@ -3521,19 +3584,14 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // DELETE FROM deleted_row USING TIMESTAMP 1525385507816568 WHERE pk=1 and ck=2;
     gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543907978};
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
     mut.partition().apply_delete(*s, ckey, tombstone{write_timestamp, tp});
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
@@ -3547,8 +3605,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // INSERT INTO collection_wide_update (pk, col) VALUES (1, {2, 3}) USING TIMESTAMP 1525385507816568;
     gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1543908589};
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
@@ -3561,11 +3617,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
     set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
 
     mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_values.serialize(*set_of_ints_type));
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
@@ -3579,8 +3632,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // UPDATE collection_incremental_update USING TIMESTAMP 1525385507816568 SET col = col + {2} WHERE pk = 1;
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
@@ -3589,11 +3640,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_collection_incremental_update) {
     set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
 
     mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_values.serialize(*set_of_ints_type));
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
@@ -3608,8 +3656,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     api::timestamp_type ts = write_timestamp;
     // INSERT INTO multiple_partitions (pk, rc1) VALUES (1, 10) USING TIMESTAMP 1525385507816568;
     // INSERT INTO multiple_partitions (pk, rc2) VALUES (2, 20) USING TIMESTAMP 1525385507816578;
@@ -3622,13 +3668,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
         clustering_key ckey = clustering_key::make_empty();
         muts.back().partition().apply_insert(*s, ckey, ts);
         muts.back().set_cell(ckey, to_bytes(format("rc{}", i)), data_value{i * 10}, ts);
-        mt->apply(muts.back());
         ts += 10;
     }
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), muts);
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, muts);
 }
 
 static void test_write_many_partitions(sstring table_name, tombstone partition_tomb, compression_parameters cp) {
@@ -3638,8 +3681,6 @@ static void test_write_many_partitions(sstring table_name, tombstone partition_t
     builder.set_compressor_params(cp);
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     std::vector<mutation> muts;
     for (auto i : boost::irange(0, 65536)) {
         auto key = partition_key::from_deeply_exploded(*s, {i});
@@ -3647,14 +3688,20 @@ static void test_write_many_partitions(sstring table_name, tombstone partition_t
         if (partition_tomb) {
             muts.back().partition().apply(partition_tomb);
         }
-        mt->apply(muts.back());
     }
 
     bool compressed = cp.get_compressor() != nullptr;
-    test_env env;
-    tmpdir tmp = compressed ? write_sstables(env, s, mt) : write_and_compare_sstables(s, mt, table_name);
-    boost::sort(muts, mutation_decorated_key_less_comparator());
-    validate_read(s, tmp.path(), muts);
+    for (auto version : test_sstable_versions) {
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+        for (auto& mut : muts) {
+            mt->apply(mut);
+        }
+
+        test_env env;
+        tmpdir tmp = compressed ? write_sstables(env, s, mt, version) : write_and_compare_sstables(s, mt, table_name, version);
+        boost::sort(muts, mutation_decorated_key_less_comparator());
+        validate_read(s, tmp.path(), muts, version);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_live_partitions) {
@@ -3720,8 +3767,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     auto key = partition_key::from_deeply_exploded(*s, {0});
     api::timestamp_type ts = write_timestamp;
     mutation mut{s, key};
@@ -3736,10 +3781,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
         ts += 10;
     }
 
-    mt->apply(mut);
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 // Information on missing columns is serialized differently when the number of columns is > 64.
@@ -3756,8 +3798,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
     }
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
-
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     auto key = partition_key::from_deeply_exploded(*s, {0});
     api::timestamp_type ts = write_timestamp;
@@ -3782,11 +3822,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
         mut.set_cell(ckey, to_bytes("rc63"), data_value{63}, ts);
         mut.set_cell(ckey, to_bytes("rc64"), data_value{64}, ts);
     }
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_empty_counter) {
@@ -3800,7 +3837,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_counter) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
     auto key = partition_key::from_exploded(*s, {to_bytes("key")});
     mutation mut{s, key};
 
@@ -3810,9 +3846,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_counter) {
     counter_cell_builder b;
     mut.set_clustered_cell(ckey, cdef, b.build(write_timestamp));
 
-    mt->apply(mut);
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path(), {mut});
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
@@ -3827,7 +3861,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
     auto key = partition_key::from_exploded(*s, {to_bytes("key")});
     mutation mut{s, key};
 
@@ -3858,10 +3891,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
     auto ckey2 = clustering_key::from_exploded(*s, {to_bytes("ck2")});
     mut.set_clustered_cell(ckey2, cdef1, atomic_cell::make_dead(write_timestamp, write_time_point));
 
-    mt->apply(mut);
-
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path(), {mut});
+    write_mut_and_validate(s, table_name, mut, validate_stats_metadata::no);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
@@ -3897,8 +3927,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // INSERT INTO different_types (pk, asciival, bigintval, blobval, boolval,
     // dateval, decimalval, doubleval, floatval, inetval, intval, smallintval,
     // timeval, tsval, timeuuidval, tinyintval, uuidval, varcharval, varintval,
@@ -3930,11 +3958,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
     mut.set_cell(ckey, "varcharval", data_value{"привет"}, write_timestamp);
     mut.set_cell(ckey, "varintval", varint_type->deserialize(varint_type->from_string("123")), write_timestamp);
     mut.set_cell(ckey, "durationval", duration_type->deserialize(duration_type->from_string("1h4m48s20ms")), write_timestamp);
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
@@ -3950,8 +3975,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
 
@@ -3960,10 +3983,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "rc", data_value{2}, write_timestamp);
 
-    mt->apply(mut);
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
@@ -3978,8 +3998,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
     builder.with_column("rc", int32_type);
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
-
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
@@ -3996,10 +4014,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "rc", data_value{1}, write_timestamp);
 
-    mt->apply(mut);
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
@@ -4014,8 +4029,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::yes);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     auto key = partition_key::from_deeply_exploded(*s, {1});
     mutation mut{s, key};
 
@@ -4023,10 +4036,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
     mut.set_cell(ckey, "rc", data_value{1}, write_timestamp);
 
-    mt->apply(mut);
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
@@ -4044,8 +4054,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
 
@@ -4054,11 +4062,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     auto ut_val = make_user_value(ut, user_type_impl::native_type({int32_t(1703), true, sstring("Санкт-Петербург")}));
     mut.set_cell(ckey, "rc", ut_val, write_timestamp);
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
@@ -4073,8 +4078,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // DELETE FROM simple_range_tombstone USING TIMESTAMP 1525385507816568 WHERE pk = 0 and ck1 = 'aaa';
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
@@ -4082,11 +4085,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
     tombstone tomb{write_timestamp, tp};
     range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
     mut.partition().apply_delete(*s, std::move(rt));
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 // Test the case when for RTs their adjacent bounds are written as boundary RT markers.
@@ -4101,8 +4101,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
     builder.with_column("ck3", utf8_type, column_kind::clustering_key);
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
-
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     auto key = make_dkey(s, {to_bytes("key")});
     mutation mut{s, key};
@@ -4126,12 +4124,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
                            clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
         mut.partition().apply_delete(*s, std::move(rt));
     }
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name, false);
-    check_min_max_column_names(written_sst, {"aaa"}, {"aaa"});
+    write_mut_and_validate(s, table_name, mut, {"aaa"}, {"aaa"});
 }
 
 // Test the case when subsequent RTs have a common clustering but those bounds are both exclusive
@@ -4147,8 +4141,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
     builder.with_column("ck3", utf8_type, column_kind::clustering_key);
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
-
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     auto key = make_dkey(s, {to_bytes("key")});
     mutation mut{s, key};
@@ -4172,11 +4164,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
                            clustering_key_prefix::from_single_value(*s, bytes("ccc")), bound_kind::excl_end};
         mut.partition().apply_delete(*s, std::move(rt));
     }
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name);
+    write_mut_and_validate(s, table_name, mut);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
@@ -4189,8 +4178,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
-
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     auto key = make_dkey(s, {to_bytes("key")});
     mutation mut{s, key};
@@ -4245,12 +4232,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"ddd", "eee"});
         mut.partition().apply_insert(*s, ckey, ts);
     }
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name, false);
-    check_min_max_column_names(written_sst, {"aaa"}, {"ddd"});
+    write_mut_and_validate(s, table_name, mut, {"aaa"}, {"ddd"});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
@@ -4263,8 +4246,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
     builder.with_column("ck2", utf8_type, column_kind::clustering_key);
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
-
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     auto key = make_dkey(s, {to_bytes("key1")});
     mutation mut{s, key};
@@ -4280,10 +4261,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
         mut.partition().apply_delete(*s, std::move(rt));
         seastar::thread::yield();
     }
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path(), {mut});
+    write_mut_and_validate(s, table_name, mut, validate_stats_metadata::no);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
@@ -4297,8 +4276,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
     builder.with_column("ck3", utf8_type, column_kind::clustering_key);
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
-
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
     auto key = make_dkey(s, {to_bytes("key")});
     mutation mut{s, key};
@@ -4336,12 +4313,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "ccc", "ccc"});
         mut.partition().apply_insert(*s, ckey, ts);
     }
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name, false);
-    check_min_max_column_names(written_sst, {"aaa"}, {"aaa"});
+    write_mut_and_validate(s, table_name, mut, {"aaa"}, {"aaa"});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
@@ -4375,13 +4348,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
         mut.partition().apply_insert(*s, ckey, ts);
     }
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-    mt->apply(mut);
-
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name, false);
-    check_min_max_column_names(written_sst, {"aaa", "bbb"}, {"aaa"});
+    write_mut_and_validate(s, table_name, mut, {"aaa", "bbb"}, {"aaa"});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
@@ -4415,13 +4382,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
         mut.partition().apply_insert(*s, ckey, ts);
     }
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-    mt->apply(mut);
-
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name, false);
-    check_min_max_column_names(written_sst, {"aaa"}, {"aaa", "bbb"});
+    write_mut_and_validate(s, table_name, mut, {"aaa"}, {"aaa", "bbb"});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_overlapped_start_range_tombstones) {
@@ -4469,13 +4430,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_overlapped_start_range_tombstones) {
         mut2.partition().apply_delete(*s, std::move(rt));
     }
 
-    lw_shared_ptr<memtable> mt1 = make_lw_shared<memtable>(s);
-    lw_shared_ptr<memtable> mt2 = make_lw_shared<memtable>(s);
-
-    mt1->apply(mut1);
-    mt2->apply(mut2);
-
-    write_and_compare_sstables(s, mt1, mt2, table_name);
+    write_muts_and_compare_sstables(s, mut1, mut2, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
@@ -4516,13 +4471,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
         mut.partition().apply_delete(*s, std::move(rt));
     }
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-    mt->apply(mut);
-
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    auto written_sst = validate_read(s, tmp.path(), {mut});
-    validate_stats_metadata(s, written_sst, table_name, false);
-    check_min_max_column_names(written_sst, {"aaa"}, {"aaa"});
+    write_mut_and_validate(s, table_name, mut, {"aaa"}, {"aaa"});
 }
 
 // The resulting files are supposed to be identical to the files
@@ -4564,12 +4513,7 @@ SEASTAR_THREAD_TEST_CASE(test_write_overlapped_range_tombstones) {
         mut2.partition().apply_delete(*s, std::move(rt));
     }
 
-    lw_shared_ptr<memtable> mt1 = make_lw_shared<memtable>(s);
-    lw_shared_ptr<memtable> mt2 = make_lw_shared<memtable>(s);
-    mt1->apply(mut1);
-    mt2->apply(mut2);
-
-    write_and_compare_sstables(s, mt1, mt2, table_name);
+    write_muts_and_compare_sstables(s, mut1, mut2, table_name);
 }
 
 static sstring get_read_index_test_path(sstring table_name) {
@@ -4816,8 +4760,6 @@ SEASTAR_THREAD_TEST_CASE(test_dead_row_marker) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     auto key = partition_key::from_deeply_exploded(*s, { 1 });
     mutation mut{s, key};
     mut.set_static_cell("st", data_value{1135}, ts);
@@ -4828,9 +4770,7 @@ SEASTAR_THREAD_TEST_CASE(test_dead_row_marker) {
 
     mut.set_cell(ckey, "rc", data_value{7777}, ts);
 
-    mt->apply(mut);
-
-    write_and_compare_sstables(s, mt, table_name);
+    write_mut_and_compare_sstables(s, mut, table_name);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_shadowable_deletion) {
@@ -4850,14 +4790,11 @@ SEASTAR_THREAD_TEST_CASE(test_shadowable_deletion) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
     mutation mut1{s, partition_key::from_deeply_exploded(*s, {1})};
     {
         auto& clustered_row = mut1.partition().clustered_row(*s, ckey);
         clustered_row.apply(row_marker{api::timestamp_type{1540230880370422}});
-        mt->apply(mut1);
     }
 
     mutation mut2{s, partition_key::from_deeply_exploded(*s, {0})};
@@ -4867,11 +4804,9 @@ SEASTAR_THREAD_TEST_CASE(test_shadowable_deletion) {
         gc_clock::time_point tp {gc_clock::duration(1540230880)};
         clustered_row.apply(row_marker{api::timestamp_type{ts}});
         clustered_row.apply(shadowable_tombstone(ts, tp));
-        mt->apply(mut2);
     }
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path(), {mut1, mut2});
+    write_mut_and_validate(s, table_name, {mut1, mut2}, validate_stats_metadata::no);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_regular_and_shadowable_deletion) {
@@ -4919,8 +4854,7 @@ SEASTAR_THREAD_TEST_CASE(test_regular_and_shadowable_deletion) {
         mt->apply(mut2);
     }
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path(), {mut1, mut2});
+    write_mut_and_validate(s, table_name, {mut1, mut2}, validate_stats_metadata::no);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
@@ -4936,8 +4870,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // INSERT INTO static_row (pk, ck, st1, rc) VALUES (0, 1, 2, 3);
     auto key = partition_key::from_deeply_exploded(*s, {0});
     mutation mut{s, key};
@@ -4945,10 +4877,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row_with_missing_columns) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_static_cell("st1", data_value{2}, write_timestamp);
     mut.set_cell(ckey, "rc", data_value{3}, write_timestamp);
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path(), {mut});
+    write_mut_and_validate(s, table_name, mut, validate_stats_metadata::no);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
@@ -4969,8 +4899,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // INSERT INTO interleaved_atomic_and_collection_columns (pk, ck, rc1, rc4, rc5)
     //     VALUES (0, 1, 2, {3, 4}, 5) USING TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, {0});
@@ -4986,10 +4914,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_interleaved_atomic_and_collection_columns) {
     mut.set_clustered_cell(ckey, *s->get_column_definition("rc4"), set_values.serialize(*set_of_ints_type));
 
     mut.set_cell(ckey, "rc5", data_value{5}, write_timestamp);
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path(), {mut});
+    write_mut_and_validate(s, table_name, mut, validate_stats_metadata::no);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_columns) {
@@ -5011,8 +4937,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_col
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
     // INSERT INTO static_interleaved_atomic_and_collection_columns (pk, ck, st1, st4, st5)
     //     VALUES (0, 1, 2, {3, 4}, 5) USING TIMESTAMP 1525385507816568;
     auto key = partition_key::from_deeply_exploded(*s, {0});
@@ -5028,10 +4952,8 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_interleaved_atomic_and_collection_col
     mut.set_static_cell(*s->get_column_definition("st4"), set_values.serialize(*set_of_ints_type));
 
     mut.set_static_cell("st5", data_value{5}, write_timestamp);
-    mt->apply(mut);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path(), {mut});
+    write_mut_and_validate(s, table_name, mut, validate_stats_metadata::no);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
@@ -5046,7 +4968,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
     builder.set_compressor_params(compression_parameters::no_compression());
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
     api::timestamp_type ts = write_timestamp;
 
     // INSERT INTO empty_static_row (pk, ck, rc) VALUES ( 0, 1, 2) USING TIMESTAMP 1525385507816568;
@@ -5055,7 +4976,6 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
     mut1.partition().apply_insert(*s, ckey, ts);
     mut1.set_cell(ckey, "rc", data_value{2}, ts);
-    mt->apply(mut1);
 
     ts += 10;
 
@@ -5065,10 +4985,15 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_static_row) {
     mut2.partition().apply_insert(*s, ckey, ts);
     mut2.set_static_cell("st", data_value{2}, ts);
     mut2.set_cell(ckey, "rc", data_value{3}, ts);
-    mt->apply(mut2);
 
-    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
-    validate_read(s, tmp.path(), {mut2, mut1}); // Mutations are re-ordered according to decorated_key order
+    for (auto version : test_sstable_versions) {
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+        mt->apply(mut1);
+        mt->apply(mut2);
+
+        tmpdir tmp = write_and_compare_sstables(s, mt, table_name, version);
+        validate_read(s, tmp.path(), {mut2, mut1}, version); // Mutations are re-ordered according to decorated_key order
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_read_missing_summary) {
@@ -5116,6 +5041,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
         partition.set_cell(ckey, "val1", data_value{100 + i}, write_timestamp);
         partition.set_cell(ckey, "val2", data_value{200 + i}, write_timestamp);
     };
+  for (auto version : test_sstable_versions) {
     auto mt = make_lw_shared<memtable>(write_schema);
     mt->apply(partition);
     for (auto index_block_size : {1, 128, 64*1024}) {
@@ -5126,7 +5052,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
         auto sst = env.make_sstable(write_schema,
             dir.path().string(),
             1 /* generation */,
-            sstable_version_types::mc,
+            version,
             sstables::sstable::format_types::big);
         sst->write_components(mt->make_flat_reader(write_schema, tests::make_permit()), 1, write_schema, cfg, mt->get_encoding_stats()).get();
         sst->load().get();
@@ -5142,6 +5068,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
             std::exception,
             message_equals("Column val1 missing in current schema in sstable " + sst->get_filename()));
     }
+  }
 }
 
 namespace {
@@ -5188,7 +5115,7 @@ struct large_row_handler : public db::large_data_handler {
 }
 
 static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const partition_key& pk,
-        std::vector<clustering_key*> expected, uint64_t threshold) {
+        std::vector<clustering_key*> expected, uint64_t threshold, sstable_version_types version) {
     unsigned i = 0;
     auto f = [&i, &expected, &pk, &threshold](const schema& s, const sstables::key& partition_key,
                      const clustering_key_prefix* clustering_key, uint64_t row_size) {
@@ -5209,7 +5136,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     auto env = test_env(manager);
     tmpdir dir;
     auto sst = env.make_sstable(
-            s, dir.path().string(), 1 /* generation */, sstable_version_types::mc, sstables::sstable::format_types::big);
+            s, dir.path().string(), 1 /* generation */, version, sstables::sstable::format_types::big);
 
     // The test provides thresholds values for the large row handler. Whether the handler gets
     // trigger depends on the size of rows after they are written in the MC format and that size
@@ -5232,15 +5159,16 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
 
     auto ck2 = s.make_ckey("cv2");
     s.add_row(partition, ck2, "foo bar");
-
+  for (auto version : test_sstable_versions) {
     auto mt = make_lw_shared<memtable>(s.schema());
     mt->apply(partition);
 
-    test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck1, &ck2}, 21);
-    test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck2}, 22);
+    test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck1, &ck2}, 21, version);
+    test_sstable_write_large_row_f(s.schema(), *mt, pk, {nullptr, &ck2}, 22, version);
+  }
 }
 
-static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool expected) {
+static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool expected, sstable_version_types version) {
     simple_schema s;
     mutation p = s.new_mutation("pv");
     const partition_key& pk = p.key();
@@ -5265,7 +5193,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     sstables_manager manager(handler, test_db_config, test_feature_service);
     auto env = test_env(manager);
     tmpdir dir;
-    auto sst = env.make_sstable(sc, dir.path().string(), 1, sstable_version_types::mc, sstables::sstable::format_types::big);
+    auto sst = env.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
     sst->write_components(mt->make_flat_reader(sc, tests::make_permit()), 1, sc, test_sstables_manager.configure_writer(), encoding_stats{}).get();
 
     BOOST_REQUIRE_EQUAL(logged, expected);
@@ -5281,11 +5209,13 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
     // This test creates a sstable with a given number of rows and test it against a
     // compaction_rows_count_warning_threshold. A warning is triggered when the number of rows
     // exceeds the threshold.
-    test_sstable_log_too_many_rows_f(random, 0, true);
-    test_sstable_log_too_many_rows_f(random, (random - 1), true);
-    test_sstable_log_too_many_rows_f(random, random, false);
-    test_sstable_log_too_many_rows_f(random, (random + 1), false);
-    test_sstable_log_too_many_rows_f((random + 1), random, true);
+  for (auto version : test_sstable_versions) {
+    test_sstable_log_too_many_rows_f(random, 0, true, version);
+    test_sstable_log_too_many_rows_f(random, (random - 1), true, version);
+    test_sstable_log_too_many_rows_f(random, random, false, version);
+    test_sstable_log_too_many_rows_f(random, (random + 1), false, version);
+    test_sstable_log_too_many_rows_f((random + 1), random, true, version);
+  }
 }
 
 // The following test runs on test/resource/sstables/3.x/uncompressed/legacy_udt_in_collection

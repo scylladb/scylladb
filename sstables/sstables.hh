@@ -835,6 +835,10 @@ public:
 
     void update_stats_on_end_of_stream();
 
+    bool has_correct_min_max_column_names() const noexcept {
+        return _version >= sstable_version_types::md;
+    }
+
     // Return true if this sstable possibly stores clustering row(s) specified by ranges.
     bool may_contain_rows(const std::vector<std::vector<nonwrapping_range<bytes_view>>>& ranges);
 
