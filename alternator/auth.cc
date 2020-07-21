@@ -129,7 +129,7 @@ future<std::string> get_key_from_roles(cql3::query_processor& qp, std::string us
             auth::meta::roles_table::qualified_name(), auth::meta::roles_table::role_col_name);
 
     auto cl = auth::password_authenticator::consistency_for_user(username);
-    auto timeout = auth::internal_distributed_timeout_config();
+    auto& timeout = auth::internal_distributed_timeout_config();
     return qp.execute_internal(query, cl, timeout, {sstring(username)}, true).then_wrapped([username = std::move(username)] (future<::shared_ptr<cql3::untyped_result_set>> f) {
         auto res = f.get0();
         auto salted_hash = std::optional<sstring>();
