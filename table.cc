@@ -40,8 +40,6 @@
 #include "query-result-writer.hh"
 #include "db/view/view.hh"
 #include <seastar/core/seastar.hh>
-#include <boost/algorithm/cxx11/all_of.hpp>
-#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
@@ -158,23 +156,10 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
         return {};
     }
 
-    int64_t min_timestamp = std::numeric_limits<int64_t>::max();
-    auto sstable_has_clustering_key = [&min_timestamp, &schema, &ranges] (const sstables::shared_sstable& sst) {
-        if (!sst->may_contain_rows(ranges)) {
-            return false; // ordered after sstables that contain clustering rows.
-        } else {
-            min_timestamp = std::min(min_timestamp, sst->get_stats_metadata().min_timestamp);
-            return true;
-        }
-    };
-    auto sstable_has_relevant_tombstone = [&min_timestamp] (const sstables::shared_sstable& sst) {
-        const auto& stats = sst->get_stats_metadata();
-        // re-add sstable as candidate if it contains a tombstone that may cover a row in an included sstable.
-        return (stats.max_timestamp > min_timestamp && stats.estimated_tombstone_drop_time.bin.size());
-    };
-    auto skipped = std::partition(sstables.begin(), sstables.end(), sstable_has_clustering_key);
-    auto actually_skipped = std::partition(skipped, sstables.end(), sstable_has_relevant_tombstone);
-    sstables.erase(actually_skipped, sstables.end());
+    auto skipped = std::partition(sstables.begin(), sstables.end(), [&ranges] (const sstables::shared_sstable& sst) {
+        return sst->may_contain_rows(ranges);
+    });
+    sstables.erase(skipped, sstables.end());
     stats->surviving_sstables_after_clustering_filter += sstables.size();
 
     return sstables;

@@ -2233,6 +2233,17 @@ bool sstable::may_contain_rows(const std::vector<std::vector<nonwrapping_range<b
         return true;
     }
 
+    // Include sstables with tombstones that are not scylla's since
+    // they may contain partition tombstones that are not taken into
+    // account in min/max coloumn names metadata.
+    // We clear min/max metadata for partition tombstones so they
+    // will match as containing the rows we're looking for.
+    if (!has_scylla_component()) {
+        if (get_stats_metadata().estimated_tombstone_drop_time.bin.size()) {
+            return true;
+        }
+    }
+
     auto clustering_components_size = _clustering_components_ranges.size();
     if (!_schema->clustering_key_size() || !clustering_components_size) {
         return true;
