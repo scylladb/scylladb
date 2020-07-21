@@ -129,7 +129,7 @@ table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offs
 
 schema_ptr hints() {
     static thread_local auto hints = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, HINTS), NAME, HINTS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, HINTS), NAME, HINTS,
         // partition key
         {{"target_id", uuid_type}},
         // clustering key
@@ -142,7 +142,7 @@ schema_ptr hints() {
         utf8_type,
         // comment
         "hints awaiting delivery"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.set_compaction_strategy_options({{ "enabled", "false" }});
        builder.with_version(generate_schema_version(builder.uuid()));
@@ -153,7 +153,7 @@ schema_ptr hints() {
 
 schema_ptr batchlog() {
     static thread_local auto batchlog = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -169,7 +169,7 @@ schema_ptr batchlog() {
         // FIXME: the original Java code also had:
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
@@ -180,7 +180,7 @@ schema_ptr batchlog() {
 /*static*/ schema_ptr paxos() {
     static thread_local auto paxos = [] {
         // FIXME: switch to the new schema_builder interface (with_column(...), etc)
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
         // partition key
         {{"row_key", bytes_type}}, // byte representation of a row key that hashes to the same token as original
         // clustering key
@@ -202,7 +202,7 @@ schema_ptr batchlog() {
         // FIXME: the original Java code also had:
         // operations on resulting CFMetaData:
         //    .compactionStrategyClass(LeveledCompactionStrategy.class);
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        builder.set_wait_for_sync_to_commitlog(true);
@@ -213,7 +213,7 @@ schema_ptr batchlog() {
 
 schema_ptr built_indexes() {
     static thread_local auto built_indexes = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
         // partition key
         {{"table_name", utf8_type}}, // table_name here is the name of the keyspace - don't be fooled
         // clustering key
@@ -226,7 +226,7 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "built column indexes"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::yes);
@@ -236,7 +236,7 @@ schema_ptr built_indexes() {
 
 /*static*/ schema_ptr local() {
     static thread_local auto local = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
         // partition key
         {{"key", utf8_type}},
         // clustering key
@@ -273,7 +273,7 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "information about the local node"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        builder.remove_column("scylla_cpu_sharding_algorithm");
@@ -286,7 +286,7 @@ schema_ptr built_indexes() {
 
 /*static*/ schema_ptr peers() {
     static thread_local auto peers = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, PEERS), NAME, PEERS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, PEERS), NAME, PEERS,
         // partition key
         {{"peer", inet_addr_type}},
         // clustering key
@@ -309,7 +309,7 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "information about known peers in the cluster"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
@@ -319,7 +319,7 @@ schema_ptr built_indexes() {
 
 /*static*/ schema_ptr peer_events() {
     static thread_local auto peer_events = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, PEER_EVENTS), NAME, PEER_EVENTS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, PEER_EVENTS), NAME, PEER_EVENTS,
         // partition key
         {{"peer", inet_addr_type}},
         // clustering key
@@ -334,7 +334,7 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "events related to peers"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
@@ -344,7 +344,7 @@ schema_ptr built_indexes() {
 
 /*static*/ schema_ptr range_xfers() {
     static thread_local auto range_xfers = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, RANGE_XFERS), NAME, RANGE_XFERS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, RANGE_XFERS), NAME, RANGE_XFERS,
         // partition key
         {{"token_bytes", bytes_type}},
         // clustering key
@@ -357,7 +357,7 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "ranges requested for transfer"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
@@ -367,7 +367,7 @@ schema_ptr built_indexes() {
 
 /*static*/ schema_ptr compactions_in_progress() {
     static thread_local auto compactions_in_progress = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, COMPACTIONS_IN_PROGRESS), NAME, COMPACTIONS_IN_PROGRESS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, COMPACTIONS_IN_PROGRESS), NAME, COMPACTIONS_IN_PROGRESS,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -384,7 +384,7 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "unfinished compactions"
-        )));
+        ));
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
@@ -393,7 +393,7 @@ schema_ptr built_indexes() {
 
 /*static*/ schema_ptr compaction_history() {
     static thread_local auto compaction_history = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -413,7 +413,7 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "week-long compaction history"
-        )));
+        ));
         builder.set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
         builder.with_version(generate_schema_version(builder.uuid()));
         return builder.build(schema_builder::compact_storage::no);
@@ -423,7 +423,7 @@ schema_ptr built_indexes() {
 
 /*static*/ schema_ptr sstable_activity() {
     static thread_local auto sstable_activity = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, SSTABLE_ACTIVITY), NAME, SSTABLE_ACTIVITY,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, SSTABLE_ACTIVITY), NAME, SSTABLE_ACTIVITY,
         // partition key
         {
             {"keyspace_name", utf8_type},
@@ -443,7 +443,7 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "historic sstable read rates"
-       )));
+       ));
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
@@ -452,7 +452,7 @@ schema_ptr built_indexes() {
 
 schema_ptr size_estimates() {
     static thread_local auto size_estimates = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, SIZE_ESTIMATES), NAME, SIZE_ESTIMATES,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, SIZE_ESTIMATES), NAME, SIZE_ESTIMATES,
             // partition key
             {{"keyspace_name", utf8_type}},
             // clustering key
@@ -468,7 +468,7 @@ schema_ptr size_estimates() {
             utf8_type,
             // comment
             "per-table primary range size estimates"
-            )));
+            ));
         builder.set_gc_grace_seconds(0);
         builder.with_version(generate_schema_version(builder.uuid()));
         return builder.build(schema_builder::compact_storage::no);
@@ -478,7 +478,7 @@ schema_ptr size_estimates() {
 
 /*static*/ schema_ptr large_partitions() {
     static thread_local auto large_partitions = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, LARGE_PARTITIONS), NAME, LARGE_PARTITIONS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, LARGE_PARTITIONS), NAME, LARGE_PARTITIONS,
         // partition key
         {{"keyspace_name", utf8_type}, {"table_name", utf8_type}},
         // clustering key
@@ -495,7 +495,7 @@ schema_ptr size_estimates() {
         utf8_type,
         // comment
         "partitions larger than specified threshold"
-        )));
+        ));
         builder.set_gc_grace_seconds(0);
         builder.with_version(generate_schema_version(builder.uuid()));
         return builder.build(schema_builder::compact_storage::no);
@@ -546,7 +546,7 @@ static schema_ptr large_cells() {
 
 /*static*/ schema_ptr scylla_local() {
     static thread_local auto scylla_local = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, SCYLLA_LOCAL), NAME, SCYLLA_LOCAL,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, SCYLLA_LOCAL), NAME, SCYLLA_LOCAL,
         // partition key
         {{"key", utf8_type}},
         // clustering key
@@ -561,7 +561,7 @@ static schema_ptr large_cells() {
         utf8_type,
         // comment
         "Scylla specific information about the local node"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
@@ -573,7 +573,7 @@ static schema_ptr large_cells() {
   * but without `request_count'. Also CK is different: C* has only (`port'). */
 static schema_ptr clients() {
     thread_local auto clients = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, CLIENTS), NAME, CLIENTS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, CLIENTS), NAME, CLIENTS,
             // partition key
             {{"address", inet_addr_type}},
             // clustering key
@@ -597,7 +597,7 @@ static schema_ptr clients() {
             utf8_type,
             // comment
             "list of connected clients"
-            )));
+            ));
         builder.set_gc_grace_seconds(0);
         builder.with_version(generate_schema_version(builder.uuid()));
         return builder.build(schema_builder::compact_storage::no);
@@ -611,7 +611,7 @@ namespace v3 {
 
 schema_ptr batches() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, BATCHES), NAME, BATCHES,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, BATCHES), NAME, BATCHES,
         // partition key
         {{"id", timeuuid_type}},
         // clustering key
@@ -624,7 +624,7 @@ schema_ptr batches() {
         utf8_type,
         // comment
         "batches awaiting replay"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        // FIXME: the original Java code also had:
        //.copy(new LocalPartitioner(TimeUUIDType.instance))
@@ -644,7 +644,7 @@ schema_ptr built_indexes() {
 
 schema_ptr local() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
         // partition key
         {{"key", utf8_type}},
         // clustering key
@@ -675,7 +675,7 @@ schema_ptr local() {
         utf8_type,
         // comment
         "information about the local node"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
@@ -685,7 +685,7 @@ schema_ptr local() {
 
 schema_ptr truncated() {
     static thread_local auto local = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, TRUNCATED), NAME, TRUNCATED,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, TRUNCATED), NAME, TRUNCATED,
         // partition key
         {{"table_uuid", uuid_type}},
         // clustering key
@@ -703,7 +703,7 @@ schema_ptr truncated() {
         utf8_type,
         // comment
         "information about table truncation"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
@@ -753,7 +753,7 @@ schema_ptr scylla_local() {
 
 schema_ptr available_ranges() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, AVAILABLE_RANGES), NAME, AVAILABLE_RANGES,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, AVAILABLE_RANGES), NAME, AVAILABLE_RANGES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -766,7 +766,7 @@ schema_ptr available_ranges() {
         utf8_type,
         // comment
         "available keyspace/ranges during bootstrap/replace that are ready to be served"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build();
@@ -776,7 +776,7 @@ schema_ptr available_ranges() {
 
 schema_ptr views_builds_in_progress() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, VIEWS_BUILDS_IN_PROGRESS), NAME, VIEWS_BUILDS_IN_PROGRESS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, VIEWS_BUILDS_IN_PROGRESS), NAME, VIEWS_BUILDS_IN_PROGRESS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -789,7 +789,7 @@ schema_ptr views_builds_in_progress() {
         utf8_type,
         // comment
         "views builds current progress"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build();
@@ -799,7 +799,7 @@ schema_ptr views_builds_in_progress() {
 
 schema_ptr built_views() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, BUILT_VIEWS), NAME, BUILT_VIEWS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, BUILT_VIEWS), NAME, BUILT_VIEWS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -812,7 +812,7 @@ schema_ptr built_views() {
         utf8_type,
         // comment
         "built views"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build();
@@ -838,7 +838,7 @@ schema_ptr scylla_views_builds_in_progress() {
 
 /*static*/ schema_ptr cdc_local() {
     static thread_local auto cdc_local = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, CDC_LOCAL), NAME, CDC_LOCAL,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, CDC_LOCAL), NAME, CDC_LOCAL,
         // partition key
         {{"key", utf8_type}},
         // clustering key
@@ -856,7 +856,7 @@ schema_ptr scylla_views_builds_in_progress() {
         utf8_type,
         // comment
         "CDC-specific information that the local node stores"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
@@ -870,7 +870,7 @@ namespace legacy {
 
 schema_ptr hints() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, HINTS), NAME, HINTS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, HINTS), NAME, HINTS,
         // partition key
         {{"target_id", uuid_type}},
         // clustering key
@@ -883,7 +883,7 @@ schema_ptr hints() {
         utf8_type,
         // comment
         "*DEPRECATED* hints awaiting delivery"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
        builder.set_compaction_strategy_options({{"enabled", "false"}});
@@ -896,7 +896,7 @@ schema_ptr hints() {
 
 schema_ptr batchlog() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -909,7 +909,7 @@ schema_ptr batchlog() {
         utf8_type,
         // comment
         "*DEPRECATED* batchlog entries"
-       )));
+       ));
        builder.set_gc_grace_seconds(0);
        builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
        builder.set_compaction_strategy_options({{"min_threshold", "2"}});
@@ -924,7 +924,7 @@ static constexpr auto schema_gc_grace = std::chrono::duration_cast<std::chrono::
 
 schema_ptr keyspaces() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -941,7 +941,7 @@ schema_ptr keyspaces() {
         utf8_type,
         // comment
         "*DEPRECATED* keyspace definitions"
-       )));
+       ));
        builder.set_gc_grace_seconds(schema_gc_grace);
        builder.with(schema_builder::compact_storage::yes);
        builder.with_version(generate_schema_version(builder.uuid()));
@@ -952,7 +952,7 @@ schema_ptr keyspaces() {
 
 schema_ptr column_families() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, COLUMNFAMILIES), NAME, COLUMNFAMILIES,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, COLUMNFAMILIES), NAME, COLUMNFAMILIES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -994,7 +994,7 @@ schema_ptr column_families() {
         utf8_type,
         // comment
         "*DEPRECATED* table definitions"
-       )));
+       ));
        builder.set_gc_grace_seconds(schema_gc_grace);
        builder.with(schema_builder::compact_storage::no);
        builder.with_version(generate_schema_version(builder.uuid()));
@@ -1005,7 +1005,7 @@ schema_ptr column_families() {
 
 schema_ptr columns() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, COLUMNS), NAME, COLUMNS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, COLUMNS), NAME, COLUMNS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -1025,7 +1025,7 @@ schema_ptr columns() {
         utf8_type,
         // comment
         "column definitions"
-        )));
+        ));
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
         builder.with_version(generate_schema_version(builder.uuid()));
@@ -1036,7 +1036,7 @@ schema_ptr columns() {
 
 schema_ptr triggers() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, TRIGGERS), NAME, TRIGGERS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, TRIGGERS), NAME, TRIGGERS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -1051,7 +1051,7 @@ schema_ptr triggers() {
         utf8_type,
         // comment
         "trigger definitions"
-        )));
+        ));
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
         builder.with_version(generate_schema_version(builder.uuid()));
@@ -1062,7 +1062,7 @@ schema_ptr triggers() {
 
 schema_ptr usertypes() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, USERTYPES), NAME, USERTYPES,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, USERTYPES), NAME, USERTYPES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -1078,7 +1078,7 @@ schema_ptr usertypes() {
         utf8_type,
         // comment
         "user defined type definitions"
-        )));
+        ));
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
         builder.with_version(generate_schema_version(builder.uuid()));
@@ -1095,7 +1095,7 @@ schema_ptr functions() {
      * installations of that to migrate, rather than our own (if we dont use the table).
      */
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, FUNCTIONS), NAME, FUNCTIONS,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, FUNCTIONS), NAME, FUNCTIONS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -1115,7 +1115,7 @@ schema_ptr functions() {
         utf8_type,
         // comment
         "*DEPRECATED* user defined type definitions"
-        )));
+        ));
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
         builder.with_version(generate_schema_version(builder.uuid()));
@@ -1126,7 +1126,7 @@ schema_ptr functions() {
 
 schema_ptr aggregates() {
     static thread_local auto schema = [] {
-        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, AGGREGATES), NAME, AGGREGATES,
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, AGGREGATES), NAME, AGGREGATES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -1146,7 +1146,7 @@ schema_ptr aggregates() {
         utf8_type,
         // comment
         "*DEPRECATED* user defined aggregate definition"
-        )));
+        ));
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with(schema_builder::compact_storage::no);
         builder.with_version(generate_schema_version(builder.uuid()));

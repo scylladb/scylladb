@@ -31,8 +31,8 @@ static atomic_cell make_atomic_cell(data_type dt, bytes value) {
 
 int main(int argc, char* argv[]) {
     return app_template().run_deprecated(argc, argv, [] {
-        auto s = make_lw_shared(schema({}, "ks", "cf",
-            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
+        auto s = make_shared_schema({}, "ks", "cf",
+            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
         memtable mt(s);
 

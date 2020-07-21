@@ -405,8 +405,8 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
         storage_service_for_tests ssft;
         auto dir = tmpdir();
-        auto s = make_lw_shared(schema({}, "ks", "cf",
-            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
+        auto s = make_shared_schema({}, "ks", "cf",
+            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
         auto key = partition_key::from_exploded(*s, {to_bytes(make_local_key(s))});
         auto c_key_start = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
@@ -541,7 +541,7 @@ SEASTAR_THREAD_TEST_CASE(broken_ranges_collection) {
 
 static schema_ptr tombstone_overlap_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("try1", "tab"), "try1", "tab",
+        schema_builder builder(make_shared_schema(generate_legacy_id("try1", "tab"), "try1", "tab",
         // partition key
         {{"pk", utf8_type}},
         // clustering key
@@ -554,7 +554,7 @@ static schema_ptr tombstone_overlap_schema() {
         utf8_type,
         // comment
         ""
-       )));
+       ));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
@@ -700,7 +700,7 @@ SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
 //        ["aaa:bbb:!","aaa:!",1459438519943668,"t",1459438519]]}
 static schema_ptr tombstone_overlap_schema2() {
     static thread_local auto s = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("try1", "tab2"), "try1", "tab2",
+        schema_builder builder(make_shared_schema(generate_legacy_id("try1", "tab2"), "try1", "tab2",
         // partition key
         {{"pk", utf8_type}},
         // clustering key
@@ -713,7 +713,7 @@ static schema_ptr tombstone_overlap_schema2() {
         utf8_type,
         // comment
         ""
-       )));
+       ));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
@@ -781,7 +781,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
 // Reproducer for #4783
 static schema_ptr buffer_overflow_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("test_ks", "test_tab"), "test_ks", "test_tab",
+        schema_builder builder(make_shared_schema(generate_legacy_id("test_ks", "test_tab"), "test_ks", "test_tab",
         // partition key
         {{"pk", int32_type}},
         // clustering key
@@ -794,7 +794,7 @@ static schema_ptr buffer_overflow_schema() {
         utf8_type,
         // comment
         ""
-       )));
+       ));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;

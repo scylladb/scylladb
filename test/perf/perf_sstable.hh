@@ -81,7 +81,7 @@ private:
             columns.push_back(schema::column{ to_bytes(format("column{:04d}", i)), utf8_type });
         }
 
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", "perf-test"), "ks", "perf-test",
+        schema_builder builder(make_shared_schema(generate_legacy_id("ks", "perf-test"), "ks", "perf-test",
             // partition key
             {{"name", utf8_type}},
             // clustering key
@@ -94,7 +94,7 @@ private:
             utf8_type,
             // comment
             "Perf tests"
-        )));
+        ));
         return builder.build(schema_builder::compact_storage::no);
     }
 

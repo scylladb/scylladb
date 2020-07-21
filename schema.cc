@@ -433,6 +433,15 @@ schema::schema(const schema& o)
     }
 }
 
+lw_shared_ptr<schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
+    std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
+    std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
+    data_type regular_column_name_type, std::string_view comment) {
+    return make_lw_shared<schema>(std::move(id), std::move(ks_name), std::move(cf_name), std::move(partition_key),
+        std::move(clustering_key), std::move(regular_columns), std::move(static_columns),
+        std::move(regular_column_name_type), std::move(comment));
+}
+
 schema::~schema() {
     if (_registry_entry) {
         _registry_entry->detach_schema();

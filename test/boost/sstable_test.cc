@@ -58,7 +58,7 @@ SEASTAR_TEST_CASE(uncompressed_data) {
 }
 
 SEASTAR_TEST_CASE(compressed_data) {
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
     return test_using_working_sst(std::move(s), "test/resource/sstables/compressed", 1);
 }
 
@@ -233,7 +233,7 @@ static future<> compare_files(sstdesc file1, sstdesc file2, component_type compo
 
 static future<> check_component_integrity(component_type component) {
     auto tmp = make_lw_shared<tmpdir>();
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
     return write_sst_info(s, "test/resource/sstables/compressed", tmp->path().string(), 1).then([component, tmp] {
         return compare_files(sstdesc{"test/resource/sstables/compressed", 1 },
                              sstdesc{tmp->path().string(), 2 },
@@ -257,7 +257,7 @@ write_and_validate_sst(schema_ptr s, sstring dir, Func&& func) {
 }
 
 SEASTAR_TEST_CASE(check_summary_func) {
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_summary().then([sst1, sst2] {
             summary& sst1_s = sstables::test(sst1).get_summary();
@@ -278,7 +278,7 @@ SEASTAR_TEST_CASE(check_filter_func) {
 }
 
 SEASTAR_TEST_CASE(check_statistics_func) {
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_statistics().then([sst1, sst2] {
             statistics& sst1_s = sstables::test(sst1).get_statistics();
@@ -297,7 +297,7 @@ SEASTAR_TEST_CASE(check_statistics_func) {
 }
 
 SEASTAR_TEST_CASE(check_toc_func) {
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         return sstables::test(sst2).read_toc().then([sst1, sst2] {
             auto& sst1_c = sstables::test(sst1).get_components();
@@ -321,7 +321,7 @@ SEASTAR_TEST_CASE(uncompressed_random_access_read) {
 }
 
 SEASTAR_TEST_CASE(compressed_random_access_read) {
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
     return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
         return sstables::test(sstp).data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
             BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
@@ -433,7 +433,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
 }
 
 SEASTAR_TEST_CASE(compressed_rows_read_one) {
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
     return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
         return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c, {0, 95}, 95);
@@ -517,7 +517,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_all) {
 }
 
 SEASTAR_TEST_CASE(compressed_rows_read_all) {
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
     return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
         return do_with(count_row_consumer(), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
@@ -909,7 +909,7 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
 
 static schema_ptr large_partition_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_lw_shared(schema(
+        schema_builder builder(make_shared_schema(
                 generate_legacy_id("try1", "data"), "try1", "data",
         // partition key
         {{"t1", utf8_type}},
@@ -923,7 +923,7 @@ static schema_ptr large_partition_schema() {
         utf8_type,
         // comment
         ""
-       )));
+       ));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
