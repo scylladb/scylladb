@@ -100,7 +100,7 @@ public:
     column_translation get_for_schema(
             const schema& s, const serialization_header& header, const sstable_enabled_features& features) {
         if (s.version() != _state->schema_uuid) {
-            _state = make_lw_shared(state(s, header, features));
+            _state = make_lw_shared<const state>(s, header, features);
         }
         return *this;
     }

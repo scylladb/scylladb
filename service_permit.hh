@@ -26,7 +26,7 @@
 
 class service_permit {
     seastar::lw_shared_ptr<seastar::semaphore_units<>> _permit;
-    service_permit(seastar::semaphore_units<>&& u) : _permit(seastar::make_lw_shared(std::move(u))) {}
+    service_permit(seastar::semaphore_units<>&& u) : _permit(seastar::make_lw_shared<seastar::semaphore_units<>>(std::move(u))) {}
     friend service_permit make_service_permit(seastar::semaphore_units<>&& permit);
     friend service_permit empty_service_permit();
 };

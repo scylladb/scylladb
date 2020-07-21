@@ -82,7 +82,7 @@ future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy& proxy
     partition_ranges.emplace_back(std::move(partition_range));
     auto read_consistency_level = options.get_read_consistency_level();
     db::timeout_clock::time_point timeout = db::timeout_clock::now() + options.get_read_timeout();
-    return proxy.query(schema, make_lw_shared(std::move(cmd)), std::move(partition_ranges), read_consistency_level, {timeout, permit, service::client_state::for_internal_calls()}).then([ps, schema] (auto qr) {
+    return proxy.query(schema, make_lw_shared<query::read_command>(std::move(cmd)), std::move(partition_ranges), read_consistency_level, {timeout, permit, service::client_state::for_internal_calls()}).then([ps, schema] (auto qr) {
         return query::result_view::do_with(*qr.query_result, [&] (query::result_view v) {
             auto pd = make_lw_shared<strings_result>();
             v.consume(ps, strings_result_builder(pd, schema, ps));

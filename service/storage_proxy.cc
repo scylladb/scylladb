@@ -3544,7 +3544,7 @@ protected:
                 if (rr_opt && (can_send_short_read || data_resolver->all_reached_end() || rr_opt->row_count() >= original_row_limit()
                                || data_resolver->live_partition_count() >= original_partition_limit())
                         && !data_resolver->any_partition_short_read()) {
-                    auto result = ::make_foreign(::make_lw_shared(
+                    auto result = ::make_foreign(::make_lw_shared<query::result>(
                             to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->row_limit, cmd->partition_limit)));
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
@@ -3885,7 +3885,7 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
         return query_nonsingular_mutations_locally(s, cmd, {pr}, std::move(trace_state), max_size, timeout).then([s, cmd, opts] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>&& r_ht) {
             auto&& [r, ht] = r_ht;
             return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(
-                    rpc::tuple(::make_foreign(::make_lw_shared(to_data_query_result(*r, s, cmd->slice,  cmd->row_limit, cmd->partition_limit, opts))), ht));
+                    rpc::tuple(::make_foreign(::make_lw_shared<query::result>(to_data_query_result(*r, s, cmd->slice,  cmd->row_limit, cmd->partition_limit, opts))), ht));
         });
     }
 }
@@ -5141,7 +5141,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
           return db.get_result_memory_limiter().new_mutation_read(max_size).then([&] (query::result_memory_accounter ma) {
             return db.query_mutations(gs, *cmd, pr, std::move(ma), gt, timeout).then([] (std::tuple<reconcilable_result, cache_temperature> result_ht) {
                 auto&& [result, ht] = result_ht;
-                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared(std::move(result))), ht));
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), ht));
             });
           });
         });

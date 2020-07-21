@@ -233,7 +233,7 @@ public:
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) override {
         auto id = utils::UUID_gen::get_time_UUID();
-        schema_builder builder(make_lw_shared(schema_maker(ks_name)));
+        schema_builder builder(make_lw_shared<schema>(schema_maker(ks_name)));
         builder.set_uuid(id);
         auto s = builder.build(schema_builder::compact_storage::no);
         return service::get_local_migration_manager().announce_new_column_family(s, true);

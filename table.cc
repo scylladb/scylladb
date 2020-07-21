@@ -653,7 +653,7 @@ void table::add_sstable(sstables::shared_sstable sstable) {
         on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
     }
     // allow in-progress reads to continue using old list
-    auto new_sstables = make_lw_shared(*_sstables);
+    auto new_sstables = make_lw_shared<sstables::sstable_set>(*_sstables);
     new_sstables->insert(sstable);
     _sstables = std::move(new_sstables);
     update_stats_for_new_sstable(sstable->bytes_on_disk());
@@ -1010,7 +1010,7 @@ table::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sst
             new_sstable_list.insert(tab);
         }
     }
-    _sstables = make_lw_shared(std::move(new_sstable_list));
+    _sstables = make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
 }
 
 // Note: must run in a seastar thread
@@ -1202,7 +1202,7 @@ int64_t table::get_unleveled_sstables() const {
 }
 
 future<std::unordered_set<sstring>> table::get_sstables_by_partition_key(const sstring& key) const {
-    return do_with(std::unordered_set<sstring>(), lw_shared_ptr<sstables::sstable_set::incremental_selector>(make_lw_shared(get_sstable_set().make_incremental_selector())),
+    return do_with(std::unordered_set<sstring>(), make_lw_shared<sstables::sstable_set::incremental_selector>(get_sstable_set().make_incremental_selector()),
             partition_key(partition_key::from_nodetool_style_string(_schema, key)),
             [this] (std::unordered_set<sstring>& filenames, lw_shared_ptr<sstables::sstable_set::incremental_selector>& sel, partition_key& pk) {
         return do_with(dht::decorated_key(dht::decorate_key(*_schema, pk)),
@@ -1254,7 +1254,7 @@ lw_shared_ptr<const sstable_list> table::get_sstables_including_compacted_undele
     if (_sstables_compacted_but_not_deleted.empty()) {
         return get_sstables();
     }
-    auto ret = make_lw_shared(*_sstables->all());
+    auto ret = make_lw_shared<sstable_list>(*_sstables->all());
     for (auto&& s : _sstables_compacted_but_not_deleted) {
         ret->insert(s);
     }
@@ -1290,7 +1290,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
                         )
     , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
-    , _sstables(make_lw_shared(_compaction_strategy.make_sstable_set(_schema)))
+    , _sstables(make_lw_shared<sstables::sstable_set>(_compaction_strategy.make_sstable_set(_schema)))
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
@@ -1306,7 +1306,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
 
 partition_presence_checker
 table::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set> sstables) {
-    auto sel = make_lw_shared(sstables->make_incremental_selector());
+    auto sel = make_lw_shared<sstables::sstable_set::incremental_selector>(sstables->make_incremental_selector());
     return [this, sstables = std::move(sstables), sel = std::move(sel)] (const dht::decorated_key& key) {
         auto& sst = sel->select(key).sstables;
         if (sst.empty()) {
@@ -1625,7 +1625,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         void prune(db_clock::time_point truncated_at) {
             auto gc_trunc = to_gc_clock(truncated_at);
 
-            auto pruned = make_lw_shared(cf._compaction_strategy.make_sstable_set(cf._schema));
+            auto pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
 
             for (auto& p : *cf._sstables->all()) {
                 if (p->max_data_age() <= gc_trunc) {

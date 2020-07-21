@@ -138,7 +138,7 @@ SEASTAR_TEST_CASE(test_commitlog_written_to_disk_no_sync){
 
 SEASTAR_TEST_CASE(test_commitlog_written_to_disk_periodic){
     return cl_test([](commitlog& log) {
-            auto state = make_lw_shared(false);
+            auto state = make_lw_shared<bool>(false);
             auto uuid = utils::UUID_gen::get_time_UUID();
             return do_until([state]() {return *state;},
                     [&log, state, uuid]() {
