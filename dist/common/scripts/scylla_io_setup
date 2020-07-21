@@ -30,15 +30,30 @@ import logging
 import sys
 import scylla_blocktune as blocktune
 
+def setup_io_files(conf_file, prop_file):
+    ioconf = open(conf_file, "w")
+    if os.path.exists(prop_file):
+        ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(prop_file))
+    else:
+        logging.error('{} properties file doesn\'t exist'.format(prop_file))
+        sys.exit(1)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='IO Setup script for Scylla.')
     parser.add_argument('--ami', dest='ami', action='store_true',
                         help='configure AWS AMI')
-    args = parser.parse_args()
 
+    parser.add_argument('--io-properties-file',default=None,dest='ioPropertiesFile',help='Use a preset io properties file.')
+    args = parser.parse_args()    
     cpudata = scylla_cpuinfo()
+    ioconf_filename = etcdir() + "/scylla.d/io.conf"
     if not is_developer_mode():
-        if args.ami:
+        prop_filename = None
+        if args.ioPropertiesFile:
+            if args.ami:
+                logging.warning("--ami flag will not take effect because a preset io properties file was given")
+            setup_io_files(ioconf_filename, args.ioPropertiesFile)
+        elif args.ami:
             idata = aws_instance()
 
             if not idata.is_supported_instance_class():
@@ -85,9 +100,8 @@ if __name__ == "__main__":
                 disk_properties["write_iops"] = 57100 * nr_disks
                 disk_properties["write_bandwidth"] = 483141731 * nr_disks
             properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
-            yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
-            ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
-            ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+            yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)                        
+            setup_io_files(ioconf_filename, properties_file.name)
         else:
             if "SCYLLA_CONF" in os.environ:
                 conf_dir = os.environ["SCYLLA_CONF"]
@@ -131,7 +145,7 @@ if __name__ == "__main__":
             try:
                 subprocess.check_call([bindir() + "/iotune",
                                        "--format", "envfile",
-                                       "--options-file", etcdir() + "/scylla.d/io.conf",
+                                       "--options-file", ioconf_filename,
                                        "--properties-file", etcdir() + "/scylla.d/io_properties.yaml"] + iotune_args)
             except Exception:
                 logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
