@@ -27,4 +27,5 @@ def parse():
     parser.add_argument('--cluster-name', default=None, dest='clusterName', help="Set cluster name")
     parser.add_argument('--endpoint-snitch', default=None, dest='endpointSnitch', help="Set endpoint snitch")
     parser.add_argument('--replace-address-first-boot', default=None, dest='replaceAddressFirstBoot', help="IP address of a dead node to replace.")
+    parser.add_argument('--io-properties-file',default=None,dest='ioPropertiesFile',help="Use a preset io properties file.")
     return parser.parse_args()
