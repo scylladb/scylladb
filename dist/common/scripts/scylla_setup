@@ -70,7 +70,7 @@ def print_non_interactive_suggestion_message(args):
         outlines[-1] += x
 
     print(' \\\n'.join(outlines))
-    if args.no_io_setup == False:
+    if args.io_setup:
         print('\nAlso, to avoid the time-consuming I/O tuning you can add --no-io-setup and copy the contents of /etc/scylla.d/io*')
         print('Only do that if you are moving the files into machines with the exact same hardware')
 
@@ -191,7 +191,9 @@ if __name__ == '__main__':
                         help='skip coredump setup')
     parser.add_argument('--no-sysconfig-setup', action='store_true', default=False,
                         help='skip sysconfig setup')
-    parser.add_argument('--no-io-setup', action='store_true', default=False,
+    parser.add_argument('--io-setup', default='1', choices=['0', '1'], dest='io_setup',
+                        help='Run I/O configuration setup (i.e. iotune). Defaults to 1.')
+    parser.add_argument('--no-io-setup', dest='io_setup', action='store_const', const='0',
                         help='skip IO configuration setup')
     parser.add_argument('--no-version-check', action='store_true', default=False,
                         help='skip daily version check')
@@ -239,7 +241,7 @@ if __name__ == '__main__':
     raid_setup = not args.no_raid_setup
     coredump_setup = not args.no_coredump_setup
     sysconfig_setup = not args.no_sysconfig_setup
-    io_setup = not args.no_io_setup
+    io_setup = args.io_setup == "1"
     version_check = not args.no_version_check
     node_exporter = not args.no_node_exporter
     cpuscaling_setup = not args.no_cpuscaling_setup
@@ -420,7 +422,7 @@ if __name__ == '__main__':
             run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
 
     io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', io_setup)
-    args.no_io_setup = not io_setup
+    args.io_setup = io_setup
     if io_setup:
         run_setup_script('IO configuration', 'scylla_io_setup')
 
