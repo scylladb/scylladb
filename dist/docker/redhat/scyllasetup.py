@@ -29,6 +29,7 @@ class ScyllaSetup:
         self._clusterName = arguments.clusterName
         self._endpointSnitch = arguments.endpointSnitch
         self._replaceAddressFirstBoot = arguments.replaceAddressFirstBoot
+        self._io_setup = arguments.io_setup
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -61,7 +62,8 @@ class ScyllaSetup:
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
 
-        self._run(['/opt/scylladb/scripts/scylla_io_setup'])
+        if self._io_setup == "1":
+            self._run(['/opt/scylladb/scripts/scylla_io_setup'])
 
     def cqlshrc(self):
         home = os.environ['HOME']
