@@ -305,7 +305,6 @@ def test_get_shard_iterator_for_nonexistent_shard(dynamodb, dynamodbstreams):
                     StreamArn=arn, ShardId='adfasdasdasdasdasdasdasdasdasasdasd', ShardIteratorType='LATEST'
                 )
 
-@pytest.mark.xfail(reason="this test still sporadically fails")
 def test_get_records(dynamodb, dynamodbstreams):
     # TODO: add tests for storage/transactionable variations and global/local index
     with create_stream_test_table(dynamodb, StreamViewType='NEW_AND_OLD_IMAGES') as table:
