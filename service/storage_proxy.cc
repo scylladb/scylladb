@@ -5221,8 +5221,7 @@ future<> storage_proxy::drain_on_shutdown() {
 
 future<>
 storage_proxy::stop() {
-    // FIXME: hints manager should be stopped here but it seems like this function is never called
-    return uninit_messaging_service();
+    return make_ready_future<>();
 }
 
 }

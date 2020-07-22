@@ -310,7 +310,6 @@ private:
 
     cdc_stats _cdc_stats;
 private:
-    future<> uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl,
@@ -465,6 +464,7 @@ public:
         return next;
     }
     void init_messaging_service();
+    future<> uninit_messaging_service();
 
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
