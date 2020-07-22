@@ -77,6 +77,12 @@ cdc::metadata::container_t::const_iterator cdc::metadata::gen_used_at(api::times
     return std::prev(it);
 }
 
+bool cdc::metadata::streams_available() const {
+    auto now = api::new_timestamp();
+    auto it = gen_used_at(now);
+    return  it != _gens.end();
+}
+
 cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok) {
     auto now = api::new_timestamp();
     if (ts > now + generation_leeway.count()) {
