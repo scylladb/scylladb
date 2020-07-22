@@ -57,6 +57,10 @@ public:
     /* Is a generation with the given timestamp already known or superseded by a newer generation? */
     bool known_or_obsolete(db_clock::time_point) const;
 
+    /* Are there streams available. I.e. valid for time == now. If this is false, any writes to 
+     * CDC logs will fail fast.
+     */
+    bool streams_available() const;
     /* Return the stream for the base partition whose token is `tok` to which a corresponding log write should go
      * according to the generation used at time `ts` (i.e, the latest generation whose timestamp is less or equal to `ts`).
      *

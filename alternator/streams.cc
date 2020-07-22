@@ -36,6 +36,7 @@
 #include "cql3/result_set.hh"
 #include "cql3/type_json.hh"
 #include "schema_builder.hh"
+#include "service/storage_service.hh"
 
 #include "executor.hh"
 #include "tags_extension.hh"
@@ -390,7 +391,18 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     auto& opts = bs->cdc_options();
 
-    rjson::set(stream_desc, "StreamStatus", rjson::from_string(opts.enabled() ? "ENABLED"s : "DISABLED"s));
+    auto status = "DISABLED";
+
+    if (opts.enabled()) {
+        auto& metadata = _ss.get_cdc_metadata();
+        if (!metadata.streams_available()) {
+            status = "ENABLING";
+        } else {
+            status = "ENABLED";
+        }
+    } 
+    
+    rjson::set(stream_desc, "StreamStatus", rjson::from_string(status));
 
     stream_view_type type = cdc_options_to_steam_view_type(opts);
 
