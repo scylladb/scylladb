@@ -142,6 +142,7 @@ private:
     using token = dht::token;
     using ring_position = dht::ring_position;
     static void init_messaging_service_handler();
+    static future<> uninit_messaging_service_handler();
     static distributed<database>* _db;
     static distributed<db::system_distributed_keyspace>* _sys_dist_ks;
     static distributed<db::view::view_update_generator>* _view_update_generator;
@@ -152,6 +153,7 @@ public:
     static database& get_local_db() { return _db->local(); }
     static distributed<database>& get_db() { return *_db; };
     static future<> init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator);
+    static future<> uninit_streaming_service();
 public:
     /**
      * Streaming endpoint.
