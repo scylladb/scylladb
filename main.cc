@@ -972,9 +972,7 @@ int main(int ac, char** av) {
                 mm.init_messaging_service();
             }).get();
             supervisor::notify("initializing storage proxy RPC verbs");
-            proxy.invoke_on_all([] (service::storage_proxy& p) {
-                p.init_messaging_service();
-            }).get();
+            proxy.invoke_on_all(&service::storage_proxy::init_messaging_service).get();
 
             supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator).get();
