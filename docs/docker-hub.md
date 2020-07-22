@@ -243,6 +243,20 @@ For example, to enable optimizations for running in an statically partitioned en
 $ docker run --name some-scylla -d scylladb/scylla --overprovisioned 0
 ```
 
+### `--io-setup ENABLE`
+
+The `--io-setup` command line option specifies if the `scylla_io_setup` script is run when the container is started for the first time.
+This is useful if users want to specify I/O settings themselves in environments such as Kubernetes, where running `iotune` is problematic.
+The default of `--io-setup` is `1`, which means I/O setup is run.
+
+For example, to skip running I/O setup:
+
+```console
+$ docker run --name some-scylla -d scylladb/scylla --io-setup 0
+```
+
+**Since: 4.3**
+
 ### `--cpuset CPUSET`
 
 The `--cpuset` command line option restricts Scylla to run on only on CPUs specified by `CPUSET`.
