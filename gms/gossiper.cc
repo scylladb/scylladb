@@ -1763,38 +1763,86 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
     });
 }
 
-future<> gossiper::do_shadow_round() {
-    return seastar::async([this, g = this->shared_from_this()] {
-        build_seeds_list();
-        _in_shadow_round = true;
-        auto t = clk::now();
-
-        // When peer node receives a syn message, it will send back a ack message.
-        // So, we need to register gossip message handlers before sending syn message.
-        get_gossiper().invoke_on_all([] (gossiper& g) {
-            return g.init_messaging_service_handler();
+future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, bind_messaging_port do_bind) {
+    return seastar::async([this, g = this->shared_from_this(), nodes = std::move(nodes), do_bind] () mutable {
+        get_gossiper().invoke_on_all([do_bind] (gossiper& g) {
+            return g.init_messaging_service_handler(do_bind);
         }).get();
-
-        while (this->_in_shadow_round) {
-            // send a completely empty syn
-            for (inet_address seed : _seeds) {
-                utils::chunked_vector<gossip_digest> digests;
-                gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
-                auto id = get_msg_addr(seed);
-                logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
-                // Do it in the background.
-                (void)ms().send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
-                    logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
+        nodes.erase(get_broadcast_address());
+        gossip_get_endpoint_states_request request{{
+            gms::application_state::STATUS,
+            gms::application_state::HOST_ID,
+            gms::application_state::TOKENS,
+            gms::application_state::SUPPORTED_FEATURES}};
+        logger.info("Gossip shadow round started with nodes={}", nodes);
+        std::unordered_set<gms::inet_address> nodes_talked;
+        size_t nodes_down = 0;
+        auto start_time = clk::now();
+        bool fall_back_to_syn_msg = false;
+        std::list<gms::gossip_get_endpoint_states_response> responses;
+        for (;;) {
+            parallel_for_each(nodes.begin(), nodes.end(), [this, &request, &responses, &nodes_talked, &nodes_down, &fall_back_to_syn_msg] (gms::inet_address node) {
+                logger.debug("Sent get_endpoint_states request to {}, request={}", node, request.application_states);
+                return ms().send_gossip_get_endpoint_states(msg_addr(node), std::chrono::milliseconds(5000), request).then(
+                        [node, &nodes_talked, &responses] (gms::gossip_get_endpoint_states_response response) {
+                    logger.debug("Got get_endpoint_states response from {}, response={}", node, response.endpoint_state_map);
+                    responses.push_back(std::move(response));
+                    nodes_talked.insert(node);
+                }).handle_exception_type([node, &fall_back_to_syn_msg] (seastar::rpc::unknown_verb_error&) {
+                    logger.warn("Node {} does not support get_endpoint_states verb", node);
+                    fall_back_to_syn_msg = true;
+                }).handle_exception_type([node, &nodes_down] (seastar::rpc::closed_error&) {
+                    nodes_down++;
+                    logger.warn("Node {} is down for get_endpoint_states verb", node);
                 });
+            }).get();
+            for (auto& response : responses) {
+                apply_state_locally_without_listener_notification(response.endpoint_state_map);
+            }
+            if (!nodes_talked.empty()) {
+                break;
+            }
+            if (nodes_down == nodes.size()) {
+                logger.warn("All nodes={} are down for get_endpoint_states verb. Skip ShadowRound.", nodes);
+                break;
+            }
+            if (fall_back_to_syn_msg) {
+                break;
+            }
+            if (clk::now() > start_time + std::chrono::milliseconds(_cfg.shadow_round_ms())) {
+                throw std::runtime_error(format("Unable to gossip with any nodes={} (ShadowRound).", nodes));
             }
             sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-            if (this->_in_shadow_round) {
-                if (clk::now() > t + std::chrono::milliseconds(_cfg.shadow_round_ms())) {
-                    throw std::runtime_error(format("Unable to gossip with any seeds (ShadowRound)"));
+            logger.info("Connect nodes={} again ... ({} seconds passed)",
+                    nodes, std::chrono::duration_cast<std::chrono::seconds>(clk::now() - start_time).count());
+        }
+        if (fall_back_to_syn_msg) {
+            logger.info("Fallback to old method for ShadowRound");
+            auto t = clk::now();
+            _in_shadow_round = true;
+            while (this->_in_shadow_round) {
+                // send a completely empty syn
+                for (const auto& node : nodes) {
+                    utils::chunked_vector<gossip_digest> digests;
+                    gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
+                    auto id = get_msg_addr(node);
+                    logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
+                    // Do it in the background.
+                    (void)ms().send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
+                        logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
+                    });
                 }
-                logger.info("Connect seeds again ... ({} seconds passed)", std::chrono::duration_cast<std::chrono::seconds>(clk::now() - t).count());
+                sleep_abortable(std::chrono::seconds(1), _abort_source).get();
+                if (this->_in_shadow_round) {
+                    if (clk::now() > t + std::chrono::milliseconds(_cfg.shadow_round_ms())) {
+                        throw std::runtime_error(format("Unable to gossip with any nodes={} (ShadowRound),", nodes));
+                    }
+                    logger.info("Connect nodes={} again ... ({} seconds passed)",
+                            nodes, std::chrono::duration_cast<std::chrono::seconds>(clk::now() - t).count());
+                }
             }
         }
+        logger.info("Gossip shadow round finisehd with nodes_talked={}", nodes_talked);
     });
 }
 
