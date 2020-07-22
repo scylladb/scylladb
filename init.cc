@@ -83,7 +83,6 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
         tndw = tcp_nodelay_what::local;
     }
 
-    future<> f = make_ready_future<>();
     std::shared_ptr<credentials_builder> creds;
 
     if (ew != encrypt_what::none) {
