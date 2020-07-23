@@ -525,6 +525,16 @@ future<> read_context::lookup_readers() {
             }
 
             auto& q = *querier_opt;
+
+            if (&q.permit().semaphore() != &semaphore) {
+                on_internal_error(mmq_log, format("looked-up reader belongs to different semaphore than the one appropriate for this query class: "
+                        "looked-up reader belongs to {} (0x{:x}) the query class appropriate is {} (0x{:x})",
+                        q.permit().semaphore().name(),
+                        reinterpret_cast<uintptr_t>(&q.permit().semaphore()),
+                        semaphore.name(),
+                        reinterpret_cast<uintptr_t>(&semaphore)));
+            }
+
             auto handle = pause(semaphore, std::move(q).reader());
             return reader_meta(
                     reader_state::successful_lookup,
