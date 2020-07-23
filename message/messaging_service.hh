@@ -220,15 +220,11 @@ public:
     struct config {
         gms::inet_address ip;
         uint16_t port;
-        uint16_t ssl_port;
-        encrypt_what encrypt;
-        compress_what compress;
-        tcp_nodelay_what tcp_nodelay;
-        bool listen_on_broadcast_address;
-        size_t rpc_memory_limit;
-    };
-
-    struct memory_config {
+        uint16_t ssl_port = 0;
+        encrypt_what encrypt = encrypt_what::none;
+        compress_what compress = compress_what::none;
+        tcp_nodelay_what tcp_nodelay = tcp_nodelay_what::all;
+        bool listen_on_broadcast_address = false;
         size_t rpc_memory_limit = 1'000'000;
     };
 
@@ -282,9 +278,7 @@ public:
 
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
             uint16_t port = 7000);
-    messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what, tcp_nodelay_what,
-            uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
-            memory_config mcfg, scheduling_config scfg, bool sltba = false);
+    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>);
     ~messaging_service();
 
     future<> start_listen();

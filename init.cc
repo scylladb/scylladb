@@ -56,30 +56,35 @@ void init_messaging_service(db::config& cfg
     using tcp_nodelay_what = netw::messaging_service::tcp_nodelay_what;
     using namespace seastar::tls;
 
-    encrypt_what ew = encrypt_what::none;
+    netw::messaging_service::config mscfg;
+
+    mscfg.ip = listen;
+    mscfg.port = storage_port;
+    mscfg.ssl_port = ssl_storage_port;
+    mscfg.listen_on_broadcast_address = sltba;
+    mscfg.rpc_memory_limit = std::max<size_t>(0.08 * available_memory, mscfg.rpc_memory_limit);
+
     if (ms_encrypt_what == "all") {
-        ew = encrypt_what::all;
+        mscfg.encrypt = encrypt_what::all;
     } else if (ms_encrypt_what == "dc") {
-        ew = encrypt_what::dc;
+        mscfg.encrypt = encrypt_what::dc;
     } else if (ms_encrypt_what == "rack") {
-        ew = encrypt_what::rack;
+        mscfg.encrypt = encrypt_what::rack;
     }
 
-    compress_what cw = compress_what::none;
     if (ms_compress == "all") {
-        cw = compress_what::all;
+        mscfg.compress = compress_what::all;
     } else if (ms_compress == "dc") {
-        cw = compress_what::dc;
+        mscfg.compress = compress_what::dc;
     }
 
-    tcp_nodelay_what tndw = tcp_nodelay_what::all;
     if (!tcp_nodelay_inter_dc) {
-        tndw = tcp_nodelay_what::local;
+        mscfg.tcp_nodelay = tcp_nodelay_what::local;
     }
 
     std::shared_ptr<credentials_builder> creds;
 
-    if (ew != encrypt_what::none) {
+    if (mscfg.encrypt != encrypt_what::none) {
         creds = std::make_shared<credentials_builder>();
         creds->set_dh_level(dh_params::level::MEDIUM);
 
@@ -102,12 +107,11 @@ void init_messaging_service(db::config& cfg
 
     // Init messaging_service
     // Delay listening messaging_service until gossip message handlers are registered
-    netw::messaging_service::memory_config mcfg = { std::max<size_t>(0.08 * available_memory, 1'000'000) };
     netw::messaging_service::scheduling_config scfg;
     scfg.statement_tenants = { {scheduling_config.statement, "$user"}, {default_scheduling_group(), "$system"} };
     scfg.streaming = scheduling_config.streaming;
     scfg.gossip = scheduling_config.gossip;
-    netw::get_messaging_service().start(listen, storage_port, ew, cw, tndw, ssl_storage_port, creds, mcfg, scfg, sltba).get();
+    netw::get_messaging_service().start(mscfg, scfg, creds).get();
 }
 
 void init_gossiper(sharded<gms::gossiper>& gossiper

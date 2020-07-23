@@ -280,8 +280,7 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
-    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, tcp_nodelay_what::all, 0, nullptr, memory_config{1'000'000},
-            scheduling_config{{{{}, "$default"}}, {}, {}}, false)
+    : messaging_service(config{std::move(ip), port}, scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr)
 {}
 
 static
@@ -374,17 +373,8 @@ void messaging_service::do_start_listen() {
     }
 }
 
-messaging_service::messaging_service(gms::inet_address ip
-        , uint16_t port
-        , encrypt_what ew
-        , compress_what cw
-        , tcp_nodelay_what tnw
-        , uint16_t ssl_port
-        , std::shared_ptr<seastar::tls::credentials_builder> credentials
-        , messaging_service::memory_config mcfg
-        , scheduling_config scfg
-        , bool sltba)
-    : _cfg(std::move(ip), port, ssl_port, ew, cw, tnw, sltba, mcfg.rpc_memory_limit)
+messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials)
+    : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
     , _clients(2 + scfg.statement_tenants.size() * 2)
