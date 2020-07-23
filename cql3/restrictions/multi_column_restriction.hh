@@ -471,18 +471,22 @@ private:
      * @return the vector of ranges for the restriction
      */
     std::vector<bounds_range_type> bounds_ranges_unified_order(const query_options& options) const {
-        auto start_prefix = clustering_key_prefix::from_optional_exploded(*_schema, read_bound_components(options, statements::bound::START));
-        auto start_bound = bounds_range_type::bound(std::move(start_prefix), _slice.is_inclusive(statements::bound::START));
-        auto end_prefix = clustering_key_prefix::from_optional_exploded(*_schema, read_bound_components(options, statements::bound::END));
-        auto end_bound = bounds_range_type::bound(std::move(end_prefix), _slice.is_inclusive(statements::bound::END));
-        auto make_range = [&] () {
-            if (is_asc_order()) {
-                return bounds_range_type::make(start_bound, end_bound);
-            } else {
-                return bounds_range_type::make(end_bound, start_bound);
-            }
-        };
-        auto range = make_range();
+        std::optional<bounds_range_type::bound> start_bound;
+        std::optional<bounds_range_type::bound> end_bound;
+        auto start_components = read_bound_components(options, statements::bound::START);
+        if (!start_components.empty()) {
+            auto start_prefix = clustering_key_prefix::from_optional_exploded(*_schema, start_components);
+            start_bound = bounds_range_type::bound(std::move(start_prefix), _slice.is_inclusive(statements::bound::START));
+        }
+        auto end_components = read_bound_components(options, statements::bound::END);
+        if (!end_components.empty()) {
+            auto end_prefix = clustering_key_prefix::from_optional_exploded(*_schema, end_components);
+            end_bound = bounds_range_type::bound(std::move(end_prefix), _slice.is_inclusive(statements::bound::END));
+        }
+        if (!is_asc_order()) {
+            std::swap(start_bound, end_bound);
+        }
+        auto range = bounds_range_type(start_bound, end_bound);
         auto bounds = bound_view::from_range(range);
         if (bound_view::compare(*_schema)(bounds.second, bounds.first)) {
             return { };
