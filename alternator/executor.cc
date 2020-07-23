@@ -2411,7 +2411,8 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "GetItem");
 
-    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
+    return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time);
         return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
