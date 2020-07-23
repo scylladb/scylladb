@@ -217,6 +217,17 @@ public:
         all,
     };
 
+    struct config {
+        gms::inet_address ip;
+        uint16_t port;
+        uint16_t ssl_port;
+        encrypt_what encrypt;
+        compress_what compress;
+        tcp_nodelay_what tcp_nodelay;
+        bool listen_on_broadcast_address;
+        size_t rpc_memory_limit;
+    };
+
     struct memory_config {
         size_t rpc_memory_limit = 1'000'000;
     };
@@ -247,13 +258,7 @@ private:
         unsigned cliend_idx;
     };
 private:
-    gms::inet_address _listen_address;
-    uint16_t _port;
-    uint16_t _ssl_port;
-    encrypt_what _encrypt_what;
-    compress_what _compress_what;
-    tcp_nodelay_what _tcp_nodelay_what;
-    bool _should_listen_to_broadcast_address;
+    config _cfg;
     // map: Node broadcast address -> Node internal IP for communication within the same data center
     std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
@@ -265,7 +270,6 @@ private:
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _shutting_down = false;
     std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
-    memory_config _mcfg;
     scheduling_config _scheduling_config;
     std::vector<scheduling_info_for_connection_index> _scheduling_info_for_connection_index;
     std::vector<tenant_connection_index> _connection_index_for_tenant;

@@ -312,9 +312,9 @@ future<> messaging_service::start_listen() {
 }
 
 void messaging_service::do_start_listen() {
-    bool listen_to_bc = _should_listen_to_broadcast_address && _listen_address != utils::fb_utilities::get_broadcast_address();
+    bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != utils::fb_utilities::get_broadcast_address();
     rpc::server_options so;
-    if (_compress_what != compress_what::none) {
+    if (_cfg.compress != compress_what::none) {
         so.compressor_factory = &compressor_factory;
     }
     so.load_balancing_algorithm = server_socket::load_balancing_algorithm::port;
@@ -322,7 +322,7 @@ void messaging_service::do_start_listen() {
     // FIXME: we don't set so.tcp_nodelay, because we can't tell at this point whether the connection will come from a
     //        local or remote datacenter, and whether or not the connection will be used for gossip. We can fix
     //        the first by wrapping its server_socket, but not the second.
-    auto limits = rpc_resource_limits(_mcfg.rpc_memory_limit);
+    auto limits = rpc_resource_limits(_cfg.rpc_memory_limit);
     limits.isolate_connection = [this] (sstring isolation_cookie) {
         rpc::isolation_config cfg;
         cfg.sched_group = scheduling_group_for_isolation_cookie(isolation_cookie);
@@ -331,11 +331,11 @@ void messaging_service::do_start_listen() {
     if (!_server[0]) {
         auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
             so.streaming_domain = sdomain;
-            auto addr = socket_address{a, _port};
+            auto addr = socket_address{a, _cfg.port};
             return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
                     so, addr, limits));
         };
-        _server[0] = listen(_listen_address, rpc::streaming_domain_type(0x55AA));
+        _server[0] = listen(_cfg.ip, rpc::streaming_domain_type(0x55AA));
         if (listen_to_bc) {
             _server[1] = listen(utils::fb_utilities::get_broadcast_address(), rpc::streaming_domain_type(0x66BB));
         }
@@ -346,7 +346,7 @@ void messaging_service::do_start_listen() {
             so.streaming_domain = sdomain;
             return std::unique_ptr<rpc_protocol_server_wrapper>(
                     [this, &so, &a, limits] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
-                if (_encrypt_what == encrypt_what::none) {
+                if (_cfg.encrypt == encrypt_what::none) {
                     return nullptr;
                 }
                 if (!_credentials) {
@@ -355,12 +355,12 @@ void messaging_service::do_start_listen() {
                 listen_options lo;
                 lo.reuse_address = true;
                 lo.lba =  server_socket::load_balancing_algorithm::port;
-                auto addr = socket_address{a, _ssl_port};
+                auto addr = socket_address{a, _cfg.ssl_port};
                 return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
                         so, seastar::tls::listen(_credentials, addr, lo), limits);
             }());
         };
-        _server_tls[0] = listen(_listen_address, rpc::streaming_domain_type(0x77CC));
+        _server_tls[0] = listen(_cfg.ip, rpc::streaming_domain_type(0x77CC));
         if (listen_to_bc) {
             _server_tls[1] = listen(utils::fb_utilities::get_broadcast_address(), rpc::streaming_domain_type(0x88DD));
         }
@@ -368,9 +368,9 @@ void messaging_service::do_start_listen() {
     // Do this on just cpu 0, to avoid duplicate logs.
     if (this_shard_id() == 0) {
         if (_server_tls[0]) {
-            mlogger.info("Starting Encrypted Messaging Service on SSL port {}", _ssl_port);
+            mlogger.info("Starting Encrypted Messaging Service on SSL port {}", _cfg.ssl_port);
         }
-        mlogger.info("Starting Messaging Service on port {}", _port);
+        mlogger.info("Starting Messaging Service on port {}", _cfg.port);
     }
 }
 
@@ -384,17 +384,10 @@ messaging_service::messaging_service(gms::inet_address ip
         , messaging_service::memory_config mcfg
         , scheduling_config scfg
         , bool sltba)
-    : _listen_address(ip)
-    , _port(port)
-    , _ssl_port(ssl_port)
-    , _encrypt_what(ew)
-    , _compress_what(cw)
-    , _tcp_nodelay_what(tnw)
-    , _should_listen_to_broadcast_address(sltba)
+    : _cfg(std::move(ip), port, ssl_port, ew, cw, tnw, sltba, mcfg.rpc_memory_limit)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
     , _clients(2 + scfg.statement_tenants.size() * 2)
-    , _mcfg(mcfg)
     , _scheduling_config(scfg)
     , _scheduling_info_for_connection_index(initial_scheduling_info())
 {
@@ -426,11 +419,11 @@ msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
 messaging_service::~messaging_service() = default;
 
 uint16_t messaging_service::port() {
-    return _port;
+    return _cfg.port;
 }
 
 gms::inet_address messaging_service::listen_address() {
-    return _listen_address;
+    return _cfg.ip;
 }
 
 static future<> stop_servers(std::array<std::unique_ptr<messaging_service::rpc_protocol_server_wrapper>, 2>& servers) {
@@ -655,16 +648,16 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }
 
     auto must_encrypt = [&id, this] {
-        if (_encrypt_what == encrypt_what::none) {
+        if (_cfg.encrypt == encrypt_what::none) {
             return false;
         }
-        if (_encrypt_what == encrypt_what::all) {
+        if (_cfg.encrypt == encrypt_what::all) {
             return true;
         }
 
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
-        if (_encrypt_what == encrypt_what::dc) {
+        if (_cfg.encrypt == encrypt_what::dc) {
             return snitch_ptr->get_datacenter(id.addr)
                             != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
         }
@@ -673,11 +666,11 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }();
 
     auto must_compress = [&id, this] {
-        if (_compress_what == compress_what::none) {
+        if (_cfg.compress == compress_what::none) {
             return false;
         }
 
-        if (_compress_what == compress_what::dc) {
+        if (_cfg.compress == compress_what::dc) {
             auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
             return snitch_ptr->get_datacenter(id.addr)
                             != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
@@ -690,7 +683,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         if (idx == 1) {
             return true; // gossip
         }
-        if (_tcp_nodelay_what == tcp_nodelay_what::local) {
+        if (_cfg.tcp_nodelay == tcp_nodelay_what::local) {
             auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
             return snitch_ptr->get_datacenter(id.addr)
                             == snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
@@ -698,7 +691,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         return true;
     }();
 
-    auto remote_addr = socket_address(get_preferred_ip(id.addr), must_encrypt ? _ssl_port : _port);
+    auto remote_addr = socket_address(get_preferred_ip(id.addr), must_encrypt ? _cfg.ssl_port : _cfg.port);
 
     rpc::client_options opts;
     // send keepalive messages each minute if connection is idle, drop connection after 10 failures
