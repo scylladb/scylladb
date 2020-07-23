@@ -2168,6 +2168,25 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
     });
 }
 
+future<> repair_uninit_messaging_service_handler() {
+    return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
+        return when_all_succeed(
+            ms.unregister_repair_get_row_diff_with_rpc_stream(),
+            ms.unregister_repair_put_row_diff_with_rpc_stream(),
+            ms.unregister_repair_get_full_row_hashes_with_rpc_stream(),
+            ms.unregister_repair_get_full_row_hashes(),
+            ms.unregister_repair_get_combined_row_hash(),
+            ms.unregister_repair_get_sync_boundary(),
+            ms.unregister_repair_get_row_diff(),
+            ms.unregister_repair_put_row_diff(),
+            ms.unregister_repair_row_level_start(),
+            ms.unregister_repair_row_level_stop(),
+            ms.unregister_repair_get_estimated_partitions(),
+            ms.unregister_repair_set_estimated_partitions(),
+            ms.unregister_repair_get_diff_algorithms()).discard_result();
+    });
+}
+
 class row_level_repair {
     repair_info& _ri;
     sstring _cf_name;

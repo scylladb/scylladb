@@ -319,6 +319,15 @@ void stream_session::init_messaging_service_handler() {
     });
 }
 
+future<> stream_session::uninit_messaging_service_handler() {
+    return when_all_succeed(
+        ms().unregister_prepare_message(),
+        ms().unregister_prepare_done_message(),
+        ms().unregister_stream_mutation_fragments(),
+        ms().unregister_stream_mutation_done(),
+        ms().unregister_complete_message()).discard_result();
+}
+
 distributed<database>* stream_session::_db;
 distributed<db::system_distributed_keyspace>* stream_session::_sys_dist_ks;
 distributed<db::view::view_update_generator>* stream_session::_view_update_generator;
@@ -342,9 +351,13 @@ future<> stream_session::init_streaming_service(distributed<database>& db, distr
     // });
     return get_stream_manager().start().then([] {
         gms::get_local_gossiper().register_(get_local_stream_manager().shared_from_this());
-        return _db->invoke_on_all([] (auto& db) {
-            init_messaging_service_handler();
-        });
+        return smp::invoke_on_all([] { init_messaging_service_handler(); });
+    });
+}
+
+future<> stream_session::uninit_streaming_service() {
+    return smp::invoke_on_all([] {
+        return uninit_messaging_service_handler();
     });
 }
 
