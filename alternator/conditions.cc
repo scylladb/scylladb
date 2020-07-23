@@ -57,12 +57,12 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
             {"NOT_CONTAINS", comparison_operator_type::NOT_CONTAINS},
     };
     if (!comparison_operator.IsString()) {
-        throw api_error("ValidationException", format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
+        throw api_error::validation(format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
     std::string op = comparison_operator.GetString();
     auto it = ops.find(op);
     if (it == ops.end()) {
-        throw api_error("ValidationException", format("Unsupported comparison operator {}", op));
+        throw api_error::validation(format("Unsupported comparison operator {}", op));
     }
     return it->second;
 }
@@ -104,10 +104,10 @@ static void verify_operand_count(const rjson::value* array, const size_check& ex
         return;
     }
     if (!array || !array->IsArray()) {
-        throw api_error("ValidationException", "With ComparisonOperator, AttributeValueList must be given and an array");
+        throw api_error::validation("With ComparisonOperator, AttributeValueList must be given and an array");
     }
     if (!expected(array->Size())) {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                         format("{} operator requires AttributeValueList {}, instead found list size {}",
                                op, expected.what(), array->Size()));
     }
@@ -164,11 +164,11 @@ static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
     // binary - otherwise it's a validation error. However, problems with
     // the stored attribute (v1) will just return false (no match).
     if (!v2.IsObject() || v2.MemberCount() != 1) {
-        throw api_error("ValidationException", format("BEGINS_WITH operator encountered malformed AttributeValue: {}", v2));
+        throw api_error::validation(format("BEGINS_WITH operator encountered malformed AttributeValue: {}", v2));
     }
     auto it2 = v2.MemberBegin();
     if (it2->name != "S" && it2->name != "B") {
-        throw api_error("ValidationException", format("BEGINS_WITH operator requires String or Binary type in AttributeValue, got {}", it2->name));
+        throw api_error::validation(format("BEGINS_WITH operator requires String or Binary type in AttributeValue, got {}", it2->name));
     }
 
 
@@ -233,12 +233,12 @@ static bool check_NOT_CONTAINS(const rjson::value* v1, const rjson::value& v2) {
 // Check if a JSON-encoded value equals any element of an array, which must have at least one element.
 static bool check_IN(const rjson::value* val, const rjson::value& array) {
     if (!array[0].IsObject() || array[0].MemberCount() != 1) {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                         format("IN operator encountered malformed AttributeValue: {}", array[0]));
     }
     const auto& type = array[0].MemberBegin()->name;
     if (type != "S" && type != "N" && type != "B") {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                         "IN operator requires AttributeValueList elements to be of type String, Number, or Binary ");
     }
     if (!val) {
@@ -247,7 +247,7 @@ static bool check_IN(const rjson::value* val, const rjson::value& array) {
     bool have_match = false;
     for (const auto& elem : array.GetArray()) {
         if (!elem.IsObject() || elem.MemberCount() != 1 || elem.MemberBegin()->name != type) {
-            throw api_error("ValidationException",
+            throw api_error::validation(
                             "IN operator requires all AttributeValueList elements to have the same type ");
         }
         if (!have_match && *val == elem) {
@@ -283,13 +283,13 @@ static bool check_NOT_NULL(const rjson::value* val) {
 template <typename Comparator>
 bool check_compare(const rjson::value* v1, const rjson::value& v2, const Comparator& cmp) {
     if (!v2.IsObject() || v2.MemberCount() != 1) {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                         format("{} requires a single AttributeValue of type String, Number, or Binary",
                                cmp.diagnostic));
     }
     const auto& kv2 = *v2.MemberBegin();
     if (kv2.name != "S" && kv2.name != "N" && kv2.name != "B") {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                         format("{} requires a single AttributeValue of type String, Number, or Binary",
                                cmp.diagnostic));
     }
@@ -345,7 +345,7 @@ struct cmp_gt {
 template <typename T>
 static bool check_BETWEEN(const T& v, const T& lb, const T& ub) {
     if (cmp_lt()(ub, lb)) {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                         format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
     }
     return cmp_ge()(v, lb) && cmp_le()(v, ub);
@@ -356,21 +356,20 @@ static bool check_BETWEEN(const rjson::value* v, const rjson::value& lb, const r
         return false;
     }
     if (!v->IsObject() || v->MemberCount() != 1) {
-        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", *v));
+        throw api_error::validation(format("BETWEEN operator encountered malformed AttributeValue: {}", *v));
     }
     if (!lb.IsObject() || lb.MemberCount() != 1) {
-        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", lb));
+        throw api_error::validation(format("BETWEEN operator encountered malformed AttributeValue: {}", lb));
     }
     if (!ub.IsObject() || ub.MemberCount() != 1) {
-        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", ub));
+        throw api_error::validation(format("BETWEEN operator encountered malformed AttributeValue: {}", ub));
     }
 
     const auto& kv_v = *v->MemberBegin();
     const auto& kv_lb = *lb.MemberBegin();
     const auto& kv_ub = *ub.MemberBegin();
     if (kv_lb.name != kv_ub.name) {
-        throw api_error(
-                "ValidationException",
+        throw api_error::validation(
                 format("BETWEEN operator requires the same type for lower and upper bound; instead got {} and {}",
                        kv_lb.name, kv_ub.name));
     }
@@ -389,7 +388,7 @@ static bool check_BETWEEN(const rjson::value* v, const rjson::value& lb, const r
     if (kv_v.name == "B") {
         return check_BETWEEN(base64_decode(kv_v.value), base64_decode(kv_lb.value), base64_decode(kv_ub.value));
     }
-    throw api_error("ValidationException",
+    throw api_error::validation(
         format("BETWEEN operator requires AttributeValueList elements to be of type String, Number, or Binary; instead got {}",
                kv_lb.name));
 }
@@ -409,24 +408,24 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
     // and requires a different combinations of parameters in the request
     if (value) {
         if (exists && (!exists->IsBool() || exists->GetBool() != true)) {
-            throw api_error("ValidationException", "Cannot combine Value with Exists!=true");
+            throw api_error::validation("Cannot combine Value with Exists!=true");
         }
         if (comparison_operator) {
-            throw api_error("ValidationException", "Cannot combine Value with ComparisonOperator");
+            throw api_error::validation("Cannot combine Value with ComparisonOperator");
         }
         return check_EQ(got, *value);
     } else if (exists) {
         if (comparison_operator) {
-            throw api_error("ValidationException", "Cannot combine Exists with ComparisonOperator");
+            throw api_error::validation("Cannot combine Exists with ComparisonOperator");
         }
         if (!exists->IsBool() || exists->GetBool() != false) {
-            throw api_error("ValidationException", "Exists!=false requires Value");
+            throw api_error::validation("Exists!=false requires Value");
         }
         // Remember Exists=false, so we're checking that the attribute does *not* exist:
         return !got;
     } else {
         if (!comparison_operator) {
-            throw api_error("ValidationException", "Missing ComparisonOperator, Value or Exists");
+            throw api_error::validation("Missing ComparisonOperator, Value or Exists");
         }
         comparison_operator_type op = get_comparison_operator(*comparison_operator);
         switch (op) {
@@ -471,7 +470,7 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
                 const rjson::value& arg = (*attribute_value_list)[0];
                 const auto& argtype = (*arg.MemberBegin()).name;
                 if (argtype != "S" && argtype != "N" && argtype != "B") {
-                    throw api_error("ValidationException",
+                    throw api_error::validation(
                             format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
                                     "got {} instead", argtype));
                 }
@@ -485,7 +484,7 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
                 const rjson::value& arg = (*attribute_value_list)[0];
                 const auto& argtype = (*arg.MemberBegin()).name;
                 if (argtype != "S" && argtype != "N" && argtype != "B") {
-                    throw api_error("ValidationException",
+                    throw api_error::validation(
                             format("CONTAINS operator requires a single AttributeValue of type String, Number, or Binary, "
                                     "got {} instead", argtype));
                 }
@@ -502,7 +501,7 @@ conditional_operator_type get_conditional_operator(const rjson::value& req) {
         return conditional_operator_type::MISSING;
     }
     if (!conditional_operator->IsString()) {
-        throw api_error("ValidationException", "'ConditionalOperator' parameter, if given, must be a string");
+        throw api_error::validation("'ConditionalOperator' parameter, if given, must be a string");
     }
     auto s = rjson::to_string_view(*conditional_operator);
     if (s == "AND") {
@@ -510,7 +509,7 @@ conditional_operator_type get_conditional_operator(const rjson::value& req) {
     } else if (s == "OR") {
         return conditional_operator_type::OR;
     } else {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                 format("'ConditionalOperator' parameter must be AND, OR or missing. Found {}.", s));
     }
 }
@@ -525,13 +524,13 @@ bool verify_expected(const rjson::value& req, const rjson::value* previous_item)
     auto conditional_operator = get_conditional_operator(req);
     if (conditional_operator != conditional_operator_type::MISSING &&
         (!expected || (expected->IsObject() && expected->GetObject().ObjectEmpty()))) {
-            throw api_error("ValidationException", "'ConditionalOperator' parameter cannot be specified for missing or empty Expression");
+            throw api_error::validation("'ConditionalOperator' parameter cannot be specified for missing or empty Expression");
     }
     if (!expected) {
         return true;
     }
     if (!expected->IsObject()) {
-        throw api_error("ValidationException", "'Expected' parameter, if given, must be an object");
+        throw api_error::validation("'Expected' parameter, if given, must be an object");
     }
     bool require_all = conditional_operator != conditional_operator_type::OR;
     return verify_condition(*expected, require_all, previous_item);
@@ -589,7 +588,7 @@ static bool calculate_primitive_condition(const parsed::primitive_condition& con
                 return it->value.GetBool();
             }
         }
-        throw api_error("ValidationException",
+        throw api_error::validation(
                 format("ConditionExpression: condition results in a non-boolean value: {}",
                         calculated_values[0]));
     default:

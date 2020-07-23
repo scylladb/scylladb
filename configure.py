@@ -859,7 +859,6 @@ alternator = [
        Antlr3Grammar('alternator/expressions.g'),
        'alternator/conditions.cc',
        'alternator/auth.cc',
-       'alternator/error.cc',
        'alternator/streams.cc',
 ]
 

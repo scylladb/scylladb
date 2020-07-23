@@ -25,23 +25,16 @@
 #include "seastarx.hh"
 
 namespace alternator {
-namespace detail {
-    enum class exception_type {
-        ValidationException,
-        ResourceNotFoundException,
-        AccessDeniedException,
-        InvalidSignatureException,
-    };
 
-    std::ostream& operator<<(std::ostream&, exception_type);
-}
-
-// DynamoDB's error messages are described in detail in
+// api_error contains a DynamoDB error message to be returned to the user.
+// It can be returned by value (see executor::request_return_type) or thrown.
+// The DynamoDB's error messages are described in detail in
 // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html
-// Ah An error message has a "type", e.g., "ResourceNotFoundException", a coarser
-// HTTP code (almost always, 400), and a human readable message. Eventually these
-// will be wrapped into a JSON object returned to the client.
-class api_error : public std::exception {
+// An error message has an HTTP code (almost always 400), a type, e.g.,
+// "ResourceNotFoundException", and a human readable message.
+// Eventually alternator::api_handler will convert a returned or thrown
+// api_error into a JSON object, and that is returned to the user.
+class api_error final {
 public:
     using status_type = httpd::reply::status_type;
     status_type _http_code;
@@ -52,26 +45,36 @@ public:
         , _type(std::move(type))
         , _msg(std::move(msg))
     { }
-    api_error() = default;
-    virtual const char* what() const noexcept override { return _msg.c_str(); }
-protected:
-    api_error(detail::exception_type, std::string msg, status_type http_code);
-};
 
-namespace detail {
-template<detail::exception_type Type>
-class t_api_error : public api_error {
-public:
-    t_api_error(std::string msg, status_type http_code = status_type::bad_request)
-        : api_error(Type, std::move(msg), http_code)
-    {}
+    // Factory functions for some common types of DynamoDB API errors
+    static api_error validation(std::string msg) {
+        return api_error("ValidationException", std::move(msg));
+    }
+    static api_error resource_not_found(std::string msg) {
+        return api_error("ResourceNotFoundException", std::move(msg));
+    }
+    static api_error resource_in_use(std::string msg) {
+        return api_error("ResourceInUseException", std::move(msg));
+    }
+    static api_error invalid_signature(std::string msg) {
+        return api_error("InvalidSignatureException", std::move(msg));
+    }
+    static api_error unrecognized_client(std::string msg) {
+        return api_error("UnrecognizedClientException", std::move(msg));
+    }
+    static api_error unknown_operation(std::string msg) {
+        return api_error("UnknownOperationException", std::move(msg));
+    }
+    static api_error access_denied(std::string msg) {
+        return api_error("AccessDeniedException", std::move(msg));
+    }
+    static api_error conditional_check_failed(std::string msg) {
+        return api_error("ConditionalCheckFailedException", std::move(msg));
+    }
+    static api_error internal(std::string msg) {
+        return api_error("InternalServerError", std::move(msg), reply::status_type::internal_server_error);
+    }
 };
-}
-
-using validation_exception = detail::t_api_error<detail::exception_type::ValidationException>;
-using resource_not_found_exception = detail::t_api_error<detail::exception_type::ResourceNotFoundException>;
-using access_denied_exception = detail::t_api_error<detail::exception_type::AccessDeniedException>;
-using invalid_signature_exception = detail::t_api_error<detail::exception_type::InvalidSignatureException>;
 
 }
 

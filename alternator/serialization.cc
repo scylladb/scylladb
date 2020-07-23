@@ -77,7 +77,7 @@ struct from_json_visitor {
         try {
             bo.write(t.from_string(rjson::to_string_view(v)));
         } catch (const marshal_exception& e) {
-            throw api_error("ValidationException", format("The parameter cannot be converted to a numeric value: {}", v));
+            throw api_error::validation(format("The parameter cannot be converted to a numeric value: {}", v));
         }
     }
     // default
@@ -88,7 +88,7 @@ struct from_json_visitor {
 
 bytes serialize_item(const rjson::value& item) {
     if (item.IsNull() || item.MemberCount() != 1) {
-        throw api_error("ValidationException", format("An item can contain only one attribute definition: {}", item));
+        throw api_error::validation(format("An item can contain only one attribute definition: {}", item));
     }
     auto it = item.MemberBegin();
     type_info type_info = type_info_from_string(rjson::to_string_view(it->name)); // JSON keys are guaranteed to be strings
@@ -132,7 +132,7 @@ struct to_json_visitor {
 rjson::value deserialize_item(bytes_view bv) {
     rjson::value deserialized(rapidjson::kObjectType);
     if (bv.empty()) {
-        throw api_error("ValidationException", "Serialized value empty");
+        throw api_error::validation("Serialized value empty");
     }
 
     alternator_type atype = alternator_type(bv[0]);
@@ -168,7 +168,7 @@ bytes get_key_column_value(const rjson::value& item, const column_definition& co
     std::string column_name = column.name_as_text();
     const rjson::value* key_typed_value = rjson::find(item, column_name);
     if (!key_typed_value) {
-        throw api_error("ValidationException", format("Key column {} not found", column_name));
+        throw api_error::validation(format("Key column {} not found", column_name));
     }
     return get_key_from_typed_value(*key_typed_value, column);
 }
@@ -179,20 +179,20 @@ bytes get_key_column_value(const rjson::value& item, const column_definition& co
 bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column_definition& column) {
     if (!key_typed_value.IsObject() || key_typed_value.MemberCount() != 1 ||
             !key_typed_value.MemberBegin()->value.IsString()) {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                 format("Malformed value object for key column {}: {}",
                         column.name_as_text(), key_typed_value));
     }
 
     auto it = key_typed_value.MemberBegin();
     if (it->name != type_to_string(column.type)) {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                 format("Type mismatch: expected type {} for key column {}, got type {}",
                         type_to_string(column.type), column.name_as_text(), it->name));
     }
     std::string_view value_view = rjson::to_string_view(it->value);
     if (value_view.empty()) {
-        throw api_error("ValidationException",
+        throw api_error::validation(
                 format("The AttributeValue for a key attribute cannot contain an empty string value. Key: {}", column.name_as_text()));
     }
     if (column.type == bytes_type) {
@@ -251,11 +251,11 @@ clustering_key ck_from_json(const rjson::value& item, schema_ptr schema) {
 
 big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
     if (!v.IsObject() || v.MemberCount() != 1) {
-        throw api_error("ValidationException", format("{}: invalid number object", diagnostic));
+        throw api_error::validation(format("{}: invalid number object", diagnostic));
     }
     auto it = v.MemberBegin();
     if (it->name != "N") {
-        throw api_error("ValidationException", format("{}: expected number, found type '{}'", diagnostic, it->name));
+        throw api_error::validation(format("{}: expected number, found type '{}'", diagnostic, it->name));
     }
     try {
         if (it->value.IsNumber()) {
@@ -263,11 +263,11 @@ big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
             return big_decimal(rjson::print(it->value));
         }
         if (!it->value.IsString()) {
-            throw api_error("ValidationException", format("{}: improperly formatted number constant", diagnostic));
+            throw api_error::validation(format("{}: improperly formatted number constant", diagnostic));
         }
         return big_decimal(rjson::to_string_view(it->value));
     } catch (const marshal_exception& e) {
-        throw api_error("ValidationException", format("The parameter cannot be converted to a numeric value: {}", it->value));
+        throw api_error::validation(format("The parameter cannot be converted to a numeric value: {}", it->value));
     }
 }
 
@@ -320,10 +320,10 @@ rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
     auto [set1_type, set1] = unwrap_set(v1);
     auto [set2_type, set2] = unwrap_set(v2);
     if (set1_type != set2_type) {
-        throw api_error("ValidationException", format("Mismatched set types: {} and {}", set1_type, set2_type));
+        throw api_error::validation(format("Mismatched set types: {} and {}", set1_type, set2_type));
     }
     if (!set1 || !set2) {
-        throw api_error("ValidationException", "UpdateExpression: ADD operation for sets must be given sets as arguments");
+        throw api_error::validation("UpdateExpression: ADD operation for sets must be given sets as arguments");
     }
     rjson::value sum = rjson::copy(*set1);
     std::set<rjson::value, rjson::single_value_comp> set1_raw;
@@ -348,10 +348,10 @@ std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value&
     auto [set1_type, set1] = unwrap_set(v1);
     auto [set2_type, set2] = unwrap_set(v2);
     if (set1_type != set2_type) {
-        throw api_error("ValidationException", format("Mismatched set types: {} and {}", set1_type, set2_type));
+        throw api_error::validation(format("Mismatched set types: {} and {}", set1_type, set2_type));
     }
     if (!set1 || !set2) {
-        throw api_error("ValidationException", "UpdateExpression: DELETE operation can only be performed on a set");
+        throw api_error::validation("UpdateExpression: DELETE operation can only be performed on a set");
     }
     std::set<rjson::value, rjson::single_value_comp> set1_raw;
     for (auto it = set1->Begin(); it != set1->End(); ++it) {

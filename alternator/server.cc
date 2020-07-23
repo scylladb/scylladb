@@ -75,20 +75,17 @@ public:
                  // returned to the client as expected. Other types of
                  // exceptions are unexpected, and returned to the user
                  // as an internal server error:
-                 api_error ret;
                  try {
                      resf.get();
                  } catch (api_error &ae) {
-                     ret = ae;
+                     generate_error_reply(*rep, ae);
                  } catch (rjson::error & re) {
-                     ret = api_error("ValidationException", re.what());
+                     generate_error_reply(*rep,
+                             api_error::validation(re.what()));
                  } catch (...) {
-                     ret = api_error(
-                             "Internal Server Error",
-                             format("Internal server error: {}", std::current_exception()),
-                             reply::status_type::internal_server_error);
+                     generate_error_reply(*rep,
+                             api_error::internal(format("Internal server error: {}", std::current_exception())));
                  }
-                 generate_error_reply(*rep, ret);
                  return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
              }
              auto res = resf.get0();
@@ -188,11 +185,11 @@ future<> server::verify_signature(const request& req) {
     }
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
-        throw api_error("InvalidSignatureException", "Host header is mandatory for signature verification");
+        throw api_error::invalid_signature("Host header is mandatory for signature verification");
     }
     auto authorization_it = req._headers.find("Authorization");
     if (authorization_it == req._headers.end()) {
-        throw api_error("InvalidSignatureException", "Authorization header is mandatory for signature verification");
+        throw api_error::invalid_signature("Authorization header is mandatory for signature verification");
     }
     std::string host = host_it->second;
     std::vector<std::string_view> credentials_raw = split(authorization_it->second, ' ');
@@ -204,7 +201,7 @@ future<> server::verify_signature(const request& req) {
         std::vector<std::string_view> entry_split = split(entry, '=');
         if (entry_split.size() != 2) {
             if (entry != "AWS4-HMAC-SHA256") {
-                throw api_error("InvalidSignatureException", format("Only AWS4-HMAC-SHA256 algorithm is supported. Found: {}", entry));
+                throw api_error::invalid_signature(format("Only AWS4-HMAC-SHA256 algorithm is supported. Found: {}", entry));
             }
             continue;
         }
@@ -225,7 +222,7 @@ future<> server::verify_signature(const request& req) {
     }
     std::vector<std::string_view> credential_split = split(credential, '/');
     if (credential_split.size() != 5) {
-        throw api_error("ValidationException", format("Incorrect credential information format: {}", credential));
+        throw api_error::validation(format("Incorrect credential information format: {}", credential));
     }
     std::string user(credential_split[0]);
     std::string datestamp(credential_split[1]);
@@ -263,7 +260,7 @@ future<> server::verify_signature(const request& req) {
 
         if (signature != std::string_view(user_signature)) {
             _key_cache.remove(user);
-            throw api_error("UnrecognizedClientException", "The security token included in the request is invalid.");
+            throw api_error::unrecognized_client("The security token included in the request is invalid.");
         }
     });
 }
@@ -279,8 +276,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         auto callback_it = _callbacks.find(op);
         if (callback_it == _callbacks.end()) {
             _executor._stats.unsupported_operations++;
-            throw api_error("UnknownOperationException",
-                    format("Unsupported operation {}", op));
+            throw api_error::unknown_operation(format("Unsupported operation {}", op));
         }
         return with_gate(_pending_requests, [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] () mutable {
             //FIXME: Client state can provide more context, e.g. client's endpoint address
