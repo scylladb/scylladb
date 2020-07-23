@@ -269,26 +269,26 @@ private:
     scheduling_config _scheduling_config;
     std::vector<scheduling_info_for_connection_index> _scheduling_info_for_connection_index;
     std::vector<tenant_connection_index> _connection_index_for_tenant;
+
+    future<> stop_tls_server();
+    future<> stop_nontls_server();
+    future<> stop_client();
 public:
     using clock_type = lowres_clock;
-public:
+
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
             uint16_t port = 7000);
     messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what, tcp_nodelay_what,
             uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
             memory_config mcfg, scheduling_config scfg, bool sltba = false);
     ~messaging_service();
-public:
+
     future<> start_listen();
     uint16_t port();
     gms::inet_address listen_address();
-    future<> stop_tls_server();
-    future<> stop_nontls_server();
-    future<> stop_client();
     future<> stop();
     static rpc::no_wait_type no_wait();
     bool is_stopping() { return _stopping; }
-public:
     gms::inet_address get_preferred_ip(gms::inet_address ep);
     future<> init_local_preferred_ip_cache();
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
