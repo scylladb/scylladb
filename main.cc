@@ -949,12 +949,16 @@ int main(int ac, char** av) {
                 mm.init_messaging_service();
             }).get();
             supervisor::notify("initializing storage proxy RPC verbs");
-            proxy.invoke_on_all([] (service::storage_proxy& p) {
-                p.init_messaging_service();
-            }).get();
+            proxy.invoke_on_all(&service::storage_proxy::init_messaging_service).get();
+            auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
+                proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
+            });
 
             supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator).get();
+            auto stop_streaming_service = defer_verbose_shutdown("streaming service", [] {
+                streaming::stream_session::uninit_streaming_service().get();
+            });
             api::set_server_stream_manager(ctx).get();
 
             supervisor::notify("starting hinted handoff manager");
@@ -987,6 +991,9 @@ int main(int ac, char** av) {
                 rs.stop().get();
             });
             repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator).get();
+            auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
+                repair_uninit_messaging_service_handler().get();
+            });
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
