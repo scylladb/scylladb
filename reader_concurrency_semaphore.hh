@@ -60,18 +60,20 @@ public:
     };
 
     class inactive_read_handle {
+        reader_concurrency_semaphore* _sem = nullptr;
         uint64_t _id = 0;
 
         friend class reader_concurrency_semaphore;
 
-        explicit inactive_read_handle(uint64_t id)
-            : _id(id) {
+        explicit inactive_read_handle(reader_concurrency_semaphore& sem, uint64_t id)
+            : _sem(&sem), _id(id) {
         }
     public:
         inactive_read_handle() = default;
-        inactive_read_handle(inactive_read_handle&& o) : _id(std::exchange(o._id, 0)) {
+        inactive_read_handle(inactive_read_handle&& o) : _sem(std::exchange(o._sem, nullptr)), _id(std::exchange(o._id, 0)) {
         }
         inactive_read_handle& operator=(inactive_read_handle&& o) {
+            _sem = std::exchange(o._sem, nullptr);
             _id = std::exchange(o._id, 0);
             return *this;
         }
