@@ -32,9 +32,7 @@
 
 logging::logger startlog("init");
 
-void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
-                , sharded<gms::feature_service>& features
-                , db::config& cfg
+void init_messaging_service(db::config& cfg
                 , sstring listen_address_in
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
@@ -46,13 +44,9 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
                 , sstring ms_tls_prio
                 , bool ms_client_auth
                 , sstring ms_compress
-                , db::seed_provider_type seed_provider
                 , size_t available_memory
                 , init_scheduling_config scheduling_config
-                , sstring cluster_name
-                , double phi
-                , bool sltba)
-{
+                , bool sltba) {
     auto preferred = cfg.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
     const auto listen = gms::inet_address::lookup(listen_address_in, family).get0();
@@ -114,9 +108,17 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
     scfg.streaming = scheduling_config.streaming;
     scfg.gossip = scheduling_config.gossip;
     netw::get_messaging_service().start(listen, storage_port, ew, cw, tndw, ssl_storage_port, creds, mcfg, scfg, sltba).get();
+}
 
-    // #293 - do not stop anything
-    //engine().at_exit([] { return netw::get_messaging_service().stop(); });
+void init_gossiper(sharded<gms::gossiper>& gossiper
+                , db::config& cfg
+                , sstring listen_address_in
+                , db::seed_provider_type seed_provider
+                , sstring cluster_name) {
+    auto preferred = cfg.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
+    auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
+    const auto listen = gms::inet_address::lookup(listen_address_in, family).get0();
+
     // Init gossiper
     std::set<gms::inet_address> seeds;
     if (seed_provider.parameters.contains("seeds")) {

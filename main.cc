@@ -795,7 +795,6 @@ int main(int ac, char** av) {
             // ssl stuff it gets to be a lot.
             uint16_t storage_port = cfg->storage_port();
             uint16_t ssl_storage_port = cfg->ssl_storage_port();
-            double phi = cfg->phi_convict_threshold();
             auto seed_provider= cfg->seed_provider();
             sstring cluster_name = cfg->cluster_name();
 
@@ -815,9 +814,7 @@ int main(int ac, char** av) {
             scfg.statement = dbcfg.statement_scheduling_group;
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
-            init_ms_fd_gossiper(gossiper
-                    , feature_service
-                    , *cfg
+            init_messaging_service(*cfg
                     , listen_address
                     , storage_port
                     , ssl_storage_port
@@ -829,12 +826,10 @@ int main(int ac, char** av) {
                     , prio
                     , clauth
                     , cfg->internode_compression()
-                    , seed_provider
                     , memory::stats().total_memory()
                     , scfg
-                    , cluster_name
-                    , phi
                     , cfg->listen_on_broadcast_address());
+            init_gossiper(gossiper, *cfg, listen_address, seed_provider, cluster_name);
             supervisor::notify("starting storage proxy");
             service::storage_proxy::config spcfg;
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
