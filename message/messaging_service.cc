@@ -795,6 +795,10 @@ void messaging_service::register_stream_mutation_fragments(std::function<future<
     register_handler(this, messaging_verb::STREAM_MUTATION_FRAGMENTS, std::move(func));
 }
 
+future<> messaging_service::unregister_stream_mutation_fragments() {
+    return unregister_handler(messaging_verb::STREAM_MUTATION_FRAGMENTS);
+}
+
 template<class SinkType, class SourceType>
 future<std::tuple<rpc::sink<SinkType>, rpc::source<SourceType>>>
 do_make_sink_source(messaging_verb verb, uint32_t repair_meta_id, shared_ptr<messaging_service::rpc_protocol_client_wrapper> rpc_client, std::unique_ptr<messaging_service::rpc_protocol_wrapper>& rpc) {
@@ -827,6 +831,9 @@ rpc::sink<repair_row_on_wire_with_cmd> messaging_service::make_sink_for_repair_g
 void messaging_service::register_repair_get_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_row_on_wire_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_hash_with_cmd> source)>&& func) {
     register_handler(this, messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM, std::move(func));
 }
+future<> messaging_service::unregister_repair_get_row_diff_with_rpc_stream() {
+    return unregister_handler(messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM);
+}
 
 // Wrapper for REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM
 future<std::tuple<rpc::sink<repair_row_on_wire_with_cmd>, rpc::source<repair_stream_cmd>>>
@@ -846,6 +853,9 @@ rpc::sink<repair_stream_cmd> messaging_service::make_sink_for_repair_put_row_dif
 void messaging_service::register_repair_put_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_stream_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source)>&& func) {
     register_handler(this, messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM, std::move(func));
 }
+future<> messaging_service::unregister_repair_put_row_diff_with_rpc_stream() {
+    return unregister_handler(messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM);
+}
 
 // Wrapper for REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM
 future<std::tuple<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd>>>
@@ -864,6 +874,9 @@ rpc::sink<repair_hash_with_cmd> messaging_service::make_sink_for_repair_get_full
 
 void messaging_service::register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source)>&& func) {
     register_handler(this, messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM, std::move(func));
+}
+future<> messaging_service::unregister_repair_get_full_row_hashes_with_rpc_stream() {
+    return unregister_handler(messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM);
 }
 
 // Send a message for verb
@@ -948,6 +961,9 @@ future<streaming::prepare_message> messaging_service::send_prepare_message(msg_a
     return send_message<streaming::prepare_message>(this, messaging_verb::PREPARE_MESSAGE, id,
         std::move(msg), plan_id, std::move(description), reason);
 }
+future<> messaging_service::unregister_prepare_message() {
+    return unregister_handler(messaging_verb::PREPARE_MESSAGE);
+}
 
 // PREPARE_DONE_MESSAGE
 void messaging_service::register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func) {
@@ -956,6 +972,9 @@ void messaging_service::register_prepare_done_message(std::function<future<> (co
 future<> messaging_service::send_prepare_done_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id) {
     return send_message<void>(this, messaging_verb::PREPARE_DONE_MESSAGE, id,
         plan_id, dst_cpu_id);
+}
+future<> messaging_service::unregister_prepare_done_message() {
+    return unregister_handler(messaging_verb::PREPARE_DONE_MESSAGE);
 }
 
 // STREAM_MUTATION_DONE
@@ -972,6 +991,9 @@ future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id,
     return send_message<void>(this, messaging_verb::STREAM_MUTATION_DONE, id,
         plan_id, std::move(ranges), cf_id, dst_cpu_id);
 }
+future<> messaging_service::unregister_stream_mutation_done() {
+    return unregister_handler(messaging_verb::STREAM_MUTATION_DONE);
+}
 
 // COMPLETE_MESSAGE
 void messaging_service::register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed)>&& func) {
@@ -980,6 +1002,9 @@ void messaging_service::register_complete_message(std::function<future<> (const 
 future<> messaging_service::send_complete_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id, bool failed) {
     return send_message<void>(this, messaging_verb::COMPLETE_MESSAGE, id,
         plan_id, dst_cpu_id, failed);
+}
+future<> messaging_service::unregister_complete_message() {
+    return unregister_handler(messaging_verb::COMPLETE_MESSAGE);
 }
 
 void messaging_service::register_gossip_echo(std::function<future<> ()>&& func) {
