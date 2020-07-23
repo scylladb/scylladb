@@ -52,11 +52,10 @@ static seastar::metrics::label keyspace_label("ks");
 
 using namespace std::chrono_literals;
 
-// Filter out sstables for reader using bloom filter and sstable metadata that keeps track
-// of a range for each clustering component.
+// Filter out sstables for reader using bloom filter
 static std::vector<sstables::shared_sstable>
-filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, column_family& cf, const schema_ptr& schema,
-        const dht::partition_range& pr, const sstables::key& key, const query::partition_slice& slice) {
+filter_sstable_for_reader_by_pk(std::vector<sstables::shared_sstable>&& sstables, column_family& cf, const schema_ptr& schema,
+        const dht::partition_range& pr, const sstables::key& key) {
     const dht::ring_position& pr_key = pr.start()->value();
     auto sstable_has_not_key = [&, cmp = dht::ring_position_comparator(*schema)] (const sstables::shared_sstable& sst) {
         return cmp(pr_key, sst->get_first_decorated_key()) < 0 ||
@@ -64,7 +63,14 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
                !sst->filter_has_key(key);
     };
     sstables.erase(boost::remove_if(sstables, sstable_has_not_key), sstables.end());
+    return sstables;
+}
 
+// Filter out sstables for reader using sstable metadata that keeps track
+// of a range for each clustering component.
+static std::vector<sstables::shared_sstable>
+filter_sstable_for_reader_by_ck(std::vector<sstables::shared_sstable>&& sstables, column_family& cf, const schema_ptr& schema,
+        const query::partition_slice& slice) {
     // no clustering filtering is applied if schema defines no clustering key or
     // compaction strategy thinks it will not benefit from such an optimization,
     // or the partition_slice includes static columns.
@@ -195,18 +201,34 @@ create_single_key_sstable_reader(column_family* cf,
                                  streamed_mutation::forwarding fwd,
                                  mutation_reader::forwarding fwd_mr)
 {
-    auto key = sstables::key::from_partition_key(*schema, *pr.start()->value().key());
+    auto& pk = pr.start()->value().key();
+    auto key = sstables::key::from_partition_key(*schema, *pk);
+    auto selected_sstables = filter_sstable_for_reader_by_pk(sstables->select(pr), *cf, schema, pr, key);
+    auto num_sstables = selected_sstables.size();
+    if (!num_sstables) {
+        return make_empty_flat_reader(schema);
+    }
     auto readers = boost::copy_range<std::vector<flat_mutation_reader>>(
-        filter_sstable_for_reader(sstables->select(pr), *cf, schema, pr, key, slice)
+        filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
         | boost::adaptors::transformed([&] (const sstables::shared_sstable& sstable) {
             tracing::trace(trace_state, "Reading key {} from sstable {}", pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
             return sstable->read_row_flat(schema, permit, pr.start()->value(), slice, pc, trace_state, fwd);
         })
     );
-    if (readers.empty()) {
-        return make_empty_flat_reader(schema);
+
+    // If filter_sstable_for_reader_by_ck filtered any sstable that contains the partition
+    // we want to emit partition_start/end if no rows were found,
+    // to prevent https://github.com/scylladb/scylla/issues/3552.
+    //
+    // Use `flat_mutation_reader_from_mutations` with an empty mutation to emit
+    // the partition_start/end pair and append it to the list of readers passed
+    // to make_combined_reader to ensure partition_start/end are emitted even if
+    // all sstables actually containing the partition were filtered.
+    auto num_readers = readers.size();
+    if (num_readers != num_sstables) {
+        readers.push_back(flat_mutation_reader_from_mutations({mutation(schema, *pk)}, slice, fwd));
     }
-    sstable_histogram.add(readers.size());
+    sstable_histogram.add(num_readers);
     return make_combined_reader(schema, std::move(readers), fwd, fwd_mr);
 }
 
