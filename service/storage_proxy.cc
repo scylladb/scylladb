@@ -5112,18 +5112,22 @@ void storage_proxy::init_messaging_service() {
 future<> storage_proxy::uninit_messaging_service() {
     auto& ms = netw::get_local_messaging_service();
     return when_all_succeed(
+        ms.unregister_counter_mutation(),
         ms.unregister_mutation(),
+        ms.unregister_hint_mutation(),
         ms.unregister_mutation_done(),
         ms.unregister_mutation_failed(),
         ms.unregister_read_data(),
         ms.unregister_read_mutation_data(),
         ms.unregister_read_digest(),
         ms.unregister_truncate(),
+        ms.unregister_get_schema_version(),
         ms.unregister_paxos_prepare(),
         ms.unregister_paxos_accept(),
         ms.unregister_paxos_learn(),
         ms.unregister_paxos_prune()
     ).discard_result();
+
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
@@ -5217,8 +5221,7 @@ future<> storage_proxy::drain_on_shutdown() {
 
 future<>
 storage_proxy::stop() {
-    // FIXME: hints manager should be stopped here but it seems like this function is never called
-    return uninit_messaging_service();
+    return make_ready_future<>();
 }
 
 }
