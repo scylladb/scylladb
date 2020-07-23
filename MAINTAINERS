@@ -7,7 +7,6 @@ F: Filename, directory, or pattern for the subsystem
 AUTH
 R: Calle Wilund <calle@scylladb.com>
 R: Vlad Zolotarov <vladz@scylladb.com>
-R: Jesse Haber-Kucharsky <jhaberku@scylladb.com>
 F: auth/*
 
 CACHE
