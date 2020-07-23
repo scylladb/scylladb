@@ -158,6 +158,13 @@ public:
     reader_concurrency_semaphore(reader_concurrency_semaphore&&) = delete;
     reader_concurrency_semaphore& operator=(reader_concurrency_semaphore&&) = delete;
 
+    /// Returns the name of the semaphore
+    ///
+    /// If the semaphore has no name, "unnamed reader concurrency semaphore" is returned.
+    std::string_view name() const {
+        return _name.empty() ? "unnamed reader concurrency semaphore" : std::string_view(_name);
+    }
+
     /// Register an inactive read.
     ///
     /// The semaphore will evict this read when there is a shortage of
