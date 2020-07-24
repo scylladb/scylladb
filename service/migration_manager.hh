@@ -158,8 +158,6 @@ public:
 
     static future<> announce(std::vector<mutation> mutations, bool announce_locally);
 
-    static future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
-
     // Returns a future on the local application of the schema
     static future<> announce(std::vector<mutation> schema);
 
@@ -180,6 +178,8 @@ private:
             const keyspace_metadata& keyspace, std::vector<mutation> mutations, bool announce_locally);
 
     static future<> do_announce_new_type(user_type new_type, bool announce_locally);
+
+    future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 };
 
 extern distributed<migration_manager> _the_migration_manager;

@@ -972,7 +972,7 @@ future<> migration_manager::announce(std::vector<mutation> mutations, bool annou
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
     netw::messaging_service::msg_addr id{endpoint, 0};
-    auto schema_features = get_local_migration_manager()._feat.cluster_schema_features();
+    auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
     auto fm = std::vector<frozen_mutation>(adjusted_schema.begin(), adjusted_schema.end());
     auto cm = std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end());
@@ -981,16 +981,17 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
-    auto f = db::schema_tables::merge_schema(get_storage_proxy(), get_local_migration_manager()._feat, schema);
+    migration_manager& mm = get_local_migration_manager();
+    auto f = db::schema_tables::merge_schema(get_storage_proxy(), mm._feat, schema);
 
-    return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members()](auto && schema) {
-        return parallel_for_each(live_members.begin(), live_members.end(), [&schema](auto& endpoint) {
+    return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members(), &mm](auto && schema) {
+        return parallel_for_each(live_members.begin(), live_members.end(), [&schema, &mm](auto& endpoint) {
             // only push schema to nodes with known and equal versions
             if (endpoint != utils::fb_utilities::get_broadcast_address() &&
                 netw::get_local_messaging_service().knows_version(endpoint) &&
                 netw::get_local_messaging_service().get_raw_version(endpoint) ==
                 netw::messaging_service::current_version) {
-                return push_schema_mutation(endpoint, schema);
+                return mm.push_schema_mutation(endpoint, schema);
             } else {
                 return make_ready_future<>();
             }
