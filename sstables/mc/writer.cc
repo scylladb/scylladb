@@ -741,6 +741,11 @@ public:
         , _run_identifier(cfg.run_identifier)
         , _write_regular_as_static(cfg.correctly_serialize_static_compact_in_mc && s.is_static_compact_table())
     {
+        // This can be 0 in some cases, which is albeit benign, can wreak havoc
+        // in lower-level writer code, so clamp it to [1, +inf) here, which is
+        // exactly what callers used to do anyway.
+        estimated_partitions = std::max(uint64_t(1), estimated_partitions);
+
         _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
         _sst.write_toc(_pc);
         _sst.create_data().get();

@@ -1236,11 +1236,8 @@ private:
     // return estimated partitions per sstable for a given shard
     uint64_t partitions_per_sstable(shard_id s) const {
         uint64_t estimated_sstables = std::max(uint64_t(1), uint64_t(ceil(double(_estimation_per_shard[s].estimated_size) / _max_sstable_size)));
-        // As we adjust this estimate downwards from the compaction strategy, it can get to 0 so
-        // make sure we're returning at least 1.
-        return std::max(uint64_t(1),
-                std::min(uint64_t(ceil(double(_estimation_per_shard[s].estimated_partitions) / estimated_sstables)),
-                _cf.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions)));
+        return std::min(uint64_t(ceil(double(_estimation_per_shard[s].estimated_partitions) / estimated_sstables)),
+                _cf.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions));
     }
 public:
     resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor)
