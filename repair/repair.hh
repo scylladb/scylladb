@@ -74,8 +74,8 @@ future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
 // repair_get_status(). The returned future<int> becomes available quickly,
 // as soon as repair_get_status() can be used - it doesn't wait for the
 // repair to complete.
-future<int> repair_start(seastar::sharded<database>& db, sstring keyspace,
-        std::unordered_map<sstring, sstring> options);
+future<int> repair_start(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms,
+        sstring keyspace, std::unordered_map<sstring, sstring> options);
 
 // TODO: Have repair_progress contains a percentage progress estimator
 // instead of just "RUNNING".
@@ -191,6 +191,7 @@ public:
 class repair_info {
 public:
     seastar::sharded<database>& db;
+    seastar::sharded<netw::messaging_service>& messaging;
     const dht::sharder& sharder;
     sstring keyspace;
     dht::token_range_vector ranges;
@@ -229,6 +230,7 @@ public:
     std::unordered_set<sstring> dropped_tables;
 public:
     repair_info(seastar::sharded<database>& db_,
+            seastar::sharded<netw::messaging_service>& ms_,
             const sstring& keyspace_,
             const dht::token_range_vector& ranges_,
             std::vector<utils::UUID> table_ids_,

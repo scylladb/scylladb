@@ -769,6 +769,7 @@ get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, 
 }
 
 repair_info::repair_info(seastar::sharded<database>& db_,
+    seastar::sharded<netw::messaging_service>& ms_,
     const sstring& keyspace_,
     const dht::token_range_vector& ranges_,
     std::vector<utils::UUID> table_ids_,
@@ -777,6 +778,7 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     const std::vector<sstring>& hosts_,
     streaming::stream_reason reason_)
     : db(db_)
+    , messaging(ms_)
     , sharder(get_sharder_for_tables(db_, keyspace_, table_ids_))
     , keyspace(keyspace_)
     , ranges(ranges_)
@@ -1517,8 +1519,8 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
 // CPU is that it allows us to keep some state (like a list of ongoing
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
-static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
-        std::unordered_map<sstring, sstring> options_map) {
+static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms,
+        sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     check_in_shutdown();
 
     repair_options options(options_map);
@@ -1596,16 +1598,16 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     }
 
     // Do it in the background.
-    (void)repair_tracker().run(id, [&db, id, keyspace = std::move(keyspace),
+    (void)repair_tracker().run(id, [&db, &ms, id, keyspace = std::move(keyspace),
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options)] () mutable {
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = db.invoke_on(shard, [&db, keyspace, table_ids, id, ranges,
+            auto f = db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges,
                     data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
                 _node_ops_metrics.repair_total_ranges_sum += ranges.size();
-                auto ri = make_lw_shared<repair_info>(db,
+                auto ri = make_lw_shared<repair_info>(db, ms,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), streaming::stream_reason::repair);
                 return repair_ranges(ri);
@@ -1633,10 +1635,10 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     return id.id;
 }
 
-future<int> repair_start(seastar::sharded<database>& db, sstring keyspace,
-        std::unordered_map<sstring, sstring> options) {
-    return db.invoke_on(0, [&db, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
-        return do_repair_start(db, std::move(keyspace), std::move(options));
+future<int> repair_start(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms,
+        sstring keyspace, std::unordered_map<sstring, sstring> options) {
+    return db.invoke_on(0, [&db, &ms, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
+        return do_repair_start(db, ms, std::move(keyspace), std::move(options));
     });
 }
 
@@ -1681,10 +1683,10 @@ static future<> sync_data_using_repair(seastar::sharded<database>& db,
     if (ranges.empty()) {
         return make_ready_future<>();
     }
-    return smp::submit_to(0, [&db, keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason] () mutable {
+    return smp::submit_to(0, [&db, &ms, keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason] () mutable {
         repair_uniq_id id = repair_tracker().next_repair_command();
         rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
-        return repair_tracker().run(id, [id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason] () mutable {
+        return repair_tracker().run(id, [id, &db, &ms, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason] () mutable {
             auto cfs = list_column_families(db.local(), keyspace);
             if (cfs.empty()) {
                 rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
@@ -1694,10 +1696,10 @@ static future<> sync_data_using_repair(seastar::sharded<database>& db,
             std::vector<future<>> repair_results;
             repair_results.reserve(smp::count);
             for (auto shard : boost::irange(unsigned(0), smp::count)) {
-                auto f = db.invoke_on(shard, [&db, keyspace, table_ids, id, ranges, neighbors, reason] (database& localdb) mutable {
+                auto f = db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges, neighbors, reason] (database& localdb) mutable {
                     auto data_centers = std::vector<sstring>();
                     auto hosts = std::vector<sstring>();
-                    auto ri = make_lw_shared<repair_info>(db,
+                    auto ri = make_lw_shared<repair_info>(db, ms,
                             std::move(keyspace), std::move(ranges), std::move(table_ids),
                             id, std::move(data_centers), std::move(hosts), reason);
                     ri->neighbors = std::move(neighbors);
