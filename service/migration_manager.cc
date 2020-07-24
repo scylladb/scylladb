@@ -292,9 +292,8 @@ future<> migration_manager::submit_migration_task(const gms::inet_address& endpo
 
 future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
 {
-    auto& ms = netw::get_local_messaging_service();
     mlogger.info("Pulling schema from {}", id);
-    return ms.send_migration_request(std::move(id), netw::schema_pull_options{}).then([this, id] (
+    return _messaging.send_migration_request(std::move(id), netw::schema_pull_options{}).then([this, id] (
             rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>> frozen_and_canonical_mutations) {
         auto&& [mutations, canonical_mutations] = frozen_and_canonical_mutations;
         if (canonical_mutations) {
@@ -974,7 +973,7 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
     auto fm = std::vector<frozen_mutation>(adjusted_schema.begin(), adjusted_schema.end());
     auto cm = std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end());
-    return netw::get_local_messaging_service().send_definitions_update(id, std::move(fm), std::move(cm));
+    return _messaging.send_definitions_update(id, std::move(fm), std::move(cm));
 }
 
 // Returns a future on the local application of the schema
@@ -986,8 +985,8 @@ future<> migration_manager::announce(std::vector<mutation> schema) {
         return parallel_for_each(live_members.begin(), live_members.end(), [&schema, &mm](auto& endpoint) {
             // only push schema to nodes with known and equal versions
             if (endpoint != utils::fb_utilities::get_broadcast_address() &&
-                netw::get_local_messaging_service().knows_version(endpoint) &&
-                netw::get_local_messaging_service().get_raw_version(endpoint) ==
+                mm._messaging.knows_version(endpoint) &&
+                mm._messaging.get_raw_version(endpoint) ==
                 netw::messaging_service::current_version) {
                 return mm.push_schema_mutation(endpoint, schema);
             } else {
@@ -1132,7 +1131,7 @@ future<> migration_manager::sync_schema(const database& db, const std::vector<gm
     using schema_and_hosts = std::unordered_map<utils::UUID, std::vector<gms::inet_address>>;
     return do_with(schema_and_hosts(), db.get_version(), [this, &nodes] (schema_and_hosts& schema_map, utils::UUID& my_version) {
         return parallel_for_each(nodes, [this, &schema_map, &my_version] (const gms::inet_address& node) {
-            return netw::get_messaging_service().local().send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (utils::UUID remote_version) {
+            return _messaging.send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (utils::UUID remote_version) {
                 if (my_version != remote_version) {
                     schema_map[remote_version].emplace_back(node);
                 }
