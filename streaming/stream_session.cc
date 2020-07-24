@@ -616,7 +616,7 @@ void stream_session::start() {
         close_session(stream_session_state::COMPLETE);
         return;
     }
-    auto connecting = netw::get_local_messaging_service().get_preferred_ip(peer);
+    auto connecting = ms().get_preferred_ip(peer);
     if (peer == connecting) {
         sslog.debug("[Stream #{}] Starting streaming to {}", plan_id(), peer);
     } else {
