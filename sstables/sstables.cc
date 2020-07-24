@@ -2013,6 +2013,11 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _tombstone_written(false)
     , _range_tombstones(s)
 {
+    // This can be 0 in some cases, which is albeit benign, can wreak havoc
+    // in lower-level writer code, so clamp it to [1, +inf) here, which is
+    // exactly what callers used to do anyway.
+    estimated_partitions = std::max(uint64_t(1), estimated_partitions);
+
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::k_l_format);
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size;
     _sst._correctly_serialize_non_compound_range_tombstones = cfg.correctly_serialize_non_compound_range_tombstones;
