@@ -20,56 +20,14 @@
  */
 
 #include "init.hh"
-#include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
-#include "service/storage_service.hh"
 #include "to_string.hh"
 #include "gms/inet_address.hh"
-#include "gms/feature_service.hh"
 #include "seastarx.hh"
 #include "db/config.hh"
 
 logging::logger startlog("init");
-
-void init_messaging_service(netw::messaging_service::config mscfg
-                , sstring ms_trust_store
-                , sstring ms_cert
-                , sstring ms_key
-                , sstring ms_tls_prio
-                , bool ms_client_auth
-                , netw::messaging_service::scheduling_config scfg) {
-
-    using encrypt_what = netw::messaging_service::encrypt_what;
-    using namespace seastar::tls;
-
-    std::shared_ptr<credentials_builder> creds;
-
-    if (mscfg.encrypt != encrypt_what::none) {
-        creds = std::make_shared<credentials_builder>();
-        creds->set_dh_level(dh_params::level::MEDIUM);
-
-        creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).get();
-        if (ms_trust_store.empty()) {
-            creds->set_system_trust().get();
-        } else {
-            creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
-        }
-
-        creds->set_priority_string(db::config::default_tls_priority);
-
-        if (!ms_tls_prio.empty()) {
-            creds->set_priority_string(ms_tls_prio);
-        }
-        if (ms_client_auth) {
-            creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
-        }
-    }
-
-    // Init messaging_service
-    // Delay listening messaging_service until gossip message handlers are registered
-    netw::get_messaging_service().start(mscfg, scfg, creds).get();
-}
 
 void init_gossiper(sharded<gms::gossiper>& gossiper
                 , db::config& cfg

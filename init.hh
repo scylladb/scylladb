@@ -24,10 +24,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
-#include "auth/service.hh"
-#include "message/messaging_service.hh"
-#include "db/system_distributed_keyspace.hh"
-#include "database_fwd.hh"
+#include "db/config.hh"
 #include "log.hh"
 #include "seastarx.hh"
 
@@ -47,14 +44,6 @@ class gossiper;
 extern logging::logger startlog;
 
 class bad_configuration_error : public std::exception {};
-
-void init_messaging_service(netw::messaging_service::config cfg
-                , sstring ms_trust_store
-                , sstring ms_cert
-                , sstring ms_key
-                , sstring ms_tls_prio
-                , bool ms_client_auth
-                , netw::messaging_service::scheduling_config scheduling_config);
 
 void init_gossiper(sharded<gms::gossiper>& gossiper
                 , db::config& cfg

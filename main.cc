@@ -840,7 +840,7 @@ int main(int ac, char** av) {
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
 
-            init_messaging_service(std::move(mscfg), trust_store, cert, key, prio, clauth, std::move(scfg));
+            netw::init_messaging_service(std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
 
             init_gossiper(gossiper, *cfg, listen_address, seed_provider, cluster_name);
             supervisor::notify("starting storage proxy");

@@ -1401,4 +1401,38 @@ future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_poi
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
 }
 
+void init_messaging_service(messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,
+                sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth) {
+    using encrypt_what = messaging_service::encrypt_what;
+    using namespace seastar::tls;
+
+    std::shared_ptr<credentials_builder> creds;
+
+    if (mscfg.encrypt != encrypt_what::none) {
+        creds = std::make_shared<credentials_builder>();
+        creds->set_dh_level(dh_params::level::MEDIUM);
+
+        creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).get();
+        if (ms_trust_store.empty()) {
+            creds->set_system_trust().get();
+        } else {
+            creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
+        }
+
+        creds->set_priority_string(db::config::default_tls_priority);
+
+        if (!ms_tls_prio.empty()) {
+            creds->set_priority_string(ms_tls_prio);
+        }
+        if (ms_client_auth) {
+            creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
+        }
+    }
+
+    // Init messaging_service
+    // Delay listening messaging_service until gossip message handlers are registered
+
+    get_messaging_service().start(mscfg, scfg, creds).get();
+}
+
 } // namespace net

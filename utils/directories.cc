@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/seastar.hh>
 #include "init.hh"
 #include "supervisor.hh"
 #include "directories.hh"
