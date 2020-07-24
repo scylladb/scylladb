@@ -202,7 +202,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
 
     sp::get_hinted_handoff_enabled.set(r, [&ctx](std::unique_ptr<request> req)  {
         auto enabled = ctx.db.local().get_config().hinted_handoff_enabled();
-        return make_ready_future<json::json_return_type>(enabled);
+        return make_ready_future<json::json_return_type>(enabled.to_configuration_string());
     });
 
     sp::set_hinted_handoff_enabled.set(r, [](std::unique_ptr<request> req)  {

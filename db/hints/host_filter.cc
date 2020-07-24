@@ -45,7 +45,7 @@ bool host_filter::can_hint_for(locator::snitch_ptr& snitch, gms::inet_address ep
     case enabled_kind::enabled_for_all:
         return true;
     case enabled_kind::enabled_selectively:
-        return _dcs.count(snitch->get_datacenter(ep));
+        return _dcs.contains(snitch->get_datacenter(ep));
     case enabled_kind::disabled_for_all:
         return false;
     }

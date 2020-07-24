@@ -33,6 +33,7 @@
 #include "seastarx.hh"
 #include "utils/config_file.hh"
 #include "utils/enum_option.hh"
+#include "db/hints/host_filter.hh"
 
 namespace seastar { class file; struct logging_settings; }
 
@@ -112,6 +113,7 @@ public:
                     //program_options::string_map;
     using string_list = std::vector<sstring>;
     using seed_provider_type = db::seed_provider_type;
+    using hinted_handoff_enabled_type = db::hints::host_filter;
 
     /*
      * All values and documentation taken from
@@ -235,7 +237,7 @@ public:
     named_value<double> dynamic_snitch_badness_threshold;
     named_value<uint32_t> dynamic_snitch_reset_interval_in_ms;
     named_value<uint32_t> dynamic_snitch_update_interval_in_ms;
-    named_value<sstring> hinted_handoff_enabled;
+    named_value<hinted_handoff_enabled_type> hinted_handoff_enabled;
     named_value<uint32_t> hinted_handoff_throttle_in_kb;
     named_value<uint32_t> max_hint_window_in_ms;
     named_value<uint32_t> max_hints_delivery_threads;

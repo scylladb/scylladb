@@ -40,6 +40,7 @@
 #include "utils/loading_shared_values.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "db/hints/resource_manager.hh"
+#include "db/hints/host_filter.hh"
 
 namespace service {
 class storage_service;
@@ -473,7 +474,7 @@ private:
     dev_t _hints_dir_device_id = 0;
 
     node_to_hint_store_factory_type _store_factory;
-    std::unordered_set<sstring> _hinted_dcs;
+    host_filter _host_filter;
     shared_ptr<service::storage_proxy> _proxy_anchor;
     shared_ptr<gms::gossiper> _gossiper_anchor;
     shared_ptr<service::storage_service> _strorage_service_anchor;
@@ -492,7 +493,7 @@ private:
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
-    manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
+    manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
     virtual ~manager();
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;

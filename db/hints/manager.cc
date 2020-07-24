@@ -51,9 +51,9 @@ const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::S
 const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
 const std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
 
-manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<database>& db)
+manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<database>& db)
     : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
-    , _hinted_dcs(hinted_dcs.begin(), hinted_dcs.end())
+    , _host_filter(std::move(filter))
     , _local_snitch_ptr(locator::i_endpoint_snitch::get_local_snitch_ptr())
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
@@ -537,8 +537,8 @@ bool manager::check_dc_for(ep_key_type ep) const noexcept {
     try {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
-        return _hinted_dcs.empty() || have_ep_manager(ep) ||
-               _hinted_dcs.contains(_local_snitch_ptr->get_datacenter(ep));
+        return _host_filter.is_enabled_for_all() || have_ep_manager(ep) ||
+               _host_filter.can_hint_for(_local_snitch_ptr, ep);
     } catch (...) {
         // if we failed to check the DC - block this hint
         return false;

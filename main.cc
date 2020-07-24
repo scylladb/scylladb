@@ -329,29 +329,6 @@ public:
     future<> stop() { return make_ready_future<>(); }
 };
 
-static std::optional<std::vector<sstring>> parse_hinted_handoff_enabled(sstring opt) {
-    using namespace boost::algorithm;
-
-    if (boost::iequals(opt, "false") || opt == "0") {
-        return std::nullopt;
-    } else if (boost::iequals(opt, "true") || opt == "1") {
-        return std::vector<sstring>{};
-    }
-
-    std::vector<sstring> dcs;
-    split(dcs, opt, is_any_of(","));
-
-    std::for_each(dcs.begin(), dcs.end(), [] (sstring& dc) {
-        trim(dc);
-        if (dc.empty()) {
-            startlog.error("hinted_handoff_enabled: DC name may not be an empty string");
-            throw bad_configuration_error();
-        }
-    });
-
-    return dcs;
-}
-
 // Formats parsed program options into a string as follows:
 // "[key1: value1_1 value1_2 ..., key2: value2_1 value 2_2 ..., (positional) value3, ...]"
 std::string format_parsed_options(const std::vector<bpo::option>& opts) {
@@ -597,7 +574,7 @@ int main(int ac, char** av) {
             sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
             sstring broadcast_address = cfg->broadcast_address();
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
-            std::optional<std::vector<sstring>> hinted_handoff_enabled = parse_hinted_handoff_enabled(cfg->hinted_handoff_enabled());
+            const auto hinted_handoff_enabled = cfg->hinted_handoff_enabled();
             auto prom_addr = [&] {
                 try {
                     return gms::inet_address::lookup(cfg->prometheus_address(), family, preferred).get0();
@@ -844,7 +821,7 @@ int main(int ac, char** av) {
 
             auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
             auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
-            if (hinted_handoff_enabled) {
+            if (!hinted_handoff_enabled.is_disabled_for_all()) {
                 hints_dir_initializer.ensure_created_and_verified().get();
             }
             view_hints_dir_initializer.ensure_created_and_verified().get();
@@ -1033,7 +1010,7 @@ int main(int ac, char** av) {
             api::set_server_stream_manager(ctx).get();
 
             supervisor::notify("starting hinted handoff manager");
-            if (hinted_handoff_enabled) {
+            if (!hinted_handoff_enabled.is_disabled_for_all()) {
                 hints_dir_initializer.ensure_rebalanced().get();
             }
             view_hints_dir_initializer.ensure_rebalanced().get();

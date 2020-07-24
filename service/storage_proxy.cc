@@ -1802,11 +1802,11 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
                        sm::description("number of currently throttled write requests")),
     });
 
-    if (cfg.hinted_handoff_enabled) {
+    if (!cfg.hinted_handoff_enabled.is_disabled_for_all()) {
         const db::config& dbcfg = _db.local().get_config();
         supervisor::notify("creating hints manager");
-        slogger.trace("hinted DCs: {}", *cfg.hinted_handoff_enabled);
-        _hints_manager.emplace(dbcfg.hints_directory(), *cfg.hinted_handoff_enabled, dbcfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
+        slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
+        _hints_manager.emplace(dbcfg.hints_directory(), cfg.hinted_handoff_enabled, dbcfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
         _hints_manager->register_metrics("hints_manager");
     }
 
