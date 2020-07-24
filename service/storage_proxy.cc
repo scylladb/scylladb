@@ -947,8 +947,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                     return paxos::paxos_state::prepare(tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, peer);
-                    netw::messaging_service& ms = netw::get_local_messaging_service();
-                    return ms.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
+                    return _proxy->_messaging.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
                             tracing::make_trace_info(tr_state));
                 }
             }).then_wrapped([this, &summary, &request_tracker, peer, ballot]
@@ -1107,8 +1106,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                     return paxos::paxos_state::accept(tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
                 } else {
                     tracing::trace(tr_state, "accept_proposal: send accept {} to {}", *proposal, peer);
-                    netw::messaging_service& ms = netw::get_local_messaging_service();
-                    return ms.send_paxos_accept(peer, _timeout, *proposal, tracing::make_trace_info(tr_state));
+                    return _proxy->_messaging.send_paxos_accept(peer, _timeout, *proposal, tracing::make_trace_info(tr_state));
                 }
             }).then_wrapped([this, &request_tracker, timeout_if_partially_accepted, proposal, peer] (future<bool> accepted_f) {
                 if (!request_tracker.p) {
