@@ -841,6 +841,56 @@ private:
         m.set_cell(ck, _ttl_col, atomic_cell::make_live(*_ttl_col.type, _ts, _ttl_col.type->decompose(ttl.count()), _cdc_ttl_opt));
     }
 
+    // Remove non-key columns or entire delta rows, according to `delta` setting in `cdc` options.
+    void adjust_or_delete_deltas() {
+        if (_schema->cdc_options().get_delta_mode() == cdc::delta_mode::full) {
+            return;
+        }
+
+        static const auto preimg_op_bytes  = _op_col.type->decompose(operation_native_type(operation::pre_image));
+        static const auto postimg_op_bytes = _op_col.type->decompose(operation_native_type(operation::post_image));
+        for (auto& m : _result_mutations) {
+            auto& clustered_rows = m.partition().clustered_rows();
+            int deleted_rows_cnt = 0;
+            for (auto it = clustered_rows.begin(); it != clustered_rows.end(); /* no increment */) {
+                const auto& op_cell = it->row().cells().cell_at(_op_col.id).as_atomic_cell(_op_col);
+                const auto op_val = op_cell.value().linearize();
+                if (op_val != preimg_op_bytes && op_val != postimg_op_bytes) {
+                    if (_schema->cdc_options().get_delta_mode() == cdc::delta_mode::off) {
+                        it = m.partition().clustered_rows().erase_and_dispose(it, current_deleter<rows_entry>());
+                        ++deleted_rows_cnt;
+                        continue;
+                    }
+
+                    // The case of `get_delta_mode() == delta_mode::keys`:
+                    it->row().cells().remove_if([this, log_s = m.schema()] (column_id id, atomic_cell_or_collection& acoc) {
+                        const auto& log_cdef = log_s->column_at(column_kind::regular_column, id);
+                        // We can surely remove "cdc$*" columns.
+                        if (is_cdc_metacolumn_name(log_cdef.name_as_text())) {
+                            return true;
+                        }
+                        const auto* base_cdef = _schema->get_column_definition(log_cdef.name());
+                        // Remove columns from delta that correspond to non-PK/CK columns in the base table.
+                        return base_cdef != nullptr
+                                && (base_cdef->kind != column_kind::partition_key && base_cdef->kind != column_kind::clustering_key);
+                    });
+                }
+
+                // Deletion of deltas might leave gaps in `batch_seq_no` - let's fix them.
+                if (deleted_rows_cnt > 0) {
+                    const auto* batch_seq_no_cdef = m.schema()->get_column_definition(log_meta_column_name_bytes("batch_seq_no"));
+                    assert(batch_seq_no_cdef != nullptr);
+                    auto exploded_ck = it->key().explode();
+                    const size_t batch_seq_no_idx = batch_seq_no_cdef->component_index();
+                    const auto old_batch_seq_no = value_cast<int32_t>(int32_type->deserialize(exploded_ck[batch_seq_no_idx]));
+                    exploded_ck[batch_seq_no_idx] = int32_type->decompose(old_batch_seq_no - deleted_rows_cnt);
+                    it->key() = clustering_key::from_exploded(std::move(exploded_ck));
+                }
+                ++it;
+            }
+        }
+    }
+
 public:
     transformer(db_context ctx, schema_ptr s, dht::decorated_key dk)
         : _ctx(ctx)
@@ -1258,6 +1308,7 @@ public:
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
     // The `transformer` object on which this method was called on should not be used anymore.
     std::tuple<std::vector<mutation>, stats::part_type_set> finish() && {
+        adjust_or_delete_deltas();
         return std::make_pair<std::vector<mutation>, stats::part_type_set>(std::move(_result_mutations), std::move(_touched_parts));
     }
 

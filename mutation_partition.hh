@@ -192,7 +192,7 @@ public:
     const atomic_cell_or_collection* find_cell(column_id id) const;
     // Returns a pointer to cell's value and hash or nullptr if column is not set.
     const cell_and_hash* find_cell_and_hash(column_id id) const;
-private:
+
     template<typename Func>
     void remove_if(Func&& func) {
         if (_type == storage_type::vector) {
