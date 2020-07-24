@@ -60,6 +60,7 @@ future<> unset_server_snapshot(http_context& ctx);
 future<> set_server_gossip(http_context& ctx);
 future<> set_server_load_sstable(http_context& ctx);
 future<> set_server_messaging_service(http_context& ctx);
+future<> unset_server_messaging_service(http_context& ctx);
 future<> set_server_storage_proxy(http_context& ctx);
 future<> set_server_stream_manager(http_context& ctx);
 future<> set_server_gossip_settle(http_context& ctx);

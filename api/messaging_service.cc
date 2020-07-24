@@ -151,5 +151,18 @@ void set_messaging_service(http_context& ctx, routes& r) {
         });
     });
 }
+
+void unset_messaging_service(http_context& ctx, routes& r) {
+    get_timeout_messages.unset(r);
+    get_sent_messages.unset(r);
+    get_dropped_messages.unset(r);
+    get_exception_messages.unset(r);
+    get_pending_messages.unset(r);
+    get_respond_pending_messages.unset(r);
+    get_respond_completed_messages.unset(r);
+    get_version.unset(r);
+    get_dropped_messages_by_ver.unset(r);
+}
+
 }
 

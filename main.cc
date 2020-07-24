@@ -1042,6 +1042,9 @@ int main(int ac, char** av) {
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
             api::set_server_messaging_service(ctx).get();
+            auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
+                api::unset_server_messaging_service(ctx).get();
+            });
             api::set_server_storage_service(ctx).get();
 
             gossiper.local().register_(ss.shared_from_this());

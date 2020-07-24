@@ -26,5 +26,6 @@
 namespace api {
 
 void set_messaging_service(http_context& ctx, routes& r);
+void unset_messaging_service(http_context& ctx, routes& r);
 
 }

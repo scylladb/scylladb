@@ -139,6 +139,9 @@ future<> set_server_messaging_service(http_context& ctx) {
     return register_api(ctx, "messaging_service",
                 "The messaging service API", set_messaging_service);
 }
+future<> unset_server_messaging_service(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_messaging_service(ctx, r); });
+}
 
 future<> set_server_storage_proxy(http_context& ctx) {
     return register_api(ctx, "storage_proxy",
