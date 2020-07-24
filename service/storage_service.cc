@@ -2040,7 +2040,7 @@ future<> storage_service::do_stop_ms() {
     }
     _ms_stopped = true;
     return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
-        return ms.stop();
+        return ms.shutdown();
     }).then([] {
         slogger.info("messaging_service stopped");
     });

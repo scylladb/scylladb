@@ -263,7 +263,7 @@ private:
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
     std::vector<clients_map> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
-    bool _stopping = false;
+    bool _shutting_down = false;
     std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
     memory_config _mcfg;
     scheduling_config _scheduling_config;
@@ -286,9 +286,9 @@ public:
     future<> start_listen();
     uint16_t port();
     gms::inet_address listen_address();
-    future<> stop();
+    future<> shutdown();
     static rpc::no_wait_type no_wait();
-    bool is_stopping() { return _stopping; }
+    bool is_shutting_down() { return _shutting_down; }
     gms::inet_address get_preferred_ip(gms::inet_address ep);
     future<> init_local_preferred_ip_cache();
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);

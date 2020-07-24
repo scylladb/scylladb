@@ -455,8 +455,8 @@ future<> messaging_service::stop_client() {
     });
 }
 
-future<> messaging_service::stop() {
-    _stopping = true;
+future<> messaging_service::shutdown() {
+    _shutting_down = true;
     return when_all(stop_nontls_server(), stop_tls_server(), stop_client()).discard_result();
 }
 
@@ -642,7 +642,7 @@ void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_addre
 }
 
 shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, msg_addr id) {
-    assert(!_stopping);
+    assert(!_shutting_down);
     auto idx = get_rpc_client_idx(verb);
     auto it = _clients[idx].find(id);
 
@@ -732,7 +732,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 }
 
 bool messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only) {
-    if (_stopping) {
+    if (_shutting_down) {
         // if messaging service is in a processed of been stopped no need to
         // stop and remove connection here since they are being stopped already
         // and we'll just interfere
@@ -783,7 +783,7 @@ rpc::sink<int32_t> messaging_service::make_sink_for_stream_mutation_fragments(rp
 future<std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>>
 messaging_service::make_sink_and_source_for_stream_mutation_fragments(utils::UUID schema_id, utils::UUID plan_id, utils::UUID cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, msg_addr id) {
     using value_type = std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>;
-    if (is_stopping()) {
+    if (is_shutting_down()) {
         return make_exception_future<value_type>(rpc::closed_error());
     }
     auto rpc_client = get_rpc_client(messaging_verb::STREAM_MUTATION_FRAGMENTS, id);
@@ -823,7 +823,7 @@ do_make_sink_source(messaging_verb verb, uint32_t repair_meta_id, shared_ptr<mes
 future<std::tuple<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>>
 messaging_service::make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(uint32_t repair_meta_id, msg_addr id) {
     auto verb = messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM;
-    if (is_stopping()) {
+    if (is_shutting_down()) {
         return make_exception_future<std::tuple<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>>(rpc::closed_error());
     }
     auto rpc_client = get_rpc_client(verb, id);
@@ -845,7 +845,7 @@ future<> messaging_service::unregister_repair_get_row_diff_with_rpc_stream() {
 future<std::tuple<rpc::sink<repair_row_on_wire_with_cmd>, rpc::source<repair_stream_cmd>>>
 messaging_service::make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(uint32_t repair_meta_id, msg_addr id) {
     auto verb = messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM;
-    if (is_stopping()) {
+    if (is_shutting_down()) {
         return make_exception_future<std::tuple<rpc::sink<repair_row_on_wire_with_cmd>, rpc::source<repair_stream_cmd>>>(rpc::closed_error());
     }
     auto rpc_client = get_rpc_client(verb, id);
@@ -867,7 +867,7 @@ future<> messaging_service::unregister_repair_put_row_diff_with_rpc_stream() {
 future<std::tuple<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd>>>
 messaging_service::make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(uint32_t repair_meta_id, msg_addr id) {
     auto verb = messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM;
-    if (is_stopping()) {
+    if (is_shutting_down()) {
         return make_exception_future<std::tuple<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd>>>(rpc::closed_error());
     }
     auto rpc_client = get_rpc_client(verb, id);
@@ -889,7 +889,7 @@ future<> messaging_service::unregister_repair_get_full_row_hashes_with_rpc_strea
 template <typename MsgIn, typename... MsgOut>
 auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
-    if (ms->is_stopping()) {
+    if (ms->is_shutting_down()) {
         using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
         return futurator::make_exception_future(rpc::closed_error());
     }
@@ -918,7 +918,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
 template <typename MsgIn, typename Timeout, typename... MsgOut>
 auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, Timeout timeout, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
-    if (ms->is_stopping()) {
+    if (ms->is_shutting_down()) {
         using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
         return futurator::make_exception_future(rpc::closed_error());
     }
