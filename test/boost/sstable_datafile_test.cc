@@ -5857,3 +5857,111 @@ SEASTAR_TEST_CASE(test_bug_6472) {
         return make_ready_future<>();
     });
 }
+
+SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
+    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+        auto builder = schema_builder("tests", "test_bug_6472")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        std::map<sstring, sstring> opts = {
+            { time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
+            { time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
+        };
+        builder.set_compaction_strategy_options(opts);
+        builder.set_gc_grace_seconds(0);
+        auto s = builder.build();
+
+        const auto rows_per_partition = 200;
+
+        auto sst_gen = [&env, s, tmpdir_path, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, tmpdir_path, (*gen)++, la, big);
+        };
+
+        auto next_timestamp = [] (int sstable_idx, int ck_idx) {
+            using namespace std::chrono;
+            auto window = hours(sstable_idx * rows_per_partition + ck_idx);
+            return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(window)).count();
+        };
+
+        auto tokens = token_generation_for_shard(4, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+
+        auto make_sstable = [&] (int sstable_idx) {
+            static thread_local int32_t value = 1;
+
+            auto key_str = tokens[sstable_idx].first;
+            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+
+            mutation m(s, key);
+            for (auto ck = 0; ck < rows_per_partition; ++ck) {
+                auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
+                m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_timestamp(sstable_idx, ck));
+            }
+            return make_sstable_containing(sst_gen, {m});
+        };
+
+        auto cm = make_lw_shared<compaction_manager>();
+        column_family::config cfg = column_family_test_config();
+        cfg.datadir = tmpdir_path;
+        cfg.enable_disk_writes = true;
+        cfg.enable_commitlog = false;
+        cfg.enable_cache = false;
+        cfg.enable_incremental_backups = false;
+        auto tracker = make_lw_shared<cache_tracker>();
+        cell_locker_stats cl_stats;
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        cf->mark_ready_for_writes();
+        cf->start();
+
+        std::vector<shared_sstable> sstables_spanning_many_windows = {
+            make_sstable(0),
+            make_sstable(1),
+            make_sstable(2),
+            make_sstable(3),
+        };
+
+        auto ret = compact_sstables(sstables::compaction_descriptor(sstables_spanning_many_windows),
+                    *cf, sst_gen, replacer_fn_no_op()).get0();
+        // The real test here is that we don't assert() in
+        // sstables::prepare_summary() with the compact_sstables() call above,
+        // this is only here as a sanity check.
+        BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), std::min(sstables_spanning_many_windows.size() * rows_per_partition,
+                    sstables::time_window_compaction_strategy::max_data_segregation_window_count));
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
+    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pk = ss.make_pkey(make_local_key(s));
+        auto mut = mutation(s, pk);
+        ss.add_row(mut, ss.make_ckey(0), "val");
+
+        for (const auto version : all_sstable_versions) {
+            testlog.info("version={}", sstables::to_string(version));
+
+            auto mr = flat_mutation_reader_from_mutations({mut});
+
+            auto sst = env.make_sstable(s, tmpdir_path, 0, version, big);
+            sstable_writer_config cfg = test_sstables_manager.configure_writer();
+            sst->write_components(std::move(mr), 0, s, cfg, encoding_stats{}).get();
+            sst->load().get();
+
+            auto sst_mr = sst->as_mutation_source().make_reader(s, no_reader_permit(), query::full_partition_range, s->full_slice());
+            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr, db::no_timeout).get0();
+
+            // The real test here is that we don't assert() in
+            // sstables::prepare_summary() with the write_components() call above,
+            // this is only here as a sanity check.
+            BOOST_REQUIRE(sst_mr.is_buffer_empty());
+            BOOST_REQUIRE(sst_mr.is_end_of_stream());
+            BOOST_REQUIRE_EQUAL(mut, *sst_mut);
+        }
+
+        return make_ready_future<>();
+    });
+}
