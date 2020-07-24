@@ -177,10 +177,10 @@ static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect
     return _algorithms;
 };
 
-static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(const std::vector<gms::inet_address>& nodes) {
+static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(netw::messaging_service& ms, const std::vector<gms::inet_address>& nodes) {
     std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
-    parallel_for_each(boost::irange(size_t(0), nodes.size()), [&nodes_algorithms, &nodes] (size_t idx) {
-        return netw::get_local_messaging_service().send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx])).then(
+    parallel_for_each(boost::irange(size_t(0), nodes.size()), [&ms, &nodes_algorithms, &nodes] (size_t idx) {
+        return ms.send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx])).then(
                 [&nodes_algorithms, &nodes, idx] (std::vector<row_level_diff_detect_algorithm> algorithms) {
             std::sort(algorithms.begin(), algorithms.end());
             nodes_algorithms[idx] = std::move(algorithms);
@@ -2576,7 +2576,7 @@ public:
             check_in_shutdown();
             _ri.check_in_abort();
             auto repair_meta_id = repair_meta::get_next_repair_meta_id().get0();
-            auto algorithm = get_common_diff_detect_algorithm(_all_live_peer_nodes);
+            auto algorithm = get_common_diff_detect_algorithm(_ri.messaging.local(), _all_live_peer_nodes);
             auto max_row_buf_size = get_max_row_buf_size(algorithm);
             auto master_node_shard_config = shard_config {
                     this_shard_id(),

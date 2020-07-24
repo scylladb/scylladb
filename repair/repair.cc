@@ -929,7 +929,7 @@ static future<> repair_cf_range(repair_info& ri,
                 checksums.push_back(checksum_range(ri.db, ri.keyspace, cf, range, checksum_type));
                 for (auto&& neighbor : neighbors) {
                     checksums.push_back(
-                            netw::get_local_messaging_service().send_repair_checksum_range(
+                            ri.messaging.local().send_repair_checksum_range(
                                     netw::msg_addr{neighbor}, ri.keyspace, cf, range, checksum_type));
                 }
 
