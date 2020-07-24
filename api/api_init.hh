@@ -28,6 +28,7 @@ namespace locator { class token_metadata; }
 namespace cql_transport { class controller; }
 class thrift_controller;
 namespace db { class snapshot_ctl; }
+namespace netw { class messaging_service; }
 
 namespace api {
 
@@ -59,7 +60,7 @@ future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_
 future<> unset_server_snapshot(http_context& ctx);
 future<> set_server_gossip(http_context& ctx);
 future<> set_server_load_sstable(http_context& ctx);
-future<> set_server_messaging_service(http_context& ctx);
+future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging_service>& ms);
 future<> unset_server_messaging_service(http_context& ctx);
 future<> set_server_storage_proxy(http_context& ctx);
 future<> set_server_stream_manager(http_context& ctx);
