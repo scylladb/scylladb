@@ -643,6 +643,7 @@ public:
     using tracker_link_type = boost::intrusive::list_member_hook<bi::link_mode<boost::intrusive::auto_unlink>>;
 private:
     seastar::sharded<database>& _db;
+    seastar::sharded<netw::messaging_service>& _messaging;
     column_family& _cf;
     schema_ptr _schema;
     dht::token_range _range;
@@ -712,6 +713,7 @@ public:
 public:
     repair_meta(
             seastar::sharded<database>& db,
+            seastar::sharded<netw::messaging_service>& ms,
             column_family& cf,
             schema_ptr s,
             dht::token_range range,
@@ -724,6 +726,7 @@ public:
             shard_config master_node_shard_config,
             size_t nr_peer_nodes = 1)
             : _db(db)
+            , _messaging(ms)
             , _cf(cf)
             , _schema(s)
             , _range(range)
@@ -751,16 +754,16 @@ public:
               )
             , _repair_writer(_schema, _estimated_partitions, _nr_peer_nodes, _reason)
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
-                    [] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
-                        return netw::get_local_messaging_service().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
+                    [&ms] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                        return ms.local().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
                 })
             , _sink_source_for_get_row_diff(_repair_meta_id, _nr_peer_nodes,
-                    [] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
-                        return netw::get_local_messaging_service().make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(repair_meta_id, addr);
+                    [&ms] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                        return ms.local().make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(repair_meta_id, addr);
                 })
             , _sink_source_for_put_row_diff(_repair_meta_id, _nr_peer_nodes,
-                    [] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
-                        return netw::get_local_messaging_service().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, addr);
+                    [&ms] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
+                        return ms.local().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, addr);
                 })
             {
             if (master) {
@@ -813,10 +816,12 @@ public:
                 master_node_shard_config,
                 schema_version,
                 reason] (schema_ptr s) {
+            sharded<netw::messaging_service>& ms = *::_messaging;
             auto& db = service::get_local_storage_proxy().get_db();
             auto& cf = db.local().find_column_family(s->id());
             node_repair_meta_id id{from, repair_meta_id};
             auto rm = make_lw_shared<repair_meta>(db,
+                    ms,
                     cf,
                     s,
                     range,
@@ -1398,7 +1403,7 @@ public:
         if (remote_node == _myip) {
             return get_full_row_hashes_handler();
         }
-        return netw::get_local_messaging_service().send_repair_get_full_row_hashes(msg_addr(remote_node),
+        return _messaging.local().send_repair_get_full_row_hashes(msg_addr(remote_node),
                 _repair_meta_id).then([this, remote_node] (repair_hash_set hashes) {
             rlogger.debug("Got full hashes from peer={}, nr_hashes={}", remote_node, hashes.size());
             _metrics.rx_hashes_nr += hashes.size();
@@ -1482,7 +1487,7 @@ public:
         if (remote_node == _myip) {
             return get_combined_row_hash_handler(common_sync_boundary);
         }
-        return netw::get_local_messaging_service().send_repair_get_combined_row_hash(msg_addr(remote_node),
+        return _messaging.local().send_repair_get_combined_row_hash(msg_addr(remote_node),
                 _repair_meta_id, common_sync_boundary).then([this] (get_combined_row_hash_response resp) {
             stats().rpc_call_nr++;
             stats().rx_hashes_nr++;
@@ -1515,7 +1520,7 @@ public:
         // Murmur3 is appropriate because that's the only supported partitioner at
         // the time this change is introduced.
         sstring remote_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
-        return netw::get_local_messaging_service().send_repair_row_level_start(msg_addr(remote_node),
+        return _messaging.local().send_repair_row_level_start(msg_addr(remote_node),
                 _repair_meta_id, ks_name, cf_name, std::move(range), _algo, _max_row_buf_size, _seed,
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb,
                 remote_partitioner_name, std::move(schema_version), reason).then([ks_name, cf_name] (rpc::optional<repair_row_level_start_response> resp) {
@@ -1551,7 +1556,7 @@ public:
             return stop();
         }
         stats().rpc_call_nr++;
-        return netw::get_local_messaging_service().send_repair_row_level_stop(msg_addr(remote_node),
+        return _messaging.local().send_repair_row_level_stop(msg_addr(remote_node),
                 _repair_meta_id, std::move(ks_name), std::move(cf_name), std::move(range));
     }
 
@@ -1570,7 +1575,7 @@ public:
             return get_estimated_partitions();
         }
         stats().rpc_call_nr++;
-        return netw::get_local_messaging_service().send_repair_get_estimated_partitions(msg_addr(remote_node), _repair_meta_id);
+        return _messaging.local().send_repair_get_estimated_partitions(msg_addr(remote_node), _repair_meta_id);
     }
 
 
@@ -1586,7 +1591,7 @@ public:
             return set_estimated_partitions(estimated_partitions);
         }
         stats().rpc_call_nr++;
-        return netw::get_local_messaging_service().send_repair_set_estimated_partitions(msg_addr(remote_node), _repair_meta_id, estimated_partitions);
+        return _messaging.local().send_repair_set_estimated_partitions(msg_addr(remote_node), _repair_meta_id, estimated_partitions);
     }
 
 
@@ -1604,7 +1609,7 @@ public:
             return get_sync_boundary_handler(skipped_sync_boundary);
         }
         stats().rpc_call_nr++;
-        return netw::get_local_messaging_service().send_repair_get_sync_boundary(msg_addr(remote_node), _repair_meta_id, skipped_sync_boundary);
+        return _messaging.local().send_repair_get_sync_boundary(msg_addr(remote_node), _repair_meta_id, skipped_sync_boundary);
     }
 
     // RPC handler
@@ -1630,7 +1635,7 @@ public:
                 _metrics.tx_hashes_nr += set_diff.size();
             }
             stats().rpc_call_nr++;
-            repair_rows_on_wire rows = netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
+            repair_rows_on_wire rows = _messaging.local().send_repair_get_row_diff(msg_addr(remote_node),
                     _repair_meta_id, std::move(set_diff), bool(needs_all_rows)).get0();
             if (!rows.empty()) {
                 apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::no, node_idx);
@@ -1644,7 +1649,7 @@ public:
             return;
         }
         stats().rpc_call_nr++;
-        repair_rows_on_wire rows = netw::get_local_messaging_service().send_repair_get_row_diff(msg_addr(remote_node),
+        repair_rows_on_wire rows = _messaging.local().send_repair_get_row_diff(msg_addr(remote_node),
                 _repair_meta_id, {}, bool(needs_all_rows_t::yes)).get0();
         if (!rows.empty()) {
             apply_rows_on_master_in_thread(std::move(rows), remote_node, update_working_row_buf::yes, update_peer_row_hash_sets::yes, node_idx);
@@ -1772,7 +1777,7 @@ public:
                         stats().tx_row_bytes += row_bytes;
                         stats().rpc_call_nr++;
                         return to_repair_rows_on_wire(std::move(row_diff)).then([this, remote_node] (repair_rows_on_wire rows)  {
-                            return netw::get_local_messaging_service().send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
+                            return _messaging.local().send_repair_put_row_diff(msg_addr(remote_node), _repair_meta_id, std::move(rows));
                         });
                     });
                 });
@@ -2583,6 +2588,7 @@ public:
             bool table_dropped = false;
 
             repair_meta master(_ri.db,
+                    _ri.messaging,
                     _cf,
                     s,
                     _range,
