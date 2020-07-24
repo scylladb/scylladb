@@ -418,6 +418,10 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
     return ::make_shared<decltype(ret)>(std::move(ret));
 }
 
+namespace debug {
+sharded<netw::messaging_service>* the_messaging_service;
+}
+
 int main(int ac, char** av) {
     // Allow core dumps. The would be disabled by default if
     // CAP_SYS_NICE was added to the binary, as is suggested by the
@@ -495,6 +499,7 @@ int main(int ac, char** av) {
     utils::directories dirs;
     sharded<gms::feature_service> feature_service;
     sharded<db::snapshot_ctl> snapshot_ctl;
+    sharded<netw::messaging_service> messaging;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -523,7 +528,7 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
-                &token_metadata, &snapshot_ctl] {
+                &token_metadata, &snapshot_ctl, &messaging] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
@@ -778,8 +783,7 @@ int main(int ac, char** av) {
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
 
-            sharded<netw::messaging_service>& messaging = netw::get_messaging_service();
-
+            debug::the_messaging_service = &messaging;
             netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
             auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
                 netw::uninit_messaging_service(messaging).get();

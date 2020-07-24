@@ -27,6 +27,4 @@ struct msg_addr;
 enum class messaging_verb;
 class messaging_service;
 
-messaging_service& get_local_messaging_service();
-
 }
