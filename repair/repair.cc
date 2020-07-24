@@ -1693,10 +1693,10 @@ static future<> sync_data_using_repair(seastar::sharded<database>& db,
             std::vector<future<>> repair_results;
             repair_results.reserve(smp::count);
             for (auto shard : boost::irange(unsigned(0), smp::count)) {
-                auto f = db.invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason] (database& localdb) mutable {
+                auto f = db.invoke_on(shard, [&db, keyspace, table_ids, id, ranges, neighbors, reason] (database& localdb) mutable {
                     auto data_centers = std::vector<sstring>();
                     auto hosts = std::vector<sstring>();
-                    auto ri = make_lw_shared<repair_info>(service::get_local_storage_service().db(),
+                    auto ri = make_lw_shared<repair_info>(db,
                             std::move(keyspace), std::move(ranges), std::move(table_ids),
                             id, std::move(data_centers), std::move(hosts), reason);
                     ri->neighbors = std::move(neighbors);
