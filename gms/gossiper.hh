@@ -150,6 +150,8 @@ public:
     void set_cluster_name(sstring name);
     const std::set<inet_address>& get_seeds() const;
     void set_seeds(std::set<inet_address> _seeds);
+
+    netw::messaging_service& get_local_messaging() const noexcept { return _messaging; }
 public:
     static clk::time_point inline now() { return clk::now(); }
 public:

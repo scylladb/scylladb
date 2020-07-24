@@ -166,7 +166,7 @@ struct schema_pull_options {
     bool remote_supports_canonical_mutation_retval = true;
 };
 
-class messaging_service : public seastar::async_sharded_service<messaging_service> {
+class messaging_service : public seastar::async_sharded_service<messaging_service>, public peering_sharded_service<messaging_service> {
 public:
     struct rpc_protocol_wrapper;
     struct rpc_protocol_client_wrapper;
