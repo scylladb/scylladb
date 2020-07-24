@@ -427,7 +427,8 @@ public:
 
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
-            auto& ms = netw::get_messaging_service();
+
+            sharded<netw::messaging_service> ms;
             // don't start listening so tests can be run in parallel
             ms.start(listen, std::move(7000)).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });

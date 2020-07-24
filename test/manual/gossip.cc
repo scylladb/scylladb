@@ -79,7 +79,7 @@ int main(int ac, char ** av) {
             sharded<abort_source> abort_sources;
             sharded<service::migration_notifier> mnotif;
             sharded<locator::token_metadata> token_metadata;
-            sharded<netw::messaging_service>& messaging = netw::get_messaging_service();
+            sharded<netw::messaging_service> messaging;
 
             abort_sources.start().get();
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });

@@ -55,7 +55,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
         sharded<gms::feature_service> feature_service;
         sharded<locator::token_metadata> token_metadata;
-        sharded<netw::messaging_service>& _messaging = netw::get_messaging_service();
+        sharded<netw::messaging_service> _messaging;
 
         token_metadata.start().get();
         auto stop_token_mgr = defer([&token_metadata] { token_metadata.stop().get(); });

@@ -41,9 +41,9 @@ class storage_service_for_tests::impl {
     sharded<service::migration_notifier> _mnotif;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
     sharded<db::view::view_update_generator> _view_update_generator;
-    sharded<netw::messaging_service>& _messaging;
+    sharded<netw::messaging_service> _messaging;
 public:
-    impl() : _messaging(netw::get_messaging_service()) {
+    impl() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
         _cfg.broadcast_to_all_shards().get();
