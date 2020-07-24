@@ -55,6 +55,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
         sharded<gms::feature_service> feature_service;
         sharded<locator::token_metadata> token_metadata;
+        sharded<netw::messaging_service>& _messaging = netw::get_messaging_service();
 
         token_metadata.start().get();
         auto stop_token_mgr = defer([&token_metadata] { token_metadata.stop().get(); });
@@ -71,8 +72,8 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
         auto stop_snitch = defer([&] { locator::i_endpoint_snitch::stop_snitch().get(); });
 
-        netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000).get();
-        auto stop_messaging_service = defer([&] { netw::get_messaging_service().stop().get(); });
+        _messaging.start(gms::inet_address("127.0.0.1"), 7000).get();
+        auto stop_messaging_service = defer([&] { _messaging.stop().get(); });
 
         gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(*cfg)).get();
         auto stop_gossiper = defer([&] { gms::get_gossiper().stop().get(); });
