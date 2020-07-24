@@ -727,6 +727,59 @@ int main(int ac, char** av) {
                 return ctx.http_server.listen(socket_address{ip, api_port});
             }).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
+
+            // Note: changed from using a move here, because we want the config object intact.
+            database_config dbcfg;
+            dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
+            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", 1000);
+            dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
+            dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
+            dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
+            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
+            dbcfg.available_memory = memory::stats().total_memory();
+
+            const auto& ssl_opts = cfg->server_encryption_options();
+            auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
+            auto trust_store = get_or_default(ssl_opts, "truststore");
+            auto cert = get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
+            auto key = get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
+            auto prio = get_or_default(ssl_opts, "priority_string", sstring());
+            auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
+
+            netw::messaging_service::config mscfg;
+
+            mscfg.ip = gms::inet_address::lookup(listen_address, family).get0();
+            mscfg.port = cfg->storage_port();
+            mscfg.ssl_port = cfg->ssl_storage_port();
+            mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
+            mscfg.rpc_memory_limit = std::max<size_t>(0.08 * memory::stats().total_memory(), mscfg.rpc_memory_limit);
+
+            if (encrypt_what == "all") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::all;
+            } else if (encrypt_what == "dc") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::dc;
+            } else if (encrypt_what == "rack") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
+            }
+
+            sstring compress_what = cfg->internode_compression();
+            if (compress_what == "all") {
+                mscfg.compress = netw::messaging_service::compress_what::all;
+            } else if (compress_what == "dc") {
+                mscfg.compress = netw::messaging_service::compress_what::dc;
+            }
+
+            if (!cfg->inter_dc_tcp_nodelay()) {
+                mscfg.tcp_nodelay = netw::messaging_service::tcp_nodelay_what::local;
+            }
+
+            netw::messaging_service::scheduling_config scfg;
+            scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
+            scfg.streaming = dbcfg.streaming_scheduling_group;
+            scfg.gossip = scheduling_group();
+
+            netw::init_messaging_service(std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
+
             static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
@@ -746,15 +799,6 @@ int main(int ac, char** av) {
             service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata).get();
             supervisor::notify("starting per-shard database core");
 
-            // Note: changed from using a move here, because we want the config object intact.
-            database_config dbcfg;
-            dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
-            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", 1000);
-            dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
-            dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
-            dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
-            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
-            dbcfg.available_memory = memory::stats().total_memory();
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();
             start_large_data_handler(db).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
@@ -795,52 +839,10 @@ int main(int ac, char** av) {
             // ssl stuff it gets to be a lot.
             auto seed_provider= cfg->seed_provider();
             sstring cluster_name = cfg->cluster_name();
-
-            const auto& ssl_opts = cfg->server_encryption_options();
-            auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
-            auto trust_store = get_or_default(ssl_opts, "truststore");
-            auto cert = get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
-            auto key = get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
-            auto prio = get_or_default(ssl_opts, "priority_string", sstring());
-            auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
             if (cluster_name.empty()) {
                 cluster_name = "Test Cluster";
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
-
-            netw::messaging_service::config mscfg;
-
-            mscfg.ip = gms::inet_address::lookup(listen_address, family).get0();
-            mscfg.port = cfg->storage_port();
-            mscfg.ssl_port = cfg->ssl_storage_port();
-            mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
-            mscfg.rpc_memory_limit = std::max<size_t>(0.08 * memory::stats().total_memory(), mscfg.rpc_memory_limit);
-
-            if (encrypt_what == "all") {
-                mscfg.encrypt = netw::messaging_service::encrypt_what::all;
-            } else if (encrypt_what == "dc") {
-                mscfg.encrypt = netw::messaging_service::encrypt_what::dc;
-            } else if (encrypt_what == "rack") {
-                mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
-            }
-
-            sstring compress_what = cfg->internode_compression();
-            if (compress_what == "all") {
-                mscfg.compress = netw::messaging_service::compress_what::all;
-            } else if (compress_what == "dc") {
-                mscfg.compress = netw::messaging_service::compress_what::dc;
-            }
-
-            if (!cfg->inter_dc_tcp_nodelay()) {
-                mscfg.tcp_nodelay = netw::messaging_service::tcp_nodelay_what::local;
-            }
-
-            netw::messaging_service::scheduling_config scfg;
-            scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
-            scfg.streaming = dbcfg.streaming_scheduling_group;
-            scfg.gossip = scheduling_group();
-
-            netw::init_messaging_service(std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
 
             init_gossiper(gossiper, *cfg, listen_address, seed_provider, cluster_name);
             supervisor::notify("starting storage proxy");
