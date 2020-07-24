@@ -63,6 +63,7 @@ static bool inject_rpc_stream_error = false;
 
 distributed<db::system_distributed_keyspace>* _sys_dist_ks;
 distributed<db::view::view_update_generator>* _view_update_generator;
+sharded<netw::messaging_service>* _messaging;
 
 // Wraps sink and source objects for repair master or repair follower nodes.
 // For repair master, it stores sink and source pair for each of the followers.
@@ -2105,10 +2106,12 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
     });
 }
 
-future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
+future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks,
+        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
-    return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
+    _messaging = &ms;
+    return ms.invoke_on_all([] (auto& ms) {
         ms.register_repair_get_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -2248,7 +2251,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
 }
 
 future<> repair_uninit_messaging_service_handler() {
-    return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
+    return _messaging->invoke_on_all([] (auto& ms) {
         return when_all_succeed(
             ms.unregister_repair_get_row_diff_with_rpc_stream(),
             ms.unregister_repair_put_row_diff_with_rpc_stream(),
