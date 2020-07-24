@@ -571,8 +571,9 @@ inline messaging_service& get_local_messaging_service() {
     return _the_messaging_service.local();
 }
 
-void init_messaging_service(messaging_service::config cfg, messaging_service::scheduling_config scheduling_config,
+void init_messaging_service(sharded<messaging_service>& ms,
+        messaging_service::config cfg, messaging_service::scheduling_config scheduling_config,
         sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth);
-future<> uninit_messaging_service();
+future<> uninit_messaging_service(sharded<messaging_service>& ms);
 
 } // namespace netw

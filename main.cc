@@ -778,9 +778,11 @@ int main(int ac, char** av) {
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
 
-            netw::init_messaging_service(std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
-            auto stop_ms = defer_verbose_shutdown("messaging service", [] {
-                netw::uninit_messaging_service().get();
+            sharded<netw::messaging_service>& messaging = netw::get_messaging_service();
+
+            netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
+            auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
+                netw::uninit_messaging_service(messaging).get();
             });
 
             static sharded<auth::service> auth_service;
@@ -1018,7 +1020,7 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting messaging service");
             // Start handling REPAIR_CHECKSUM_RANGE messages
-            netw::get_messaging_service().invoke_on_all([&db] (auto& ms) {
+            messaging.invoke_on_all([&db] (auto& ms) {
                 ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version) {
                     auto hv = hash_version ? *hash_version : repair_checksum::legacy;
                     return do_with(std::move(keyspace), std::move(cf), std::move(range),

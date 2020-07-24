@@ -1406,7 +1406,8 @@ future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_poi
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
 }
 
-void init_messaging_service(messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,
+void init_messaging_service(sharded<messaging_service>& ms,
+                messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,
                 sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth) {
     using encrypt_what = messaging_service::encrypt_what;
     using namespace seastar::tls;
@@ -1437,12 +1438,12 @@ void init_messaging_service(messaging_service::config mscfg, netw::messaging_ser
     // Init messaging_service
     // Delay listening messaging_service until gossip message handlers are registered
 
-    get_messaging_service().start(mscfg, scfg, creds).get();
+    ms.start(mscfg, scfg, creds).get();
 }
 
-future<> uninit_messaging_service() {
+future<> uninit_messaging_service(sharded<messaging_service>& ms) {
     // Do not destroy instances for real, as other services need them, just call .stop()
-    return get_messaging_service().invoke_on_all(&messaging_service::stop);
+    return ms.invoke_on_all(&messaging_service::stop);
 }
 
 } // namespace net
