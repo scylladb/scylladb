@@ -1781,7 +1781,7 @@ using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, locator::token_metadata& tm)
+        scheduling_group_key stats_key, gms::feature_service& feat, locator::token_metadata& tm, netw::messaging_service& ms)
     : _db(db)
     , _token_metadata(tm)
     , _read_smp_service_group(cfg.read_smp_service_group)
@@ -1792,6 +1792,7 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
+    , _messaging(ms)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
@@ -4745,7 +4746,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 }
 
 void storage_proxy::init_messaging_service() {
-    auto& ms = netw::get_local_messaging_service();
+    auto& ms = _messaging;
     ms.register_counter_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
@@ -5144,7 +5145,7 @@ void storage_proxy::init_messaging_service() {
 }
 
 future<> storage_proxy::uninit_messaging_service() {
-    auto& ms = netw::get_local_messaging_service();
+    auto& ms = _messaging;
     return when_all_succeed(
         ms.unregister_counter_mutation(),
         ms.unregister_mutation(),

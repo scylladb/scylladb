@@ -271,6 +271,7 @@ private:
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
+    netw::messaging_service& _messaging;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
     std::default_random_engine _urandom;
@@ -436,7 +437,7 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, locator::token_metadata& tokens);
+            scheduling_group_key stats_key, gms::feature_service& feat, locator::token_metadata& tokens, netw::messaging_service& ms);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;
