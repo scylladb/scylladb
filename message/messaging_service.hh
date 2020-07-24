@@ -285,6 +285,7 @@ public:
     uint16_t port();
     gms::inet_address listen_address();
     future<> shutdown();
+    future<> stop();
     static rpc::no_wait_type no_wait();
     bool is_shutting_down() { return _shutting_down; }
     gms::inet_address get_preferred_ip(gms::inet_address ep);
@@ -572,5 +573,6 @@ inline messaging_service& get_local_messaging_service() {
 
 void init_messaging_service(messaging_service::config cfg, messaging_service::scheduling_config scheduling_config,
         sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth);
+future<> uninit_messaging_service();
 
 } // namespace netw

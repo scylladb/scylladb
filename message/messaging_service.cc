@@ -443,6 +443,11 @@ future<> messaging_service::shutdown() {
     return when_all(stop_nontls_server(), stop_tls_server(), stop_client()).discard_result();
 }
 
+future<> messaging_service::stop() {
+    // FIXME -- make sure all _rpc handlers are unregistered
+    return make_ready_future<>();
+}
+
 rpc::no_wait_type messaging_service::no_wait() {
     return rpc::no_wait;
 }
@@ -1433,6 +1438,11 @@ void init_messaging_service(messaging_service::config mscfg, netw::messaging_ser
     // Delay listening messaging_service until gossip message handlers are registered
 
     get_messaging_service().start(mscfg, scfg, creds).get();
+}
+
+future<> uninit_messaging_service() {
+    // Do not destroy instances for real, as other services need them, just call .stop()
+    return get_messaging_service().invoke_on_all(&messaging_service::stop);
 }
 
 } // namespace net

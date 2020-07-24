@@ -779,6 +779,9 @@ int main(int ac, char** av) {
             scfg.gossip = scheduling_group();
 
             netw::init_messaging_service(std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
+            auto stop_ms = defer_verbose_shutdown("messaging service", [] {
+                netw::uninit_messaging_service().get();
+            });
 
             static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
