@@ -25,6 +25,7 @@
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include "gms/gossiper.hh"
 
 namespace gms {
 constexpr std::string_view features::RANGE_TOMBSTONES = "RANGE_TOMBSTONES";
@@ -230,6 +231,9 @@ void feature::enable() {
 }
 
 db::schema_features feature_service::cluster_schema_features() const {
+    if (!get_local_gossiper().is_enabled()) {
+        return db::schema_features::full();
+    }
     db::schema_features f;
     f.set_if<db::schema_feature::VIEW_VIRTUAL_COLUMNS>(bool(_view_virtual_columns));
     f.set_if<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>(bool(_digest_insensitive_to_expiry));
