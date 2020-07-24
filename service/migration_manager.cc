@@ -64,8 +64,8 @@ using namespace std::chrono_literals;
 
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 
-migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat) :
-        _notifier(notifier), _feat(feat)
+migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms) :
+        _notifier(notifier), _feat(feat), _messaging(ms)
 {
 }
 
@@ -108,8 +108,7 @@ void migration_manager::init_messaging_service()
         _wait_cluster_upgraded.broadcast();
     }));
 
-    auto& ms = netw::get_local_messaging_service();
-    ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm, rpc::optional<std::vector<canonical_mutation>> cm) {
+    _messaging.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm, rpc::optional<std::vector<canonical_mutation>> cm) {
         auto src = netw::messaging_service::get_source(cinfo);
         auto f = make_ready_future<>();
         if (cm) {
@@ -131,7 +130,7 @@ void migration_manager::init_messaging_service()
         });
         return netw::messaging_service::no_wait();
     });
-    ms.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
+    _messaging.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
         using frozen_mutations = std::vector<frozen_mutation>;
         using canonical_mutations = std::vector<canonical_mutation>;
         const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
@@ -156,10 +155,10 @@ void migration_manager::init_messaging_service()
             // keep local proxy alive
         });
     });
-    ms.register_schema_check([] {
+    _messaging.register_schema_check([] {
         return make_ready_future<utils::UUID>(service::get_local_storage_proxy().get_db().local().get_version());
     });
-    ms.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
+    _messaging.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
         get_local_storage_proxy().get_stats().replica_cross_shard_ops += shard != this_shard_id();
         // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
         return container().invoke_on(shard, [v] (auto&& sp) {
@@ -171,12 +170,11 @@ void migration_manager::init_messaging_service()
 
 future<> migration_manager::uninit_messaging_service()
 {
-    auto& ms = netw::get_local_messaging_service();
     return when_all_succeed(
-        ms.unregister_migration_request(),
-        ms.unregister_definitions_update(),
-        ms.unregister_schema_check(),
-        ms.unregister_get_schema_version()
+        _messaging.unregister_migration_request(),
+        _messaging.unregister_definitions_update(),
+        _messaging.unregister_schema_check(),
+        _messaging.unregister_get_schema_version()
     ).discard_result();
 }
 

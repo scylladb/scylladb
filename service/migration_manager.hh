@@ -57,6 +57,7 @@
 class canonical_mutation;
 class frozen_mutation;
 namespace cql3 { namespace functions { class user_function; }}
+namespace netw { class messaging_service; }
 
 namespace service {
 
@@ -73,11 +74,12 @@ private:
     seastar::gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;
     gms::feature_service& _feat;
+    netw::messaging_service& _messaging;
     seastar::abort_source _as;
     bool _cluster_upgraded = false;
     seastar::condition_variable _wait_cluster_upgraded;
 public:
-    migration_manager(migration_notifier&, gms::feature_service&);
+    migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms);
 
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }
