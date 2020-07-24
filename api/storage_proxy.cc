@@ -215,7 +215,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::get_hinted_handoff_enabled_by_dc.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         unimplemented();
-        std::vector<sp::mapper_list> res;
+        std::vector<sstring> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
