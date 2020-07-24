@@ -119,9 +119,7 @@ private:
     using messaging_verb = netw::messaging_verb;
     using messaging_service = netw::messaging_service;
     using msg_addr = netw::msg_addr;
-    netw::messaging_service& ms() {
-        return netw::get_local_messaging_service();
-    }
+
     future<> init_messaging_service_handler(bind_messaging_port do_bind = bind_messaging_port::yes);
     future<> uninit_messaging_service_handler();
     future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
@@ -238,7 +236,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(abort_source& as, feature_service& features, locator::token_metadata& tokens, db::config& cfg);
+    explicit gossiper(abort_source& as, feature_service& features, locator::token_metadata& tokens, netw::messaging_service& ms, db::config& cfg);
 
     void set_last_processed_message_at();
     void set_last_processed_message_at(clk::time_point tp);
@@ -560,6 +558,7 @@ private:
     condition_variable _features_condvar;
     feature_service& _feature_service;
     locator::token_metadata& _token_metadata;
+    netw::messaging_service& _messaging;
     db::config& _cfg;
     failure_detector _fd;
     friend class feature;

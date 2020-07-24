@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         _messaging.start(gms::inet_address("127.0.0.1"), 7000).get();
         auto stop_messaging_service = defer([&] { _messaging.stop().get(); });
 
-        gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(*cfg)).get();
+        gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(_messaging), std::ref(*cfg)).get();
         auto stop_gossiper = defer([&] { gms::get_gossiper().stop().get(); });
 
         service::storage_service_config sscfg;

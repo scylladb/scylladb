@@ -795,7 +795,7 @@ int main(int ac, char** av) {
             (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
             auto stop_cql_config_updater = defer([&] { cql_config_updater.stop().get(); });
             auto& gossiper = gms::get_gossiper();
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(*cfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg)).get();
             // #293 - do not stop anything
             //engine().at_exit([]{ return gms::get_gossiper().stop(); });
             supervisor::notify("initializing storage service");

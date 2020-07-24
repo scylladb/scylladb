@@ -123,10 +123,11 @@ public:
     void on_restart(inet_address, endpoint_state) override {}
 };
 
-gossiper::gossiper(abort_source& as, feature_service& features, locator::token_metadata& tokens, db::config& cfg)
+gossiper::gossiper(abort_source& as, feature_service& features, locator::token_metadata& tokens, netw::messaging_service& ms, db::config& cfg)
         : _abort_source(as)
         , _feature_service(features)
         , _token_metadata(tokens)
+        , _messaging(ms)
         , _cfg(cfg)
         , _fd(cfg.phi_convict_threshold(),
                 std::chrono::milliseconds(cfg.fd_initial_value_ms()),
@@ -282,7 +283,7 @@ future<> gossiper::do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg) {
         this->examine_gossiper(g_digest_list, delta_gossip_digest_list, delta_ep_state_map);
         gms::gossip_digest_ack ack_msg(std::move(delta_gossip_digest_list), std::move(delta_ep_state_map));
         logger.debug("Calling do_send_ack_msg to node {}, syn_msg={}, ack_msg={}", from, syn_msg, ack_msg);
-        return this->ms().send_gossip_digest_ack(from, std::move(ack_msg));
+        return _messaging.send_gossip_digest_ack(from, std::move(ack_msg));
     });
 }
 
@@ -391,7 +392,7 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
         }
         gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
         logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
-        return this->ms().send_gossip_digest_ack2(from, std::move(ack2_msg));
+        return _messaging.send_gossip_digest_ack2(from, std::move(ack2_msg));
     });
 }
 
@@ -458,7 +459,7 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         return make_ready_future<>();
     }
     _ms_registered = true;
-    ms().register_gossip_digest_syn([] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
+    _messaging.register_gossip_digest_syn([] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
         auto from = netw::messaging_service::get_source(cinfo);
         // In a new fiber.
         (void)smp::submit_to(0, [from, syn_msg = std::move(syn_msg)] () mutable {
@@ -469,7 +470,7 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         });
         return messaging_service::no_wait();
     });
-    ms().register_gossip_digest_ack([] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
+    _messaging.register_gossip_digest_ack([] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
         auto from = netw::messaging_service::get_source(cinfo);
         // In a new fiber.
         (void)smp::submit_to(0, [from, msg = std::move(msg)] () mutable {
@@ -480,7 +481,7 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         });
         return messaging_service::no_wait();
     });
-    ms().register_gossip_digest_ack2([] (gossip_digest_ack2 msg) {
+    _messaging.register_gossip_digest_ack2([] (gossip_digest_ack2 msg) {
         // In a new fiber.
         (void)smp::submit_to(0, [msg = std::move(msg)] () mutable {
             return gms::get_local_gossiper().handle_ack2_msg(std::move(msg));
@@ -489,12 +490,12 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         });
         return messaging_service::no_wait();
     });
-    ms().register_gossip_echo([] {
+    _messaging.register_gossip_echo([] {
         return smp::submit_to(0, [] {
             return gms::get_local_gossiper().handle_echo_msg();
         });
     });
-    ms().register_gossip_shutdown([] (inet_address from) {
+    _messaging.register_gossip_shutdown([] (inet_address from) {
         // In a new fiber.
         (void)smp::submit_to(0, [from] {
             return gms::get_local_gossiper().handle_shutdown_msg(from);
@@ -503,7 +504,7 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         });
         return messaging_service::no_wait();
     });
-    ms().register_gossip_get_endpoint_states([] (const rpc::client_info& cinfo, gossip_get_endpoint_states_request request) {
+    _messaging.register_gossip_get_endpoint_states([] (const rpc::client_info& cinfo, gossip_get_endpoint_states_request request) {
         return smp::submit_to(0, [request = std::move(request)] () mutable {
             return gms::get_local_gossiper().handle_get_endpoint_states_msg(std::move(request));
         });
@@ -511,13 +512,13 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
 
     // Start listening messaging_service after gossip message handlers are registered
     if (do_bind) {
-        return ms().start_listen();
+        return _messaging.start_listen();
     }
     return make_ready_future<>();
 }
 
 future<> gossiper::uninit_messaging_service_handler() {
-    auto& ms = netw::get_local_messaging_service();
+    auto& ms = _messaging;
     return when_all_succeed(
         ms.unregister_gossip_echo(),
         ms.unregister_gossip_shutdown(),
@@ -542,7 +543,7 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
     inet_address to = __live_endpoints[index];
     auto id = get_msg_addr(to);
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
-    return ms().send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
+    return _messaging.send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
         // It is normal to reach here because it is normal that a node
         // tries to send a SYN message to a peer node which is down before
         // failure_detector thinks that peer node is down.
@@ -1313,7 +1314,7 @@ const std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpo
 }
 
 bool gossiper::uses_host_id(inet_address endpoint) const {
-    return netw::get_local_messaging_service().knows_version(endpoint) ||
+    return _messaging.knows_version(endpoint) ||
             get_application_state_ptr(endpoint, application_state::NET_VERSION);
 }
 
@@ -1418,7 +1419,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     msg_addr id = get_msg_addr(addr);
     logger.trace("Sending a EchoMessage to {}", id);
     // Do it in the background.
-    (void)ms().send_gossip_echo(id).then([this, addr] {
+    (void)_messaging.send_gossip_echo(id).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
         set_last_processed_message_at();
         return seastar::async([this, addr] {
@@ -1784,7 +1785,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         for (;;) {
             parallel_for_each(nodes.begin(), nodes.end(), [this, &request, &responses, &nodes_talked, &nodes_down, &fall_back_to_syn_msg] (gms::inet_address node) {
                 logger.debug("Sent get_endpoint_states request to {}, request={}", node, request.application_states);
-                return ms().send_gossip_get_endpoint_states(msg_addr(node), std::chrono::milliseconds(5000), request).then(
+                return _messaging.send_gossip_get_endpoint_states(msg_addr(node), std::chrono::milliseconds(5000), request).then(
                         [node, &nodes_talked, &responses] (gms::gossip_get_endpoint_states_response response) {
                     logger.debug("Got get_endpoint_states response from {}, response={}", node, response.endpoint_state_map);
                     responses.push_back(std::move(response));
@@ -1829,7 +1830,7 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
                     auto id = get_msg_addr(node);
                     logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
                     // Do it in the background.
-                    (void)ms().send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
+                    (void)_messaging.send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
                         logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
                     });
                 }
@@ -2000,7 +2001,7 @@ future<> gossiper::do_stop_gossiping() {
             for (inet_address addr : live_endpoints) {
                 msg_addr id = get_msg_addr(addr);
                 logger.trace("Sending a GossipShutdown to {}", id);
-                ms().send_gossip_shutdown(id, get_broadcast_address()).then_wrapped([id] (auto&&f) {
+                _messaging.send_gossip_shutdown(id, get_broadcast_address()).then_wrapped([id] (auto&&f) {
                     try {
                         f.get();
                         logger.trace("Got GossipShutdown Reply");

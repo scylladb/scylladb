@@ -87,7 +87,7 @@ future<> await_background_jobs_on_all_shards();
 
 static const sstring testing_superuser = "tester";
 
-static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, sharded<locator::token_metadata>& tm, db::config& cfg, db::seed_provider_type seed_provider,
+static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, sharded<locator::token_metadata>& tm, sharded<netw::messaging_service>& ms, db::config& cfg, db::seed_provider_type seed_provider,
             sharded<abort_source>& abort_sources, sstring cluster_name = "Test Cluster") {
         // Init gossiper
         std::set<gms::inet_address> seeds;
@@ -103,7 +103,7 @@ static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features,
         if (seeds.empty()) {
             seeds.emplace(gms::inet_address("127.0.0.1"));
         }
-        return gms::get_gossiper().start(std::ref(abort_sources), std::ref(features), std::ref(tm), std::ref(cfg)).then([seeds, cluster_name] {
+        return gms::get_gossiper().start(std::ref(abort_sources), std::ref(features), std::ref(tm), std::ref(ms), std::ref(cfg)).then([seeds, cluster_name] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(seeds);
             gossiper.set_cluster_name(cluster_name);
@@ -449,7 +449,7 @@ public:
             auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
             // FIXME: split
-            tst_init_ms_fd_gossiper(feature_service, token_metadata, *cfg, db::config::seed_provider_type(), abort_sources).get();
+            tst_init_ms_fd_gossiper(feature_service, token_metadata, ms, *cfg, db::config::seed_provider_type(), abort_sources).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
