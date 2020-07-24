@@ -932,9 +932,9 @@ void storage_service::bootstrap() {
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     if (is_repair_based_node_ops_enabled()) {
         if (db().local().is_replacing()) {
-            replace_with_repair(_db, _token_metadata, _bootstrap_tokens).get();
+            replace_with_repair(_db, netw::get_messaging_service(), _token_metadata, _bootstrap_tokens).get();
         } else {
-            bootstrap_with_repair(_db, _token_metadata, _bootstrap_tokens).get();
+            bootstrap_with_repair(_db, netw::get_messaging_service(), _token_metadata, _bootstrap_tokens).get();
         }
     } else {
         dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, _token_metadata);
@@ -2296,7 +2296,7 @@ future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
         if (ss.is_repair_based_node_ops_enabled()) {
-            return rebuild_with_repair(ss._db, ss._token_metadata, std::move(source_dc));
+            return rebuild_with_repair(ss._db, netw::get_messaging_service(), ss._token_metadata, std::move(source_dc));
         } else {
             auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss._abort_source,
                     ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
@@ -2406,7 +2406,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 void storage_service::unbootstrap() {
     db::get_local_batchlog_manager().do_batch_log_replay().get();
     if (is_repair_based_node_ops_enabled()) {
-        decommission_with_repair(_db, _token_metadata).get();
+        decommission_with_repair(_db, netw::get_messaging_service(), _token_metadata).get();
     } else {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
@@ -2448,7 +2448,7 @@ void storage_service::unbootstrap() {
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
     if (is_repair_based_node_ops_enabled()) {
-        return removenode_with_repair(_db, _token_metadata, endpoint).finally([this, notify_endpoint] () {
+        return removenode_with_repair(_db, netw::get_messaging_service(), _token_metadata, endpoint).finally([this, notify_endpoint] () {
             return send_replication_notification(notify_endpoint);
         });
     }

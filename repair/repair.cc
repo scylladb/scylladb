@@ -1673,6 +1673,7 @@ future<> repair_abort_all(seastar::sharded<database>& db) {
 }
 
 static future<> sync_data_using_repair(seastar::sharded<database>& db,
+        seastar::sharded<netw::messaging_service>& ms,
         sstring keyspace,
         dht::token_range_vector ranges,
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
@@ -1731,9 +1732,9 @@ static future<> sync_data_using_repair(seastar::sharded<database>& db,
     });
 }
 
-future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> bootstrap_tokens) {
+future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, std::unordered_set<dht::token> bootstrap_tokens) {
     using inet_address = gms::inet_address;
-    return seastar::async([&db, tm = std::move(tm), tokens = std::move(bootstrap_tokens)] () mutable {
+    return seastar::async([&db, &ms, tm = std::move(tm), tokens = std::move(bootstrap_tokens)] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto reason = streaming::stream_reason::bootstrap;
@@ -1891,16 +1892,16 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
                 }
             }
             auto nr_ranges = desired_ranges.size();
-            sync_data_using_repair(db, keyspace_name, std::move(desired_ranges), std::move(range_sources), reason).get();
+            sync_data_using_repair(db, ms, keyspace_name, std::move(desired_ranges), std::move(range_sources), reason).get();
             rlogger.info("bootstrap_with_repair: finished with keyspace={}, nr_ranges={}", keyspace_name, nr_ranges);
         }
         rlogger.info("bootstrap_with_repair: finished with keyspaces={}", keyspaces);
     });
 }
 
-static future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node) {
+static future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, gms::inet_address leaving_node) {
     using inet_address = gms::inet_address;
-    return seastar::async([&db, tm = std::move(tm), leaving_node = std::move(leaving_node)] () mutable {
+    return seastar::async([&db, &ms, tm = std::move(tm), leaving_node = std::move(leaving_node)] () mutable {
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto keyspaces = db.local().get_non_system_keyspaces();
         bool is_removenode = myip != leaving_node;
@@ -2043,7 +2044,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                 ranges.swap(ranges_for_removenode);
             }
             auto nr_ranges_synced = ranges.size();
-            sync_data_using_repair(db, keyspace_name, std::move(ranges), std::move(range_sources), reason).get();
+            sync_data_using_repair(db, ms, keyspace_name, std::move(ranges), std::move(range_sources), reason).get();
             rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}, nr_ranges_synced={}, nr_ranges_skipped={}",
                 op, keyspace_name, leaving_node, nr_ranges_total, nr_ranges_synced, nr_ranges_skipped);
         }
@@ -2051,16 +2052,16 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
     });
 }
 
-future<> decommission_with_repair(seastar::sharded<database>& db, locator::token_metadata tm) {
-    return do_decommission_removenode_with_repair(db, std::move(tm), utils::fb_utilities::get_broadcast_address());
+future<> decommission_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm) {
+    return do_decommission_removenode_with_repair(db, ms, std::move(tm), utils::fb_utilities::get_broadcast_address());
 }
 
-future<> removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node) {
-    return do_decommission_removenode_with_repair(db, std::move(tm), std::move(leaving_node));
+future<> removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, gms::inet_address leaving_node) {
+    return do_decommission_removenode_with_repair(db, ms, std::move(tm), std::move(leaving_node));
 }
 
-static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, sstring op, sstring source_dc, streaming::stream_reason reason) {
-    return seastar::async([&db, tm = std::move(tm), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
+static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, sstring op, sstring source_dc, streaming::stream_reason reason) {
+    return seastar::async([&db, &ms, tm = std::move(tm), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         size_t nr_ranges_total = 0;
@@ -2121,26 +2122,26 @@ static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, l
                 }).get();
             }
             auto nr_ranges = ranges.size();
-            sync_data_using_repair(db, keyspace_name, std::move(ranges), std::move(range_sources), reason).get();
+            sync_data_using_repair(db, ms, keyspace_name, std::move(ranges), std::move(range_sources), reason).get();
             rlogger.info("{}: finished with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc, nr_ranges);
         }
         rlogger.info("{}: finished with keyspaces={}, source_dc={}", op, keyspaces, source_dc);
     });
 }
 
-future<> rebuild_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, sstring source_dc) {
+future<> rebuild_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, sstring source_dc) {
     auto op = sstring("rebuild_with_repair");
     if (source_dc.empty()) {
         source_dc = get_local_dc();
     }
     auto reason = streaming::stream_reason::rebuild;
-    return do_rebuild_replace_with_repair(db, std::move(tm), std::move(op), std::move(source_dc), reason);
+    return do_rebuild_replace_with_repair(db, ms, std::move(tm), std::move(op), std::move(source_dc), reason);
 }
 
-future<> replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> replacing_tokens) {
+future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, std::unordered_set<dht::token> replacing_tokens) {
     auto op = sstring("replace_with_repair");
     auto source_dc = get_local_dc();
     auto reason = streaming::stream_reason::replace;
     tm.update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
-    return do_rebuild_replace_with_repair(db, std::move(tm), std::move(op), std::move(source_dc), reason);
+    return do_rebuild_replace_with_repair(db, ms, std::move(tm), std::move(op), std::move(source_dc), reason);
 }
