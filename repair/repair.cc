@@ -1672,7 +1672,7 @@ future<> repair_abort_all(seastar::sharded<database>& db) {
     });
 }
 
-future<> sync_data_using_repair(seastar::sharded<database>& db,
+static future<> sync_data_using_repair(seastar::sharded<database>& db,
         sstring keyspace,
         dht::token_range_vector ranges,
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
@@ -1898,7 +1898,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
     });
 }
 
-future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node) {
+static future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node) {
     using inet_address = gms::inet_address;
     return seastar::async([&db, tm = std::move(tm), leaving_node = std::move(leaving_node)] () mutable {
         auto myip = utils::fb_utilities::get_broadcast_address();
@@ -2059,7 +2059,7 @@ future<> removenode_with_repair(seastar::sharded<database>& db, locator::token_m
     return do_decommission_removenode_with_repair(db, std::move(tm), std::move(leaving_node));
 }
 
-future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, sstring op, sstring source_dc, streaming::stream_reason reason) {
+static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, sstring op, sstring source_dc, streaming::stream_reason reason) {
     return seastar::async([&db, tm = std::move(tm), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
