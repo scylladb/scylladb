@@ -73,6 +73,7 @@ stream_transfer_task::~stream_transfer_task() = default;
 
 struct send_info {
     database& db;
+    netw::messaging_service& ms;
     utils::UUID plan_id;
     utils::UUID cf_id;
     netw::messaging_service::msg_addr id;
@@ -85,10 +86,11 @@ struct send_info {
     dht::token_range_vector ranges;
     dht::partition_range_vector prs;
     flat_mutation_reader reader;
-    send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
+    send_info(database& db_, netw::messaging_service& ms_, utils::UUID plan_id_, utils::UUID cf_id_,
               dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_, stream_reason reason_)
         : db(db_)
+        , ms(ms_)
         , plan_id(plan_id_)
         , cf_id(cf_id_)
         , id(id_)
@@ -140,7 +142,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
   }
   return si->estimate_partitions().then([si] (size_t estimated_partitions) {
     sslog.info("[Stream #{}] Start sending ks={}, cf={}, estimated_partitions={}, with new rpc streaming", si->plan_id, si->cf.schema()->ks_name(), si->cf.schema()->cf_name(), estimated_partitions);
-    return netw::get_local_messaging_service().make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->id).then_unpack([si] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd> sink, rpc::source<int32_t> source) mutable {
+    return si->ms.make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->id).then_unpack([si] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd> sink, rpc::source<int32_t> source) mutable {
         auto got_error_from_peer = make_lw_shared<bool>(false);
 
         auto source_op = [source, got_error_from_peer, si] () mutable -> future<> {
@@ -219,7 +221,7 @@ future<> stream_transfer_task::execute() {
     sort_and_merge_ranges();
     auto reason = session->get_reason();
     return session->get_db().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason] (database& db) {
-        auto si = make_lw_shared<send_info>(db, plan_id, cf_id, std::move(ranges), id, dst_cpu_id, reason);
+        auto si = make_lw_shared<send_info>(db, stream_session::ms(), plan_id, cf_id, std::move(ranges), id, dst_cpu_id, reason);
         return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
             if (!has_relevant_range_on_this_shard) {
                 sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
