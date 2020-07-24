@@ -835,11 +835,12 @@ int main(int ac, char** av) {
                 mscfg.tcp_nodelay = netw::messaging_service::tcp_nodelay_what::local;
             }
 
-            init_scheduling_config scfg;
-            scfg.statement = dbcfg.statement_scheduling_group;
+            netw::messaging_service::scheduling_config scfg;
+            scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
-            init_messaging_service(std::move(mscfg), trust_store, cert, key, prio, clauth, scfg);
+
+            init_messaging_service(std::move(mscfg), trust_store, cert, key, prio, clauth, std::move(scfg));
 
             init_gossiper(gossiper, *cfg, listen_address, seed_provider, cluster_name);
             supervisor::notify("starting storage proxy");

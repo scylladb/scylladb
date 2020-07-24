@@ -38,7 +38,7 @@ void init_messaging_service(netw::messaging_service::config mscfg
                 , sstring ms_key
                 , sstring ms_tls_prio
                 , bool ms_client_auth
-                , init_scheduling_config scheduling_config) {
+                , netw::messaging_service::scheduling_config scfg) {
 
     using encrypt_what = netw::messaging_service::encrypt_what;
     using namespace seastar::tls;
@@ -68,10 +68,6 @@ void init_messaging_service(netw::messaging_service::config mscfg
 
     // Init messaging_service
     // Delay listening messaging_service until gossip message handlers are registered
-    netw::messaging_service::scheduling_config scfg;
-    scfg.statement_tenants = { {scheduling_config.statement, "$user"}, {default_scheduling_group(), "$system"} };
-    scfg.streaming = scheduling_config.streaming;
-    scfg.gossip = scheduling_config.gossip;
     netw::get_messaging_service().start(mscfg, scfg, creds).get();
 }
 

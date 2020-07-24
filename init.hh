@@ -48,19 +48,13 @@ extern logging::logger startlog;
 
 class bad_configuration_error : public std::exception {};
 
-struct init_scheduling_config {
-    scheduling_group streaming;
-    scheduling_group statement;
-    scheduling_group gossip;
-};
-
 void init_messaging_service(netw::messaging_service::config cfg
                 , sstring ms_trust_store
                 , sstring ms_cert
                 , sstring ms_key
                 , sstring ms_tls_prio
                 , bool ms_client_auth
-                , init_scheduling_config scheduling_config);
+                , netw::messaging_service::scheduling_config scheduling_config);
 
 void init_gossiper(sharded<gms::gossiper>& gossiper
                 , db::config& cfg
