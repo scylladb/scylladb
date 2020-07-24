@@ -801,7 +801,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata, messaging).get();
             supervisor::notify("starting per-shard database core");
 
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();

@@ -126,6 +126,7 @@ private:
     distributed<database>& _db;
     gms::gossiper& _gossiper;
     sharded<service::migration_notifier>& _mnotifier;
+    sharded<netw::messaging_service>& _messaging;
     // Note that this is obviously only valid for the current shard. Users of
     // this facility should elect a shard to be the coordinator based on any
     // given objective criteria
@@ -153,7 +154,7 @@ private:
      */
     bool _for_testing;
 public:
-    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, /* only for tests */ bool for_testing = false);
+    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, sharded<netw::messaging_service>& ms, /* only for tests */ bool for_testing = false);
 
     // Needed by distributed<>
     future<> stop();
@@ -842,7 +843,8 @@ public:
 future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<database>& db, sharded<gms::gossiper>& gossiper,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
-        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm);
+        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm,
+        sharded<netw::messaging_service>& ms);
 future<> deinit_storage_service();
 
 }

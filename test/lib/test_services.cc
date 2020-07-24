@@ -57,7 +57,7 @@ public:
         _gossiper.start(std::ref(_abort_source), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_messaging), std::ref(_cfg)).get();
         service::storage_service_config sscfg;
         sscfg.available_memory = memory::stats().total_memory();
-        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, std::ref(_mnotif), std::ref(_token_metadata), true).get();
+        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, std::ref(_mnotif), std::ref(_token_metadata), std::ref(_messaging), true).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();

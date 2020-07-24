@@ -91,7 +91,7 @@ int main(int ac, char ** av) {
             sscfg.available_memory = memory::stats().total_memory();
             messaging.start(listen).get();
             gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg)).get();
-            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), sys_dist_ks, view_update_generator, feature_service, sscfg, mnotif, token_metadata).get();
+            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), sys_dist_ks, view_update_generator, feature_service, sscfg, mnotif, token_metadata, messaging).get();
             auto& server = messaging.local();
             auto port = server.port();
             auto msg_listen = server.listen_address();
