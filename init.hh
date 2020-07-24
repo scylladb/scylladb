@@ -25,6 +25,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 #include "auth/service.hh"
+#include "message/messaging_service.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "database_fwd.hh"
 #include "log.hh"
@@ -53,21 +54,13 @@ struct init_scheduling_config {
     scheduling_group gossip;
 };
 
-void init_messaging_service(db::config& cfg
-                , sstring listen_address
-                , uint16_t storage_port
-                , uint16_t ssl_storage_port
-                , bool tcp_nodelay_inter_dc
-                , sstring ms_encrypt_what
+void init_messaging_service(netw::messaging_service::config cfg
                 , sstring ms_trust_store
                 , sstring ms_cert
                 , sstring ms_key
                 , sstring ms_tls_prio
                 , bool ms_client_auth
-                , sstring ms_compress
-                , size_t available_memory
-                , init_scheduling_config scheduling_config
-                , bool sltba = false);
+                , init_scheduling_config scheduling_config);
 
 void init_gossiper(sharded<gms::gossiper>& gossiper
                 , db::config& cfg

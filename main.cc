@@ -793,13 +793,10 @@ int main(int ac, char** av) {
             supervisor::notify("starting gossip");
             // Moved local parameters here, esp since with the
             // ssl stuff it gets to be a lot.
-            uint16_t storage_port = cfg->storage_port();
-            uint16_t ssl_storage_port = cfg->ssl_storage_port();
             auto seed_provider= cfg->seed_provider();
             sstring cluster_name = cfg->cluster_name();
 
             const auto& ssl_opts = cfg->server_encryption_options();
-            auto tcp_nodelay_inter_dc = cfg->inter_dc_tcp_nodelay();
             auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
             auto trust_store = get_or_default(ssl_opts, "truststore");
             auto cert = get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
@@ -810,25 +807,40 @@ int main(int ac, char** av) {
                 cluster_name = "Test Cluster";
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
+
+            netw::messaging_service::config mscfg;
+
+            mscfg.ip = gms::inet_address::lookup(listen_address, family).get0();
+            mscfg.port = cfg->storage_port();
+            mscfg.ssl_port = cfg->ssl_storage_port();
+            mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
+            mscfg.rpc_memory_limit = std::max<size_t>(0.08 * memory::stats().total_memory(), mscfg.rpc_memory_limit);
+
+            if (encrypt_what == "all") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::all;
+            } else if (encrypt_what == "dc") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::dc;
+            } else if (encrypt_what == "rack") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
+            }
+
+            sstring compress_what = cfg->internode_compression();
+            if (compress_what == "all") {
+                mscfg.compress = netw::messaging_service::compress_what::all;
+            } else if (compress_what == "dc") {
+                mscfg.compress = netw::messaging_service::compress_what::dc;
+            }
+
+            if (!cfg->inter_dc_tcp_nodelay()) {
+                mscfg.tcp_nodelay = netw::messaging_service::tcp_nodelay_what::local;
+            }
+
             init_scheduling_config scfg;
             scfg.statement = dbcfg.statement_scheduling_group;
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = scheduling_group();
-            init_messaging_service(*cfg
-                    , listen_address
-                    , storage_port
-                    , ssl_storage_port
-                    , tcp_nodelay_inter_dc
-                    , encrypt_what
-                    , trust_store
-                    , cert
-                    , key
-                    , prio
-                    , clauth
-                    , cfg->internode_compression()
-                    , memory::stats().total_memory()
-                    , scfg
-                    , cfg->listen_on_broadcast_address());
+            init_messaging_service(std::move(mscfg), trust_store, cert, key, prio, clauth, scfg);
+
             init_gossiper(gossiper, *cfg, listen_address, seed_provider, cluster_name);
             supervisor::notify("starting storage proxy");
             service::storage_proxy::config spcfg;

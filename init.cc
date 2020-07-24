@@ -32,55 +32,16 @@
 
 logging::logger startlog("init");
 
-void init_messaging_service(db::config& cfg
-                , sstring listen_address_in
-                , uint16_t storage_port
-                , uint16_t ssl_storage_port
-                , bool tcp_nodelay_inter_dc
-                , sstring ms_encrypt_what
+void init_messaging_service(netw::messaging_service::config mscfg
                 , sstring ms_trust_store
                 , sstring ms_cert
                 , sstring ms_key
                 , sstring ms_tls_prio
                 , bool ms_client_auth
-                , sstring ms_compress
-                , size_t available_memory
-                , init_scheduling_config scheduling_config
-                , bool sltba) {
-    auto preferred = cfg.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
-    auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
-    const auto listen = gms::inet_address::lookup(listen_address_in, family).get0();
+                , init_scheduling_config scheduling_config) {
 
     using encrypt_what = netw::messaging_service::encrypt_what;
-    using compress_what = netw::messaging_service::compress_what;
-    using tcp_nodelay_what = netw::messaging_service::tcp_nodelay_what;
     using namespace seastar::tls;
-
-    netw::messaging_service::config mscfg;
-
-    mscfg.ip = listen;
-    mscfg.port = storage_port;
-    mscfg.ssl_port = ssl_storage_port;
-    mscfg.listen_on_broadcast_address = sltba;
-    mscfg.rpc_memory_limit = std::max<size_t>(0.08 * available_memory, mscfg.rpc_memory_limit);
-
-    if (ms_encrypt_what == "all") {
-        mscfg.encrypt = encrypt_what::all;
-    } else if (ms_encrypt_what == "dc") {
-        mscfg.encrypt = encrypt_what::dc;
-    } else if (ms_encrypt_what == "rack") {
-        mscfg.encrypt = encrypt_what::rack;
-    }
-
-    if (ms_compress == "all") {
-        mscfg.compress = compress_what::all;
-    } else if (ms_compress == "dc") {
-        mscfg.compress = compress_what::dc;
-    }
-
-    if (!tcp_nodelay_inter_dc) {
-        mscfg.tcp_nodelay = tcp_nodelay_what::local;
-    }
 
     std::shared_ptr<credentials_builder> creds;
 
