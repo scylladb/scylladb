@@ -1000,7 +1000,7 @@ int main(int ac, char** av) {
             });
 
             supervisor::notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator).get();
+            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging).get();
             auto stop_streaming_service = defer_verbose_shutdown("streaming service", [] {
                 streaming::stream_session::uninit_streaming_service().get();
             });

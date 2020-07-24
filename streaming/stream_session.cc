@@ -102,8 +102,8 @@ static auto get_session(utils::UUID plan_id, gms::inet_address from, const char*
     return coordinator->get_or_create_session(from);
 }
 
-void stream_session::init_messaging_service_handler() {
-    ms().register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
+void stream_session::init_messaging_service_handler(netw::messaging_service& ms) {
+    ms.register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = this_shard_id();
@@ -117,7 +117,7 @@ void stream_session::init_messaging_service_handler() {
             return session->prepare(std::move(msg.requests), std::move(msg.summaries));
         });
     });
-    ms().register_prepare_done_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
+    ms.register_prepare_done_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [plan_id, from] () mutable {
             auto session = get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
@@ -125,7 +125,7 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<>();
         });
     });
-    ms().register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
+    ms.register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
@@ -136,7 +136,7 @@ void stream_session::init_messaging_service_handler() {
         }
 
         return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
-            auto sink = ms().make_sink_for_stream_mutation_fragments(source);
+            auto sink = stream_session::ms().make_sink_for_stream_mutation_fragments(source);
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
                 bool got_end_of_stream = false;
@@ -233,7 +233,7 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<rpc::sink<int>>(sink);
         });
     });
-    ms().register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
+    ms.register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
             auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
@@ -263,7 +263,7 @@ void stream_session::init_messaging_service_handler() {
             });
         });
     });
-    ms().register_complete_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
+    ms.register_complete_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         if (failed && *failed) {
             return smp::submit_to(dst_cpu_id, [plan_id, from, dst_cpu_id] () {
@@ -280,18 +280,19 @@ void stream_session::init_messaging_service_handler() {
     });
 }
 
-future<> stream_session::uninit_messaging_service_handler() {
+future<> stream_session::uninit_messaging_service_handler(netw::messaging_service& ms) {
     return when_all_succeed(
-        ms().unregister_prepare_message(),
-        ms().unregister_prepare_done_message(),
-        ms().unregister_stream_mutation_fragments(),
-        ms().unregister_stream_mutation_done(),
-        ms().unregister_complete_message()).discard_result();
+        ms.unregister_prepare_message(),
+        ms.unregister_prepare_done_message(),
+        ms.unregister_stream_mutation_fragments(),
+        ms.unregister_stream_mutation_done(),
+        ms.unregister_complete_message()).discard_result();
 }
 
 distributed<database>* stream_session::_db;
 distributed<db::system_distributed_keyspace>* stream_session::_sys_dist_ks;
 distributed<db::view::view_update_generator>* stream_session::_view_update_generator;
+sharded<netw::messaging_service>* stream_session::_messaging;
 
 stream_session::stream_session() = default;
 
@@ -302,23 +303,25 @@ stream_session::stream_session(inet_address peer_)
 
 stream_session::~stream_session() = default;
 
-future<> stream_session::init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks, distributed<db::view::view_update_generator>& view_update_generator) {
+future<> stream_session::init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
+        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms) {
     _db = &db;
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
+    _messaging = &ms;
     // #293 - do not stop anything
     // engine().at_exit([] {
     //     return get_stream_manager().stop();
     // });
-    return get_stream_manager().start().then([] {
+    return get_stream_manager().start().then([&ms] {
         gms::get_local_gossiper().register_(get_local_stream_manager().shared_from_this());
-        return smp::invoke_on_all([] { init_messaging_service_handler(); });
+        return ms.invoke_on_all([] (netw::messaging_service& ms) { init_messaging_service_handler(ms); });
     });
 }
 
 future<> stream_session::uninit_streaming_service() {
-    return smp::invoke_on_all([] {
-        return uninit_messaging_service_handler();
+    return _messaging->invoke_on_all([] (netw::messaging_service& ms) {
+        return uninit_messaging_service_handler(ms);
     });
 }
 
