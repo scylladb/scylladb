@@ -459,7 +459,11 @@ public:
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
-            dbcfg.available_memory = memory::stats().total_memory();
+            if (cfg_in.dbcfg) {
+                dbcfg = std::move(*cfg_in.dbcfg);
+            } else {
+                dbcfg.available_memory = memory::stats().total_memory();
+            }
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources)).get();
             auto stop_db = defer([&db] {
                 db.stop().get();

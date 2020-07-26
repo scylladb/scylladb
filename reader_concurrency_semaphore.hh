@@ -107,6 +107,7 @@ private:
     };
 
 private:
+    const resources _initial_resources;
     resources _resources;
 
     expiring_fifo<entry, expiry_handler, db::timeout_clock> _wait_list;
@@ -137,7 +138,8 @@ public:
             sstring name,
             size_t max_queue_length = std::numeric_limits<size_t>::max(),
             std::function<void()> prethrow_action = nullptr)
-        : _resources(count, memory)
+        : _initial_resources(count, memory)
+        , _resources(count, memory)
         , _wait_list(expiry_handler(name))
         , _name(std::move(name))
         , _max_queue_length(max_queue_length)
@@ -201,6 +203,10 @@ public:
     }
 
     reader_permit make_permit();
+
+    const resources initial_resources() const {
+        return _initial_resources;
+    }
 
     const resources available_resources() const {
         return _resources;

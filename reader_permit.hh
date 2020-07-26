@@ -42,10 +42,18 @@ struct reader_resources {
         return count >= other.count && memory >= other.memory;
     }
 
+    reader_resources operator-(const reader_resources& other) const {
+        return reader_resources{count - other.count, memory - other.memory};
+    }
+
     reader_resources& operator-=(const reader_resources& other) {
         count -= other.count;
         memory -= other.memory;
         return *this;
+    }
+
+    reader_resources operator+(const reader_resources& other) const {
+        return reader_resources{count + other.count, memory + other.memory};
     }
 
     reader_resources& operator+=(const reader_resources& other) {

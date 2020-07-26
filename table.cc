@@ -23,7 +23,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "service/priority_manager.hh"
-#include "db/view/view_updating_consumer.hh"
 #include "db/schema_tables.hh"
 #include "cell_locking.hh"
 #include "mutation_fragment.hh"
@@ -324,6 +323,32 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
                     std::move(reader_factory_fn)),
             fwd,
             fwd_mr);
+}
+
+flat_mutation_reader make_restricted_range_sstable_reader(schema_ptr s,
+        reader_permit permit,
+        lw_shared_ptr<sstables::sstable_set> sstables,
+        const dht::partition_range& pr,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        sstables::read_monitor_generator& monitor_generator)
+{
+    auto ms = mutation_source([sstables=std::move(sstables), &monitor_generator] (
+            schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr) {
+        return make_range_sstable_reader(std::move(s), std::move(permit), std::move(sstables), pr, slice, pc,
+                std::move(trace_state), fwd, fwd_mr, monitor_generator);
+    });
+    return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
 flat_mutation_reader
@@ -2587,17 +2612,4 @@ table::as_mutation_source_excluding(std::vector<sstables::shared_sstable>& ssts)
                                    mutation_reader::forwarding fwd_mr) {
         return this->make_reader_excluding_sstables(std::move(s), std::move(permit), ssts, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
-}
-
-stop_iteration db::view::view_updating_consumer::consume_end_of_partition() {
-    if (_as->abort_requested()) {
-        return stop_iteration::yes;
-    }
-    try {
-        auto lock_holder = _table->stream_view_replica_updates(_schema, std::move(*_m), db::no_timeout, _excluded_sstables).get();
-    } catch (...) {
-        tlogger.warn("Failed to push replica updates for table {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
-    }
-    _m.reset();
-    return stop_iteration::no;
 }
