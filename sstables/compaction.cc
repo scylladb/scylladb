@@ -163,32 +163,93 @@ static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, 
 
 class compaction;
 
+class compaction_write_monitor final : public sstables::write_monitor, public backlog_write_progress_manager {
+    sstables::shared_sstable _sst;
+    column_family& _cf;
+    const sstables::writer_offset_tracker* _tracker = nullptr;
+    uint64_t _progress_seen = 0;
+    api::timestamp_type _maximum_timestamp;
+    unsigned _sstable_level;
+public:
+    compaction_write_monitor(sstables::shared_sstable sst, column_family& cf, api::timestamp_type max_timestamp, unsigned sstable_level)
+        : _sst(sst)
+        , _cf(cf)
+        , _maximum_timestamp(max_timestamp)
+        , _sstable_level(sstable_level)
+    {}
+
+    ~compaction_write_monitor() {
+        if (_sst) {
+            _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
+        }
+    }
+
+    virtual void on_write_started(const sstables::writer_offset_tracker& tracker) override {
+        _tracker = &tracker;
+        _cf.get_compaction_strategy().get_backlog_tracker().register_partially_written_sstable(_sst, *this);
+    }
+
+    virtual void on_data_write_completed() override {
+        if (_tracker) {
+            _progress_seen = _tracker->offset;
+            _tracker = nullptr;
+        }
+    }
+
+    virtual void write_failed() override {
+        _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(std::move(_sst));
+    }
+
+    virtual uint64_t written() const {
+        if (_tracker) {
+            return _tracker->offset;
+        }
+        return _progress_seen;
+    }
+
+    api::timestamp_type maximum_timestamp() const override {
+        return _maximum_timestamp;
+    }
+
+    unsigned level() const override {
+        return _sstable_level;
+    }
+};
+
 struct compaction_writer {
+    // We use a ptr for pointer stability and so that it can be null
+    // when using a noop monitor.
+    std::unique_ptr<compaction_write_monitor> monitor;
     sstable_writer writer;
     shared_sstable sst;
+
+    compaction_writer(std::unique_ptr<compaction_write_monitor> monitor, sstable_writer writer, shared_sstable sst)
+        : monitor(std::move(monitor)), writer(std::move(writer)), sst(std::move(sst)) {}
+    compaction_writer(sstable_writer writer, shared_sstable sst)
+        : compaction_writer(nullptr, std::move(writer), std::move(sst)) {}
 };
 
 class compacting_sstable_writer {
     compaction& _c;
-    std::optional<compaction_writer> _writer = {};
+    std::optional<compaction_writer> _compaction_writer = {};
 private:
     inline void maybe_abort_compaction();
 public:
     explicit compacting_sstable_writer(compaction& c) : _c(c) { }
     void consume_new_partition(const dht::decorated_key& dk);
 
-    void consume(tombstone t) { _writer->writer.consume(t); }
+    void consume(tombstone t) { _compaction_writer->writer.consume(t); }
     stop_iteration consume(static_row&& sr, tombstone, bool) {
         maybe_abort_compaction();
-        return _writer->writer.consume(std::move(sr));
+        return _compaction_writer->writer.consume(std::move(sr));
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
         maybe_abort_compaction();
-        return _writer->writer.consume(std::move(cr));
+        return _compaction_writer->writer.consume(std::move(cr));
     }
     stop_iteration consume(range_tombstone&& rt) {
         maybe_abort_compaction();
-        return _writer->writer.consume(std::move(rt));
+        return _compaction_writer->writer.consume(std::move(rt));
     }
 
     stop_iteration consume_end_of_partition();
@@ -273,64 +334,6 @@ private:
      std::deque<compaction_read_monitor> _generated_monitors;
 };
 
-class compaction_write_monitor final : public sstables::write_monitor, public backlog_write_progress_manager {
-    sstables::shared_sstable _sst;
-    column_family& _cf;
-    const sstables::writer_offset_tracker* _tracker = nullptr;
-    uint64_t _progress_seen = 0;
-    api::timestamp_type _maximum_timestamp;
-    unsigned _sstable_level;
-public:
-    compaction_write_monitor(sstables::shared_sstable sst, column_family& cf, api::timestamp_type max_timestamp, unsigned sstable_level)
-        : _sst(sst)
-        , _cf(cf)
-        , _maximum_timestamp(max_timestamp)
-        , _sstable_level(sstable_level)
-    {}
-
-    ~compaction_write_monitor() {
-        if (_sst) {
-            _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
-        }
-    }
-
-    virtual void on_write_started(const sstables::writer_offset_tracker& tracker) override {
-        _tracker = &tracker;
-        _cf.get_compaction_strategy().get_backlog_tracker().register_partially_written_sstable(_sst, *this);
-    }
-
-    virtual void on_data_write_completed() override {
-        if (_tracker) {
-            _progress_seen = _tracker->offset;
-            _tracker = nullptr;
-        }
-    }
-
-    virtual void write_failed() override {
-        _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(std::move(_sst));
-    }
-
-    virtual uint64_t written() const {
-        if (_tracker) {
-            return _tracker->offset;
-        }
-        return _progress_seen;
-    }
-
-    void add_sstable() {
-        _cf.get_compaction_strategy().get_backlog_tracker().add_sstable(_sst);
-        _sst = {};
-    }
-
-    api::timestamp_type maximum_timestamp() const override {
-        return _maximum_timestamp;
-    }
-
-    unsigned level() const override {
-        return _sstable_level;
-    }
-};
-
 // Writes a temporary sstable run containing only garbage collected data.
 // Whenever regular compaction writer seals a new sstable, this writer will flush a new sstable as well,
 // right before there's an attempt to release exhausted sstables earlier.
@@ -349,10 +352,12 @@ public:
         std::vector<shared_sstable> _unused_garbage_collected_sstables;
         // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
         std::vector<shared_sstable> _used_garbage_collected_sstables;
-        std::deque<compaction_write_monitor> _active_write_monitors = {};
-        shared_sstable _sst;
-        std::optional<sstable_writer> _writer;
+        std::optional<compaction_writer> _compaction_writer;
         utils::UUID _run_identifier = utils::make_random_uuid();
+        sstable_writer& writer() {
+            return _compaction_writer->writer;
+        }
+
     public:
         explicit data(compaction& c) : _c(&c) {
         }
@@ -379,6 +384,9 @@ public:
     };
 private:
     garbage_collected_sstable_writer::data* _data = nullptr;
+    sstable_writer& writer() {
+        return _data->writer();
+    }
 public:
     explicit garbage_collected_sstable_writer() = default;
     explicit garbage_collected_sstable_writer(garbage_collected_sstable_writer::data& data) : _data(&data) {}
@@ -391,16 +399,16 @@ public:
 
     void consume_new_partition(const dht::decorated_key& dk) {
         _data->maybe_create_new_sstable_writer();
-        _data->_writer->consume_new_partition(dk);
+        writer().consume_new_partition(dk);
     }
 
-    void consume(tombstone t) { _data->_writer->consume(t); }
-    stop_iteration consume(static_row&& sr, tombstone, bool) { return _data->_writer->consume(std::move(sr)); }
-    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _data->_writer->consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone&& rt) { return _data->_writer->consume(std::move(rt)); }
+    void consume(tombstone t) { writer().consume(t); }
+    stop_iteration consume(static_row&& sr, tombstone, bool) { return writer().consume(std::move(sr)); }
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return writer().consume(std::move(cr)); }
+    stop_iteration consume(range_tombstone&& rt) { return writer().consume(std::move(rt)); }
 
     stop_iteration consume_end_of_partition() {
-        _data->_writer->consume_end_of_partition();
+        writer().consume_end_of_partition();
         return stop_iteration::no;
     }
 
@@ -744,51 +752,53 @@ void compacting_sstable_writer::maybe_abort_compaction() {
 
 void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
     maybe_abort_compaction();
-    if (!_writer) {
-        _writer = _c.create_compaction_writer(dk);
+    if (!_compaction_writer) {
+        _compaction_writer = _c.create_compaction_writer(dk);
     }
 
     _c.on_new_partition();
-    _writer->writer.consume_new_partition(dk);
+    _compaction_writer->writer.consume_new_partition(dk);
     _c._info->total_keys_written++;
 }
 
 stop_iteration compacting_sstable_writer::consume_end_of_partition() {
-    auto ret = _writer->writer.consume_end_of_partition();
+    auto ret = _compaction_writer->writer.consume_end_of_partition();
     if (ret == stop_iteration::yes) {
         // stop sstable writer being currently used.
-        _c.stop_sstable_writer(&*_writer);
-        _writer = std::nullopt;
+        _c.stop_sstable_writer(&*_compaction_writer);
+        _compaction_writer = std::nullopt;
     }
     return ret;
 }
 
 void compacting_sstable_writer::consume_end_of_stream() {
-    if (_writer) {
-        _c.stop_sstable_writer(&*_writer);
-        _writer = std::nullopt;
+    if (_compaction_writer) {
+        _c.stop_sstable_writer(&*_compaction_writer);
+        _compaction_writer = std::nullopt;
     }
 }
 
 void garbage_collected_sstable_writer::data::maybe_create_new_sstable_writer() {
-    if (!_writer) {
-        _sst = _c->_sstable_creator(this_shard_id());
+    if (!_compaction_writer) {
+        auto sst = _c->_sstable_creator(this_shard_id());
 
         auto&& priority = _c->_io_priority;
-        _active_write_monitors.emplace_back(_sst, _c->_cf, _c->maximum_timestamp(), _c->_sstable_level);
+        auto monitor = std::make_unique<compaction_write_monitor>(sst, _c->_cf, _c->maximum_timestamp(), _c->_sstable_level);
         sstable_writer_config cfg = _c->_cf.get_sstables_manager().configure_writer();
         cfg.run_identifier = _run_identifier;
-        cfg.monitor = &_active_write_monitors.back();
-        _writer.emplace(_sst->get_writer(*_c->schema(), _c->partitions_per_sstable(), cfg, _c->get_encoding_stats(), priority));
+        cfg.monitor = monitor.get();
+        auto writer = sst->get_writer(*_c->schema(), _c->partitions_per_sstable(), cfg, _c->get_encoding_stats(), priority);
+        _compaction_writer.emplace(std::move(monitor), std::move(writer), std::move(sst));
     }
 }
 
 void garbage_collected_sstable_writer::data::finish_sstable_writer() {
-    if (_writer) {
-        _writer->consume_end_of_stream();
-        _writer = std::nullopt;
-        _sst->open_data().get0();
-        _unused_garbage_collected_sstables.push_back(std::move(_sst));
+    if (_compaction_writer) {
+        writer().consume_end_of_stream();
+        auto sst = std::move(_compaction_writer->sst);
+        sst->open_data().get0();
+        _compaction_writer = std::nullopt;
+        _unused_garbage_collected_sstables.push_back(std::move(sst));
     }
 }
 
@@ -840,7 +850,7 @@ public:
 class regular_compaction : public compaction {
     // sstable being currently written.
     mutable compaction_read_monitor_generator _monitor_generator;
-    std::deque<compaction_write_monitor> _active_write_monitors = {};
+    std::vector<shared_sstable> _unused_sstables = {};
 public:
     regular_compaction(column_family& cf, compaction_descriptor descriptor)
         : compaction(cf, std::move(descriptor))
@@ -871,9 +881,11 @@ public:
 
     void backlog_tracker_adjust_charges() override {
         _monitor_generator.remove_sstables(_info->tracking);
-        for (auto& wm : _active_write_monitors) {
-            wm.add_sstable();
+        auto& tracker = _cf.get_compaction_strategy().get_backlog_tracker();
+        for (auto& sst : _unused_sstables) {
+            tracker.add_sstable(sst);
         }
+        _unused_sstables.clear();
     }
 
     virtual flat_mutation_reader::filter make_partition_filter() const override {
@@ -885,13 +897,14 @@ public:
     virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
+        _unused_sstables.push_back(sst);
 
-        _active_write_monitors.emplace_back(sst, _cf, maximum_timestamp(), _sstable_level);
+        auto monitor = std::make_unique<compaction_write_monitor>(sst, _cf, maximum_timestamp(), _sstable_level);
         sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
         cfg.max_sstable_size = _max_sstable_size;
-        cfg.monitor = &_active_write_monitors.back();
+        cfg.monitor = monitor.get();
         cfg.run_identifier = _run_identifier;
-        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
+        return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
     }
 
     virtual void stop_sstable_writer(compaction_writer* writer) override {
@@ -925,10 +938,11 @@ private:
         for (auto& sst : exhausted_sstables) {
             _monitor_generator.remove_sstable(_info->tracking, sst);
         }
-        for (auto& wm : _active_write_monitors) {
-            wm.add_sstable();
-        }
-        _active_write_monitors.clear();
+        auto& tracker = _cf.get_compaction_strategy().get_backlog_tracker();
+        for (auto& sst : _unused_sstables) {
+            tracker.add_sstable(sst);
+         }
+        _unused_sstables.clear();
     }
 
     void maybe_replace_exhausted_sstables_by_sst(shared_sstable sst) {
