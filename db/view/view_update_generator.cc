@@ -64,18 +64,29 @@ future<> view_update_generator::start() {
                         ssts->insert(sst);
                     }
 
-                    flat_mutation_reader staging_sstable_reader = ::make_range_sstable_reader(s,
+                    auto ms = mutation_source([this, ssts] (
+                                schema_ptr s,
+                                reader_permit permit,
+                                const dht::partition_range& pr,
+                                const query::partition_slice& ps,
+                                const io_priority_class& pc,
+                                tracing::trace_state_ptr ts,
+                                streamed_mutation::forwarding fwd_ms,
+                                mutation_reader::forwarding fwd_mr) {
+                        return ::make_restricted_range_sstable_reader(s, std::move(permit), std::move(ssts), pr, ps, pc, std::move(ts), fwd_ms, fwd_mr);
+                    });
+                    auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader(
+                            std::move(ms),
+                            s,
                             _db.make_query_class_config().semaphore.make_permit(),
-                            std::move(ssts),
                             query::full_partition_range,
                             s->full_slice(),
                             service::get_local_streaming_priority(),
                             nullptr,
-                            ::streamed_mutation::forwarding::no,
                             ::mutation_reader::forwarding::no);
 
                     inject_failure("view_update_generator_consume_staging_sstable");
-                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, *t, sstables, _as), db::no_timeout);
+                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, *t, sstables, _as, staging_sstable_reader_handle), db::no_timeout);
                     if (result == stop_iteration::yes) {
                         break;
                     }

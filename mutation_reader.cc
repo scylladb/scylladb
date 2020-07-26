@@ -659,6 +659,8 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
     return make_combined_reader(std::move(schema), std::move(v), fwd_sm, fwd_mr);
 }
 
+const ssize_t new_reader_base_cost{16 * 1024};
+
 class restricting_mutation_reader : public flat_mutation_reader::impl {
     struct mutation_source_and_params {
         mutation_source _ms;
@@ -684,8 +686,6 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
         reader_permit::resource_units units;
     };
     std::variant<pending_state, admitted_state> _state;
-
-    static const ssize_t new_reader_base_cost{16 * 1024};
 
     template<typename Function>
     requires std::is_move_constructible<Function>::value

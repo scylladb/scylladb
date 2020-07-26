@@ -64,6 +64,7 @@ namespace db {
 class cql_test_config {
 public:
     seastar::shared_ptr<db::config> db_config;
+    std::optional<database_config> dbcfg;
     std::set<sstring> disabled_features;
 
     cql_test_config();

@@ -58,6 +58,7 @@
 #include "cql3/util.hh"
 #include "db/view/view.hh"
 #include "db/view/view_builder.hh"
+#include "db/view/view_updating_consumer.hh"
 #include "db/system_keyspace_view_types.hh"
 #include "db/system_keyspace.hh"
 #include "frozen_mutation.hh"
@@ -1911,6 +1912,49 @@ future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_d
                 std::logical_or<bool>());
     });
 }
+
+const size_t view_updating_consumer::buffer_size_soft_limit{1 * 1024 * 1024};
+const size_t view_updating_consumer::buffer_size_hard_limit{2 * 1024 * 1024};
+
+void view_updating_consumer::do_flush_buffer() {
+    _staging_reader_handle.pause();
+
+    if (_buffer.front().partition().empty()) {
+        // If we flushed mid-partition we can have an empty mutation if we
+        // flushed right before getting the end-of-partition fragment.
+        _buffer.pop_front();
+    }
+
+    while (!_buffer.empty()) {
+        try {
+            auto lock_holder = _view_update_pusher(std::move(_buffer.front())).get();
+        } catch (...) {
+            vlogger.warn("Failed to push replica updates for table {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
+        }
+        _buffer.pop_front();
+    }
+
+    _buffer_size = 0;
+    _m = nullptr;
+}
+
+void view_updating_consumer::maybe_flush_buffer_mid_partition() {
+    if (_buffer_size >= buffer_size_hard_limit) {
+        auto m = mutation(_schema, _m->decorated_key(), mutation_partition(_schema));
+        do_flush_buffer();
+        _buffer.emplace_back(std::move(m));
+        _m = &_buffer.back();
+    }
+}
+
+view_updating_consumer::view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
+        evictable_reader_handle& staging_reader_handle)
+    : view_updating_consumer(std::move(schema), as, staging_reader_handle,
+            [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables)] (mutation m) mutable {
+        auto s = m.schema();
+        return table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, excluded_sstables);
+    })
+{ }
 
 } // namespace view
 } // namespace db
