@@ -360,7 +360,7 @@ if __name__ == '__main__':
                 print('No free disks were detected, abort RAID/XFS setup. Disks must be unmounted before proceeding.\n')
                 raid_setup = False
             else:
-                print('Please select unmounted disks from the following list: {}'.format(devices))
+                print('Please select unmounted disks from the following list: {}'.format(', '.join(devices)))
             selected = []
             dsklist = []
             while raid_setup:
@@ -368,7 +368,7 @@ if __name__ == '__main__':
                     dsk = dsklist.pop(0)
                 else:
                     print('type \'cancel\' to cancel RAID/XFS setup.')
-                    print('type \'done\' to finish selection. Selected: {}'.format(selected))
+                    print('type \'done\' to finish selection. Selected: {}'.format(', '.join(selected)))
                     dsk = input('> ')
                 if dsk == 'cancel':
                     raid_setup = 0
