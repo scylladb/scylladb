@@ -769,3 +769,27 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
 
     fut.get();
 }
+
+namespace {
+
+class inactive_read : public reader_concurrency_semaphore::inactive_read {
+public:
+    virtual void evict() override {
+    }
+};
+
+}
+
+SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
+    reader_concurrency_semaphore sem1(reader_concurrency_semaphore::no_limits{}, "sem1");
+    reader_concurrency_semaphore sem2(reader_concurrency_semaphore::no_limits{}, ""); // to see the message for an unnamed semaphore
+
+    auto sem1_h1 = sem1.register_inactive_read(std::make_unique<inactive_read>());
+    auto sem2_h1 = sem2.register_inactive_read(std::make_unique<inactive_read>());
+
+    // Sanity check that lookup still works with empty handle.
+    BOOST_REQUIRE(!sem1.unregister_inactive_read(reader_concurrency_semaphore::inactive_read_handle{}));
+
+    BOOST_REQUIRE_THROW(sem1.unregister_inactive_read(std::move(sem2_h1)), std::runtime_error);
+    BOOST_REQUIRE_THROW(sem2.unregister_inactive_read(std::move(sem1_h1)), std::runtime_error);
+}

@@ -575,7 +575,12 @@ messaging_service::initial_scheduling_info() const {
 
 scheduling_group
 messaging_service::scheduling_group_for_verb(messaging_verb verb) const {
-    return _scheduling_info_for_connection_index[get_rpc_client_idx(verb)].sched_group;
+    // We are not using get_rpc_client_idx() because it figures out the client
+    // index based on the current scheduling group, which is relevant when
+    // selecting the right client for sending a message, but is not relevant
+    // when registering handlers.
+    const auto idx = s_rpc_client_idx_table[static_cast<size_t>(verb)];
+    return _scheduling_info_for_connection_index[idx].sched_group;
 }
 
 scheduling_group
