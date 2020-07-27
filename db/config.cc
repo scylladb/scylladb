@@ -224,7 +224,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The directory in which Scylla will put all its subdirectories. The location of individual subdirs can be overriden by the respective *_directory options.")
     , commitlog_directory(this, "commitlog_directory", value_status::Used, "",
         "The directory where the commit log is stored. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories.")
-    , data_file_directories(this, "data_file_directories", value_status::Used, { },
+    , data_file_directories(this, "data_file_directories", "datadir", value_status::Used, { },
         "The directory location where table data (SSTables) is stored")
     , hints_directory(this, "hints_directory", value_status::Used, "",
         "The directory where hints files are stored if hinted handoff is enabled.")
@@ -517,7 +517,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /* Native transport (CQL Binary Protocol) */
     , start_native_transport(this, "start_native_transport", value_status::Used, true,
         "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port.")
-    , native_transport_port(this, "native_transport_port", value_status::Used, 9042,
+    , native_transport_port(this, "native_transport_port", "cql_port", value_status::Used, 9042,
         "Port on which the CQL native transport listens for clients.")
     , native_transport_port_ssl(this, "native_transport_port_ssl", value_status::Used, 9142,
         "Port on which the CQL TLS native transport listens for clients."
@@ -536,7 +536,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /* Settings for configuring and tuning client connections. */
     , broadcast_rpc_address(this, "broadcast_rpc_address", value_status::Used, {/* unset */},
         "RPC address to broadcast to drivers and other Scylla nodes. This cannot be set to 0.0.0.0. If blank, it is set to the value of the rpc_address or rpc_interface. If rpc_address or rpc_interfaceis set to 0.0.0.0, this property must be set.\n")
-    , rpc_port(this, "rpc_port", value_status::Used, 9160,
+    , rpc_port(this, "rpc_port", "thrift_port", value_status::Used, 9160,
         "Thrift port for client connections.")
     , start_rpc(this, "start_rpc", value_status::Used, true,
         "Starts the Thrift RPC server")
@@ -828,17 +828,6 @@ void config_file::named_value<db::config::seed_provider_type>::add_command_line_
                     desc.data());
 }
 
-}
-
-boost::program_options::options_description_easy_init&
-db::config::add_options(boost::program_options::options_description_easy_init& init) {
-    config_file::add_options(init);
-
-    data_file_directories.add_command_line_option(init, "datadir", "alias for 'data-file-directories'");
-    rpc_port.add_command_line_option(init, "thrift-port", "alias for 'rpc-port'");
-    native_transport_port.add_command_line_option(init, "cql-port", "alias for 'native-transport-port'");
-
-    return init;
 }
 
 db::fs::path db::config::get_conf_dir() {

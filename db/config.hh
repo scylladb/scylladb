@@ -329,9 +329,6 @@ public:
 
     seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 
-    boost::program_options::options_description_easy_init&
-    add_options(boost::program_options::options_description_easy_init&);
-
     const db::extensions& extensions() const;
 
     static const sstring default_tls_priority;
