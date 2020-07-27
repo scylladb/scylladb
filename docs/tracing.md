@@ -98,6 +98,8 @@ Traces are created in a context of a `tracing session`. For instance, if we trac
 
 If we need trace points for a specific session we may query `events` table for this session's ID (see examples above).
 
+Note that there is no guaranteed way to know when the tracing of a particular session has completed and `events` now contains the full trace of this request. In particular, the appearance of the session's id in the `sessions` table does _not_ indicate that the tracing of this session int `events` has completed. This session record is written by the coordinator of the request when it considers the "foreground" part of the request to be done (and the `duration` field measures the time the request spent in foreground mode), but replicas may continue to write to the `events` table about their work for this request. Moreover, even on a single-node setup the writes to `sessions` and `events` happen asynchronously, so the user cannot rely on their relative ordering.
+
 ##### `events` columns descripton
 `events` columns are quite straight forward:
 
