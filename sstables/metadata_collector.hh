@@ -177,13 +177,17 @@ private:
     hll::HyperLogLog _cardinality = hyperloglog(13, 25);
 private:
     void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, const std::optional<clustering_key_prefix>& from);
-
-    void do_update_min_max_components(const clustering_key_prefix& key);
 public:
     explicit metadata_collector(const schema& schema, sstring name)
         : _schema(schema)
         , _name(name)
-    { }
+    {
+        if (!schema.clustering_key_size()) {
+            // Empty min/max components represent the full range
+            // And so they will never be narrowed down.
+            update_min_max_components(clustering_key_prefix::make_empty(_schema));
+        }
+    }
 
     const schema& get_schema() {
         return _schema;
@@ -238,11 +242,7 @@ public:
         _has_legacy_counter_shards = _has_legacy_counter_shards || has_legacy_counter_shards;
     }
 
-    void update_min_max_components(const clustering_key_prefix& key) {
-        if (_schema.clustering_key_size()) {
-            do_update_min_max_components(key);
-        }
-    }
+    void update_min_max_components(const clustering_key_prefix& key);
 
     void update(column_stats&& stats) {
         _timestamp_tracker.update(stats.timestamp_tracker);

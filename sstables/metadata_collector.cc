@@ -37,7 +37,7 @@ void metadata_collector::convert(disk_array<uint32_t, disk_string<uint16_t>>& to
     }
 }
 
-void metadata_collector::do_update_min_max_components(const clustering_key_prefix& key) {
+void metadata_collector::update_min_max_components(const clustering_key_prefix& key) {
     if (!_min_clustering_key) {
         mdclogger.trace("{}: initializing min/max clustering keys={}", _name, clustering_key_prefix::with_schema_wrapper(_schema, key));
         _min_clustering_key.emplace(key);
