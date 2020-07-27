@@ -60,18 +60,20 @@ public:
     };
 
     class inactive_read_handle {
+        reader_concurrency_semaphore* _sem = nullptr;
         uint64_t _id = 0;
 
         friend class reader_concurrency_semaphore;
 
-        explicit inactive_read_handle(uint64_t id)
-            : _id(id) {
+        explicit inactive_read_handle(reader_concurrency_semaphore& sem, uint64_t id)
+            : _sem(&sem), _id(id) {
         }
     public:
         inactive_read_handle() = default;
-        inactive_read_handle(inactive_read_handle&& o) : _id(std::exchange(o._id, 0)) {
+        inactive_read_handle(inactive_read_handle&& o) : _sem(std::exchange(o._sem, nullptr)), _id(std::exchange(o._id, 0)) {
         }
         inactive_read_handle& operator=(inactive_read_handle&& o) {
+            _sem = std::exchange(o._sem, nullptr);
             _id = std::exchange(o._id, 0);
             return *this;
         }
@@ -144,11 +146,11 @@ public:
     /// Create a semaphore with practically unlimited count and memory.
     ///
     /// And conversely, no queue limit either.
-    explicit reader_concurrency_semaphore(no_limits)
+    explicit reader_concurrency_semaphore(no_limits, sstring name = "unlimited reader_concurrency_semaphore")
         : reader_concurrency_semaphore(
                 std::numeric_limits<int>::max(),
                 std::numeric_limits<ssize_t>::max(),
-                "unlimited reader_concurrency_semaphore") {}
+                std::move(name)) {}
 
     ~reader_concurrency_semaphore();
 
@@ -157,6 +159,13 @@ public:
 
     reader_concurrency_semaphore(reader_concurrency_semaphore&&) = delete;
     reader_concurrency_semaphore& operator=(reader_concurrency_semaphore&&) = delete;
+
+    /// Returns the name of the semaphore
+    ///
+    /// If the semaphore has no name, "unnamed reader concurrency semaphore" is returned.
+    std::string_view name() const {
+        return _name.empty() ? "unnamed reader concurrency semaphore" : std::string_view(_name);
+    }
 
     /// Register an inactive read.
     ///

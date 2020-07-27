@@ -104,7 +104,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
         const auto [it, _] = _inactive_reads.emplace(_next_id++, std::move(ir));
         (void)_;
         ++_inactive_read_stats.population;
-        return inactive_read_handle(it->first);
+        return inactive_read_handle(*this, it->first);
     }
 
     // The evicted reader will release its permit, hopefully allowing us to
@@ -115,6 +115,17 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
 }
 
 std::unique_ptr<reader_concurrency_semaphore::inactive_read> reader_concurrency_semaphore::unregister_inactive_read(inactive_read_handle irh) {
+    if (irh && irh._sem != this) {
+        throw std::runtime_error(fmt::format(
+                    "reader_concurrency_semaphore::unregister_inactive_read(): "
+                    "attempted to unregister an inactive read with a handle belonging to another semaphore: "
+                    "this is {} (0x{:x}) but the handle belongs to {} (0x{:x})",
+                    name(),
+                    reinterpret_cast<uintptr_t>(this),
+                    irh._sem->name(),
+                    reinterpret_cast<uintptr_t>(irh._sem)));
+    }
+
     if (auto it = _inactive_reads.find(irh._id); it != _inactive_reads.end()) {
         auto ir = std::move(it->second);
         _inactive_reads.erase(it);
