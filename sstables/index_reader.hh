@@ -453,9 +453,16 @@ private:
                     auto indexes = std::move(entries_reader->_consumer.indexes);
                     return entries_reader->_context.close().then([indexes = std::move(indexes), ex = std::move(ex)] () mutable {
                         if (ex) {
-                            std::rethrow_exception(std::move(ex));
+                            return do_with(std::move(indexes), [ex = std::move(ex)] (index_list& indexes) mutable {
+                                return parallel_for_each(indexes, [] (index_entry& ie) mutable {
+                                    return ie.close_pi_stream();
+                                }).then_wrapped([ex = std::move(ex)] (future<>&& fut) mutable {
+                                    fut.ignore_ready_future();
+                                    return make_exception_future<index_list>(std::move(ex));
+                                });
+                            });
                         }
-                        return std::move(indexes);
+                        return make_ready_future<index_list>(std::move(indexes));
                     });
 
                 });
