@@ -300,10 +300,9 @@ flat_mutation_reader read_context::create_reader(
     }
 
     auto& table = _db.local().find_column_family(schema);
-    auto class_config = _db.local().make_query_class_config();
 
     if (!rm.rparts) {
-        rm.rparts = make_foreign(std::make_unique<reader_meta::remote_parts>(class_config.semaphore));
+        rm.rparts = make_foreign(std::make_unique<reader_meta::remote_parts>(semaphore()));
     }
 
     rm.rparts->range = std::make_unique<const dht::partition_range>(pr);
@@ -513,12 +512,12 @@ future<> read_context::lookup_readers() {
     }
 
     return parallel_for_each(boost::irange(0u, smp::count), [this] (shard_id shard) {
-        return _db.invoke_on(shard, [shard, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
+        return _db.invoke_on(shard, [this, shard, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
                 gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
             auto schema = gs.get();
             auto querier_opt = db.get_querier_cache().lookup_shard_mutation_querier(cmd->query_uuid, *schema, *ranges, cmd->slice, gts.get());
             auto& table = db.find_column_family(schema);
-            auto& semaphore = db.make_query_class_config().semaphore;
+            auto& semaphore = this->semaphore();
 
             if (!querier_opt) {
                 return reader_meta(reader_state::inexistent, reader_meta::remote_parts(semaphore));
