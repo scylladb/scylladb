@@ -63,6 +63,17 @@ MemoryHigh=1200M
 MemoryMax=1400M
 MemoryLimit=1400M
 EOS
+
+# On CentOS7, systemd does not support percentage-based parameter.
+# To apply memory parameter on CentOS7, we need to override the parameter
+# in bytes, instead of percentage.
+elif [ "$RHEL" -a "$VERSION_ID" = "7" ]; then
+    MEMORY_LIMIT=$((MEMTOTAL_BYTES / 100 * 5))
+    mkdir -p /etc/systemd/system/scylla-helper.slice.d/
+    cat << EOS > /etc/systemd/system/scylla-helper.slice.d/memory.conf
+[Slice]
+MemoryLimit=$MEMORY_LIMIT
+EOS
 fi
 
 systemctl --system daemon-reload >/dev/null || true
