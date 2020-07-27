@@ -2765,7 +2765,8 @@ SEASTAR_TEST_CASE(test_reversed_slice_with_empty_range_before_all_rows) {
 // See #6171
 SEASTAR_TEST_CASE(test_reversed_slice_with_many_clustering_ranges) {
     cql_test_config cfg;
-    cfg.db_config->max_memory_for_unlimited_query(std::numeric_limits<uint64_t>::max());
+    cfg.db_config->max_memory_for_unlimited_query_soft_limit(std::numeric_limits<uint64_t>::max());
+    cfg.db_config->max_memory_for_unlimited_query_hard_limit(std::numeric_limits<uint64_t>::max());
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE test (pk int, ck int, v text, PRIMARY KEY (pk, ck));").get();
         auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
