@@ -362,7 +362,7 @@ def is_redhat_variant():
     return ('rhel' in d) or ('fedora' in d) or ('oracle') in d
 
 def is_amzn2():
-    return ('amazon' in distro.id()) and ('2' in distro.version())
+    return ('amzn' in distro.id()) and ('2' in distro.version())
 
 def is_gentoo_variant():
     return ('gentoo' in distro.id())
