@@ -210,6 +210,17 @@ utils::config_type::to_json(const void* value) const {
     return _to_json(value);
 }
 
+bool
+utils::config_file::config_src::matches(std::string_view name) const {
+    if (_name == name) {
+        return true;
+    }
+    if (!_alias.empty() && _alias == name) {
+        return true;
+    }
+    return false;
+}
+
 json::json_return_type
 utils::config_file::config_src::value_as_json() const {
     return _type->to_json(current_value());
@@ -291,7 +302,7 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
     for (auto node : doc) {
         auto label = node.first.as<sstring>();
 
-        auto i = std::find_if(_cfgs.begin(), _cfgs.end(), [&label](const config_src& cfg) { return cfg.name() == label; });
+        auto i = std::find_if(_cfgs.begin(), _cfgs.end(), [&label](const config_src& cfg) { return cfg.matches(label); });
         if (i == _cfgs.end()) {
             h(label, "Unknown option", std::nullopt);
             continue;
