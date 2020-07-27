@@ -46,7 +46,8 @@ sessions_cols = {
     'request': 'text',
     'started_at': 'timestamp',
     'request_size': 'int',
-    'response_size': 'int'
+    'response_size': 'int',
+    'username': 'text'
 }
 
 slow_query_log_cols = {

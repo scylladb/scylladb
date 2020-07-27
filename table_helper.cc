@@ -59,17 +59,36 @@ future<> table_helper::setup_table() const {
 }
 
 future<> table_helper::cache_table_info(service::query_state& qs) {
-    if (_prepared_stmt) {
-        return now();
-    } else {
+    if (!_prepared_stmt) {
         // if prepared statement has been invalidated - drop cached pointers
         _insert_stmt = nullptr;
+    } else if (!_is_fallback_stmt) {
+        // we've already prepared the non-fallback statement
+        return now();
     }
 
-    return cql3::get_local_query_processor().prepare(_insert_cql, qs.get_client_state(), false).then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) {
+    return cql3::get_local_query_processor().prepare(_insert_cql, qs.get_client_state(), false)
+            .then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) noexcept {
         _prepared_stmt = std::move(msg_ptr->get_prepared());
         shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
         _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
+        _is_fallback_stmt = false;
+    }).handle_exception_type([this, &qs] (exceptions::invalid_request_exception& eptr) {
+        // the non-fallback statement can't be prepared
+        if (!_insert_cql_fallback) {
+            return make_exception_future(eptr);
+        }
+        if (_is_fallback_stmt && _prepared_stmt) {
+            // we have already prepared the fallback statement
+            return now();
+        }
+        return cql3::get_local_query_processor().prepare(_insert_cql_fallback.value(), qs.get_client_state(), false)
+                .then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) noexcept {
+            _prepared_stmt = std::move(msg_ptr->get_prepared());
+            shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
+            _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
+            _is_fallback_stmt = true;
+        });
     }).handle_exception([this] (auto eptr) {
         // One of the possible causes for an error here could be the table that doesn't exist.
         //FIXME: discarded future.
@@ -90,6 +109,7 @@ future<> table_helper::cache_table_info(service::query_state& qs) {
 future<> table_helper::insert(service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
     return cache_table_info(qs).then([this, &qs, opt_maker = std::move(opt_maker)] () mutable {
         return do_with(opt_maker(), [this, &qs] (auto& opts) {
+            opts.prepare(_prepared_stmt->bound_names);
             return _insert_stmt->execute(service::get_storage_proxy().local(), qs, opts);
         });
     }).discard_result();

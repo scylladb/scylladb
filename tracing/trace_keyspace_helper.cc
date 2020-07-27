@@ -88,6 +88,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   "started_at timestamp,"
                                   "request_size int,"
                                   "response_size int,"
+                                  "username text,"
                                   "PRIMARY KEY ((session_id))) "
                                   "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS),
 
@@ -101,8 +102,41 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   "request,"
                                   "started_at,"
                                   "request_size,"
-                                  "response_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                                  "USING TTL ?", KEYSPACE_NAME, SESSIONS))
+                                  "response_size,"
+                                  "username) VALUES ("
+                                  ":session_id,"
+                                  ":command,"
+                                  ":client,"
+                                  ":coordinator,"
+                                  ":duration,"
+                                  ":parameters,"
+                                  ":request,"
+                                  ":started_at,"
+                                  ":request_size,"
+                                  ":response_size,"
+                                  ":username) USING TTL :ttl", KEYSPACE_NAME, SESSIONS),
+
+                        sprint("INSERT INTO %s.%s ("
+                                  "session_id,"
+                                  "command,"
+                                  "client,"
+                                  "coordinator,"
+                                  "duration,"
+                                  "parameters,"
+                                  "request,"
+                                  "started_at,"
+                                  "request_size,"
+                                  "response_size) VALUES ("
+                                  ":session_id,"
+                                  ":command,"
+                                  ":client,"
+                                  ":coordinator,"
+                                  ":duration,"
+                                  ":parameters,"
+                                  ":request,"
+                                  ":started_at,"
+                                  ":request_size,"
+                                  ":response_size) USING TTL :ttl", KEYSPACE_NAME, SESSIONS))
 
             , _sessions_time_idx(KEYSPACE_NAME, SESSIONS_TIME_IDX,
                                  sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
@@ -248,7 +282,20 @@ cql3::query_options trace_keyspace_helper::make_session_mutation_data(const one_
     parameters_values_vector.reserve(record.parameters.size());
     std::for_each(record.parameters.begin(), record.parameters.end(), [&parameters_values_vector] (auto& val_pair) { parameters_values_vector.emplace_back(val_pair.first, val_pair.second); });
     auto my_map_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
-
+    std::vector<sstring_view> names {
+        "session_id",
+        "command",
+        "client",
+        "coordinator",
+        "duration",
+        "parameters",
+        "request",
+        "started_at",
+        "request_size",
+        "response_size",
+        "username",
+        "ttl"
+    };
     std::vector<cql3::raw_value> values {
         cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
         cql3::raw_value::make_value(utf8_type->decompose(type_to_string(record.command))),
@@ -260,11 +307,12 @@ cql3::query_options trace_keyspace_helper::make_session_mutation_data(const one_
         cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.request_size))),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.response_size))),
+        cql3::raw_value::make_value(utf8_type->decompose(record.username)),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(session_records.ttl.count())))
     };
 
     return cql3::query_options(cql3::default_cql_config,
-            db::consistency_level::ANY, tracing_db_timeout_config, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+            db::consistency_level::ANY, tracing_db_timeout_config, std::move(names), std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
 }
 
 cql3::query_options trace_keyspace_helper::make_session_time_idx_mutation_data(const one_session_records& session_records) {

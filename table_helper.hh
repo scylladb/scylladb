@@ -40,16 +40,23 @@ private:
     const sstring _name; /** a table name */
     const sstring _create_cql; /** a CQL CREATE TABLE statement for the table */
     const sstring _insert_cql; /** a CQL INSERT statement */
+    const std::optional<sstring> _insert_cql_fallback; /** a fallback CQL INSERT statement */
 
     cql3::statements::prepared_statement::checked_weak_ptr _prepared_stmt; /** a raw prepared statement object (containing the INSERT statement) */
     shared_ptr<cql3::statements::modification_statement> _insert_stmt; /** INSERT prepared statement */
+    /*
+     * Tells whether the _insert_stmt is a prepared fallback INSERT statement or the regular one.
+     * Should be changed alongside every _insert_stmt reassignment
+     * */
+    bool _is_fallback_stmt = false;
 
 public:
-    table_helper(sstring keyspace, sstring name, sstring create_cql, sstring insert_cql)
+    table_helper(sstring keyspace, sstring name, sstring create_cql, sstring insert_cql, std::optional<sstring> insert_cql_fallback = std::nullopt)
         : _keyspace(std::move(keyspace))
         , _name(std::move(name))
         , _create_cql(std::move(create_cql))
-        , _insert_cql(std::move(insert_cql)) {}
+        , _insert_cql(std::move(insert_cql))
+        , _insert_cql_fallback(std::move(insert_cql_fallback)) {}
 
     /**
      * Tries to create a table using create_cql command.
