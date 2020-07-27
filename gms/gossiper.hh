@@ -441,6 +441,8 @@ public:
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
 private:
+    void do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state);
+
     void apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state);
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
