@@ -3697,6 +3697,7 @@ class scylla_features(gdb.Command):
     "ROLES": true
     "LA_SSTABLE_FORMAT": true
     "MC_SSTABLE_FORMAT": true
+    "MD_SSTABLE_FORMAT": true
     "STREAM_WITH_RPC_STREAM": true
     "ROW_LEVEL_REPAIR": true
     "TRUNCATION_TABLE": true
