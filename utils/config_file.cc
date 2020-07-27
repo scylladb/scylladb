@@ -270,10 +270,7 @@ bpo::options_description_easy_init&
 utils::config_file::add_options(bpo::options_description_easy_init& init) {
     for (config_src& src : _cfgs) {
         if (src.status() == value_status::Used) {
-            auto&& name = src.name();
-            sstring tmp(name.begin(), name.end());
-            std::replace(tmp.begin(), tmp.end(), '_', '-');
-            src.add_command_line_option(init, tmp, src.desc());
+            src.add_command_line_option(init);
         }
     }
     return init;

@@ -808,24 +808,23 @@ namespace utils {
 
 template<>
 void config_file::named_value<db::config::seed_provider_type>::add_command_line_option(
-                boost::program_options::options_description_easy_init& init,
-                const std::string_view& name, const std::string_view& desc) {
-    init((hyphenate(name) + "-class-name").data(),
+                boost::program_options::options_description_easy_init& init) {
+    init((hyphenate(name()) + "-class-name").data(),
                     value_ex<sstring>()->notifier(
                                     [this](sstring new_class_name) {
                                         auto old_seed_provider = operator()();
                                         old_seed_provider.class_name = new_class_name;
                                         set(std::move(old_seed_provider), config_source::CommandLine);
                                     }),
-                    desc.data());
-    init((hyphenate(name) + "-parameters").data(),
+                    desc().data());
+    init((hyphenate(name()) + "-parameters").data(),
                     value_ex<std::unordered_map<sstring, sstring>>()->notifier(
                                     [this](std::unordered_map<sstring, sstring> new_parameters) {
                                         auto old_seed_provider = operator()();
                                         old_seed_provider.parameters = new_parameters;
                                         set(std::move(old_seed_provider), config_source::CommandLine);
                                     }),
-                    desc.data());
+                    desc().data());
 }
 
 }

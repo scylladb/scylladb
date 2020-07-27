@@ -135,9 +135,7 @@ public:
             return _cf;
         }
         bool matches(std::string_view name) const;
-        virtual void add_command_line_option(
-                        bpo::options_description_easy_init&, const std::string_view&,
-                        const std::string_view&) = 0;
+        virtual void add_command_line_option(bpo::options_description_easy_init&) = 0;
         virtual void set_value(const YAML::Node&) = 0;
         virtual value_status status() const = 0;
         virtual config_source source() const = 0;
@@ -240,8 +238,7 @@ public:
             return the_value().observe(std::move(callback));
         }
 
-        void add_command_line_option(bpo::options_description_easy_init&,
-                        const std::string_view&, const std::string_view&) override;
+        void add_command_line_option(bpo::options_description_easy_init&) override;
         void set_value(const YAML::Node&) override;
     };
 

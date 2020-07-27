@@ -343,8 +343,7 @@ private:
             return this->is_set() ? (*this)() : t;
         }
         // do not add to boost::options. We only care about yaml config
-        void add_command_line_option(boost::program_options::options_description_easy_init&,
-                        const std::string_view&, const std::string_view&) override {}
+        void add_command_line_option(boost::program_options::options_description_easy_init&) override {}
     };
 
     log_legacy_value<seastar::log_level> default_log_level;
