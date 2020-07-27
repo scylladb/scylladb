@@ -74,4 +74,12 @@ class gossip_digest_ack2 {
     std::map<gms::inet_address, gms::endpoint_state> get_endpoint_state_map();
 };
 
+struct gossip_get_endpoint_states_request {
+    std::unordered_set<gms::application_state> application_states;
+};
+
+struct gossip_get_endpoint_states_response {
+    std::unordered_map<gms::inet_address, gms::endpoint_state> endpoint_state_map;
+};
+
 }

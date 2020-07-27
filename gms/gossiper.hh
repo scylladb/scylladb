@@ -81,6 +81,8 @@ class gossip_digest_ack2;
 class gossip_digest;
 class inet_address;
 class i_endpoint_state_change_subscriber;
+class gossip_get_endpoint_states_request;
+class gossip_get_endpoint_states_response;
 
 class feature_service;
 
@@ -129,6 +131,7 @@ private:
     future<> handle_shutdown_msg(inet_address from);
     future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest);
+    future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to);
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
@@ -441,7 +444,8 @@ public:
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
 private:
-    void do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state);
+    void do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
+    void apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
 
     void apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state);
 
@@ -646,5 +650,13 @@ inline future<std::map<inet_address, arrival_window>> get_arrival_samples() {
     });
 }
 
+struct gossip_get_endpoint_states_request {
+    // Application states the sender requested
+    std::unordered_set<gms::application_state> application_states;
+};
+
+struct gossip_get_endpoint_states_response {
+    std::unordered_map<gms::inet_address, gms::endpoint_state> endpoint_state_map;
+};
 
 } // namespace gms

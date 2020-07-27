@@ -475,6 +475,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GOSSIP_DIGEST_ACK2:
     case messaging_verb::GOSSIP_SHUTDOWN:
     case messaging_verb::GOSSIP_ECHO:
+    case messaging_verb::GOSSIP_GET_ENDPOINT_STATES:
     case messaging_verb::GET_SCHEMA_VERSION:
         return 0;
     case messaging_verb::PREPARE_MESSAGE:
@@ -1033,6 +1034,16 @@ future<> messaging_service::unregister_gossip_digest_ack2() {
 }
 future<> messaging_service::send_gossip_digest_ack2(msg_addr id, gossip_digest_ack2 msg) {
     return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(msg));
+}
+
+void messaging_service::register_gossip_get_endpoint_states(std::function<future<gms::gossip_get_endpoint_states_response> (const rpc::client_info& cinfo, gms::gossip_get_endpoint_states_request request)>&& func) {
+    register_handler(this, messaging_verb::GOSSIP_GET_ENDPOINT_STATES, std::move(func));
+}
+future<> messaging_service::unregister_gossip_get_endpoint_states() {
+    return unregister_handler(messaging_verb::GOSSIP_GET_ENDPOINT_STATES);
+}
+future<gms::gossip_get_endpoint_states_response> messaging_service::send_gossip_get_endpoint_states(msg_addr id, std::chrono::milliseconds timeout, gms::gossip_get_endpoint_states_request request) {
+    return send_message_timeout<future<gms::gossip_get_endpoint_states_response>>(this, messaging_verb::GOSSIP_GET_ENDPOINT_STATES, std::move(id), std::move(timeout), std::move(request));
 }
 
 void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,
