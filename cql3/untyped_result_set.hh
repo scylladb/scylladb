@@ -67,7 +67,7 @@ public:
 
     bool has(std::string_view) const;
     bytes_view get_view(std::string_view name) const {
-        return *_data.at(name);
+        return _data.at(name).value();
     }
     bytes get_blob(std::string_view name) const {
         return bytes(get_view(name));
