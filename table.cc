@@ -2041,8 +2041,9 @@ table::query(schema_ptr s,
         query::querier_cache_context cache_ctx) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
+    const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto f = opts.request == query::result_request::only_digest
-             ? memory_limiter.new_digest_read(*cmd.max_result_size) : memory_limiter.new_data_read(*cmd.max_result_size);
+             ? memory_limiter.new_digest_read(*cmd.max_result_size, short_read_allwoed) : memory_limiter.new_data_read(*cmd.max_result_size, short_read_allwoed);
     return f.then([this, lc, s = std::move(s), &cmd, class_config, opts, &partition_ranges,
             trace_state = std::move(trace_state), timeout, cache_ctx = std::move(cache_ctx)] (query::result_memory_accounter accounter) mutable {
         auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, opts, partition_ranges, std::move(accounter));

@@ -552,12 +552,12 @@ SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     slice.options.set<query::partition_slice::option::allow_short_read>();
 
     query::result::builder digest_only_builder(slice, query::result_options{query::result_request::only_digest, query::digest_algorithm::xxHash},
-            l.new_digest_read(query::max_result_size(query::result_memory_limiter::maximum_result_size)).get0());
+            l.new_digest_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::yes).get0());
     data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(),
             gc_clock::now(), digest_only_builder, db::no_timeout, tests::make_query_class_config()).get0();
 
     query::result::builder result_and_digest_builder(slice, query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash},
-            l.new_data_read(query::max_result_size(query::result_memory_limiter::maximum_result_size)).get0());
+            l.new_data_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::yes).get0());
     data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(),
             gc_clock::now(), result_and_digest_builder, db::no_timeout, tests::make_query_class_config()).get0();
 

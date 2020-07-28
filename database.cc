@@ -1207,7 +1207,8 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
 future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
-  return get_result_memory_limiter().new_mutation_read(*cmd.max_result_size).then(
+    const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
+  return get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allwoed).then(
           [&, s = std::move(s), trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) {
     column_family& cf = find_column_family(cmd.cf_id);
     auto class_config = query::query_class_config{.semaphore = get_reader_concurrency_semaphore(), .max_memory_for_unlimited_query = *cmd.max_result_size};

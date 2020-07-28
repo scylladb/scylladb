@@ -666,8 +666,9 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
                 db.local().find_column_family(s).get_global_cache_hit_rate()));
     }
 
-    return db.local().get_result_memory_limiter().new_mutation_read(*cmd.max_result_size).then([&, s = std::move(s), trace_state = std::move(trace_state),
-            timeout] (query::result_memory_accounter accounter) mutable {
+    const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
+    return db.local().get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allwoed).then([&, s = std::move(s),
+            trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) mutable {
         return do_query_mutations(db, s, cmd, ranges, std::move(trace_state), timeout, std::move(accounter)).then_wrapped(
                     [&db, s = std::move(s)] (future<reconcilable_result>&& f) {
             auto& local_db = db.local();
