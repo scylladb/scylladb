@@ -58,14 +58,21 @@ public:
         _metrics.add_group("node_maintenance_operations", {
             sm::make_gauge("bootstrap_finished_percentage", sm::description("Number of finished percentage for bootstrap operation on this shard."),
                 [this] { return bootstrap_finished_percentage(); }),
+            sm::make_gauge("rebuild_finished_percentage", sm::description("Number of finished percentage for rebuild operation on this shard."),
+                [this] { return rebuild_finished_percentage(); }),
         });
     }
     uint64_t bootstrap_total_ranges{0};
     uint64_t bootstrap_finished_ranges{0};
+    uint64_t rebuild_total_ranges{0};
+    uint64_t rebuild_finished_ranges{0};
 private:
     seastar::metrics::metric_groups _metrics;
     float bootstrap_finished_percentage() {
         return bootstrap_total_ranges == 0 ? 1 : float(bootstrap_finished_ranges) / float(bootstrap_total_ranges);
+    }
+    float rebuild_finished_percentage() {
+        return rebuild_total_ranges == 0 ? 1 : float(rebuild_finished_ranges) / float(rebuild_total_ranges);
     }
 };
 
@@ -1414,6 +1421,8 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                 return repair_range(*ri, range).then([ri] {
                     if (ri->reason == streaming::stream_reason::bootstrap) {
                         _node_ops_metrics.bootstrap_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::rebuild) {
+                        _node_ops_metrics.rebuild_finished_ranges++;
                     }
                 });
             });
@@ -1441,6 +1450,8 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
             }).then([ri] {
                 if (ri->reason == streaming::stream_reason::bootstrap) {
                     _node_ops_metrics.bootstrap_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::rebuild) {
+                    _node_ops_metrics.rebuild_finished_ranges++;
                 }
             });
         }).then([ri] {
@@ -2018,9 +2029,27 @@ future<> removenode_with_repair(seastar::sharded<database>& db, locator::token_m
 future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, sstring op, sstring source_dc, streaming::stream_reason reason) {
     return seastar::async([&db, tm = std::move(tm), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
-        rlogger.info("{}: started with keyspaces={}, source_dc={}", op, keyspaces, source_dc);
         auto myip = utils::fb_utilities::get_broadcast_address();
+        size_t nr_ranges_total = 0;
         for (auto& keyspace_name : keyspaces) {
+            if (!db.local().has_keyspace(keyspace_name)) {
+                continue;
+            }
+            auto& ks = db.local().find_keyspace(keyspace_name);
+            auto& strat = ks.get_replication_strategy();
+            dht::token_range_vector ranges = strat.get_ranges_in_thread(myip, tm);
+            nr_ranges_total += ranges.size();
+
+        }
+        if (reason == streaming::stream_reason::rebuild) {
+            db.invoke_on_all([nr_ranges_total] (database&) {
+                _node_ops_metrics.rebuild_finished_ranges = 0;
+                _node_ops_metrics.rebuild_total_ranges = nr_ranges_total;
+            }).get();
+        }
+        rlogger.info("{}: started with keyspaces={}, source_dc={}, nr_ranges_total={}", op, keyspaces, source_dc, nr_ranges_total);
+        for (auto& keyspace_name : keyspaces) {
+            size_t nr_ranges_skipped = 0;
             if (!db.local().has_keyspace(keyspace_name)) {
                 rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
                 continue;
@@ -2050,7 +2079,13 @@ future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, locator:
                 } else {
                     // Skip the range with zero neighbors
                     it = ranges.erase(it);
+                    nr_ranges_skipped++;
                 }
+            }
+            if (reason == streaming::stream_reason::rebuild) {
+                db.invoke_on_all([nr_ranges_skipped] (database&) {
+                    _node_ops_metrics.rebuild_finished_ranges += nr_ranges_skipped;
+                }).get();
             }
             auto nr_ranges = ranges.size();
             sync_data_using_repair(db, keyspace_name, std::move(ranges), std::move(range_sources), reason).get();
