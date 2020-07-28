@@ -29,7 +29,7 @@
 #include "sstables/types.hh"
 #include "sstables/exceptions.hh"
 #include "clustering_bounds_comparator.hh"
-#include "sstables/mc/types.hh"
+#include "sstables/mx/types.hh"
 
 namespace sstables {
 

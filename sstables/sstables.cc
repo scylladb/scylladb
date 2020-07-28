@@ -38,7 +38,7 @@
 
 #include "dht/sharder.hh"
 #include "types.hh"
-#include "mc/writer.hh"
+#include "sstables/mx/writer.hh"
 #include "writer.hh"
 #include "writer_impl.hh"
 #include "m_format_read_helpers.hh"

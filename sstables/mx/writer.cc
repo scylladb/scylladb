@@ -19,14 +19,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "sstables/mc/writer.hh"
+#include "sstables/mx/writer.hh"
 #include "sstables/writer.hh"
 #include "encoding_stats.hh"
 #include "schema.hh"
 #include "mutation_fragment.hh"
 #include "vint-serialization.hh"
 #include "sstables/types.hh"
-#include "sstables/mc/types.hh"
+#include "sstables/mx/types.hh"
 #include "db/config.hh"
 #include "atomic_cell.hh"
 #include "utils/exceptions.hh"

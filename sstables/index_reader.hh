@@ -29,7 +29,7 @@
 #include "sstables/prepended_input_stream.hh"
 #include "tracing/traced_file.hh"
 #include "sstables/scanning_clustered_index_cursor.hh"
-#include "sstables/mc/bsearch_clustered_cursor.hh"
+#include "sstables/mx/bsearch_clustered_cursor.hh"
 
 namespace sstables {
 

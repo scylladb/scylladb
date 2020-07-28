@@ -50,7 +50,7 @@
 #include "schema.hh"
 #include "utils/UUID_gen.hh"
 #include "encoding_stats.hh"
-#include "sstables/mc/writer.hh"
+#include "sstables/mx/writer.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/reader_permit.hh"
