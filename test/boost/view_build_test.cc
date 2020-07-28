@@ -758,12 +758,12 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 // Checking for view_builds_in_progress used to assume that certain values
 // (e.g. first_token) are always present in every row, which lead to using
 // freed memory. In order to check for regressions, a row with missing
-// values is inserted and ensured that it produces an exception instead
-// of a segfault.
+// values is inserted and ensured that it produces a status without any
+// views in progress.
 SEASTAR_TEST_CASE(test_load_view_build_progress_with_values_missing) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, format("INSERT INTO system.{} (keyspace_name, view_name, cpu_id) VALUES ('ks', 'v', {})",
                 db::system_keyspace::v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS, this_shard_id()));
-        BOOST_REQUIRE_THROW(db::system_keyspace::load_view_build_progress().get0(), std::bad_optional_access);
+        BOOST_REQUIRE(db::system_keyspace::load_view_build_progress().get0().empty());
     });
 }
