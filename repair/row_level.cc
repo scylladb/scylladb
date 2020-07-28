@@ -733,11 +733,12 @@ public:
 public:
     future<> stop() {
         auto gate_future = _gate.close();
-        auto writer_future = _repair_writer.wait_for_writer_done();
         auto f1 = _sink_source_for_get_full_row_hashes.close();
         auto f2 = _sink_source_for_get_row_diff.close();
         auto f3 = _sink_source_for_put_row_diff.close();
-        return when_all_succeed(std::move(gate_future), std::move(writer_future), std::move(f1), std::move(f2), std::move(f3));
+        return when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).finally([this] {
+            return _repair_writer.wait_for_writer_done();
+        });
     }
 
     static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map() {
