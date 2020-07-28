@@ -30,6 +30,9 @@
 
 namespace query {
 
+struct short_read_tag { };
+using short_read = bool_class<short_read_tag>;
+
 // result_memory_limiter, result_memory_accounter and result_memory_tracker
 // form an infrastructure for limiting size of query results.
 //
@@ -307,9 +310,6 @@ public:
 // Related headers:
 //  - query-result-reader.hh
 //  - query-result-writer.hh
-
-struct short_read_tag { };
-using short_read = bool_class<short_read_tag>;
 
 class result {
     bytes_ostream _w;
