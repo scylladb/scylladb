@@ -63,35 +63,64 @@ public:
 
     void copy_to(std::vector<mutation>& dst) const;
 
-    const mutation& columnfamilies_mutation() const {
+    const mutation& columnfamilies_mutation() const& {
         return _columnfamilies;
     }
 
-    const mutation& columns_mutation() const {
+    mutation&& columnfamilies_mutation() && {
+        return std::move(_columnfamilies);
+    }
+
+    const mutation& columns_mutation() const& {
         return _columns;
     }
 
-    const mutation_opt& view_virtual_columns_mutation() const {
+    mutation&& columns_mutation() && {
+        return std::move(_columns);
+    }
+
+    const mutation_opt& view_virtual_columns_mutation() const& {
         return _view_virtual_columns;
     }
 
-    const mutation_opt& computed_columns_mutation() const {
+    mutation_opt&& view_virtual_columns_mutation() && {
+        return std::move(_view_virtual_columns);
+    }
+
+    const mutation_opt& computed_columns_mutation() const& {
         return _computed_columns;
     }
 
-    const mutation_opt& scylla_tables() const {
+    mutation_opt&& computed_columns_mutation() && {
+        return std::move(_computed_columns);
+    }
+
+    const mutation_opt& scylla_tables() const& {
         return _scylla_tables;
     }
 
-    mutation_opt& scylla_tables() {
+    mutation_opt& scylla_tables() & {
         return _scylla_tables;
     }
 
-    const mutation_opt& indices_mutation() const {
+    mutation_opt&& scylla_tables() && {
+        return std::move(_scylla_tables);
+    }
+
+    const mutation_opt& indices_mutation() const& {
         return _indices;
     }
-    const mutation_opt& dropped_columns_mutation() const {
+
+    mutation_opt&& indices_mutation() && {
+        return std::move(_indices);
+    }
+
+    const mutation_opt& dropped_columns_mutation() const& {
         return _dropped_columns;
+    }
+
+    mutation_opt&& dropped_columns_mutation() && {
+        return std::move(_dropped_columns);
     }
 
     canonical_mutation columnfamilies_canonical_mutation() const {
