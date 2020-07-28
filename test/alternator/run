@@ -84,6 +84,7 @@ ln -s "$SCYLLA" "$SCYLLA_LINK"
         $alternator_port_option \
         --alternator-enforce-authorization=1 \
         --alternator-write-isolation=always_use_lwt \
+        --alternator-streams-time-window-s=0 \
         --developer-mode=1 \
         --experimental-features=cdc \
         --ring-delay-ms 0 --collectd 0 \
