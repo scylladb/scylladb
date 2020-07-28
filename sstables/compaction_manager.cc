@@ -144,39 +144,6 @@ static inline int calculate_weight(const std::vector<sstables::shared_sstable>& 
     return calculate_weight(get_total_size(sstables));
 }
 
-int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_descriptor& descriptor) {
-    int weight = calculate_weight(descriptor.sstables);
-    // NOTE: a compaction job with level > 0 cannot be trimmed because leveled
-    // compaction relies on higher levels having no overlapping sstables.
-    if (descriptor.level != 0 || descriptor.sstables.empty()) {
-        return weight;
-    }
-
-    uint64_t total_size = get_total_size(descriptor.sstables);
-    int min_threshold = cf->min_compaction_threshold();
-    auto compacting_run_identifiers = boost::copy_range<std::unordered_set<utils::UUID>>(descriptor.sstables
-        | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::run_identifier)));
-
-    while (compacting_run_identifiers.size() > size_t(min_threshold)) {
-        if (_weight_tracker.count(weight)) {
-            auto run_id_to_remove = descriptor.sstables.back()->run_identifier();
-            auto e = boost::range::remove_if(descriptor.sstables, [&] (sstables::shared_sstable& sst) -> bool {
-                if (sst->run_identifier() != run_id_to_remove) {
-                    return false;
-                }
-                total_size -= sst->data_size();
-                return true;
-            });
-            descriptor.sstables.erase(e, descriptor.sstables.end());
-            compacting_run_identifiers.erase(run_id_to_remove);
-            weight = calculate_weight(total_size);
-        } else {
-            break;
-        }
-    }
-    return weight;
-}
-
 bool compaction_manager::can_register_weight(column_family* cf, int weight) const {
     auto has_cf_ongoing_compaction = [&] () -> bool {
         return boost::range::count_if(_tasks, [&] (const lw_shared_ptr<task>& task) {
@@ -578,7 +545,7 @@ void compaction_manager::submit(column_family* cf) {
             column_family& cf = *task->compacting_cf;
             sstables::compaction_strategy cs = cf.get_compaction_strategy();
             sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, get_candidates(cf));
-            int weight = trim_to_compact(&cf, descriptor);
+            int weight = calculate_weight(descriptor.sstables);
 
             if (descriptor.sstables.empty() || !can_proceed(task) || cf.is_auto_compaction_disabled_by_user()) {
                 _stats.pending_tasks--;

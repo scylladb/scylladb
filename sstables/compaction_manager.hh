@@ -127,11 +127,6 @@ private:
     // Deregister weight for a column family.
     void deregister_weight(int weight);
 
-    // If weight of compaction job is taken, it will be trimmed until its new
-    // weight is not taken or its size is equal to minimum threshold.
-    // Return weight of compaction job.
-    int trim_to_compact(column_family* cf, sstables::compaction_descriptor& descriptor);
-
     // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
     std::vector<sstables::shared_sstable> get_candidates(const column_family& cf);
 
