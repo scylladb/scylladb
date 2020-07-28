@@ -748,7 +748,7 @@ public:
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
         const query::read_command& cmd,
-        query_class_config class_config,
+        query::query_class_config class_config,
         query::result_options opts,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
@@ -1294,7 +1294,7 @@ private:
         column_family*,
         schema_ptr,
         const query::read_command&,
-        query_class_config,
+        query::query_class_config,
         query::result_options,
         const dht::partition_range_vector&,
         tracing::trace_state_ptr,
@@ -1594,7 +1594,7 @@ public:
         return _supports_infinite_bound_range_deletions;
     }
 
-    query_class_config make_query_class_config();
+    query::query_class_config make_query_class_config();
 };
 
 future<> start_large_data_handler(sharded<database>& db);

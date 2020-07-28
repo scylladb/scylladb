@@ -2032,7 +2032,7 @@ struct query_state {
 future<lw_shared_ptr<query::result>>
 table::query(schema_ptr s,
         const query::read_command& cmd,
-        query_class_config class_config,
+        query::query_class_config class_config,
         query::result_options opts,
         const dht::partition_range_vector& partition_ranges,
         tracing::trace_state_ptr trace_state,

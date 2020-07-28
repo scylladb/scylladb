@@ -2167,7 +2167,7 @@ future<> data_query(
         gc_clock::time_point query_time,
         query::result::builder& builder,
         db::timeout_clock::time_point timeout,
-        query_class_config class_config,
+        query::query_class_config class_config,
         tracing::trace_state_ptr trace_ptr,
         query::querier_cache_context cache_ctx)
 {
@@ -2261,7 +2261,7 @@ static do_mutation_query(schema_ptr s,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
                db::timeout_clock::time_point timeout,
-               query_class_config class_config,
+               query::query_class_config class_config,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
                query::querier_cache_context cache_ctx)
@@ -2301,7 +2301,7 @@ mutation_query(schema_ptr s,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
                db::timeout_clock::time_point timeout,
-               query_class_config class_config,
+               query::query_class_config class_config,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
                query::querier_cache_context cache_ctx)

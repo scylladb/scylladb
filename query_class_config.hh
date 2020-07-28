@@ -25,7 +25,11 @@
 
 class reader_concurrency_semaphore;
 
+namespace query {
+
 struct query_class_config {
     reader_concurrency_semaphore& semaphore;
     uint64_t max_memory_for_unlimited_query;
 };
+
+}
