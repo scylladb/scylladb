@@ -1207,7 +1207,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
 future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           size_t result_max_size, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
-  return get_result_memory_limiter().new_mutation_read(result_max_size).then(
+  return get_result_memory_limiter().new_mutation_read(query::max_result_size(result_max_size)).then(
           [&, s = std::move(s), trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) {
     column_family& cf = find_column_family(cmd.cf_id);
     query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
