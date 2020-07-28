@@ -34,7 +34,7 @@ reader_permit make_permit() {
 }
 
 query::query_class_config make_query_class_config() {
-    return query::query_class_config{the_semaphore, std::numeric_limits<uint64_t>::max()};
+    return query::query_class_config{the_semaphore, query::max_result_size(std::numeric_limits<uint64_t>::max())};
 }
 
 } // namespace tests

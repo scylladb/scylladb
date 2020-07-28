@@ -60,14 +60,15 @@ void flat_mutation_reader::impl::clear_buffer_to_next_partition() {
     _buffer_size = compute_buffer_size(*_schema, _buffer);
 }
 
-flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, size_t max_memory_consumption) {
+flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query::max_result_size max_size) {
     class partition_reversing_mutation_reader final : public flat_mutation_reader::impl {
         flat_mutation_reader* _source;
         range_tombstone_list _range_tombstones;
         std::stack<mutation_fragment> _mutation_fragments;
         mutation_fragment_opt _partition_end;
         size_t _stack_size = 0;
-        const size_t _max_stack_size;
+        const query::max_result_size _max_size;
+        bool _below_soft_limit = true;
     private:
         stop_iteration emit_partition() {
             auto emit_range_tombstone = [&] {
@@ -119,7 +120,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, size_
                 } else {
                     _mutation_fragments.emplace(std::move(mf));
                     _stack_size += _mutation_fragments.top().memory_usage(*_schema);
-                    if (_stack_size >= _max_stack_size) {
+                    if (_stack_size > _max_size.hard_limit || (_stack_size > _max_size.soft_limit && _below_soft_limit)) {
                         const partition_key* key = nullptr;
                         auto it = buffer().end();
                         --it;
@@ -129,21 +130,30 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, size_
                             --it;
                             key = &it->as_partition_start().key().key();
                         }
-                        throw std::runtime_error(fmt::format(
-                                "Aborting reverse partition read because partition {} is larger than the maximum safe size of {} for reversible partitions.",
-                                key->with_schema(*_schema),
-                                _max_stack_size));
+
+                        if (_stack_size > _max_size.hard_limit) {
+                            throw std::runtime_error(fmt::format(
+                                    "Memory usage of reversed read exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit), while reading partition {}",
+                                    _max_size.hard_limit,
+                                    key->with_schema(*_schema)));
+                        } else {
+                            fmr_logger.warn(
+                                    "Memory usage of reversed read exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit), while reading partition {}",
+                                    _max_size.soft_limit,
+                                    key->with_schema(*_schema));
+                            _below_soft_limit = false;
+                        }
                     }
                 }
             }
             return make_ready_future<stop_iteration>(is_buffer_full());
         }
     public:
-        explicit partition_reversing_mutation_reader(flat_mutation_reader& mr, size_t max_stack_size)
+        explicit partition_reversing_mutation_reader(flat_mutation_reader& mr, query::max_result_size max_size)
             : flat_mutation_reader::impl(mr.schema())
             , _source(&mr)
             , _range_tombstones(*_schema)
-            , _max_stack_size(max_stack_size)
+            , _max_size(max_size)
         { }
 
         virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
@@ -185,7 +195,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, size_
         }
     };
 
-    return make_flat_mutation_reader<partition_reversing_mutation_reader>(original, max_memory_consumption);
+    return make_flat_mutation_reader<partition_reversing_mutation_reader>(original, max_size);
 }
 
 template<typename Source>
