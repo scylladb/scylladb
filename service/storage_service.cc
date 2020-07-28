@@ -1150,14 +1150,11 @@ void storage_service::handle_state_normal(inet_address endpoint) {
                 do_remove_node(*existing);
                 slogger.info("Set host_id={} to be owned by node={}, existing={}", host_id, endpoint, *existing);
                 _token_metadata.update_host_id(host_id, endpoint);
-                slogger.info("Remove node {} from pending replacing endpoint", endpoint);
-                _token_metadata.del_replacing_endpoint(endpoint);
             } else {
                 slogger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
                 do_remove_node(endpoint);
             }
         } else if (existing && *existing == endpoint) {
-            slogger.info("Remove node {} from pending replacing endpoint", endpoint);
             _token_metadata.del_replacing_endpoint(endpoint);
         } else {
             slogger.info("Set host_id={} to be owned by node={}", host_id, endpoint);

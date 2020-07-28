@@ -1248,7 +1248,7 @@ void token_metadata_impl::remove_endpoint(inet_address endpoint) {
     remove_by_value(_token_to_endpoint_map, endpoint);
     _topology.remove_endpoint(endpoint);
     _leaving_endpoints.erase(endpoint);
-    _replacing_endpoints.erase(endpoint);
+    del_replacing_endpoint(endpoint);
     _endpoint_to_host_id_map.erase(endpoint);
     _sorted_tokens = sort_tokens();
     invalidate_cached_rings();
@@ -1540,10 +1540,16 @@ void token_metadata_impl::add_leaving_endpoint(inet_address endpoint) {
 }
 
 void token_metadata_impl::add_replacing_endpoint(inet_address existing_node, inet_address replacing_node) {
+    tlogger.info("Added node {} as pending replacing endpoint which replaces existing node {}",
+            replacing_node, existing_node);
     _replacing_endpoints[existing_node] = replacing_node;
 }
 
 void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
+    if (_replacing_endpoints.count(existing_node)) {
+        tlogger.info("Removed node {} as pending replacing endpoint which replaces existing node {}",
+                _replacing_endpoints[existing_node], existing_node);
+    }
     _replacing_endpoints.erase(existing_node);
 }
 
