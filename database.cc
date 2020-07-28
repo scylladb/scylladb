@@ -545,6 +545,14 @@ void database::set_format(sstables::sstable_version_types format) {
     get_system_sstables_manager().set_format(format);
 }
 
+void database::set_format_by_config() {
+    if (_cfg.enable_sstables_mc_format()) {
+        set_format(sstables::sstable_version_types::mc);
+    } else {
+        set_format(sstables::sstable_version_types::la);
+    }
+}
+
 database::~database() {
     _read_concurrency_sem.clear_inactive_reads();
     _streaming_concurrency_sem.clear_inactive_reads();
