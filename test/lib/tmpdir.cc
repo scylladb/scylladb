@@ -21,7 +21,14 @@
 
 #include "test/lib/tmpdir.hh"
 
-void tmpdir::remove() {
+#include <seastar/util/alloc_failure_injector.hh>
+
+// This is not really noexcept. But it is used only from the
+// destructor and move assignment operators which have to be
+// noexcept. This is only for testing, so a std::unexpected call if if
+// remove fails is fine.
+void tmpdir::remove() noexcept {
+    memory::disable_failure_guard dfg;
     if (!_path.empty()) {
         fs::remove_all(_path);
     }

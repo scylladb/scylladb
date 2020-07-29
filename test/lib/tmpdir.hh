@@ -35,7 +35,7 @@ class tmpdir {
     fs::path _path;
 
 private:
-    void remove();
+    void remove() noexcept;
 
 public:
     tmpdir();
