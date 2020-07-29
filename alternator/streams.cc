@@ -563,6 +563,19 @@ shard_iterator::shard_iterator(const sstring& s, size_t i)
 }
 }
 
+/**
+ * Increment a timeuuid. The lowest larger timeuud we 
+ * can get (tm)
+ */
+static utils::UUID increment(const utils::UUID& uuid) {
+    auto msb = uuid.get_most_significant_bits();
+    auto lsb = uuid.get_least_significant_bits() + 1;
+    if (lsb == 0) {
+        ++msb;
+    }
+    return utils::UUID(msb, lsb);
+}
+
 template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_iterator>
     : public from_string_helper<ValueType, alternator::shard_iterator>
@@ -611,7 +624,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
             threshold = *seq_num;
             break;
         case shard_iterator_type::AFTER_SEQUENCE_NUMBER:
-            threshold = utils::UUID_gen::max_time_UUID(utils::UUID_gen::unix_timestamp(*seq_num));
+            threshold = increment(*seq_num);
             break;
         case shard_iterator_type::TRIM_HORIZON:
             threshold = utils::UUID{};
@@ -847,7 +860,8 @@ future<executor::request_return_type> executor::get_records(client_state& client
         if (records.Size() != 0) {
             auto ret = rjson::empty_object();
             rjson::set(ret, "Records", std::move(records));
-            shard_iterator next_iter(iter.shard, *timestamp);
+            // #9642. Set next iterators threshold to > last
+            shard_iterator next_iter(iter.shard, increment(*timestamp));
             rjson::set(ret, "NextShardIterator", next_iter);
             _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
              return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
