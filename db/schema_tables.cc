@@ -743,7 +743,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
 {
     auto dk = dht::decorate_key(*s, pkey);
     return do_with(dht::partition_range::make_singular(dk), [&proxy, dk, s = std::move(s), cmd = std::move(cmd)] (auto& range) {
-        return proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout)
+        return proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout, tracing::trace_state_ptr{})
                 .then([dk = std::move(dk), s](rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> res_hit_rate) {
                     auto&& [res, hit_rate] = res_hit_rate;
                     auto&& partitions = res->partitions();
@@ -778,7 +778,8 @@ read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, sche
     auto slice = partition_slice_builder(*schema)
             .with_range(std::move(clustering_range))
             .build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), query::max_rows);
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice),
+            query::row_limit(query::max_rows));
     return query_partition_mutation(proxy.local(), std::move(schema), std::move(cmd), std::move(keyspace_key)).then([&proxy] (mutation mut) {
          return redact_columns_for_missing_features(std::move(mut), proxy.local().get_db().local().features().cluster_schema_features());
     });
@@ -788,7 +789,8 @@ future<mutation>
 read_keyspace_mutation(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name) {
     schema_ptr s = keyspaces();
     auto key = partition_key::from_singular(*s, keyspace_name);
-    auto cmd = make_lw_shared<query::read_command>(s->id(), s->version(), s->full_slice());
+    auto slice = s->full_slice();
+    auto cmd = make_lw_shared<query::read_command>(s->id(), s->version(), std::move(slice), proxy.local().get_max_result_size(slice));
     return query_partition_mutation(proxy.local(), std::move(s), std::move(cmd), std::move(key));
 }
 

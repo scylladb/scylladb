@@ -385,7 +385,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
                 make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
     }
 
-    return proxy.cas(schema, request, request->read_command(), request->key(),
+    return proxy.cas(schema, request, request->read_command(proxy), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, batch_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return modification_statement::build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied, request->rows());

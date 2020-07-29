@@ -168,7 +168,7 @@ modification_statement::get_mutations(service::storage_proxy& proxy, const query
     }
 
     if (requires_read()) {
-        lw_shared_ptr<query::read_command> cmd = read_command(ranges, cl);
+        lw_shared_ptr<query::read_command> cmd = read_command(proxy, ranges, cl);
         // FIXME: ignoring "local"
         f = proxy.query(s, cmd, dht::partition_range_vector(keys), cl,
                 {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then(
@@ -246,14 +246,15 @@ std::vector<mutation> modification_statement::apply_updates(
 }
 
 lw_shared_ptr<query::read_command>
-modification_statement::read_command(query::clustering_row_ranges ranges, db::consistency_level cl) const {
+modification_statement::read_command(service::storage_proxy& proxy, query::clustering_row_ranges ranges, db::consistency_level cl) const {
     try {
         validate_for_read(cl);
     } catch (exceptions::invalid_request_exception& e) {
         throw exceptions::invalid_request_exception(format("Write operation require a read but consistency {} is not supported on reads", cl));
     }
     query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
-    return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps));
+    const auto max_result_size = proxy.get_max_result_size(ps);
+    return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size));
 }
 
 std::vector<query::clustering_range>
@@ -351,7 +352,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
                 make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard));
     }
 
-    return proxy.cas(s, request, request->read_command(), request->key(),
+    return proxy.cas(s, request, request->read_command(proxy), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied, request->rows());

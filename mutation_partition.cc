@@ -1976,7 +1976,6 @@ class mutation_querier {
     bool _live_data_in_static_row{};
     uint32_t _live_clustering_rows = 0;
     std::optional<ser::qr_partition__rows<bytes_ostream>> _rows_wr;
-    bool _short_reads_allowed;
 private:
     void query_static_row(const row& r, tombstone current_tombstone);
     void prepare_writers();
@@ -1998,7 +1997,6 @@ mutation_querier::mutation_querier(const schema& s, query::result::partition_wri
     , _memory_accounter(memory_accounter)
     , _pw(std::move(pw))
     , _static_cells_wr(pw.start().start_static_row().start_cells())
-    , _short_reads_allowed(pw.slice().options.contains<query::partition_slice::option::allow_short_read>())
 {
 }
 
@@ -2011,7 +2009,7 @@ void mutation_querier::query_static_row(const row& r, tombstone current_tombston
             get_compacted_row_slice(_schema, slice, column_kind::static_column,
                                     r, slice.static_columns, _static_cells_wr);
             _memory_accounter.update(_static_cells_wr._out.size() - start);
-        } else if (_short_reads_allowed) {
+        } else {
             seastar::measuring_output_stream stream;
             ser::qr_partition__static_row__cells<seastar::measuring_output_stream> out(stream, { });
             auto start = stream.size();
@@ -2075,7 +2073,7 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone curr
         auto start = _rows_wr->_out.size();
         write_row(*_rows_wr);
         stop = _memory_accounter.update_and_check(_rows_wr->_out.size() - start);
-    } else if (_short_reads_allowed) {
+    } else {
         seastar::measuring_output_stream stream;
         ser::qr_partition__rows<seastar::measuring_output_stream> out(stream, { });
         auto start = stream.size();
@@ -2084,7 +2082,7 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone curr
     }
 
     _live_clustering_rows++;
-    return stop && stop_iteration(_short_reads_allowed);
+    return stop;
 }
 
 uint32_t mutation_querier::consume_end_of_stream() {
@@ -2115,11 +2113,9 @@ class query_result_builder {
     query::result::builder& _rb;
     std::optional<mutation_querier> _mutation_consumer;
     stop_iteration _stop;
-    stop_iteration _short_read_allowed;
 public:
     query_result_builder(const schema& s, query::result::builder& rb)
         : _schema(s), _rb(rb)
-        , _short_read_allowed(_rb.slice().options.contains<query::partition_slice::option::allow_short_read>())
     { }
 
     void consume_new_partition(const dht::decorated_key& dk) {
@@ -2130,21 +2126,21 @@ public:
         _mutation_consumer->consume(t);
     }
     stop_iteration consume(static_row&& sr, tombstone t, bool) {
-        _stop = _mutation_consumer->consume(std::move(sr), t) && _short_read_allowed;
+        _stop = _mutation_consumer->consume(std::move(sr), t);
         return _stop;
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone t,  bool) {
-        _stop = _mutation_consumer->consume(std::move(cr), t) && _short_read_allowed;
+        _stop = _mutation_consumer->consume(std::move(cr), t);
         return _stop;
     }
     stop_iteration consume(range_tombstone&& rt) {
-        _stop = _mutation_consumer->consume(std::move(rt)) && _short_read_allowed;
+        _stop = _mutation_consumer->consume(std::move(rt));
         return _stop;
     }
 
     stop_iteration consume_end_of_partition() {
         auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
-        if (_short_read_allowed && live_rows_in_partition > 0 && !_stop) {
+        if (live_rows_in_partition > 0 && !_stop) {
             _stop = _rb.memory_accounter().check();
         }
         if (_stop) {
@@ -2167,7 +2163,7 @@ future<> data_query(
         gc_clock::time_point query_time,
         query::result::builder& builder,
         db::timeout_clock::time_point timeout,
-        query_class_config class_config,
+        query::query_class_config class_config,
         tracing::trace_state_ptr trace_ptr,
         query::querier_cache_context cache_ctx)
 {
@@ -2189,6 +2185,24 @@ future<> data_query(
             }
         });
     });
+}
+
+stop_iteration query::result_memory_accounter::check_local_limit() const {
+    if (_total_used_memory > _maximum_result_size.hard_limit) {
+        if (_short_read_allowed) {
+            return stop_iteration::yes;
+        }
+        throw std::runtime_error(fmt::format(
+                "Memory usage of unpaged query exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit)",
+                _maximum_result_size.hard_limit));
+    }
+    if (_below_soft_limit && !_short_read_allowed && _total_used_memory > _maximum_result_size.soft_limit) {
+        mplog.warn(
+                "Memory usage of unpaged query exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit)",
+                _maximum_result_size.soft_limit);
+        _below_soft_limit = false;
+    }
+    return stop_iteration::no;
 }
 
 void reconcilable_result_builder::consume_new_partition(const dht::decorated_key& dk) {
@@ -2220,7 +2234,7 @@ stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tom
         // guarantee progress, not ending the result on a live row would
         // mean that the next page fetch will read all tombstones after the
         // last live row again.
-        _stop = stop && stop_iteration(_short_read_allowed);
+        _stop = stop;
     }
     return _mutation_consumer->consume(std::move(cr)) || _stop;
 }
@@ -2239,7 +2253,7 @@ stop_iteration reconcilable_result_builder::consume_end_of_partition() {
         // well. Next page fetch will ask for the next partition and if we
         // don't do that we could end up with an unbounded number of
         // partitions with only a static row.
-        _stop = _stop || (_memory_accounter.check() && stop_iteration(_short_read_allowed));
+        _stop = _stop || _memory_accounter.check();
     }
     _total_live_rows += _live_rows;
     _result.emplace_back(partition { _live_rows, _mutation_consumer->consume_end_of_stream() });
@@ -2261,7 +2275,7 @@ static do_mutation_query(schema_ptr s,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
                db::timeout_clock::time_point timeout,
-               query_class_config class_config,
+               query::query_class_config class_config,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
                query::querier_cache_context cache_ctx)
@@ -2301,7 +2315,7 @@ mutation_query(schema_ptr s,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
                db::timeout_clock::time_point timeout,
-               query_class_config class_config,
+               query::query_class_config class_config,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
                query::querier_cache_context cache_ctx)

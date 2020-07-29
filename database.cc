@@ -1178,18 +1178,18 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
 
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
-                tracing::trace_state_ptr trace_state, uint64_t max_result_size, db::timeout_clock::time_point timeout) {
+                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
+    auto class_config = query::query_class_config{.semaphore = get_reader_concurrency_semaphore(), .max_memory_for_unlimited_query = *cmd.max_result_size};
     query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
     return _data_query_stage(&cf,
             std::move(s),
             seastar::cref(cmd),
-            make_query_class_config(),
+            class_config,
             opts,
             seastar::cref(ranges),
             std::move(trace_state),
             seastar::ref(get_result_memory_limiter()),
-            max_result_size,
             timeout,
             std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
         if (f.failed()) {
@@ -1206,8 +1206,12 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
 
 future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
-                          query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
+                          tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
+    const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
+  return get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allwoed).then(
+          [&, s = std::move(s), trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) {
     column_family& cf = find_column_family(cmd.cf_id);
+    auto class_config = query::query_class_config{.semaphore = get_reader_concurrency_semaphore(), .max_memory_for_unlimited_query = *cmd.max_result_size};
     query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
     return _mutation_query_stage(std::move(s),
             cf.as_mutation_source(),
@@ -1217,7 +1221,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             cmd.partition_limit,
             cmd.timestamp,
             timeout,
-            make_query_class_config(),
+            class_config,
             std::move(accounter),
             std::move(trace_state),
             std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
@@ -1231,6 +1235,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             return make_ready_future<std::tuple<reconcilable_result, cache_temperature>>(std::tuple(std::move(result), hit_rate));
         }
     });
+  });
 }
 
 std::unordered_set<sstring> database::get_initial_tokens() {
@@ -1279,16 +1284,16 @@ void database::register_connection_drop_notifier(netw::messaging_service& ms) {
     });
 }
 
-query_class_config database::make_query_class_config() {
+reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
     // Everything running in the statement group is considered a user query
     if (current_scheduling_group() == _dbcfg.statement_scheduling_group) {
-        return query_class_config{_read_concurrency_sem, _cfg.max_memory_for_unlimited_query()};
+        return _read_concurrency_sem;
     // Reads done on behalf of view update generation run in the streaming group
     } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
-        return query_class_config{_streaming_concurrency_sem, std::numeric_limits<uint64_t>::max()};
+        return _streaming_concurrency_sem;
     // Everything else is considered a system query
     } else {
-        return query_class_config{_system_read_concurrency_sem, std::numeric_limits<uint64_t>::max()};
+        return _system_read_concurrency_sem;
     }
 }
 
@@ -1348,7 +1353,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
             // counter state for each modified cell...
 
             tracing::trace(trace_state, "Reading counter values from the CF");
-            return counter_write_query(m_schema, cf.as_mutation_source(), make_query_class_config().semaphore.make_permit(), m.decorated_key(), slice, trace_state, timeout)
+            return counter_write_query(m_schema, cf.as_mutation_source(), get_reader_concurrency_semaphore().make_permit(), m.decorated_key(), slice, trace_state, timeout)
                     .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
@@ -1559,7 +1564,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     if (cf.views().empty()) {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout, sync).finally([op = std::move(op)] { });
     }
-    future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m, timeout, std::move(tr_state), make_query_class_config().semaphore);
+    future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m, timeout, std::move(tr_state), get_reader_concurrency_semaphore());
     return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout, &cf, op = std::move(op), sync] (row_locker::lock_holder lock) mutable {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout, sync).finally(
                 // Hold the local lock on the base-table partition or row

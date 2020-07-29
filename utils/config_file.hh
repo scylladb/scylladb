@@ -98,7 +98,7 @@ public:
 
     struct config_src {
         config_file* _cf;
-        std::string_view _name, _desc;
+        std::string_view _name, _alias, _desc;
         const config_type* _type;
         size_t _per_shard_values_offset;
     protected:
@@ -110,10 +110,20 @@ public:
             , _desc(desc)
             , _type(type)
         {}
+        config_src(config_file* cf, std::string_view name, std::string_view alias, const config_type* type, std::string_view desc)
+            : _cf(cf)
+            , _name(name)
+            , _alias(alias)
+            , _desc(desc)
+            , _type(type)
+        {}
         virtual ~config_src() {}
 
         const std::string_view & name() const {
             return _name;
+        }
+        std::string_view alias() const {
+            return _alias;
         }
         const std::string_view & desc() const {
             return _desc;
@@ -124,9 +134,8 @@ public:
         config_file * get_config_file() const {
             return _cf;
         }
-        virtual void add_command_line_option(
-                        bpo::options_description_easy_init&, const std::string_view&,
-                        const std::string_view&) = 0;
+        bool matches(std::string_view name) const;
+        virtual void add_command_line_option(bpo::options_description_easy_init&) = 0;
         virtual void set_value(const YAML::Node&) = 0;
         virtual value_status status() const = 0;
         virtual config_source source() const = 0;
@@ -168,18 +177,25 @@ public:
         typedef T type;
         typedef named_value<T> MyType;
 
-        named_value(config_file* file, std::string_view name, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
+        named_value(config_file* file, std::string_view name, std::string_view alias, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
-            : config_src(file, name, &config_type_for<T>, desc)
+            : config_src(file, name, alias, &config_type_for<T>, desc)
             , _value_status(vs)
             , _liveness(liveness_)
-            , _allowed_values(std::move(allowed_values))
-        {
+            , _allowed_values(std::move(allowed_values)) {
             file->add(*this, std::make_unique<the_value_type>(std::move(t)));
+        }
+        named_value(config_file* file, std::string_view name, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
+                std::initializer_list<T> allowed_values = {})
+            : named_value(file, name, {}, liveness_, vs, t, desc) {
+        }
+        named_value(config_file* file, std::string_view name, std::string_view alias, value_status vs, const T& t = T(), std::string_view desc = {},
+                std::initializer_list<T> allowed_values = {})
+                : named_value(file, name, alias, liveness::MustRestart, vs, t, desc, allowed_values) {
         }
         named_value(config_file* file, std::string_view name, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
-                : named_value(file, name, liveness::MustRestart, vs, t, desc, allowed_values) {
+                : named_value(file, name, {}, liveness::MustRestart, vs, t, desc, allowed_values) {
         }
         value_status status() const override {
             return _value_status;
@@ -222,8 +238,7 @@ public:
             return the_value().observe(std::move(callback));
         }
 
-        void add_command_line_option(bpo::options_description_easy_init&,
-                        const std::string_view&, const std::string_view&) override;
+        void add_command_line_option(bpo::options_description_easy_init&) override;
         void set_value(const YAML::Node&) override;
     };
 

@@ -81,7 +81,7 @@ std::optional<mutation> cas_request::apply_updates(api::timestamp_type ts) const
     return mutation_set;
 }
 
-lw_shared_ptr<query::read_command> cas_request::read_command() const {
+lw_shared_ptr<query::read_command> cas_request::read_command(service::storage_proxy& proxy) const {
 
     column_set columns_to_read(_schema->all_columns_count());
     std::vector<query::clustering_range> ranges;
@@ -116,7 +116,7 @@ lw_shared_ptr<query::read_command> cas_request::read_command() const {
     options.set(query::partition_slice::option::always_return_static_content);
     query::partition_slice ps(std::move(ranges), *_schema, columns_to_read, options);
     ps.set_partition_row_limit(max_rows);
-    return make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(ps));
+    return make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(ps), proxy.get_max_result_size(ps));
 }
 
 bool cas_request::applies_to() const {

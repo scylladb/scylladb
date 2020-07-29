@@ -592,7 +592,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             return fmr.consume_in_thread(std::move(fsc), db::no_timeout);
         } else {
             if (reversed) {
-                auto reverse_reader = make_reversing_reader(fmr, size_t(1) << 20);
+                auto reverse_reader = make_reversing_reader(fmr, query::max_result_size(size_t(1) << 20));
                 return reverse_reader.consume(std::move(fsc), db::no_timeout).get0();
             }
             return fmr.consume(std::move(fsc), db::no_timeout).get0();
@@ -805,7 +805,8 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
 
     auto test_with_partition = [&] (bool with_static_row) {
         testlog.info("Testing with_static_row={}", with_static_row);
-        auto mut = schema.new_mutation("pk1");
+        const auto pk = "pk1";
+        auto mut = schema.new_mutation(pk);
         const size_t desired_mut_size = 1 * 1024 * 1024;
         const size_t row_size = 10 * 1024;
 
@@ -817,8 +818,9 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
             schema.add_row(mut, schema.make_ckey(++i), sstring(row_size, '0'));
         }
 
+        const uint64_t hard_limit = size_t(1) << 18;
         auto reader = flat_mutation_reader_from_mutations({mut});
-        auto reverse_reader = make_reversing_reader(reader, size_t(1) << 10);
+        auto reverse_reader = make_reversing_reader(reader, query::max_result_size(size_t(1) << 10, hard_limit));
 
         try {
             reverse_reader.consume(phony_consumer{}, db::no_timeout).get();
@@ -826,7 +828,12 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
         } catch (const std::runtime_error& e) {
             testlog.info("Got exception with message: {}", e.what());
             auto str = sstring(e.what());
-            BOOST_REQUIRE_EQUAL(str.find("Aborting reverse partition read because partition pk1"), 0);
+            const auto expected_str = format(
+                    "Memory usage of reversed read exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit), while reading partition {}",
+                    hard_limit,
+                    pk);
+
+            BOOST_REQUIRE_EQUAL(str.find(expected_str), 0);
         } catch (...) {
             throw;
         }

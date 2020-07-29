@@ -748,12 +748,11 @@ public:
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
         const query::read_command& cmd,
-        query_class_config class_config,
+        query::query_class_config class_config,
         query::result_options opts,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
-        uint64_t max_result_size,
         db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx = { });
 
@@ -1294,12 +1293,11 @@ private:
         column_family*,
         schema_ptr,
         const query::read_command&,
-        query_class_config,
+        query::query_class_config,
         query::result_options,
         const dht::partition_range_vector&,
         tracing::trace_state_ptr,
         query::result_memory_limiter&,
-        uint64_t,
         db::timeout_clock::time_point,
         query::querier_cache_context> _data_query_stage;
 
@@ -1396,6 +1394,7 @@ public:
         return _commitlog.get();
     }
 
+    seastar::scheduling_group get_statement_scheduling_group() const { return _dbcfg.statement_scheduling_group; }
     seastar::scheduling_group get_streaming_scheduling_group() const { return _dbcfg.streaming_scheduling_group; }
     size_t get_available_memory() const { return _dbcfg.available_memory; }
 
@@ -1463,10 +1462,9 @@ public:
     unsigned shard_of(const frozen_mutation& m);
     future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
-                                                                  uint64_t max_result_size, db::timeout_clock::time_point timeout);
+                                                                  db::timeout_clock::time_point timeout);
     future<std::tuple<reconcilable_result, cache_temperature>> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
-                                                query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state,
-                                                db::timeout_clock::time_point timeout);
+                                                tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
     future<> apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout);
@@ -1594,7 +1592,9 @@ public:
         return _supports_infinite_bound_range_deletions;
     }
 
-    query_class_config make_query_class_config();
+    // Get the reader concurrency semaphore, appropriate for the query class,
+    // which is deduced from the current scheduling group.
+    reader_concurrency_semaphore& get_reader_concurrency_semaphore();
 };
 
 future<> start_large_data_handler(sharded<database>& db);

@@ -54,6 +54,11 @@ public:
     partition_slice_builder& without_partition_key_columns();
     partition_slice_builder& without_clustering_key_columns();
     partition_slice_builder& reversed();
+    template <query::partition_slice::option OPTION>
+    partition_slice_builder& with_option() {
+        _options.set<OPTION>();
+        return *this;
+    }
 
     query::partition_slice build();
 };

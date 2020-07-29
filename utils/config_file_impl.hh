@@ -192,13 +192,17 @@ sstring hyphenate(const std::string_view&);
 }
 
 template<typename T>
-void utils::config_file::named_value<T>::add_command_line_option(
-                boost::program_options::options_description_easy_init& init,
-                const std::string_view& name, const std::string_view& desc) {
+void utils::config_file::named_value<T>::add_command_line_option(boost::program_options::options_description_easy_init& init) {
+    const auto hyphenated_name = hyphenate(name());
     // NOTE. We are not adding default values. We could, but must in that case manually (in some way) geenrate the textual
     // version, since the available ostream operators for things like pairs and collections don't match what we can deal with parser-wise.
     // See removed ostream operators above.
-    init(hyphenate(name).data(), value_ex<T>()->notifier([this](T new_val) { set(std::move(new_val), config_source::CommandLine); }), desc.data());
+    init(hyphenated_name.data(), value_ex<T>()->notifier([this](T new_val) { set(std::move(new_val), config_source::CommandLine); }), desc().data());
+
+    if (!alias().empty()) {
+        const auto alias_desc = fmt::format("Alias for {}", hyphenated_name);
+        init(hyphenate(alias()).data(), value_ex<T>()->notifier([this](T new_val) { set(std::move(new_val), config_source::CommandLine); }), alias_desc.data());
+    }
 }
 
 template<typename T>

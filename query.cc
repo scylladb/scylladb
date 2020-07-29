@@ -34,6 +34,7 @@ namespace query {
 
 constexpr size_t result_memory_limiter::minimum_result_size;
 constexpr size_t result_memory_limiter::maximum_result_size;
+constexpr size_t result_memory_limiter::unlimited_result_size;
 
 thread_local semaphore result_memory_tracker::_dummy { 0 };
 

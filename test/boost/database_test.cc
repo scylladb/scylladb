@@ -28,6 +28,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/result_set_assertions.hh"
 #include "test/lib/reader_permit.hh"
+#include "test/lib/log.hh"
 
 #include "database.hh"
 #include "partition_slice_builder.hh"
@@ -40,6 +41,7 @@
 #include "db/commitlog/commitlog_replayer.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/data_listeners.hh"
+#include "multishard_mutation_query.hh"
 
 using namespace std::chrono_literals;
 
@@ -62,8 +64,8 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
 
         auto assert_query_result = [&] (size_t expected_size) {
             auto max_size = std::numeric_limits<size_t>::max();
-            auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), 1000);
-            auto&& [result, cache_tempature] = db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0();
+            auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size), query::row_limit(1000));
+            auto&& [result, cache_tempature] = db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, db::no_timeout).get0();
             assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(expected_size);
         };
         assert_query_result(1000);
@@ -105,22 +107,22 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
 
             auto max_size = std::numeric_limits<size_t>::max();
             {
-                auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), 3);
-                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0());
+                auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size), query::row_limit(3));
+                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, db::no_timeout).get0());
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
             }
 
             {
-                auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(),
-                        query::max_rows, gc_clock::now(), std::nullopt, 5);
-                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0());
+                auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size),
+                        query::row_limit(query::max_rows), query::partition_limit(5));
+                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, db::no_timeout).get0());
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(5);
             }
 
             {
-                auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(),
-                        query::max_rows, gc_clock::now(), std::nullopt, 3);
-                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, max_size, db::no_timeout).get0());
+                auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), query::max_result_size(max_size),
+                        query::row_limit(query::max_rows), query::partition_limit(3));
+                auto result = std::get<0>(db.query(s, cmd, query::result_options::only_result(), pranges, nullptr, db::no_timeout).get0());
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
             }
         });
@@ -471,4 +473,87 @@ SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
         // This should trigger the bug in debug mode
         tq.gather().get();
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(read_max_size) {
+    do_with_cql_env([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE test (pk text, ck int, v text, PRIMARY KEY (pk, ck));").get();
+        auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
+
+        auto& db = e.local_db();
+        auto& tab = db.find_column_family("ks", "test");
+        auto s = tab.schema();
+
+        auto pk = make_local_key(s);
+        const auto raw_pk = utf8_type->decompose(data_value(pk));
+        const auto cql3_pk = cql3::raw_value::make_value(raw_pk);
+
+        const auto value = sstring(1024, 'a');
+        const auto raw_value = utf8_type->decompose(data_value(value));
+        const auto cql3_value = cql3::raw_value::make_value(raw_value);
+
+        const int num_rows = 1024;
+
+        for (int i = 0; i != num_rows; ++i) {
+            const auto cql3_ck = cql3::raw_value::make_value(int32_type->decompose(data_value(i)));
+            e.execute_prepared(id, {cql3_pk, cql3_ck, cql3_value}).get();
+        }
+
+        const auto partition_ranges = std::vector<dht::partition_range>{query::full_partition_range};
+
+        const std::vector<std::pair<sstring, std::function<future<size_t>(schema_ptr, const query::read_command&)>>> query_methods{
+                {"query_mutations()", [&db, &partition_ranges] (schema_ptr s, const query::read_command& cmd) -> future<size_t> {
+                    return db.query_mutations(s, cmd, partition_ranges.front(), {}, db::no_timeout).then(
+                            [] (const std::tuple<reconcilable_result, cache_temperature>& res) {
+                        return std::get<0>(res).memory_usage();
+                    });
+                }},
+                {"query()", [&db, &partition_ranges] (schema_ptr s, const query::read_command& cmd) -> future<size_t> {
+                    return db.query(s, cmd, query::result_options::only_result(), partition_ranges, {}, db::no_timeout).then(
+                            [] (const std::tuple<lw_shared_ptr<query::result>, cache_temperature>& res) {
+                        return size_t(std::get<0>(res)->buf().size());
+                    });
+                }},
+                {"query_mutations_on_all_shards()", [&e, &partition_ranges] (schema_ptr s, const query::read_command& cmd) -> future<size_t> {
+                    return query_mutations_on_all_shards(e.db(), s, cmd, partition_ranges, {}, db::no_timeout).then(
+                            [] (const std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>& res) {
+                        return std::get<0>(res)->memory_usage();
+                    });
+                }}
+        };
+
+        for (auto [query_method_name, query_method] : query_methods) {
+            for (auto allow_short_read : {true, false}) {
+                for (auto max_size : {1024u, 1024u * 1024u, 1024u * 1024u * 1024u}) {
+                    const auto should_throw = max_size < (num_rows * value.size() * 2) && !allow_short_read;
+                    testlog.info("checking: query_method={}, allow_short_read={}, max_size={}, should_throw={}", query_method_name, allow_short_read, max_size, should_throw);
+                    auto slice = s->full_slice();
+                    if (allow_short_read) {
+                        slice.options.set<query::partition_slice::option::allow_short_read>();
+                    } else {
+                        slice.options.remove<query::partition_slice::option::allow_short_read>();
+                    }
+                    query::read_command cmd(s->id(), s->version(), slice, query::max_result_size(max_size));
+                    try {
+                        auto size = query_method(s, cmd).get0();
+                        // Just to ensure we are not interpreting empty results as success.
+                        BOOST_REQUIRE(size != 0);
+                        if (should_throw) {
+                            BOOST_FAIL("Expected exception, but none was thrown.");
+                        } else {
+                            testlog.trace("No exception thrown, as expected.");
+                        }
+                    } catch (std::runtime_error& e) {
+                        if (should_throw) {
+                            testlog.trace("Exception thrown, as expected: {}", e);
+                        } else {
+                            BOOST_FAIL(fmt::format("Expected no exception, but caught: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+
+        return make_ready_future<>();
+    }).get();
 }

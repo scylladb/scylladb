@@ -82,9 +82,9 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
         (void)_;
 
         auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), 7, gc_clock::now(), std::nullopt, query::max_partitions,
-                utils::make_random_uuid(), query::is_first_page::yes);
+                utils::make_random_uuid(), query::is_first_page::yes, query::max_result_size(query::result_memory_limiter::unlimited_result_size));
 
-        query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, std::numeric_limits<uint64_t>::max(), db::no_timeout).get();
+        query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, db::no_timeout).get();
 
         check_cache_population(env.db(), 1);
 
@@ -104,11 +104,11 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
     for (const auto& pkey : pkeys) {
         const auto res = db.invoke_on(sharder.shard_of(pkey.token()), [gs = global_schema_ptr(s), &pkey] (database& db) {
             return async([s = gs.get(), &pkey, &db] () mutable {
-                auto accounter = db.get_result_memory_limiter().new_mutation_read(std::numeric_limits<size_t>::max()).get0();
-                const auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), query::max_rows);
+                const auto cmd = query::read_command(s->id(), s->version(), s->full_slice(),
+                        query::max_result_size(query::result_memory_limiter::unlimited_result_size));
                 const auto range = dht::partition_range::make_singular(pkey);
                 return make_foreign(std::make_unique<reconcilable_result>(
-                    std::get<0>(db.query_mutations(std::move(s), cmd, range, std::move(accounter), nullptr, db::no_timeout).get0())));
+                    std::get<0>(db.query_mutations(std::move(s), cmd, range, nullptr, db::no_timeout).get0())));
             });
         }).get0();
 
@@ -126,13 +126,14 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
         const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
     std::vector<mutation> results;
-    auto cmd = query::read_command(s->id(), s->version(), slice, page_size, gc_clock::now(), std::nullopt, query::max_partitions, query_uuid, query::is_first_page::yes);
+    auto cmd = query::read_command(s->id(), s->version(), slice, page_size, gc_clock::now(), std::nullopt, query::max_partitions, query_uuid,
+            query::is_first_page::yes, query::max_result_size(max_size));
 
     bool has_more = true;
 
     // First page is special, needs to have `is_first_page` set.
     {
-        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {range}, nullptr, max_size, db::no_timeout).get0());
+        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {range}, nullptr, db::no_timeout).get0());
         for (auto& part : res->partitions()) {
             auto mut = part.mut().unfreeze(s);
             results.emplace_back(std::move(mut));
@@ -176,7 +177,7 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
             cmd.slice.set_range(*s, last_pkey.key(), std::move(ckranges));
         }
 
-        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, max_size, db::no_timeout).get0());
+        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, db::no_timeout).get0());
 
         if (is_stateful) {
             BOOST_REQUIRE(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);
@@ -880,6 +881,7 @@ run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<database>& db, 
 
     const auto partition_slice = partition_slice_builder(*schema)
         .with_ranges(generate_clustering_ranges(rnd_engine, *schema, part_descs))
+        .with_option<query::partition_slice::option::allow_short_read>()
         .build();
 
     const auto is_stateful = stateful_query(std::uniform_int_distribution<int>(0, 3)(rnd_engine));
@@ -972,7 +974,7 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
 
         const auto& partitions = pop_desc.partitions;
         smp::invoke_on_all([cfg, db = &env.db(), gs = global_schema_ptr(pop_desc.schema), &partitions] {
-            auto& sem = db->local().make_query_class_config().semaphore;
+            auto& sem = db->local().get_reader_concurrency_semaphore();
 
             auto resources = sem.available_resources();
             resources -= reader_concurrency_semaphore::resources{1, 0};

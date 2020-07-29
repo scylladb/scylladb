@@ -555,7 +555,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         t->add_sstable_and_update_cache(sst).get();
 
         auto& sem = *with_scheduling_group(e.local_db().get_streaming_scheduling_group(), [&] () {
-            return &e.local_db().make_query_class_config().semaphore;
+            return &e.local_db().get_reader_concurrency_semaphore();
         }).get0();
 
         // consume all units except what is needed to admit a single reader.

@@ -81,7 +81,7 @@ future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state,
                                 [tr_state, schema, &cmd, only_digest, da, timeout] (const dht::partition_range_vector& prv) {
                             return get_local_storage_proxy().get_db().local().query(schema, cmd,
                                     {only_digest ? query::result_request::only_digest : query::result_request::result_and_digest, da},
-                                    prv, tr_state, query::result_memory_limiter::maximum_result_size, timeout);
+                                    prv, tr_state, timeout);
                         });
                     });
                     return when_all(std::move(f1), std::move(f2)).then([state = std::move(state), only_digest] (auto t) {

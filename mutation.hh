@@ -108,6 +108,7 @@ public:
 public:
     // The supplied partition_slice must be governed by this mutation's schema
     query::result query(const query::partition_slice&,
+        query::result_memory_accounter&& accounter,
         query::result_options opts = query::result_options::only_result(),
         gc_clock::time_point now = gc_clock::now(),
         uint32_t row_limit = query::max_rows) &&;
@@ -115,6 +116,7 @@ public:
     // The supplied partition_slice must be governed by this mutation's schema
     // FIXME: Slower than the r-value version
     query::result query(const query::partition_slice&,
+        query::result_memory_accounter&& accounter,
         query::result_options opts = query::result_options::only_result(),
         gc_clock::time_point now = gc_clock::now(),
         uint32_t row_limit = query::max_rows) const&;

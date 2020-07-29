@@ -29,6 +29,7 @@
 #include "mutation_fragment.hh"
 #include "tracing/trace_state.hh"
 #include "mutation.hh"
+#include "query_class_config.hh"
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/file.hh>
@@ -720,15 +721,17 @@ make_generating_reader(schema_ptr s, std::function<future<mutation_fragment_opt>
 ///
 /// \param original the reader to be reversed, has to be kept alive while the
 ///     reversing reader is in use.
-/// \param max_memory_consumption the maximum amount of memory the reader is
-///     allowed to use for reversing. The reverse reader reads entire partitions
-///     into memory, before reversing them. Since partitions can be larger than
-///     the available memory, we need to enforce a limit on memory consumption.
-///     If the read uses more memory then this limit, the read is aborted.
+/// \param max_size the maximum amount of memory the reader is allowed to use
+///     for reversing and conversely the maximum size of the results. The
+///     reverse reader reads entire partitions into memory, before reversing
+///     them. Since partitions can be larger than the available memory, we need
+///     to enforce a limit on memory consumption. When reaching the soft limit
+///     a warning will be logged. When reaching the hard limit the read will be
+///     aborted.
 ///
 /// FIXME: reversing should be done in the sstable layer, see #1413.
 flat_mutation_reader
-make_reversing_reader(flat_mutation_reader& original, size_t max_memory_consumption);
+make_reversing_reader(flat_mutation_reader& original, query::max_result_size max_size);
 
 /// Low level fragment stream validator.
 ///

@@ -409,6 +409,13 @@ public:
                 create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
             }
 
+            if (!cfg->max_memory_for_unlimited_query_soft_limit.is_set()) {
+                cfg->max_memory_for_unlimited_query_soft_limit.set(uint64_t(query::result_memory_limiter::unlimited_result_size));
+            }
+            if (!cfg->max_memory_for_unlimited_query_hard_limit.is_set()) {
+                cfg->max_memory_for_unlimited_query_hard_limit.set(uint64_t(query::result_memory_limiter::unlimited_result_size));
+            }
+
             sharded<locator::token_metadata> token_metadata;
             token_metadata.start().get();
             auto stop_token_metadata = defer([&token_metadata] { token_metadata.stop().get(); });

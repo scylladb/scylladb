@@ -2001,7 +2001,7 @@ struct query_state {
                          const query::read_command& cmd,
                          query::result_options opts,
                          const dht::partition_range_vector& ranges,
-                         query::result_memory_accounter memory_accounter = { })
+                         query::result_memory_accounter memory_accounter)
             : schema(std::move(s))
             , cmd(cmd)
             , builder(cmd.slice, opts, std::move(memory_accounter))
@@ -2032,18 +2032,18 @@ struct query_state {
 future<lw_shared_ptr<query::result>>
 table::query(schema_ptr s,
         const query::read_command& cmd,
-        query_class_config class_config,
+        query::query_class_config class_config,
         query::result_options opts,
         const dht::partition_range_vector& partition_ranges,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
-        uint64_t max_size,
         db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
+    const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto f = opts.request == query::result_request::only_digest
-             ? memory_limiter.new_digest_read(max_size) : memory_limiter.new_data_read(max_size);
+             ? memory_limiter.new_digest_read(*cmd.max_result_size, short_read_allwoed) : memory_limiter.new_data_read(*cmd.max_result_size, short_read_allwoed);
     return f.then([this, lc, s = std::move(s), &cmd, class_config, opts, &partition_ranges,
             trace_state = std::move(trace_state), timeout, cache_ctx = std::move(cache_ctx)] (query::result_memory_accounter accounter) mutable {
         auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, opts, partition_ranges, std::move(accounter));

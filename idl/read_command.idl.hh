@@ -40,6 +40,11 @@ class partition_slice {
     uint32_t partition_row_limit() [[version 1.3]] = std::numeric_limits<uint32_t>::max();
 };
 
+struct max_result_size {
+    uint64_t soft_limit;
+    uint64_t hard_limit;
+}
+
 class read_command {
     utils::UUID cf_id;
     utils::UUID schema_version;
@@ -50,6 +55,7 @@ class read_command {
     uint32_t partition_limit [[version 1.3]] = std::numeric_limits<uint32_t>::max();
     utils::UUID query_uuid [[version 2.2]] = utils::UUID();
     query::is_first_page is_first_page [[version 2.2]] = query::is_first_page::no;
+    std::optional<query::max_result_size> max_result_size [[version 4.3]] = std::nullopt;
 };
 
 }

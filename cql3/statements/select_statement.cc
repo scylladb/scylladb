@@ -319,8 +319,19 @@ select_statement::do_execute(service::storage_proxy& proxy,
     _stats.select_partition_range_scan += _range_scan;
     _stats.select_partition_range_scan_no_bypass_cache += _range_scan_no_bypass_cache;
 
-    auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, utils::UUID(), query::is_first_page::no, options.get_timestamp(state));
+    auto slice = make_partition_slice(options);
+    auto command = ::make_lw_shared<query::read_command>(
+            _schema->id(),
+            _schema->version(),
+            std::move(slice),
+            proxy.get_max_result_size(slice),
+            query::row_limit(limit),
+            query::partition_limit(query::max_partitions),
+            now,
+            tracing::make_trace_info(state.get_trace_state()),
+            utils::UUID(),
+            query::is_first_page::no,
+            options.get_timestamp(state));
 
     int32_t page_size = options.get_page_size();
 
@@ -471,25 +482,28 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const std::option
 }
 
 lw_shared_ptr<query::read_command>
-indexed_table_select_statement::prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now, bool use_paging) const {
+indexed_table_select_statement::prepare_command_for_base_query(service::storage_proxy& proxy, const query_options& options,
+        service::query_state& state, gc_clock::time_point now, bool use_paging) const {
+    auto slice = make_partition_slice(options);
+    if (use_paging) {
+        slice.options.set<query::partition_slice::option::allow_short_read>();
+        slice.options.set<query::partition_slice::option::send_partition_key>();
+        if (_schema->clustering_key_size() > 0) {
+            slice.options.set<query::partition_slice::option::send_clustering_key>();
+        }
+    }
     lw_shared_ptr<query::read_command> cmd = ::make_lw_shared<query::read_command>(
             _schema->id(),
             _schema->version(),
-            make_partition_slice(options),
-            get_limit(options),
+            std::move(slice),
+            proxy.get_max_result_size(slice),
+            query::row_limit(get_limit(options)),
+            query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            query::max_partitions,
             utils::UUID(),
             query::is_first_page::no,
             options.get_timestamp(state));
-    if (use_paging) {
-        cmd->slice.options.set<query::partition_slice::option::allow_short_read>();
-        cmd->slice.options.set<query::partition_slice::option::send_partition_key>();
-        if (_schema->clustering_key_size() > 0) {
-            cmd->slice.options.set<query::partition_slice::option::send_clustering_key>();
-        }
-    }
     return cmd;
 }
 
@@ -502,7 +516,7 @@ indexed_table_select_statement::do_execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
-    auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
+    auto cmd = prepare_command_for_base_query(proxy, options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     uint32_t queried_ranges_count = partition_ranges.size();
     service::query_ranges_to_vnodes_generator ranges_to_vnodes(proxy.get_token_metadata(), _schema, std::move(partition_ranges));
@@ -578,7 +592,7 @@ indexed_table_select_statement::do_execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
-    auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
+    auto cmd = prepare_command_for_base_query(proxy, options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
 
     struct base_query_state {
@@ -1146,10 +1160,11 @@ indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
             _view_schema->id(),
             _view_schema->version(),
             partition_slice,
-            limit,
+            proxy.get_max_result_size(partition_slice),
+            query::row_limit(limit),
+            query::partition_limit(query::max_partitions),
             now,
             tracing::make_trace_info(state.get_trace_state()),
-            query::max_partitions,
             utils::UUID(),
             query::is_first_page::no,
             options.get_timestamp(state));

@@ -30,6 +30,7 @@
 #include "range.hh"
 #include "tracing/tracing.hh"
 #include "utils/small_vector.hh"
+#include "query_class_config.hh"
 
 class position_in_partition_view;
 
@@ -206,6 +207,10 @@ public:
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
 
+// Tagged integers to disambiguate constructor arguments.
+enum class row_limit : uint32_t { max = max_rows };
+enum class partition_limit : uint32_t { max = max_partitions };
+
 using is_first_page = bool_class<class is_first_page_tag>;
 
 // Full specification of a query to the database.
@@ -233,18 +238,23 @@ public:
     // to avoid doing work normally done on paged requests, e.g. attempting to
     // reused suspended readers.
     query::is_first_page is_first_page;
+    // The maximum size of the query result, for all queries.
+    // We use the entire value range, so we need an optional for the case when
+    // the remote doesn't send it.
+    std::optional<query::max_result_size> max_result_size;
     api::timestamp_type read_timestamp; // not serialized
 public:
+    // IDL constructor
     read_command(utils::UUID cf_id,
                  table_schema_version schema_version,
                  partition_slice slice,
-                 uint32_t row_limit = max_rows,
-                 gc_clock::time_point now = gc_clock::now(),
-                 std::optional<tracing::trace_info> ti = std::nullopt,
-                 uint32_t partition_limit = max_partitions,
-                 utils::UUID query_uuid = utils::UUID(),
-                 query::is_first_page is_first_page = is_first_page::no,
-                 api::timestamp_type rt = api::new_timestamp())
+                 uint32_t row_limit,
+                 gc_clock::time_point now,
+                 std::optional<tracing::trace_info> ti,
+                 uint32_t partition_limit,
+                 utils::UUID query_uuid,
+                 query::is_first_page is_first_page,
+                 std::optional<query::max_result_size> max_result_size)
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
@@ -254,6 +264,31 @@ public:
         , partition_limit(partition_limit)
         , query_uuid(query_uuid)
         , is_first_page(is_first_page)
+        , max_result_size(max_result_size)
+        , read_timestamp(api::new_timestamp())
+    { }
+
+    read_command(utils::UUID cf_id,
+            table_schema_version schema_version,
+            partition_slice slice,
+            query::max_result_size max_result_size,
+            query::row_limit row_limit = query::row_limit::max,
+            query::partition_limit partition_limit = query::partition_limit::max,
+            gc_clock::time_point now = gc_clock::now(),
+            std::optional<tracing::trace_info> ti = std::nullopt,
+            utils::UUID query_uuid = utils::UUID(),
+            query::is_first_page is_first_page = query::is_first_page::no,
+            api::timestamp_type rt = api::new_timestamp())
+        : cf_id(std::move(cf_id))
+        , schema_version(std::move(schema_version))
+        , slice(std::move(slice))
+        , row_limit(static_cast<uint32_t>(row_limit))
+        , timestamp(now)
+        , trace_info(std::move(ti))
+        , partition_limit(static_cast<uint32_t>(partition_limit))
+        , query_uuid(query_uuid)
+        , is_first_page(is_first_page)
+        , max_result_size(max_result_size)
         , read_timestamp(rt)
     { }
 

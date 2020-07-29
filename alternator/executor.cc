@@ -1225,7 +1225,8 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
         service_permit permit,
         alternator::stats& stats);
 
-static lw_shared_ptr<query::read_command> previous_item_read_command(schema_ptr schema,
+static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
+        schema_ptr schema,
         const clustering_key& ck,
         shared_ptr<cql3::selection::selection> selection) {
     std::vector<query::clustering_range> bounds;
@@ -1240,7 +1241,7 @@ static lw_shared_ptr<query::read_command> previous_item_read_command(schema_ptr 
     auto regular_columns = boost::copy_range<query::column_id_vector>(
             schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
+    return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice));
 }
 
 static dht::partition_range_vector to_partition_ranges(const schema& schema, const partition_key& pk) {
@@ -1354,7 +1355,7 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
 {
     stats.reads_before_write++;
     auto selection = cql3::selection::selection::wildcard(schema);
-    auto command = previous_item_read_command(schema, ck, selection);
+    auto command = previous_item_read_command(proxy, schema, ck, selection);
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
     return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
@@ -1405,7 +1406,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     auto timeout = executor::default_timeout();
     auto selection = cql3::selection::selection::wildcard(schema());
     auto read_command = needs_read_before_write ?
-            previous_item_read_command(schema(), _ck, selection) :
+            previous_item_read_command(proxy, schema(), _ck, selection) :
             nullptr;
     return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
             {timeout, std::move(permit), client_state, trace_state},
@@ -2405,7 +2406,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto selection = cql3::selection::selection::wildcard(schema);
 
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
 
     std::unordered_set<std::string> used_attribute_names;
     auto attrs_to_get = calculate_attrs_to_get(request, used_attribute_names);
@@ -2475,7 +2476,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     rs.schema->regular_columns() | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.id; }));
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, query::max_partitions);
+            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice));
             future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
@@ -2728,7 +2729,8 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     return last_evaluated_key;
 }
 
-static future<executor::request_return_type> do_query(schema_ptr schema,
+static future<executor::request_return_type> do_query(service::storage_proxy& proxy,
+        schema_ptr schema,
         const rjson::value* exclusive_start_key,
         dht::partition_range_vector&& partition_ranges,
         std::vector<query::clustering_range>&& ck_bounds,
@@ -2762,7 +2764,7 @@ static future<executor::request_return_type> do_query(schema_ptr schema,
     query::partition_slice::option_set opts = selection->get_query_options();
     opts.add(custom_opts);
     auto partition_slice = query::partition_slice(std::move(ck_bounds), std::move(static_columns), std::move(regular_columns), opts);
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, query::max_partitions);
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice));
 
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
 
@@ -2883,7 +2885,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "Scan");
     verify_all_are_used(request, "ExpressionAttributeValues", used_attribute_values, "Scan");
 
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+    return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
             std::move(filter), query::partition_slice::option_set(), client_state, _stats.cql_stats, trace_state, std::move(permit));
 }
 
@@ -3357,7 +3359,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
     verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "Query");
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
-    return do_query(schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+    return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
             std::move(filter), opts, client_state, _stats.cql_stats, std::move(trace_state), std::move(permit));
 }
 
