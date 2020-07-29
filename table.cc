@@ -114,24 +114,6 @@ ranges_for_clustering_key_filter(const schema_ptr& schema, const query::clusteri
     return ranges;
 }
 
-// Return true if this sstable possibly stores clustering row(s) specified by ranges.
-static inline bool
-contains_rows(const sstables::sstable& sst, const schema_ptr& schema, const ck_filter_clustering_key_ranges& ranges) {
-    auto& clustering_key_types = schema->clustering_key_type()->types();
-    auto& clustering_components_ranges = sst.clustering_components_ranges();
-
-    if (!schema->clustering_key_size() || clustering_components_ranges.empty()) {
-        return true;
-    }
-    return boost::algorithm::any_of(ranges, [&] (const ck_filter_clustering_key_components& range) {
-        auto s = std::min(range.size(), clustering_components_ranges.size());
-        return boost::algorithm::all_of(boost::irange<unsigned>(0, s), [&] (unsigned i) {
-            auto& type = clustering_key_types[i];
-            return range[i].is_full() || range[i].overlaps(clustering_components_ranges[i], type->as_tri_comparator());
-        });
-    });
-}
-
 // Filter out sstables for reader using bloom filter and sstable metadata that keeps track
 // of a range for each clustering component.
 static std::vector<sstables::shared_sstable>
@@ -173,7 +155,7 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
 
     int64_t min_timestamp = std::numeric_limits<int64_t>::max();
     auto sstable_has_clustering_key = [&min_timestamp, &schema, &ranges] (const sstables::shared_sstable& sst) {
-        if (!contains_rows(*sst, schema, ranges)) {
+        if (!sst->may_contain_rows(ranges)) {
             return false; // ordered after sstables that contain clustering rows.
         } else {
             min_timestamp = std::min(min_timestamp, sst->get_stats_metadata().min_timestamp);

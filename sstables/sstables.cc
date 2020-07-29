@@ -1227,10 +1227,6 @@ void sstable::set_clustering_components_ranges() {
     }
 }
 
-const std::vector<nonwrapping_range<bytes_view>>& sstable::clustering_components_ranges() const {
-    return _clustering_components_ranges;
-}
-
 double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
     auto& st = get_stats_metadata();
     auto estimated_count = st.estimated_cells_count.mean() * st.estimated_cells_count.count();
@@ -2237,6 +2233,22 @@ void sstable::update_stats_on_end_of_stream()
     if (_c_stats.capped_local_deletion_time) {
         _stats.on_capped_local_deletion_time();
     }
+}
+
+bool sstable::may_contain_rows(const std::vector<std::vector<nonwrapping_range<bytes_view>>>& ranges) {
+    auto clustering_components_size = _clustering_components_ranges.size();
+    if (!_schema->clustering_key_size() || !clustering_components_size) {
+        return true;
+    }
+
+    auto& clustering_key_types = _schema->clustering_key_type()->types();
+    return std::ranges::any_of(ranges, [this, clustering_components_size, &clustering_key_types] (const std::vector<nonwrapping_range<bytes_view>>& range) {
+        auto s = std::min(range.size(), clustering_components_size);
+        return std::ranges::all_of(boost::irange<unsigned>(0, s), [this, &clustering_key_types, &range] (unsigned i) {
+            auto& type = clustering_key_types[i];
+            return range[i].is_full() || range[i].overlaps(_clustering_components_ranges[i], type->as_tri_comparator());
+        });
+    });
 }
 
 class sstable_writer_k_l : public sstable_writer::writer_impl {
