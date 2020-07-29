@@ -184,7 +184,8 @@ public:
 
 static
 migrators&
-static_migrators() {
+static_migrators() noexcept {
+    memory::disable_failure_guard dfg;
     static thread_local lw_shared_ptr<migrators> obj = make_lw_shared<migrators>();
     return *obj;
 }
@@ -348,7 +349,14 @@ struct segment;
 
 static logging::logger llogger("lsa");
 static logging::logger timing_logger("lsa-timing");
-static thread_local tracker tracker_instance;
+
+static tracker& get_tracker_instance() noexcept {
+    memory::disable_failure_guard dfg;
+    static thread_local tracker obj;
+    return obj;
+}
+
+static thread_local tracker& tracker_instance = get_tracker_instance();
 
 using clock = std::chrono::steady_clock;
 
@@ -942,7 +950,13 @@ size_t segment_pool::segments_in_use() const {
     return _segments_in_use;
 }
 
-static thread_local segment_pool shard_segment_pool;
+static segment_pool& get_shard_segment_pool() noexcept {
+    memory::disable_failure_guard dfg;
+    static thread_local segment_pool obj;
+    return obj;
+}
+
+static thread_local segment_pool& shard_segment_pool = get_shard_segment_pool();
 
 void segment::record_alloc(segment::size_type size) {
     shard_segment_pool.descriptor(this).record_alloc(size);
