@@ -27,7 +27,7 @@
 namespace sstables {
 
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>
-size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) const {
+size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) {
 
     std::vector<std::pair<sstables::shared_sstable, uint64_t>> sstable_length_pairs;
     sstable_length_pairs.reserve(sstables.size());
@@ -43,7 +43,7 @@ size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vect
 }
 
 std::vector<std::vector<sstables::shared_sstable>>
-size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_sstable>& sstables) const {
+size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_sstable>& sstables, size_tiered_compaction_strategy_options options) {
     // sstables sorted by size of its data file.
     auto sorted_sstables = create_sstable_and_length_pairs(sstables);
 
@@ -64,8 +64,8 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
         for (auto it = buckets.begin(); it != buckets.end(); it++) {
             size_t old_average_size = it->first;
 
-            if ((size > (old_average_size * _options.bucket_low) && size < (old_average_size * _options.bucket_high)) ||
-                    (size < _options.min_sstable_size && old_average_size < _options.min_sstable_size)) {
+            if ((size > (old_average_size * options.bucket_low) && size < (old_average_size * options.bucket_high)) ||
+                    (size < options.min_sstable_size && old_average_size < options.min_sstable_size)) {
                 auto bucket = std::move(it->second);
                 size_t total_size = bucket.size() * old_average_size;
                 size_t new_average_size = (total_size + size) / (bucket.size() + 1);
@@ -95,6 +95,11 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
     }
 
     return bucket_list;
+}
+
+std::vector<std::vector<sstables::shared_sstable>>
+size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_sstable>& sstables) const {
+    return get_buckets(sstables, _options);
 }
 
 std::vector<sstables::shared_sstable>

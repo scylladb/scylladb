@@ -116,9 +116,11 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     compaction_backlog_tracker _backlog_tracker;
 
     // Return a list of pair of shared_sstable and its respective size.
-    std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) const;
+    static std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables);
 
     // Group files of similar size into buckets.
+    static std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, size_tiered_compaction_strategy_options options);
+
     std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables) const;
 
     // Maybe return a bucket of sstables to compact
