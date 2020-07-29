@@ -779,9 +779,7 @@ read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, sche
             .with_range(std::move(clustering_range))
             .build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), query::max_rows);
-    return query_partition_mutation(proxy.local(), std::move(schema), std::move(cmd), std::move(keyspace_key)).then([&proxy] (mutation mut) {
-         return redact_columns_for_missing_features(std::move(mut), proxy.local().get_db().local().features().cluster_schema_features());
-    });
+    return query_partition_mutation(proxy.local(), std::move(schema), std::move(cmd), std::move(keyspace_key));
 }
 
 future<mutation>
@@ -858,7 +856,20 @@ read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std:
     for (auto&& keyspace_name : keyspace_names) {
         for (auto&& table_name : read_table_names_of_keyspace(proxy, keyspace_name, s).get0()) {
             auto qn = qualified_name(keyspace_name, table_name);
-            auto muts = read_table_mutations(proxy, qn, s).get0();
+            schema_mutations&& muts = read_table_mutations(proxy, qn, s).get0();
+            auto features = proxy.local().get_db().local().features().cluster_schema_features();
+            auto redact = [&] (mutation_opt&& m) {
+                return !m ? m : redact_columns_for_missing_features(*m, features);
+            };
+            muts = {
+                    redact_columns_for_missing_features(std::move(muts).columnfamilies_mutation(), features),
+                    redact_columns_for_missing_features(std::move(muts).columns_mutation(), features),
+                    redact(std::move(muts).view_virtual_columns_mutation()),
+                    redact(std::move(muts).computed_columns_mutation()),
+                    redact(std::move(muts).indices_mutation()),
+                    redact(std::move(muts).dropped_columns_mutation()),
+                    redact(std::move(muts).scylla_tables()),
+            };
             auto id = table_id_from_mutations(muts);
             result.emplace(std::move(id), std::move(muts));
         }
