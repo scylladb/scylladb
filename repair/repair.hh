@@ -202,6 +202,8 @@ public:
     std::vector<sstring> hosts;
     streaming::stream_reason reason;
     std::unordered_map<dht::token_range, repair_neighbors> neighbors;
+    uint64_t nr_ranges_finished = 0;
+    uint64_t nr_ranges_total;
     size_t nr_failed_ranges = 0;
     bool aborted = false;
     // Map of peer -> <cf, ranges>
@@ -303,6 +305,7 @@ public:
     static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
+    float report_progress(streaming::stream_reason reason);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
