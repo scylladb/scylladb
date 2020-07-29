@@ -534,3 +534,41 @@ def test_query_filter_paging(test_table_sn_with_data):
     # passed the filter), but doesn't know it is really the last item - it
     # takes one more query to discover there are no more.
     assert(pages == len(items) + 1)
+
+# Test that a QueryFilter and AttributesToGet may be given together.
+# In particular, test that QueryFilter may inspect attributes which will
+# not be returned by the query, because the AttributesToGet.
+# This test reproduces issue #6951.
+@pytest.mark.xfail(reason="issue #6951: cannot filter on non-returned attributes")
+def test_query_filter_and_attributes_to_get(test_table):
+    p = random_string()
+    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
+    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
+    # Note that the filter is on the column x, but x is not included in the
+    # results because of AttributesToGet. The filter should still work.
+    got_items = full_query(test_table,
+        KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
+        QueryFilter={ 'x': { 'AttributeValueList': ['mouse'], 'ComparisonOperator': 'EQ' }},
+        AttributesToGet=['y'])
+    # Note that:
+    # 1. Exactly one item matches the filter on x
+    # 2. The returned record for that item will include *only* the attribute y
+    #    as requestd by AttributesToGet. It won't include x - it was just
+    #    needed for the filter, but didn't appear in ProjectionExpression.
+    expected_items = [{'y': 'horse'}]
+    assert(got_items == expected_items)
+
+# It is not allowed to combine the old-style QueryFilter with the
+# new-style ProjectionExpression. You must use AttributesToGet instead
+# (tested in test_query_filter_and_attributes_to_get() above).
+@pytest.mark.xfail(reason="missing check for expression and non-expression query parameters")
+def test_query_filter_and_projection_expression(test_table):
+    p = random_string()
+    # DynamoDB complains: "Can not use both expression and non-expression
+    # parameters in the same request: Non-expression parameters:
+    # {QueryFilter} Expression parameters: {ProjectionExpression}.
+    with pytest.raises(ClientError, match='ValidationException.* both'):
+        full_query(test_table,
+            KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
+            QueryFilter={ 'x': { 'AttributeValueList': ['mouse'], 'ComparisonOperator': 'EQ' }},
+            ProjectionExpression='y')

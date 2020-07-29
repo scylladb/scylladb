@@ -654,6 +654,47 @@ def test_filter_expression_and_sort_key_condition(test_table_sn_with_data):
     expected_items = [item for item in items if item['i'] > i and item['c'] <= 7]
     assert(got_items == expected_items)
 
+# Test that a FilterExpression and ProjectionExpression may be given together.
+# In particular, test that FilterExpression may inspect attributes which will
+# not be returned by the query, because of the ProjectionExpression.
+# This test reproduces issue #6951.
+@pytest.mark.xfail(reason="issue #6951: cannot filter on non-returned attributes")
+def test_filter_expression_and_projection_expression(test_table):
+    p = random_string()
+    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
+    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
+    # Note that the filter is on the column x, but x is not included in the
+    # results because of ProjectionExpression. The filter should still work.
+    got_items = full_query(test_table,
+        KeyConditionExpression='p=:p',
+        FilterExpression='x=:x',
+        ProjectionExpression='y',
+        ExpressionAttributeValues={':p': p, ':x': 'mouse'})
+    # Note that:
+    # 1. Exactly one item matches the filter on x
+    # 2. The returned record for that item will include *only* the attribute y
+    #    as requestd by ProjectionExpression. It won't include x - it was just
+    #    needed for the filter, but didn't appear in ProjectionExpression.
+    expected_items = [{'y': 'horse'}]
+    assert(got_items == expected_items)
+
+# It is not allowed to combine the new-style FilterExpression with the
+# old-style AttributesToGet. You must use ProjectionExpression instead
+# (tested in test_filter_expression_and_projection_expression() above).
+@pytest.mark.xfail(reason="missing check for expression and non-expression query parameters")
+def test_filter_expression_and_attributes_to_get(test_table):
+    p = random_string()
+    # DynamoDB complains: "Can not use both expression and non-expression
+    # parameters in the same request: Non-expression parameters:
+    # {AttributesToGet} Expression parameters: {FilterExpression,
+    # KeyConditionExpression}.
+    with pytest.raises(ClientError, match='ValidationException.* both'):
+        full_query(test_table,
+            KeyConditionExpression='p=:p',
+            FilterExpression='x=:x',
+            AttributesToGet=['y'],
+            ExpressionAttributeValues={':p': p, ':x': 'mouse'})
+
 # All the tests above were for the Query operation. Let's verify that
 # FilterExpression also works for Scan. We will assume the same code is
 # used internally, so don't need to check all the details of the
