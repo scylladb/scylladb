@@ -857,9 +857,11 @@ future<executor::request_return_type> executor::get_records(client_state& client
             maybe_add_record();
         }
 
-        if (records.Size() != 0) {
-            auto ret = rjson::empty_object();
-            rjson::set(ret, "Records", std::move(records));
+        auto ret = rjson::empty_object();
+        auto nrecords = records.Size();
+        rjson::set(ret, "Records", std::move(records));
+
+        if (nrecords != 0) {
             // #9642. Set next iterators threshold to > last
             shard_iterator next_iter(iter.shard, increment(*timestamp));
             rjson::set(ret, "NextShardIterator", next_iter);
@@ -868,8 +870,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         }
 
         // ugh. figure out if we are and end-of-shard
-        return cdc::get_local_streams_timestamp().then([this, iter, high_ts, start_time](db_clock::time_point ts) {
-            auto ret = rjson::empty_object();
+        return cdc::get_local_streams_timestamp().then([this, iter, high_ts, start_time, ret = std::move(ret)](db_clock::time_point ts) mutable {
             auto& shard = iter.shard;            
 
             if (shard.time < ts && ts < high_ts) {
