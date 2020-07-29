@@ -60,12 +60,16 @@ public:
                 [this] { return bootstrap_finished_percentage(); }),
             sm::make_gauge("rebuild_finished_percentage", sm::description("Number of finished percentage for rebuild operation on this shard."),
                 [this] { return rebuild_finished_percentage(); }),
+            sm::make_gauge("repair_finished_percentage", sm::description("Number of finished percentage for repair operation on this shard."),
+                [this] { return repair_finished_percentage(); }),
         });
     }
     uint64_t bootstrap_total_ranges{0};
     uint64_t bootstrap_finished_ranges{0};
     uint64_t rebuild_total_ranges{0};
     uint64_t rebuild_finished_ranges{0};
+    uint64_t repair_total_ranges_sum{0};
+    uint64_t repair_finished_ranges_sum{0};
 private:
     seastar::metrics::metric_groups _metrics;
     float bootstrap_finished_percentage() {
@@ -74,6 +78,7 @@ private:
     float rebuild_finished_percentage() {
         return rebuild_total_ranges == 0 ? 1 : float(rebuild_finished_ranges) / float(rebuild_total_ranges);
     }
+    float repair_finished_percentage();
 };
 
 static thread_local node_ops_metrics _node_ops_metrics;
@@ -271,6 +276,13 @@ tracker& repair_tracker() {
     }
 }
 
+float node_ops_metrics::repair_finished_percentage() {
+    if (_the_tracker) {
+        return repair_tracker().report_progress(streaming::stream_reason::repair);
+    }
+    return 1;
+}
+
 tracker::tracker(size_t nr_shards, size_t max_repair_memory)
     : _shutdown(false)
     , _repairs(nr_shards) {
@@ -396,6 +408,19 @@ void tracker::abort_all_repairs() {
         ri->abort();
     }
     rlogger.info0("Aborted {} repair job(s)", count);
+}
+
+float tracker::report_progress(streaming::stream_reason reason) {
+    uint64_t nr_ranges_finished = 0;
+    uint64_t nr_ranges_total = 0;
+    for (auto& x : _repairs[this_shard_id()]) {
+        auto& ri = x.second;
+        if (ri->reason == reason) {
+            nr_ranges_total += ri->nr_ranges_total;
+            nr_ranges_finished += ri->nr_ranges_finished;
+        }
+    }
+    return nr_ranges_total == 0 ? 1 : float(nr_ranges_finished) / float(nr_ranges_total);
 }
 
 named_semaphore& tracker::range_parallelism_semaphore() {
@@ -762,6 +787,7 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     , data_centers(data_centers_)
     , hosts(hosts_)
     , reason(reason_)
+    , nr_ranges_total(ranges.size())
     , _row_level_repair(db.local().features().cluster_supports_row_level_repair()) {
 }
 
@@ -1423,6 +1449,9 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                         _node_ops_metrics.bootstrap_finished_ranges++;
                     } else if (ri->reason == streaming::stream_reason::rebuild) {
                         _node_ops_metrics.rebuild_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::repair) {
+                        _node_ops_metrics.repair_finished_ranges_sum++;
+                        ri->nr_ranges_finished++;
                     }
                 });
             });
@@ -1452,6 +1481,9 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                     _node_ops_metrics.bootstrap_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::rebuild) {
                     _node_ops_metrics.rebuild_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::repair) {
+                    _node_ops_metrics.repair_finished_ranges_sum++;
+                    ri->nr_ranges_finished++;
                 }
             });
         }).then([ri] {
@@ -1562,6 +1594,11 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         rlogger.info("repair id {} completed successfully: no tables to repair", id);
         return id.id;
     }
+
+    auto nr_ranges_total = ranges.size();
+    db.invoke_on_all([nr_ranges_total] (database&) {
+        _node_ops_metrics.repair_total_ranges_sum += nr_ranges_total;
+    }).get();
 
     // Do it in the background.
     (void)repair_tracker().run(id, [&db, id, keyspace = std::move(keyspace),
