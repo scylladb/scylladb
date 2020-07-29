@@ -299,7 +299,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
                 mutation m(cf.schema(), fm.decorated_key(*cf.schema()));
                 converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());
                 fm.partition().accept(cm, v);
-                return do_with(std::move(m), [&db, &cf] (mutation m) {
+                return do_with(std::move(m), [&db, &cf] (const mutation& m) {
                     return db.apply_in_memory(m, cf, db::rp_handle(), db::no_timeout);
                 });
             } else {
