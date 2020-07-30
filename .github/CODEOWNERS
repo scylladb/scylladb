@@ -1,0 +1,70 @@
+# THE REST
+* @avikivity @tgrabiec @nyh
+
+# AUTH
+auth/* @elcallio @vladzcloudius
+
+# CACHE
+row_cache* @tgrabiec @haaawk
+*mutation* @tgrabiec @haaawk
+tests/mvcc* @tgrabiec @haaawk
+
+# COMMITLOG / BATCHLOG
+db/commitlog/* @elcallio
+db/batch* @elcallio
+
+# COORDINATOR
+service/storage_proxy* @gleb-cloudius
+
+# COMPACTION
+sstables/compaction* @raphaelsc @nyh
+
+# CQL TRANSPORT LAYER
+transport/* @penberg
+
+# CQL QUERY LANGUAGE
+cql3/* @tgrabiec @penberg
+
+# COUNTERS
+# counters*
+# tests/counter_test*
+
+# GOSSIP
+gms/* @tgrabiec @asias
+
+# DOCKER
+dist/docker/* @penberg
+
+# LSA
+utils/logalloc* @tgrabiec
+
+# MATERIALIZED VIEWS
+db/view/* @nyh
+cql3/statements/*view* @nyh
+
+# PACKAGING
+dist/* @syuu1228
+
+# REPAIR
+repair/* @tgrabiec @asias @nyh
+
+# SCHEMA MANAGEMENT
+db/schema_tables* @tgrabiec @nyh
+db/legacy_schema_migrator* @tgrabiec @nyh
+service/migration* @tgrabiec @nyh
+schema* @tgrabiec @nyh
+
+# SECONDARY INDEXES
+db/index/* @nyh @penberg
+cql3/statements/*index* @nyh @penberg
+
+# SSTABLES
+sstables/* @tgrabiec @raphaelsc @nyh
+
+# STREAMING
+streaming/* @tgrabiec @asias
+service/storage_service.* @tgrabiec @asias
+
+# ALTERNATOR
+alternator/* @nyh
+alternator-test/* @nyh
