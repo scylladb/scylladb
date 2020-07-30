@@ -25,7 +25,7 @@
 
 // This is not really noexcept. But it is used only from the
 // destructor and move assignment operators which have to be
-// noexcept. This is only for testing, so a std::unexpected call if if
+// noexcept. This is only for testing, so a std::unexpected call if
 // remove fails is fine.
 void tmpdir::remove() noexcept {
     memory::disable_failure_guard dfg;
