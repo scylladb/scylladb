@@ -94,7 +94,8 @@ executables = ['build/{}/scylla'.format(args.mode),
                '/usr/sbin/ethtool',
                '/usr/bin/netstat',
                '/usr/bin/hwloc-distrib',
-               '/usr/bin/hwloc-calc']
+               '/usr/bin/hwloc-calc',
+               '/usr/bin/lsblk']
 
 output = args.dest
 
