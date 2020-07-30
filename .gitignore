@@ -24,3 +24,4 @@ resources
 tags
 testlog
 test/*/*.reject
+.vscode
