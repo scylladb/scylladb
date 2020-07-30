@@ -22,5 +22,5 @@ resources
 .pytest_cache
 /expressions.tokens
 tags
-testlog/*
+testlog
 test/*/*.reject
