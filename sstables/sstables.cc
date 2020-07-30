@@ -2979,25 +2979,25 @@ fsync_directory(const io_error_handler& error_handler, sstring fname) {
 }
 
 static future<>
-remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handler = sstable_write_error_handler) {
-    return seastar::async([sstable_toc_name, &error_handler] () mutable {
+remove_by_toc_name(sstring sstable_toc_name) {
+    return seastar::async([sstable_toc_name] () mutable {
         sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
         auto new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
         sstring dir;
 
         sstlog.debug("Removing by TOC name: {}", sstable_toc_name);
-        if (sstable_io_check(error_handler, file_exists, sstable_toc_name).get0()) {
+        if (sstable_io_check(sstable_write_error_handler, file_exists, sstable_toc_name).get0()) {
             dir = dirname(sstable_toc_name);
-            sstable_io_check(error_handler, rename_file, sstable_toc_name, new_toc_name).get();
-            fsync_directory(error_handler, dir).get();
-        } else if (sstable_io_check(error_handler, file_exists, new_toc_name).get0()) {
+            sstable_io_check(sstable_write_error_handler, rename_file, sstable_toc_name, new_toc_name).get();
+            fsync_directory(sstable_write_error_handler, dir).get();
+        } else if (sstable_io_check(sstable_write_error_handler, file_exists, new_toc_name).get0()) {
             dir = dirname(new_toc_name);
         } else {
             sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
             return;
         }
 
-        auto toc_file = open_checked_file_dma(error_handler, new_toc_name, open_flags::ro).get0();
+        auto toc_file = open_checked_file_dma(sstable_write_error_handler, new_toc_name, open_flags::ro).get0();
         auto in = make_file_input_stream(toc_file);
         auto size = toc_file.size().get0();
         auto text = in.read_exactly(size).get0();
@@ -3005,7 +3005,7 @@ remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handl
         std::vector<sstring> components;
         sstring all(text.begin(), text.end());
         boost::split(components, all, boost::is_any_of("\n"));
-        parallel_for_each(components, [prefix, &error_handler] (sstring component) mutable {
+        parallel_for_each(components, [prefix] (sstring component) mutable {
             if (component.empty()) {
                 // eof
                 return make_ready_future<>();
@@ -3015,7 +3015,7 @@ remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handl
                 return make_ready_future<>();
             }
             auto fname = prefix + component;
-            return sstable_io_check(error_handler, remove_file, prefix + component).then_wrapped([fname = std::move(fname)] (future<> f) {
+            return sstable_io_check(sstable_write_error_handler, remove_file, prefix + component).then_wrapped([fname = std::move(fname)] (future<> f) {
                 // forgive ENOENT, since the component may not have been written;
                 try {
                     f.get();
@@ -3028,8 +3028,8 @@ remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handl
                 return make_ready_future<>();
             });
         }).get();
-        fsync_directory(error_handler, dir).get();
-        sstable_io_check(error_handler, remove_file, new_toc_name).get();
+        fsync_directory(sstable_write_error_handler, dir).get();
+        sstable_io_check(sstable_write_error_handler, remove_file, new_toc_name).get();
     });
 }
 
