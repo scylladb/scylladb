@@ -65,7 +65,6 @@
 #include "utils/bloom_filter.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/cached_file.hh"
-
 #include "checked-file-impl.hh"
 #include "integrity_checked_file_impl.hh"
 #include "db/extensions.hh"
@@ -2979,57 +2978,77 @@ fsync_directory(const io_error_handler& error_handler, sstring fname) {
 }
 
 static future<>
-remove_by_toc_name(sstring sstable_toc_name) {
-    return seastar::async([sstable_toc_name] () mutable {
-        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
-        auto new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
-        sstring dir;
+remove_by_toc_name(sstring sstable_toc_name) noexcept {
+    sstring prefix, new_toc_name, dir;
+    try {
+        prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
+        new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
+        dir = dirname(sstable_toc_name);
+    } catch (...) {
+        return current_exception_as_future();
+    }
 
+    return do_with(std::move(sstable_toc_name), std::move(prefix), std::move(new_toc_name), std::move(dir),
+            [] (sstring& sstable_toc_name, sstring& prefix, sstring& new_toc_name, sstring& dir) {
         sstlog.debug("Removing by TOC name: {}", sstable_toc_name);
-        if (sstable_io_check(sstable_write_error_handler, file_exists, sstable_toc_name).get0()) {
-            dir = dirname(sstable_toc_name);
-            sstable_io_check(sstable_write_error_handler, rename_file, sstable_toc_name, new_toc_name).get();
-            fsync_directory(sstable_write_error_handler, dir).get();
-        } else if (sstable_io_check(sstable_write_error_handler, file_exists, new_toc_name).get0()) {
-            dir = dirname(new_toc_name);
-        } else {
-            sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
-            return;
-        }
-
-        auto toc_file = open_checked_file_dma(sstable_write_error_handler, new_toc_name, open_flags::ro).get0();
-        auto in = make_file_input_stream(toc_file);
-        auto size = toc_file.size().get0();
-        auto text = in.read_exactly(size).get0();
-        in.close().get();
-        std::vector<sstring> components;
-        sstring all(text.begin(), text.end());
-        boost::split(components, all, boost::is_any_of("\n"));
-        parallel_for_each(components, [prefix] (sstring component) mutable {
-            if (component.empty()) {
-                // eof
+        return sstable_io_check(sstable_write_error_handler, file_exists, sstable_toc_name).then([&] (bool toc_exists) {
+            if (toc_exists) {
+                // If new_toc_name exists it will be atomically replaced.  See rename(2)
+                return sstable_io_check(sstable_write_error_handler, rename_file, sstable_toc_name, new_toc_name).then([&dir] {
+                    return fsync_directory(sstable_write_error_handler, dir);
+                }).then([] {
+                    return make_ready_future<bool>(true);
+                });
+            } else {
+                return sstable_io_check(sstable_write_error_handler, file_exists, new_toc_name);
+            }
+        }).then([&] (bool exists) {
+            if (!exists) {
+                sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
                 return make_ready_future<>();
             }
-            if (component == sstable_version_constants::TOC_SUFFIX) {
-                // already deleted
-                return make_ready_future<>();
-            }
-            auto fname = prefix + component;
-            return sstable_io_check(sstable_write_error_handler, remove_file, prefix + component).then_wrapped([fname = std::move(fname)] (future<> f) {
-                // forgive ENOENT, since the component may not have been written;
-                try {
-                    f.get();
-                } catch (std::system_error& e) {
-                    if (!is_system_error_errno(ENOENT)) {
-                        throw;
-                    }
-                    sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
-                }
-                return make_ready_future<>();
+            return with_file(open_checked_file_dma(sstable_write_error_handler, new_toc_name, open_flags::ro), [&] (file& toc_file) {
+                return toc_file.size().then([&] (size_t size) {
+                    return do_with(make_file_input_stream(toc_file), [&, size] (input_stream<char>& in) {
+                        return in.read_exactly(size).then([&] (temporary_buffer<char> text) {
+                            std::vector<sstring> components;
+                            sstring all(text.begin(), text.end());
+                            boost::split(components, all, boost::is_any_of("\n"));
+                            return parallel_for_each(components, [&prefix] (sstring component) {
+                                if (component.empty()) {
+                                    // eof
+                                    return make_ready_future<>();
+                                }
+                                if (component == sstable_version_constants::TOC_SUFFIX) {
+                                    // already renamed
+                                    return make_ready_future<>();
+                                }
+                                auto fname = prefix + component;
+                                return sstable_io_check(sstable_write_error_handler, remove_file, fname).handle_exception([fname = std::move(fname)] (std::exception_ptr eptr) {
+                                    // forgive ENOENT, since the component may not have been written;
+                                    try {
+                                        std::rethrow_exception(eptr);
+                                    } catch (const std::system_error& e) {
+                                        if (!is_system_error_errno(ENOENT)) {
+                                            return make_exception_future<>(eptr);
+                                        }
+                                        sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
+                                        return make_ready_future<>();
+                                    }
+                                    __builtin_unreachable();
+                                });
+                            }).then([&dir] {
+                                return fsync_directory(sstable_write_error_handler, dir);
+                            }).then([&new_toc_name] {
+                                return sstable_io_check(sstable_write_error_handler, remove_file, new_toc_name);
+                            });
+                        }).finally([&in] () mutable {
+                            return in.close();
+                        });
+                    });
+                });
             });
-        }).get();
-        fsync_directory(sstable_write_error_handler, dir).get();
-        sstable_io_check(sstable_write_error_handler, remove_file, new_toc_name).get();
+        });
     });
 }
 
