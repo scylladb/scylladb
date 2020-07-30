@@ -47,7 +47,6 @@
 #include "compress.hh"
 #include "unimplemented.hh"
 #include "index_reader.hh"
-#include "remove.hh"
 #include "memtable.hh"
 #include "range.hh"
 #include "downsampling.hh"
@@ -2979,8 +2978,8 @@ fsync_directory(const io_error_handler& error_handler, sstring fname) {
     });
 }
 
-future<>
-remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handler) {
+static future<>
+remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handler = sstable_write_error_handler) {
     return seastar::async([sstable_toc_name, &error_handler] () mutable {
         sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
         auto new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;

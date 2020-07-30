@@ -44,7 +44,6 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/compaction.hh"
-#include "sstables/remove.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "locator/simple_snitch.hh"

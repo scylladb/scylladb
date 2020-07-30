@@ -30,7 +30,6 @@
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
-#include "sstables/remove.hh"
 #include "sstables/sstable_directory.hh"
 #include "service/priority_manager.hh"
 #include "auth/common.hh"
