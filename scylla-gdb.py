@@ -125,6 +125,40 @@ class intrusive_set:
             yield n
 
 
+class double_decker:
+    def __init__(self, ref):
+        self.tree = ref['_tree']
+        self.leaf_node_flag = int(gdb.parse_and_eval(self.tree.type.name + "::node::NODE_LEAF"))
+        self.rightmost_leaf_flag = int(gdb.parse_and_eval(self.tree.type.name + "::node::NODE_RIGHTMOST"))
+        self.max_conflicting_partitions = 128
+
+    def __iter__(self):
+        node_p = self.tree['_left']
+        while node_p:
+            node = node_p.dereference()
+            if not node['_flags'] & self.leaf_node_flag:
+                raise ValueError("Expected B+ leaf node")
+
+            for i in range(0, node['_num_keys']):
+                parts = node['_kids'][i+1]['d'].dereference()['value']
+                p = 0
+                while True:
+                    ce = parts['_data'][p]['object']
+                    if p == 0 and not ce['_flags']['_head']:
+                        raise ValueError("Expected head cache_entry")
+                    yield ce
+                    if ce['_flags']['_tail']:
+                        break
+                    if p >= this.max_conflicting_partitions:
+                        raise ValueError("Too many conflicting partitions")
+                    p += 1
+
+            if node['_flags'] & self.rightmost_leaf_flag:
+                node_p = None
+            else:
+                node_p = node['__next']
+
+
 class boost_variant:
     def __init__(self, ref):
         self.ref = ref
@@ -2891,13 +2925,20 @@ class scylla_cache(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla cache', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
+    def __partitions(self, table):
+        try:
+            return double_decker(table['_cache']['_partitions'])
+        except gdb.error:
+            # Compatibility, the row-cache was switched to B+ tree at some point
+            return intrusive_set(table['_cache']['_partitions'])
+
     def invoke(self, arg, from_tty):
         schema_ptr_type = gdb.lookup_type('schema').pointer()
         for table in for_each_table():
             schema = table['_schema']['_p'].reinterpret_cast(schema_ptr_type)
             name = '%s.%s' % (schema['_raw']['_ks_name'], schema['_raw']['_cf_name'])
             gdb.write("%s:\n" % (name))
-            for e in intrusive_set(table['_cache']['_partitions']):
+            for e in self.__partitions(table):
                 gdb.write('  (cache_entry*) 0x%x {_key=%s, _flags=%s, _pe=%s}\n' % (
                     int(e.address), e['_key'], e['_flags'], e['_pe']))
             gdb.write("\n")
