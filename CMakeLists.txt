@@ -152,4 +152,5 @@ target_include_directories(scylla PUBLIC
         ${Boost_INCLUDE_DIRS}
         xxhash
         libdeflate
+        abseil
         build/${BUILD_TYPE}/gen)
