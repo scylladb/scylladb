@@ -22,18 +22,16 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/thread.hh>
 #include <map>
-#include <vector>
-#include <random>
 #include <string>
 #include <iostream>
 #include <fmt/core.h>
-#include "utils/logalloc.hh"
 
 constexpr int TEST_NODE_SIZE = 7;
 
 #include "tree_test_key.hh"
 #include "utils/bptree.hh"
 #include "bptree_validation.hh"
+#include "collection_stress.hh"
 
 using namespace bplus;
 using namespace seastar;
@@ -52,78 +50,6 @@ public:
 using test_tree = tree<test_key, test_data, test_key_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;
 using test_validator = validator<test_key, test_data, test_key_compare, TEST_NODE_SIZE>;
 
-class reference {
-    reference* _ref = nullptr;
-public:
-    reference() = default;
-    reference(const reference& other) = delete;
-
-    reference(reference&& other) noexcept : _ref(other._ref) {
-        if (_ref != nullptr) {
-            _ref->_ref = this;
-        }
-        other._ref = nullptr;
-    }
-
-    ~reference() {
-        if (_ref != nullptr) {
-            _ref->_ref = nullptr;
-        }
-    }
-
-    void link(reference& other) {
-        assert(_ref == nullptr);
-        _ref = &other;
-        other._ref = this;
-    }
-
-    reference* get() {
-        assert(_ref != nullptr);
-        return _ref;
-    }
-};
-
-class tree_pointer {
-    reference _ref;
-
-    class tree_wrapper {
-        friend class tree_pointer;
-        test_tree _tree;
-        reference _ref;
-    public:
-        tree_wrapper() : _tree(test_key_compare{}) {}
-    };
-
-    tree_wrapper* get_wrapper() {
-        return boost::intrusive::get_parent_from_member(_ref.get(), &tree_wrapper::_ref);
-    }
-
-public:
-
-    tree_pointer(const tree_pointer& other) = delete;
-    tree_pointer(tree_pointer&& other) = delete;
-
-    tree_pointer() {
-        tree_wrapper *t = current_allocator().construct<tree_wrapper>();
-        _ref.link(t->_ref);
-    }
-
-    test_tree* operator->() {
-        tree_wrapper *tw = get_wrapper();
-        return &tw->_tree;
-    }
-
-    test_tree& operator*() {
-        tree_wrapper *tw = get_wrapper();
-        return tw->_tree;
-    }
-
-    ~tree_pointer() {
-        tree_wrapper *tw = get_wrapper();
-        current_allocator().destroy(tw);
-    }
-};
-
 int main(int argc, char **argv) {
     namespace bpo = boost::program_options;
     app_template app;
@@ -138,70 +64,34 @@ int main(int argc, char **argv) {
         auto verb = app.configuration()["verb"].as<bool>();
 
         return seastar::async([count, iter, verb] {
-            std::vector<int> keys;
-            for (int i = 0; i < count; i++) {
-                keys.push_back(i + 1);
-            }
+            stress_config cfg;
+            cfg.count = count;
+            cfg.iters = iter;
+            cfg.verb = verb;
 
-            std::random_device rd;
-            std::mt19937 g(rd());
-
-            fmt::print("Compacting {:d} k:v pairs {:d} times\n", count, iter);
-
+            tree_pointer<test_tree> t(test_key_compare{});
             test_validator tv;
 
-            logalloc::region mem;
-
-            with_allocator(mem.allocator(), [&] {
-                tree_pointer t;
-
-                for (auto rep = 0; rep < iter; rep++) {
-                    {
-                        std::shuffle(keys.begin(), keys.end(), g);
-
-                        logalloc::reclaim_lock rl(mem);
-
-                        for (int i = 0; i < count; i++) {
-                            test_key k(keys[i]);
-
-                            auto ti = t->emplace(std::move(copy_key(k)), k);
-                            assert(ti.second);
-                            seastar::thread::maybe_yield();
-                        }
-                    }
-
-                    mem.full_compaction();
-
+            stress_compact_collection(cfg,
+                /* insert */ [&] (int key) {
+                    test_key k(key);
+                    auto ti = t->emplace(std::move(copy_key(k)), k);
+                    assert(ti.second);
+                },
+                /* erase */ [&] (int key) {
+                    t->erase(test_key(key));
+                },
+                /* validate */ [&] {
                     if (verb) {
-                        fmt::print("After fill + compact\n");
+                        fmt::print("Validating:\n");
                         tv.print_tree(*t, '|');
                     }
-
                     tv.validate(*t);
-
-                    {
-                        std::shuffle(keys.begin(), keys.end(), g);
-
-                        logalloc::reclaim_lock rl(mem);
-
-                        for (int i = 0; i < count; i++) {
-                            test_key k(keys[i]);
-
-                            t->erase(k);
-                            seastar::thread::maybe_yield();
-                        }
-                    }
-
-                    mem.full_compaction();
-
-                    if (verb) {
-                        fmt::print("After erase + compact\n");
-                        tv.print_tree(*t, '|');
-                    }
-
-                    tv.validate(*t);
+                },
+                /* clear */ [&] {
+                    t->clear();
                 }
-            });
+            );
         });
     });
 }
