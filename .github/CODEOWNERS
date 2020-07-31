@@ -26,8 +26,8 @@ transport/* @penberg
 cql3/* @tgrabiec @penberg
 
 # COUNTERS
-# counters*
-# tests/counter_test*
+counters* @haaawk @jul-stas
+tests/counter_test* @haaawk @jul-stas
 
 # GOSSIP
 gms/* @tgrabiec @asias
