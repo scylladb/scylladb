@@ -11,6 +11,7 @@ import glob
 from functools import reduce
 import logging
 from datetime import datetime
+import pathlib
 
 def run_remote(cmd, node_list, ssh_auth):
     '''
@@ -340,12 +341,12 @@ def get_toc_file_list(path, schema):
         path += "/**"
     _files = glob.glob(path, recursive=True)
     logger.debug('files detected unfiltered: %s', str(_files))
-    _files = [f for f in _files if os.path.isfile(f) and f.split('/')[-1].endswith('-TOC.txt')]
+    _files = [f for f in _files if os.path.isfile(f) and pathlib.Path(f).name.endswith('-TOC.txt')]
     files = []
     for f in _files:
         try:
-            ks = f.split('/')[-3]
-            tb = f.split('/')[-2].split('-')[0]
+            ks = pathlib.Path(f).parts[-3]
+            tb = pathlib.Path(f).parts[-2].split('-')[0]
             if ks in schema.keys():
                 if tb in schema[ks]:
                     files.append(f)
@@ -367,11 +368,11 @@ def get_file_details(file_path):
                    size, version, generation)
     '''
     file = {}
-    file['file_path'] = '/'.join(file_path.split('/')[:-1])
-    file['file_name'] = file_path.split('/')[-1]
-    file['table'] = file_path.split('/')[-2].split('-')[0]
-    file['keyspace'] = file_path.split('/')[-3]
-    file['src_node'] = file_path.split('/')[-4]
+    file['file_path'] = str(pathlib.Path(file_path).parent)
+    file['file_name'] = str(pathlib.Path(file_path).name)
+    file['table'] = str(pathlib.Path(file_path).parts[-2].split('-')[0])
+    file['keyspace'] = str(pathlib.Path(file_path).parts[-3])
+    file['src_node'] = str(pathlib.Path(file_path).parts[-4])
     try:
         file['size'] = os.path.getsize(file_path)
     except Exception as e:
@@ -563,8 +564,8 @@ def build_restore_plan(file_list, dest_dirs, src_nodes, dest_nodes):
             #d[file['src_node']][file['base']]['nodes'] = get_destination_hosts(ring, file, dest_nodes)
             d[file['src_node']][file['base']]['nodes'] = dest_nodes
             for item in dest_dirs:
-                dks = item.split('/')[-2]
-                dtable = item.split('/')[-1].split('-')[0]
+                dks = pathlib.Path(item).parts[-2]
+                dtable = pathlib.Path(item).parts[-1].split('-')[0]
                 if dks == file['keyspace'] and dtable == file['table']:
                     d[file['src_node']][file['base']]['dest_dir'] = item + '/upload'
 
@@ -726,8 +727,8 @@ def restore_bundle(bundle, config, uidgid, ssh_auth):
     success = True
     refresh = check_df(bundle, config, ssh_auth)
     try:
-        ks = bundle['dest_dir'].split('/')[-3]
-        table = bundle['dest_dir'].split('/')[-2].split('-')[0]
+        ks = pathlib.Path(bundle['dest_dir'].parts[-3])
+        table = pathlib.Path(bundle['dest_dir'].parts[-2].split('-')[0])
     except:
         logger.error('Invalid data in bundle %s', str(bundle))
         sys.exit(1)
@@ -779,7 +780,7 @@ def execute_restore_plan(dest_nodes, schema, rplan, config, uidgid, file_list, s
         success = True
         counter = 0
         while counter < len(nodes):
-            b = base.split('/')[-1]
+            b = pathlib.Path(base).name
             cmd = ('sh -c "sudo rm -f %s/%s-*"' % (path, b))
             logger.debug('deleting leftovers from bundle %s in %s on nodes %s', base, path, str(nodes))
             run_remote(cmd, nodes, ssh_auth)
@@ -846,7 +847,7 @@ def execute_restore_plan(dest_nodes, schema, rplan, config, uidgid, file_list, s
         for ks in schema.keys():
             for table in schema[ks]:
                 for path in dest_dirs:
-                    if path.split('/')[-2].split('-')[0] == table and path.split('/')[-3] == ks:
+                    if pathlib.Path(path).parts[-2].split('-')[0] == table and pathlib.Path(path).parts[-3] == ks:
                         logger.info('Refreshing %s/%s located in %s', ks, table, path)
                         run_refresh(nodes, ks, table, path, uidgid, ssh_auth)
                         if not success:
@@ -864,7 +865,7 @@ def get_src_nodes(file_list):
     '''
     src_nodes = []
     for f in file_list:
-        src_nodes.append(f.split('/')[-4])
+        src_nodes.append(pathlib.Path(f).parts[-4])
     logger.info('Source node list: %s', str(list(set(src_nodes))))
     return list(set(src_nodes))
 
