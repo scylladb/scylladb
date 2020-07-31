@@ -1,5 +1,5 @@
 # THE REST
-* @avikivity @tgrabiec @nyh
+* @avikivity @tgrabiec @nyh @penberg @psarna
 
 # AUTH
 auth/* @elcallio @vladzcloudius
@@ -28,7 +28,7 @@ sstables/compaction* @raphaelsc @nyh
 transport/* @penberg
 
 # CQL QUERY LANGUAGE
-cql3/* @tgrabiec @penberg
+cql3/* @tgrabiec @penberg @psarna
 
 # COUNTERS
 counters* @haaawk @jul-stas
@@ -44,8 +44,8 @@ dist/docker/* @penberg
 utils/logalloc* @tgrabiec
 
 # MATERIALIZED VIEWS
-db/view/* @nyh
-cql3/statements/*view* @nyh
+db/view/* @nyh @psarna
+cql3/statements/*view* @nyh @psarna
 
 # PACKAGING
 dist/* @syuu1228
@@ -60,8 +60,8 @@ service/migration* @tgrabiec @nyh
 schema* @tgrabiec @nyh
 
 # SECONDARY INDEXES
-db/index/* @nyh @penberg
-cql3/statements/*index* @nyh @penberg
+db/index/* @nyh @penberg @psarna
+cql3/statements/*index* @nyh @penberg @psarna
 
 # SSTABLES
 sstables/* @tgrabiec @raphaelsc @nyh
@@ -71,8 +71,8 @@ streaming/* @tgrabiec @asias
 service/storage_service.* @tgrabiec @asias
 
 # ALTERNATOR
-alternator/* @nyh
-alternator-test/* @nyh
+alternator/* @nyh @psarna
+alternator-test/* @nyh @psarna
 
 # HINTED HANDOFF
 db/hints/* @haaawk @piodul @vladzcloudius
