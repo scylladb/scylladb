@@ -432,6 +432,7 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
         ASAN_OPTIONS = [
             "disable_coredump=0",
             "abort_on_error=1",
+            "detect_stack_use_after_return=1",
             os.getenv("ASAN_OPTIONS"),
         ]
         try:
