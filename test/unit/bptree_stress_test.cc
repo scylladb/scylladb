@@ -22,9 +22,6 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/thread.hh>
 #include <map>
-#include <vector>
-#include <random>
-#include <string>
 #include <iostream>
 #include <fmt/core.h>
 #include <fmt/ostream.h>
@@ -34,6 +31,7 @@ constexpr int TEST_NODE_SIZE = 16;
 #include "tree_test_key.hh"
 #include "utils/bptree.hh"
 #include "bptree_validation.hh"
+#include "collection_stress.hh"
 
 using namespace bplus;
 using namespace seastar;
@@ -78,53 +76,19 @@ int main(int argc, char **argv) {
         return seastar::async([count, iters, ks, verb] {
             auto t = std::make_unique<test_tree>(test_key_compare{});
             std::map<int, unsigned long> oracle;
-
-            int p = count / 10;
-            if (p == 0) {
-                p = 1;
-            }
-
-            std::vector<int> keys;
-
-            for (int i = 0; i < count; i++) {
-                keys.push_back(i + 1);
-            }
-
-            std::random_device rd;
-            std::mt19937 g(rd());
-
-            fmt::print("Inserting {:d} k:v pairs {:d} times\n", count, iters);
-
             test_validator tv;
+            auto* itc = new test_iterator_checker(tv, *t);
 
-            if (ks == "desc") {
-                fmt::print("Reversing keys vector\n");
-                std::reverse(keys.begin(), keys.end());
-            }
+            stress_config cfg;
+            cfg.count = count;
+            cfg.iters = iters;
+            cfg.keys = ks;
+            cfg.verb = verb;
+            auto rep = 0, itv = 0;
 
-            bool shuffle = ks == "rand";
-            if (shuffle) {
-                fmt::print("Will shuffle keys each iteration\n");
-            }
-
-
-            for (auto rep = 0; rep < iters; rep++) {
-                if (verb) {
-                    fmt::print("Iteration {:d}\n", rep);
-                }
-
-                auto* itc = new test_iterator_checker(tv, *t);
-
-                if (shuffle) {
-                    std::shuffle(keys.begin(), keys.end(), g);
-                }
-
-                for (int i = 0; i < count; i++) {
-                    test_key k(keys[i]);
-
-                    if (verb) {
-                        fmt::print("+++ {}\n", (int)k);
-                    }
+            stress_collection(cfg,
+                /* insert */ [&] (int key) {
+                    test_key k(key);
 
                     if (rep % 2 != 1) {
                         auto ir = t->emplace(std::move(copy_key(k)), k);
@@ -133,61 +97,21 @@ int main(int argc, char **argv) {
                         auto ir = t->lower_bound(k);
                         ir.emplace_before(std::move(copy_key(k)), test_key_compare{}, k);
                     }
-                    oracle[keys[i]] = keys[i] + 10;
+                    oracle[key] = key + 10;
 
-                    if (verb) {
-                        fmt::print("Validating\n");
-                        tv.print_tree(*t, '|');
-                    }
-
-                    /* Limit validation rate for many keys */
-                    if (i % (i/1000 + 1) == 0) {
-                        tv.validate(*t);
-                    }
-
-                    if (i % 7 == 0) {
+                    if (itv++ % 7 == 0) {
                         if (!itc->step()) {
                             delete itc;
                             itc = new test_iterator_checker(tv, *t);
                         }
                     }
+                },
+                /* erase */ [&] (int key) {
+                    test_key k(key);
 
-                    seastar::thread::maybe_yield();
-                }
-
-                auto sz = t->size_slow();
-                if (sz != (size_t)count) {
-                    fmt::print("Size {} != count {}\n", sz, count);
-                    throw "size";
-                }
-
-                auto ti = t->begin();
-                for (auto oe : oracle) {
-                    if (*ti != oe.second) {
-                        fmt::print("Data mismatch {} vs {}\n", oe.second, *ti);
-                        throw "oracle";
-                    }
-                    ti++;
-                }
-
-                if (shuffle) {
-                    std::shuffle(keys.begin(), keys.end(), g);
-                }
-
-                for (int i = 0; i < count; i++) {
-                    test_key k(keys[i]);
-
-                    /*
-                     * kill iterator if we're removing what it points to,
-                     * otherwise it's not invalidated
-                     */
                     if (itc->here(k)) {
                         delete itc;
                         itc = nullptr;
-                    }
-
-                    if (verb) {
-                        fmt::print("--- {}\n", (int)k);
                     }
 
                     if (rep % 3 != 2) {
@@ -199,34 +123,51 @@ int main(int argc, char **argv) {
                         auto eni = ri.erase(test_key_compare{});
                         assert(ni == eni);
                     }
-
-                    oracle.erase(keys[i]);
-
-                    if (verb) {
-                        fmt::print("Validating\n");
-                        tv.print_tree(*t, '|');
-                    }
-
-                    if ((count-i) % ((count-i)/1000 + 1) == 0) {
-                        tv.validate(*t);
-                    }
+                    oracle.erase(key);
 
                     if (itc == nullptr) {
                         itc = new test_iterator_checker(tv, *t);
                     }
 
-                    if (i % 5 == 0) {
+                    if (itv++ % 5 == 0) {
                         if (!itc->step()) {
                             delete itc;
                             itc = new test_iterator_checker(tv, *t);
                         }
                     }
+                },
+                /* validate */ [&] {
+                    if (verb) {
+                        fmt::print("Validating\n");
+                        tv.print_tree(*t, '|');
+                    }
+                    tv.validate(*t);
+                },
+                /* step */ [&] (stress_step step) {
+                    if (step == stress_step::iteration_finished) {
+                        rep++;
+                    }
 
-                    seastar::thread::maybe_yield();
+                    if (step == stress_step::before_erase) {
+                        auto sz = t->size_slow();
+                        if (sz != (size_t)count) {
+                            fmt::print("Size {} != count {}\n", sz, count);
+                            throw "size";
+                        }
+
+                        auto ti = t->begin();
+                        for (auto oe : oracle) {
+                            if ((unsigned long)*ti != oe.second) {
+                                fmt::print("Data mismatch {} vs {}\n", oe.second, *ti);
+                                throw "oracle";
+                            }
+                            ti++;
+                        }
+                    }
                 }
+            );
 
-                delete itc;
-            }
+            delete itc;
         });
     });
 }
