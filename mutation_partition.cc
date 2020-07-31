@@ -180,8 +180,7 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
         for(auto&& r : ck_ranges) {
             for (const rows_entry& e : x.range(schema, r)) {
                 auto ce = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(schema, e));
-                _rows.insert_before_hint(_rows.end(), *ce, rows_entry::tri_compare(schema));
-                ce.release();
+                _rows.insert_before_hint(_rows.end(), std::move(ce), rows_entry::tri_compare(schema));
             }
             for (auto&& rt : x._row_tombstones.slice(schema, r)) {
                 _row_tombstones.apply(schema, rt);
@@ -529,16 +528,14 @@ void mutation_partition::apply_insert(const schema& s, clustering_key_view key, 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
     auto e = alloc_strategy_unique_ptr<rows_entry>(
         current_allocator().construct<rows_entry>(key, std::move(row)));
-    _rows.insert_before_hint(_rows.end(), *e, rows_entry::tri_compare(s));
-    e.release();
+    _rows.insert_before_hint(_rows.end(), std::move(e), rows_entry::tri_compare(s));
 }
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, const deletable_row& row) {
     check_schema(s);
     auto e = alloc_strategy_unique_ptr<rows_entry>(
         current_allocator().construct<rows_entry>(s, key, row));
-    _rows.insert_before_hint(_rows.end(), *e, rows_entry::tri_compare(s));
-    e.release();
+    _rows.insert_before_hint(_rows.end(), std::move(e), rows_entry::tri_compare(s));
 }
 
 const row*
@@ -558,8 +555,7 @@ mutation_partition::clustered_row(const schema& s, clustering_key&& key) {
     if (i == _rows.end()) {
         auto e = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(std::move(key)));
-        i = _rows.insert_before_hint(i, *e, rows_entry::tri_compare(s)).first;
-        e.release();
+        i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
     }
     return i->row();
 }
@@ -571,8 +567,7 @@ mutation_partition::clustered_row(const schema& s, const clustering_key& key) {
     if (i == _rows.end()) {
         auto e = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(key));
-        i = _rows.insert_before_hint(i, *e, rows_entry::tri_compare(s)).first;
-        e.release();
+        i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
     }
     return i->row();
 }
@@ -584,8 +579,7 @@ mutation_partition::clustered_row(const schema& s, clustering_key_view key) {
     if (i == _rows.end()) {
         auto e = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(key));
-        i = _rows.insert_before_hint(i, *e, rows_entry::tri_compare(s)).first;
-        e.release();
+        i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
     }
     return i->row();
 }
@@ -597,8 +591,7 @@ mutation_partition::clustered_row(const schema& s, position_in_partition_view po
     if (i == _rows.end()) {
         auto e = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
-        i = _rows.insert_before_hint(i, *e, rows_entry::tri_compare(s)).first;
-        e.release();
+        i = _rows.insert_before_hint(i, std::move(e), rows_entry::tri_compare(s)).first;
     }
     return i->row();
 }
@@ -613,8 +606,7 @@ mutation_partition::append_clustered_row(const schema& s, position_in_partition_
                 ", last clustering row is equal or greater: {}", i->key(), std::prev(i)->key()));
     }
     auto e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
-    i = _rows.insert_before_hint(i, *e, cmp).first;
-    e.release();
+    i = _rows.insert_before_hint(i, std::move(e), cmp).first;
 
     return i->row();
 }
