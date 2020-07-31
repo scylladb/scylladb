@@ -72,18 +72,30 @@ future<> controller::do_start_server() {
         cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(service::get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
         cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
         cql_server_config.sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits();
+        if (cfg.native_shard_aware_transport_port.is_set()) {
+            // Needed for "SUPPORTED" message
+            cql_server_config.shard_aware_transport_port = cfg.native_shard_aware_transport_port();
+        }
+        if (cfg.native_shard_aware_transport_port_ssl.is_set()) {
+            // Needed for "SUPPORTED" message
+            cql_server_config.shard_aware_transport_port_ssl = cfg.native_shard_aware_transport_port_ssl();
+        }
         cql_server_config.partitioner_name = cfg.partitioner();
         smp_service_group_config cql_server_smp_service_group_config;
         cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
         cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
-        seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
+        const seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
         cserver->start(std::ref(cql3::get_query_processor()), std::ref(_auth_service), std::ref(_mnotifier), cql_server_config).get();
         struct listen_cfg {
             socket_address addr;
+            bool is_shard_aware;
             std::shared_ptr<seastar::tls::credentials_builder> cred;
         };
 
-        std::vector<listen_cfg> configs({ { socket_address{ip, cfg.native_transport_port()} }});
+        std::vector<listen_cfg> configs({{ socket_address{ip, cfg.native_transport_port()}, false }});
+        if (cfg.native_shard_aware_transport_port.is_set()) {
+            configs.push_back(listen_cfg{ socket_address{ip, cfg.native_shard_aware_transport_port()}, true });
+        }
 
         // main should have made sure values are clean and neatish
         if (ceo.at("enabled") == "true") {
@@ -108,16 +120,21 @@ future<> controller::do_start_server() {
             logger.info("Enabling encrypted CQL connections between client and server");
 
             if (cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() != cfg.native_transport_port()) {
-                configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, std::move(cred)});
+                configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, false, cred});
             } else {
-                configs.back().cred = std::move(cred);
+                configs[0].cred = cred;
+            }
+            if (cfg.native_shard_aware_transport_port_ssl.is_set() && cfg.native_shard_aware_transport_port_ssl() != cfg.native_shard_aware_transport_port()) {
+                configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl()}, true, std::move(cred)});
+            } else if (cfg.native_shard_aware_transport_port.is_set()) {
+                configs[1].cred = std::move(cred);
             }
         }
 
         parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
-            return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, keepalive).then([cfg] {
-                logger.info("Starting listening for CQL clients on {} ({})"
-                        , cfg.addr, cfg.cred ? "encrypted" : "unencrypted"
+            return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
+                logger.info("Starting listening for CQL clients on {} ({}, {})"
+                        , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
                 );
             });
         }).get();

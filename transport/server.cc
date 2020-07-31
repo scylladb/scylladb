@@ -211,7 +211,7 @@ future<> cql_server::stop() {
 }
 
 future<>
-cql_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool keepalive) {
+cql_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive) {
     auto f = make_ready_future<shared_ptr<seastar::tls::server_credentials>>(nullptr);
     if (creds) {
         f = creds->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
@@ -222,9 +222,12 @@ cql_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credential
             }
         });
     }
-    return f.then([this, addr, keepalive](shared_ptr<seastar::tls::server_credentials> creds) {
+    return f.then([this, addr, is_shard_aware, keepalive](shared_ptr<seastar::tls::server_credentials> creds) {
         listen_options lo;
         lo.reuse_address = true;
+        if (is_shard_aware) {
+            lo.lba = server_socket::load_balancing_algorithm::port;
+        }
         server_socket ss;
         try {
             ss = creds
@@ -1227,6 +1230,12 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int
         opts.insert({"SCYLLA_SHARD", format("{:d}", this_shard_id())});
         opts.insert({"SCYLLA_NR_SHARDS", format("{:d}", smp::count)});
         opts.insert({"SCYLLA_SHARDING_ALGORITHM", dht::cpu_sharding_algorithm_name()});
+        if (_server._config.shard_aware_transport_port) {
+            opts.insert({"SCYLLA_SHARD_AWARE_PORT", format("{:d}", *_server._config.shard_aware_transport_port)});
+        }
+        if (_server._config.shard_aware_transport_port_ssl) {
+            opts.insert({"SCYLLA_SHARD_AWARE_PORT_SSL", format("{:d}", *_server._config.shard_aware_transport_port_ssl)});
+        }
         opts.insert({"SCYLLA_SHARDING_IGNORE_MSB", format("{:d}", _server._config.sharding_ignore_msb)});
         opts.insert({"SCYLLA_PARTITIONER", _server._config.partitioner_name});
     }

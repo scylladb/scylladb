@@ -102,6 +102,10 @@ listen_address: localhost
 # For security reasons, you should not expose this port to the internet.  Firewall it if needed.
 native_transport_port: 9042
 
+# Like native_transport_port, but clients are forwarded to specific shards, based on the
+# client-side port numbers.
+native_shard_aware_transport_port: 19042
+
 # Enabling native transport encryption in client_encryption_options allows you to either use
 # encryption for the standard port or to use a dedicated, additional port along with the unencrypted
 # standard native_transport_port.
@@ -110,6 +114,10 @@ native_transport_port: 9042
 # from native_transport_port will use encryption for native_transport_port_ssl while
 # keeping native_transport_port unencrypted.
 #native_transport_port_ssl: 9142
+
+# Like native_transport_port_ssl, but clients are forwarded to specific shards, based on the
+# client-side port numbers.
+#native_shard_aware_transport_port_ssl: 19142
 
 # How long the coordinator should wait for read operations to complete
 read_request_timeout_in_ms: 5000

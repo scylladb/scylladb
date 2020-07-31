@@ -525,6 +525,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "for native_transport_port. Setting native_transport_port_ssl to a different value"
         "from native_transport_port will use encryption for native_transport_port_ssl while"
         "keeping native_transport_port unencrypted")
+    , native_shard_aware_transport_port(this, "native_shard_aware_transport_port", value_status::Used, 19042,
+        "Like native_transport_port, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
+    , native_shard_aware_transport_port_ssl(this, "native_shard_aware_transport_port_ssl", value_status::Used, 19142,
+        "Like native_transport_port_ssl, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
     , native_transport_max_threads(this, "native_transport_max_threads", value_status::Invalid, 128,
         "The maximum number of thread handling requests. The meaning is the same as rpc_max_threads.\n"
         "Default is different (128 versus unlimited).\n"
