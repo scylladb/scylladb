@@ -9,6 +9,11 @@ row_cache* @tgrabiec @haaawk
 *mutation* @tgrabiec @haaawk
 tests/mvcc* @tgrabiec @haaawk
 
+# CDC
+cdc/* @haaawk @kbr- @elcallio @piodul @jul-stas
+test/cql/cdc_* @haaawk @kbr- @elcallio @piodul @jul-stas
+test/boost/cdc_* @haaawk @kbr- @elcallio @piodul @jul-stas
+
 # COMMITLOG / BATCHLOG
 db/commitlog/* @elcallio
 db/batch* @elcallio
