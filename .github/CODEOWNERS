@@ -68,3 +68,6 @@ service/storage_service.* @tgrabiec @asias
 # ALTERNATOR
 alternator/* @nyh
 alternator-test/* @nyh
+
+# HINTED HANDOFF
+db/hints/* @haaawk @piodul @vladzcloudius
