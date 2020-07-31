@@ -65,7 +65,7 @@ namespace auth {
 constexpr std::string_view password_authenticator_name("org.apache.cassandra.auth.PasswordAuthenticator");
 
 // name of the hash column.
-static const sstring SALTED_HASH = "salted_hash";
+static constexpr std::string_view SALTED_HASH = "salted_hash";
 static const sstring DEFAULT_USER_NAME = sstring(meta::DEFAULT_SUPERUSER_NAME);
 static const sstring DEFAULT_USER_PASSWORD = sstring(meta::DEFAULT_SUPERUSER_NAME);
 
