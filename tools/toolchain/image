@@ -1,1 +1,1 @@
-docker.io/scylladb/scylla-toolchain:fedora-32-20200610
+docker.io/scylladb/scylla-toolchain:fedora-32-branch-4.2-20200731
