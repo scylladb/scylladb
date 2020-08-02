@@ -139,7 +139,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
         if (rb->name().empty() || rb->type == empty_type) {
             // There is no column outside the PK. So no operation could have passed through validation
             assert(_column_operations.empty());
-            constants::setter(*s->regular_begin(), make_shared(constants::value(cql3::raw_value::make_value(bytes())))).execute(m, prefix, params);
+            constants::setter(*s->regular_begin(), make_shared<constants::value>(cql3::raw_value::make_value(bytes()))).execute(m, prefix, params);
         } else {
             // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
             if (_column_operations.empty()) {
@@ -217,19 +217,19 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
     visit(*column.type, make_visitor(
     [&] (const list_type_impl& ltype) {
         lists::setter::execute(m, prefix, params, column,
-                ::make_shared(lists::value::from_serialized(fragmented_temporary_buffer::view(*value), ltype, sf)));
+                ::make_shared<lists::value>(lists::value::from_serialized(fragmented_temporary_buffer::view(*value), ltype, sf)));
     },
     [&] (const set_type_impl& stype) {
         sets::setter::execute(m, prefix, params, column,
-                ::make_shared(sets::value::from_serialized(fragmented_temporary_buffer::view(*value), stype, sf)));
+                ::make_shared<sets::value>(sets::value::from_serialized(fragmented_temporary_buffer::view(*value), stype, sf)));
     },
     [&] (const map_type_impl& mtype) {
         maps::setter::execute(m, prefix, params, column,
-                ::make_shared(maps::value::from_serialized(fragmented_temporary_buffer::view(*value), mtype, sf)));
+                ::make_shared<maps::value>(maps::value::from_serialized(fragmented_temporary_buffer::view(*value), mtype, sf)));
     },
     [&] (const user_type_impl& utype) {
         user_types::setter::execute(m, prefix, params, column,
-                ::make_shared(user_types::value::from_serialized(fragmented_temporary_buffer::view(*value), utype)));
+                ::make_shared<user_types::value>(user_types::value::from_serialized(fragmented_temporary_buffer::view(*value), utype)));
     },
     [&] (const abstract_type& type) {
         if (type.is_collection()) {

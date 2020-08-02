@@ -105,7 +105,7 @@ shared_ptr<term> user_types::literal::prepare(database& db, const sstring& keysp
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
-        return make_shared(std::move(value));
+        return make_shared<delayed_value>(std::move(value));
     }
 }
 
@@ -238,7 +238,7 @@ shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
     if (value.is_unset_value()) {
         return constants::UNSET_VALUE;
     }
-    return make_shared(value::from_serialized(*value, static_cast<const user_type_impl&>(*_receiver->type)));
+    return make_shared<user_types::value>(value::from_serialized(*value, static_cast<const user_type_impl&>(*_receiver->type)));
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {

@@ -51,7 +51,7 @@ tuples::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<co
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
-        return make_shared(std::move(value));
+        return make_shared<delayed_value>(std::move(value));
     }
 }
 
@@ -76,7 +76,7 @@ tuples::literal::prepare(database& db, const sstring& keyspace, const std::vecto
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
-        return make_shared(std::move(value));
+        return make_shared<delayed_value>(std::move(value));
     }
 }
 
@@ -153,7 +153,7 @@ shared_ptr<terminal> tuples::in_marker::bind(const query_options& options) {
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
-        return make_shared(tuples::in_value::from_serialized(*value, type, options));
+        return make_shared<tuples::in_value>(tuples::in_value::from_serialized(*value, type, options));
     }
 }
 

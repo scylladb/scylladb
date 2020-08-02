@@ -126,7 +126,7 @@ void write(serializer s, Output& out, const lw_shared_ptr<T>& v) {
 }
 template <typename Input, typename T>
 lw_shared_ptr<T> read(serializer s, Input& in, boost::type<lw_shared_ptr<T>>) {
-    return make_lw_shared(read(s, in, boost::type<T>()));
+    return make_lw_shared<T>(read(s, in, boost::type<T>()));
 }
 
 static logging::logger mlogger("messaging_service");

@@ -968,6 +968,10 @@ public:
     }
 };
 
+lw_shared_ptr<schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name, std::string_view cf_name,
+    std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key, std::vector<schema::column> regular_columns,
+    std::vector<schema::column> static_columns, data_type regular_column_name_type, std::string_view comment = {});
+
 bool operator==(const schema&, const schema&);
 
 using schema_ptr = lw_shared_ptr<const schema>;

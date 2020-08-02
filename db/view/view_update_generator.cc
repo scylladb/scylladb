@@ -59,7 +59,7 @@ future<> view_update_generator::start() {
                     // Exploit the fact that sstables in the staging directory
                     // are usually non-overlapping and use a partitioned set for
                     // the read.
-                    auto ssts = make_lw_shared(sstables::make_partitioned_sstable_set(s, make_lw_shared<sstable_list>(sstable_list{}), false));
+                    auto ssts = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, make_lw_shared<sstable_list>(sstable_list{}), false));
                     for (auto& sst : sstables) {
                         ssts->insert(sst);
                     }

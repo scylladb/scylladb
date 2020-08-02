@@ -186,8 +186,8 @@ private:
     friend class optimized_optional<mutation_source>;
 public:
     mutation_source(flat_reader_factory_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
-        : _fn(make_lw_shared(std::move(fn)))
-        , _presence_checker_factory(make_lw_shared(std::move(pcf)))
+        : _fn(make_lw_shared<flat_reader_factory_type>(std::move(fn)))
+        , _presence_checker_factory(make_lw_shared<std::function<partition_presence_checker()>>(std::move(pcf)))
     { }
 
     // For sources which don't care about the mutation_reader::forwarding flag (always fast forwardable)

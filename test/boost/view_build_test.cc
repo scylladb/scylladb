@@ -43,7 +43,7 @@ using namespace std::literals::chrono_literals;
 
 schema_ptr test_table_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_lw_shared(schema(
+        schema_builder builder(make_shared_schema(
                 generate_legacy_id("try1", "data"), "try1", "data",
         // partition key
         {{"p", utf8_type}},
@@ -57,7 +57,7 @@ schema_ptr test_table_schema() {
         utf8_type,
         // comment
         ""
-       )));
+       ));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;

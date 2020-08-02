@@ -486,17 +486,17 @@ function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, c
 
     return visit(*fun->return_type(), make_visitor(
     [&] (const list_type_impl& ltype) -> shared_ptr<terminal> {
-        return make_shared(lists::value::from_serialized(to_buffer(result), ltype, sf));
+        return make_shared<lists::value>(lists::value::from_serialized(to_buffer(result), ltype, sf));
     },
     [&] (const set_type_impl& stype) -> shared_ptr<terminal> {
-        return make_shared(sets::value::from_serialized(to_buffer(result), stype, sf));
+        return make_shared<sets::value>(sets::value::from_serialized(to_buffer(result), stype, sf));
     },
     [&] (const map_type_impl& mtype) -> shared_ptr<terminal> {
-        return make_shared(maps::value::from_serialized(to_buffer(result), mtype, sf));
+        return make_shared<maps::value>(maps::value::from_serialized(to_buffer(result), mtype, sf));
     },
     [&] (const user_type_impl& utype) -> shared_ptr<terminal> {
         // TODO (kbraun): write a test for this case when User Defined Functions are implemented
-        return make_shared(user_types::value::from_serialized(to_buffer(result), utype));
+        return make_shared<user_types::value>(user_types::value::from_serialized(to_buffer(result), utype));
     },
     [&] (const abstract_type& type) -> shared_ptr<terminal> {
         if (type.is_collection()) {

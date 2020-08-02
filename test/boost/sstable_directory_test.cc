@@ -34,7 +34,7 @@
 
 schema_ptr test_table_schema() {
     static thread_local auto s = [] {
-        schema_builder builder(make_lw_shared(schema(
+        schema_builder builder(make_shared_schema(
                 generate_legacy_id("ks", "cf"), "ks", "cf",
         // partition key
         {{"p", bytes_type}},
@@ -48,7 +48,7 @@ schema_ptr test_table_schema() {
         bytes_type,
         // comment
         ""
-       )));
+       ));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return s;

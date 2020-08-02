@@ -1888,7 +1888,8 @@ static sstring get_snapshot_table_dir_prefix(const sstring& table_name) {
 // (as we have been doing for a lot of the other operations, like the snapshot itself).
 future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name) {
     std::vector<sstring> data_dirs = _cfg.data_file_directories();
-    lw_shared_ptr<lister::dir_entry_types> dirs_only_entries_ptr = make_lw_shared<lister::dir_entry_types>({ directory_entry_type::directory });
+    auto dirs_only_entries_ptr =
+        make_lw_shared<lister::dir_entry_types>(lister::dir_entry_types{directory_entry_type::directory});
     lw_shared_ptr<sstring> tag_ptr = make_lw_shared<sstring>(std::move(tag));
     std::unordered_set<sstring> ks_names_set(keyspace_names.begin(), keyspace_names.end());
 

@@ -123,7 +123,7 @@ sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s, l
 sstable_set::sstable_set(const sstable_set& x)
         : _impl(x._impl->clone())
         , _schema(x._schema)
-        , _all(make_lw_shared(sstable_list(*x._all)))
+        , _all(make_lw_shared<sstable_list>(*x._all))
         , _all_runs(x._all_runs) {
 }
 

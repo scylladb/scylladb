@@ -286,7 +286,7 @@ void schema::rebuild() {
     }
 
     _v3_columns = v3_columns::from_v2_schema(*this);
-    _full_slice = make_shared(partition_slice_builder(*this).build());
+    _full_slice = make_shared<query::partition_slice>(partition_slice_builder(*this).build());
 }
 
 const column_mapping& schema::get_column_mapping() const {
@@ -431,6 +431,15 @@ schema::schema(const schema& o)
     if (o.is_view()) {
         _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw());
     }
+}
+
+lw_shared_ptr<schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
+    std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
+    std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
+    data_type regular_column_name_type, std::string_view comment) {
+    return make_lw_shared<schema>(std::move(id), std::move(ks_name), std::move(cf_name), std::move(partition_key),
+        std::move(clustering_key), std::move(regular_columns), std::move(static_columns),
+        std::move(regular_column_name_type), std::move(comment));
 }
 
 schema::~schema() {

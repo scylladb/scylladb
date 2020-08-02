@@ -81,7 +81,7 @@ lists::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<col
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
-        return make_shared(std::move(value));
+        return make_shared<delayed_value>(std::move(value));
     }
 }
 
@@ -236,7 +236,7 @@ lists::marker::bind(const query_options& options) {
         try {
             return with_linearized(*value, [&] (bytes_view v) {
                 ltype.validate(v, options.get_cql_serialization_format());
-                return make_shared(value::from_serialized(v, ltype, options.get_cql_serialization_format()));
+                return make_shared<lists::value>(value::from_serialized(v, ltype, options.get_cql_serialization_format()));
             });
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(e.what());

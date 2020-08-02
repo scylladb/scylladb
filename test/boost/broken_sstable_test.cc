@@ -54,7 +54,7 @@ static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstr
 static void broken_sst(sstring dir, unsigned long generation, sstring msg) {
     // Using an empty schema for this function, which is only about loading
     // a malformed component and checking that it fails.
-    auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
+    auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);
     return broken_sst(dir, generation, s, msg);
 }
 

@@ -92,7 +92,7 @@ maps::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<colu
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
-        return make_shared(std::move(value));
+        return make_shared<delayed_value>(std::move(value));
     }
 }
 
@@ -269,7 +269,7 @@ maps::marker::bind(const query_options& options) {
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
-    return ::make_shared(maps::value::from_serialized(*val, static_cast<const map_type_impl&>(*_receiver->type), options.get_cql_serialization_format()));
+    return ::make_shared<maps::value>(maps::value::from_serialized(*val, static_cast<const map_type_impl&>(*_receiver->type), options.get_cql_serialization_format()));
 }
 
 void
