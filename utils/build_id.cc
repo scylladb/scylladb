@@ -49,16 +49,17 @@ static int callback(dl_phdr_info* info, size_t size, void* data) {
     assert(strlen(info->dlpi_name) == 0);
 
     auto* n = get_nt_build_id(info);
-    auto* p = reinterpret_cast<const char*>(n);
+    auto* p = reinterpret_cast<const unsigned char*>(n);
 
     p += sizeof(Elf64_Nhdr);
 
     p += n->n_namesz;
     p = align_up(p, 4);
 
-    const char* desc = p;
-    for (unsigned i = 0; i < n->n_descsz; ++i) {
-        fmt::fprintf(os, "%02x", (unsigned char)*(desc + i));
+    auto* desc = p;
+    auto* desc_end = p + n->n_descsz;
+    while (desc < desc_end) {
+        fmt::fprintf(os, "%02x", *desc++);
     }
     ret = os.str();
     return 1;
