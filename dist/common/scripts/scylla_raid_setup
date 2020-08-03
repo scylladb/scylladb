@@ -80,6 +80,12 @@ if __name__ == '__main__':
         print('{} is already mounted'.format(mount_at))
         sys.exit(1)
 
+    mntunit_bn = out('systemd-escape -p --suffix=mount {}'.format(mount_at))
+    mntunit = Path('/etc/systemd/system/{}'.format(mntunit_bn))
+    if mntunit.exists():
+        print('mount unit {} already exists'.format(mntunit))
+        sys.exit(1)
+
     if is_debian_variant():
         run('env DEBIAN_FRONTEND=noninteractive apt-get -y install mdadm xfsprogs')
     elif is_redhat_variant():
@@ -132,11 +138,6 @@ if __name__ == '__main__':
             f.write('\nMAILADDR root')
 
     makedirs(mount_at)
-    mntunit_bn = out('systemd-escape -p --suffix=mount {}'.format(mount_at))
-    mntunit = Path('/etc/systemd/system/{}'.format(mntunit_bn))
-    if mntunit.exists():
-        print('mount unit {} already exists'.format(mntunit))
-        sys.exit(1)
 
     uuid = out(f'blkid -s UUID -o value {fsdev}')
     after = 'local-fs.target'
