@@ -1379,9 +1379,6 @@ else:
 buildfile = 'build.ninja'
 
 os.makedirs(outdir, exist_ok=True)
-do_sanitize = True
-if args.static:
-    do_sanitize = False
 
 if args.antlr3_exec:
     antlr3_exec = args.antlr3_exec
