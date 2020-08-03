@@ -407,9 +407,6 @@ enum class bootstrap_state {
 
     typedef std::vector<db::replay_position> replay_positions;
 
-    future<> migrate_truncation_records(const gms::feature& cluster_supports_truncation_table);
-    // for tests
-    future<> wait_for_truncation_record_migration_complete();
     future<> save_truncation_record(utils::UUID, db_clock::time_point truncated_at, db::replay_position);
     future<> save_truncation_record(const column_family&, db_clock::time_point truncated_at, db::replay_position);
     future<> remove_truncation_record(utils::UUID);
