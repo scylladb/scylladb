@@ -146,7 +146,6 @@ public:
     struct named_value : public config_src {
     private:
         friend class config;
-        std::string_view _name, _desc;
         config_source _source = config_source::None;
         value_status _value_status;
         struct the_value_type final : any_value {
