@@ -63,6 +63,18 @@ The keys and values are:
     partitions are mapped into shards (described below)
   - `SCYLLA_SHARDING_IGNORE_MSB` is an integer parameter to the algorithm (also
     described below)
+  - `SCYLLA_SHARD_AWARE_PORT` is an additional port number where Scylla is listening
+    for CQL connections. If present, it works almost the same way as port 9042 typically
+    does; the difference is that client-side port number is used as an indicator to which
+    shard client wants to connect. The desired shard number is calculated as:
+    `desired_shard_no = client_port % SCYLLA_NR_SHARDS`. Its value is a decimal
+    representation of type `uint16_t`, by default `19042`.
+  - `SCYLLA_SHARD_AWARE_PORT_SSL` is an additional port number where Scylla is
+    listening for encrypted CQL connections. If present, it works almost the same way
+    as port 9142 typically does; the difference is that client-side port number is used
+    as an indicator to which shard client wants to connect. The desired shard number
+    is calculated as: `desired_shard_no = client_port % SCYLLA_NR_SHARDS`.
+    Its value is a decimal representation of type `uint16_t`, by default `19142`.
 
 Currently, one `SCYLLA_SHARDING_ALGORITHM` is defined,
 `biased-token-round-robin`. To apply the algorithm,
