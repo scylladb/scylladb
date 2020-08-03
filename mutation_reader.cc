@@ -1534,6 +1534,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
             });
             auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
                         gs.get(), _lifecycle_policy->semaphore().make_permit(), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+            tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
             auto f = rreader->fill_buffer(timeout);
             return f.then([rreader = std::move(rreader)] () mutable {
                 auto res = fill_buffer_result(rreader->detach_buffer(), rreader->is_end_of_stream());
