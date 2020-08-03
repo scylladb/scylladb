@@ -2358,6 +2358,9 @@ class circular_buffer(object):
     def __init__(self, ref):
         self.ref = ref
 
+    def _mask(self, i):
+        return i & (int(self['_impl']['capacity']) - 1)
+
     def __iter__(self):
         impl = self.ref['_impl']
         st = impl['storage']
@@ -2365,7 +2368,7 @@ class circular_buffer(object):
         i = impl['begin']
         end = impl['end']
         while i < end:
-            yield st[i % cap]
+            yield st[self._mask(i)]
             i += 1
 
     def size(self):
@@ -2374,6 +2377,10 @@ class circular_buffer(object):
 
     def __len__(self):
         return self.size()
+
+    def __getitem__(self, item):
+        impl = self.ref['_impl']
+        return (impl['storage'] + self._mask(int(impl['begin']) + item)).dereference()
 
     def external_memory_footprint(self):
         impl = self.ref['_impl']
@@ -3735,6 +3742,8 @@ class scylla_gdb_func_collection_element(gdb.Function):
             return std_vector(collection)[int(key)]
         elif typ.name.startswith('std::__cxx11::list<'):
             return std_list(collection)[int(key)]
+        elif typ.name.startswith('seastar::circular_buffer<'):
+            return circular_buffer(collection)[int(key)]
 
         raise ValueError("Unsupported container type: {}".format(typ.name))
 
