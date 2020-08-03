@@ -1479,9 +1479,8 @@ future<> table::snapshot(database& db, sstring name) {
         return do_with(std::move(tables), [this, &db, name](std::vector<sstables::shared_sstable> & tables) {
             auto jsondir = _config.datadir + "/snapshots/" + name;
             return io_check([jsondir] { return recursive_touch_directory(jsondir); }).then([this, name, jsondir, &tables] {
-                return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
-                    auto dir = sstable->get_dir() + "/snapshots/" + name;
-                    return io_check([dir] { return recursive_touch_directory(dir); }).then([sstable, dir] {
+                return parallel_for_each(tables, [name, jsondir] (sstables::shared_sstable sstable) {
+                    return io_check([sstable, dir = jsondir] {
                         return sstable->create_links(dir).then_wrapped([] (future<> f) {
                             // If the SSTables are shared, one of the CPUs will fail here.
                             // That is completely fine, though. We only need one link.
