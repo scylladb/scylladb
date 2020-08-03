@@ -337,7 +337,7 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
     , _backlog_manager(_compaction_controller)
     , _scheduling_group(_compaction_controller.sg())
     , _available_memory(available_memory)
-    , _early_abort_subscription(as.subscribe([this] {
+    , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
 {
@@ -349,7 +349,7 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
     , _backlog_manager(_compaction_controller)
     , _scheduling_group(_compaction_controller.sg())
     , _available_memory(available_memory)
-    , _early_abort_subscription(as.subscribe([this] {
+    , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
 {
@@ -467,7 +467,7 @@ future<> compaction_manager::stop() {
     }
 }
 
-void compaction_manager::do_stop() {
+void compaction_manager::really_do_stop() {
     if (_state == state::none || _state == state::stopped) {
         return;
     }
@@ -485,6 +485,18 @@ void compaction_manager::do_stop() {
         cmlog.info("Stopped");
         return _compaction_controller.shutdown();
     }));
+}
+
+void compaction_manager::do_stop() noexcept {
+    try {
+        really_do_stop();
+    } catch (...) {
+        try {
+            cmlog.error("Failed to stop the manager: {}", std::current_exception());
+        } catch (...) {
+            // Nothing else we can do.
+        }
+    }
 }
 
 inline bool compaction_manager::can_proceed(const lw_shared_ptr<task>& task) {
