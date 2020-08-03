@@ -85,9 +85,23 @@ stream_plan& stream_plan::listeners(std::vector<stream_event_handler*> handlers)
     return *this;
 }
 
-void stream_plan::abort() {
+void stream_plan::do_abort() {
     _aborted = true;
     _coordinator->abort_all_stream_sessions();
+}
+
+void stream_plan::abort() noexcept {
+    try {
+        // FIXME: do_abort() can throw, because its underlying implementation
+        // allocates a vector and calls vector::push_back(). Let's make it noexcept too
+        do_abort();
+    } catch (...) {
+        try {
+            sslog.error("Failed to abort stream plan: {}", std::current_exception());
+        } catch (...) {
+            // Nothing else we can do.
+        }
+    }
 }
 
 }
