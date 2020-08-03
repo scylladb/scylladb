@@ -1475,24 +1475,22 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
 future<> table::snapshot(database& db, sstring name) {
     return flush().then([this, &db, name = std::move(name)]() {
        return with_semaphore(_sstable_deletion_sem, 1, [this, &db, name = std::move(name)]() {
-        auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
+        // If the SSTables are shared, link this sstable to the snapshot directory only by one of the shards that own it.
+        auto& all = *_sstables->all();
+        std::vector<sstables::shared_sstable> tables;
+        tables.reserve(all.size());
+        for (auto& sst : all) {
+            const auto& shards = sst->get_shards_for_this_sstable();
+            if (shards.size() <= 1 || shards[0] == this_shard_id()) {
+                tables.emplace_back(sst);
+            }
+        }
         auto jsondir = _config.datadir + "/snapshots/" + name;
         return do_with(std::move(tables), std::move(jsondir), [this, &db, name] (std::vector<sstables::shared_sstable>& tables, const sstring& jsondir) {
             return io_check([&jsondir] { return recursive_touch_directory(jsondir); }).then([this, name, &jsondir, &tables] {
                 return parallel_for_each(tables, [name, &jsondir] (sstables::shared_sstable sstable) {
                     return io_check([sstable, &dir = jsondir] {
-                        return sstable->create_links(dir).then_wrapped([] (future<> f) {
-                            // If the SSTables are shared, one of the CPUs will fail here.
-                            // That is completely fine, though. We only need one link.
-                            try {
-                                f.get();
-                            } catch (std::system_error& e) {
-                                if (e.code() != std::error_code(EEXIST, std::system_category())) {
-                                    throw;
-                                }
-                            }
-                            return make_ready_future<>();
-                        });
+                        return sstable->create_links(dir);
                     });
                 });
             }).then([&jsondir, &tables] {
