@@ -354,7 +354,10 @@ if __name__ == '__main__':
             raid_setup = interactive_ask_service('Are you sure you want to setup RAID0 and XFS?', 'If you choose Yes, the selected drive will be reformated, erasing all existing data in the process.', raid_setup)
         else:
             raid_setup = False
-        if res and raid_setup and not disks:
+        if res and raid_setup and os.path.exists('/etc/systemd/system/var-lib-scylla.mount'):
+            colorprint('{red}/etc/systemd/system/var-lib-scylla.mount already exists, skipping RAID setup.{nocolor}')
+            raid_setup = False
+        elif res and raid_setup and not disks:
             devices = get_unused_disks()
             if len(devices) == 0:
                 print('No free disks were detected, abort RAID/XFS setup. Disks must be unmounted before proceeding.\n')
