@@ -1,0 +1,105 @@
+create table tb1 (pk int, ck int, i1 int, PRIMARY KEY (pk, ck)) with cdc = {'enabled': true, 'preimage': false, 'postimage': false, 'delta': 'off'};
+{
+	"message" : "exceptions::configuration_exception (Invalid combination of CDC options: neither of {preimage, postimage, delta} is enabled)",
+	"status" : "error"
+}
+
+create table tb2 (pk int, ck int, i1 int, PRIMARY KEY (pk, ck)) with cdc = {'enabled': true, 'preimage': true, 'postimage': true, 'delta': 'off'};
+{
+	"status" : "ok"
+}
+-- Should add 2 rows (preimage + postimage)
+insert into tb2 (pk, ck, i1) VALUES (1, 11, 111) USING TTL 1111;
+{
+	"status" : "ok"
+}
+select "cdc$batch_seq_no", "cdc$operation", pk, ck, i1 from tb2_scylla_cdc_log where pk = 1 and ck = 11 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"ck" : "11",
+			"pk" : "1"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "9",
+			"ck" : "11",
+			"i1" : "111",
+			"pk" : "1"
+		}
+	]
+}
+
+alter table tb2 with cdc = {'enabled': true, 'preimage': true, 'postimage': true, 'delta': 'keys'};
+{
+	"status" : "ok"
+}
+-- Should add 3 rows (preimage + postimage + delta). Delta has only key columns and "pk" + "ck"
+insert into tb2 (pk, ck, i1) VALUES (2, 22, 222) USING TTL 2222;
+{
+	"status" : "ok"
+}
+select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck, i1 from tb2_scylla_cdc_log where pk = 2 and ck = 22 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"ck" : "22",
+			"pk" : "2"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"ck" : "22",
+			"pk" : "2"
+		},
+		{
+			"cdc$batch_seq_no" : "2",
+			"cdc$operation" : "9",
+			"ck" : "22",
+			"i1" : "222",
+			"pk" : "2"
+		}
+	]
+}
+
+alter table tb2 with cdc = {'enabled': true, 'preimage': true, 'postimage': true, 'delta': 'full'};
+{
+	"status" : "ok"
+}
+-- Should add 3 rows (preimage + postimage + delta)
+insert into tb2 (pk, ck, i1) VALUES (3, 33, 333) USING TTL 3333;
+{
+	"status" : "ok"
+}
+select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck, i1 from tb2_scylla_cdc_log where pk = 3 and ck = 33 allow filtering;
+{
+	"rows" : 
+	[
+		{
+			"cdc$batch_seq_no" : "0",
+			"cdc$operation" : "0",
+			"ck" : "33",
+			"pk" : "3"
+		},
+		{
+			"cdc$batch_seq_no" : "1",
+			"cdc$operation" : "2",
+			"cdc$ttl" : "3333",
+			"ck" : "33",
+			"i1" : "333",
+			"pk" : "3"
+		},
+		{
+			"cdc$batch_seq_no" : "2",
+			"cdc$operation" : "9",
+			"ck" : "33",
+			"i1" : "333",
+			"pk" : "3"
+		}
+	]
+}
