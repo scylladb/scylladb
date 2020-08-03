@@ -1476,11 +1476,11 @@ future<> table::snapshot(database& db, sstring name) {
     return flush().then([this, &db, name = std::move(name)]() {
        return with_semaphore(_sstable_deletion_sem, 1, [this, &db, name = std::move(name)]() {
         auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
-        return do_with(std::move(tables), [this, &db, name](std::vector<sstables::shared_sstable> & tables) {
-            auto jsondir = _config.datadir + "/snapshots/" + name;
-            return io_check([jsondir] { return recursive_touch_directory(jsondir); }).then([this, name, jsondir, &tables] {
-                return parallel_for_each(tables, [name, jsondir] (sstables::shared_sstable sstable) {
-                    return io_check([sstable, dir = jsondir] {
+        auto jsondir = _config.datadir + "/snapshots/" + name;
+        return do_with(std::move(tables), std::move(jsondir), [this, &db, name] (std::vector<sstables::shared_sstable>& tables, const sstring& jsondir) {
+            return io_check([&jsondir] { return recursive_touch_directory(jsondir); }).then([this, name, &jsondir, &tables] {
+                return parallel_for_each(tables, [name, &jsondir] (sstables::shared_sstable sstable) {
+                    return io_check([sstable, &dir = jsondir] {
                         return sstable->create_links(dir).then_wrapped([] (future<> f) {
                             // If the SSTables are shared, one of the CPUs will fail here.
                             // That is completely fine, though. We only need one link.
@@ -1495,9 +1495,9 @@ future<> table::snapshot(database& db, sstring name) {
                         });
                     });
                 });
-            }).then([jsondir, &tables] {
-                return io_check(sync_directory, std::move(jsondir));
-            }).finally([this, &tables, &db, jsondir] {
+            }).then([&jsondir, &tables] {
+                return io_check(sync_directory, jsondir);
+            }).finally([this, &tables, &db, &jsondir] {
                 auto shard = std::hash<sstring>()(jsondir) % smp::count;
                 std::unordered_set<sstring> table_names;
                 for (auto& sst : tables) {
@@ -1505,7 +1505,7 @@ future<> table::snapshot(database& db, sstring name) {
                     auto rf = f.substr(sst->get_dir().size() + 1);
                     table_names.insert(std::move(rf));
                 }
-                return smp::submit_to(shard, [requester = this_shard_id(), jsondir = std::move(jsondir), this, &db,
+                return smp::submit_to(shard, [requester = this_shard_id(), &jsondir, this, &db,
                                               tables = std::move(table_names), datadir = _config.datadir] {
 
                     if (pending_snapshots.count(jsondir) == 0) {
@@ -1519,14 +1519,14 @@ future<> table::snapshot(database& db, sstring name) {
                     snapshot->requests.signal(1);
                     auto my_work = make_ready_future<>();
                     if (requester == this_shard_id()) {
-                        my_work = snapshot->requests.wait(smp::count).then([jsondir = std::move(jsondir),
+                        my_work = snapshot->requests.wait(smp::count).then([&jsondir,
                                                                             &db, snapshot, this] {
                             // this_shard_id() here == requester == this_shard_id() before submit_to() above,
                             // so the db reference is still local
-                            return write_schema_as_cql(db, jsondir).handle_exception([jsondir](std::exception_ptr ptr) {
+                            return write_schema_as_cql(db, jsondir).handle_exception([&jsondir](std::exception_ptr ptr) {
                                 tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
                                 return make_ready_future<>();
-                            }).finally([jsondir = std::move(jsondir), snapshot] () mutable {
+                            }).finally([&jsondir, snapshot] () mutable {
                                 return seal_snapshot(jsondir).then([snapshot] {
                                     snapshot->manifest_write.signal(smp::count);
                                     return make_ready_future<>();
