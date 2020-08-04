@@ -22,6 +22,9 @@
 #include "mutation.hh"
 #include "schema.hh"
 
+#include "concrete_types.hh"
+#include "types/user.hh"
+
 #include "split.hh"
 #include "log.hh"
 #include "change_visitor.hh"
@@ -91,6 +94,18 @@ static void add_columns_affected_by_entries(cdc::one_kind_column_set& cset, cons
     }
 }
 
+/* Given a mutation with multiple timestamps/ttl/types of changes, we split it into multiple mutations
+ * before passing it into `process_change` (see comment above `should_split_visitor` for more details).
+ *
+ * The first step of the splitting is to walk over the mutation and put each change into an appropriate bucket
+ * (see `batch`). The buckets are sorted by timestamps (see `set_of_changes`), and within each bucket,
+ * the changes are split according to their types (`static_updates`, `clustered_inserts`, and so on).
+ * Within each type, the changes are sorted w.r.t TTLs. Changes without a TTL are treated as if they had TTL = 0.
+ *
+ * The function that puts changes into bucket is called `extract_changes`. Underneath, it uses
+ * `extract_changes_visitor`, `extract_collection_visitor` and `extract_row_visitor`.
+ */
+
 struct batch {
     std::vector<static_row_update> static_updates;
     std::vector<clustered_row_insert> clustered_inserts;
@@ -149,101 +164,171 @@ static gc_clock::duration get_ttl(const row_marker& rm) {
     return rm.is_expiring() ? rm.ttl() : gc_clock::duration(0);
 }
 
-static
-std::map<std::pair<api::timestamp_type, gc_clock::duration>, row_update>
-extract_row_updates(const row& r, column_kind ckind, const schema& schema) {
-    std::map<std::pair<api::timestamp_type, gc_clock::duration>, row_update> result;
-    r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
-        auto& cdef = schema.column_at(ckind, id);
-        if (cdef.is_atomic()) {
-            auto view = cell.as_atomic_cell(cdef);
-            auto timestamp_and_ttl = std::pair(
-                    view.timestamp(),
-                    view.is_live_and_has_ttl() ? view.ttl() : gc_clock::duration(0)
-                );
-            result[timestamp_and_ttl].atomic_entries.push_back({id, atomic_cell(*cdef.type, view)});
-            return;
+using change_key_t = std::pair<api::timestamp_type, gc_clock::duration>;
+
+/* Visits the cells and tombstone of a collection, putting the encountered changes into buckets
+ * sorted by timestamp first and ttl second (see `_updates`).
+ */
+template <typename V>
+struct extract_collection_visitor {
+private:
+    const column_id _id;
+    std::map<change_key_t, row_update>& _updates;
+
+    nonatomic_column_update& get_or_append_entry(api::timestamp_type ts, gc_clock::duration ttl) {
+        auto& updates = this->_updates[std::pair(ts, ttl)].nonatomic_entries;
+        if (updates.empty() || updates.back().id != _id) {
+            updates.push_back({_id});
         }
-
-        cell.as_collection_mutation().with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
-            auto desc = mview.materialize(*cdef.type);
-            for (auto& [k, v]: desc.cells) {
-                auto timestamp_and_ttl = std::pair(
-                        v.timestamp(),
-                        v.is_live_and_has_ttl() ? v.ttl() : gc_clock::duration(0)
-                    );
-                auto& updates = result[timestamp_and_ttl].nonatomic_entries;
-                if (updates.empty() || updates.back().id != id) {
-                    updates.push_back({id, {}});
-                }
-                updates.back().cells.push_back({std::move(k), std::move(v)});
-            }
-
-            if (desc.tomb) {
-                auto timestamp_and_ttl = std::pair(desc.tomb.timestamp + 1, gc_clock::duration(0));
-                auto& updates = result[timestamp_and_ttl].nonatomic_entries;
-                if (updates.empty() || updates.back().id != id) {
-                    updates.push_back({id, {}});
-                }
-                updates.back().t = std::move(desc.tomb);
-            }
-        });
-    });
-    return result;
-};
-
-set_of_changes extract_changes(const mutation& base_mutation) {
-    set_of_changes res;
-    auto& p = base_mutation.partition();
-    const auto& base_schema = *base_mutation.schema();
-
-    auto sr_updates = extract_row_updates(p.static_row().get(), column_kind::static_column, base_schema);
-    for (auto& [k, up]: sr_updates) {
-        auto [timestamp, ttl] = k;
-        res[timestamp].static_updates.push_back({
-                ttl,
-                std::move(up.atomic_entries),
-                std::move(up.nonatomic_entries)
-            });
+        return updates.back();
     }
 
-    for (const rows_entry& cr : p.clustered_rows()) {
-        auto cr_updates = extract_row_updates(cr.row().cells(), column_kind::regular_column, base_schema);
+    /* To copy a value from a collection/non-frozen UDT (in order to put it into a bucket) we need to know the value's type.
+     * The method of obtaining the type depends on the collection type; in particular, for non-frozen UDT, each value
+     * might have a different type, thus in general we need a method that, given a key (identifying the value in the collection),
+     * returns the value' type.
+     *
+     * We use the `Curiously Recurring Template Pattern' to avoid performing a dynamic dispatch on the collection's type for each visited cell.
+     * Instead we perform a single dynamic dispatch at the beginning, when encountering the collection column;
+     * the dispatch provides us with a correct `get_value_type` method.
+     * See `extract_row_visitor::collection_column` where the dispatch is done.
 
-        const auto& marker = cr.row().marker();
-        auto marker_timestamp = marker.timestamp();
-        auto marker_ttl = marker.is_expiring() ? marker.ttl() : gc_clock::duration(0);
-        if (marker.is_live()) {
-            // make sure that an entry corresponding to the row marker's timestamp and ttl is in the map
-            (void)cr_updates[std::pair(marker_timestamp, marker_ttl)];
+    data_type get_value_type(bytes_view);
+    */
+
+    void cell(bytes_view key, const atomic_cell_view& c) {
+        auto& entry = get_or_append_entry(c.timestamp(), get_ttl(c));
+        entry.cells.emplace_back(to_bytes(key), atomic_cell(*static_cast<V&>(*this).get_value_type(key), c));
+    }
+
+public:
+    extract_collection_visitor(column_id id, std::map<change_key_t, row_update>& updates)
+        : _id(id), _updates(updates) {}
+
+    void collection_tombstone(const tombstone& t) {
+        auto& entry = get_or_append_entry(t.timestamp + 1, gc_clock::duration(0));
+        entry.t = t;
+    }
+
+    void live_collection_cell(bytes_view key, const atomic_cell_view& c) {
+        cell(key, c);
+    }
+
+    void dead_collection_cell(bytes_view key, const atomic_cell_view& c) {
+        cell(key, c);
+    }
+
+    constexpr bool finished() const { return false; }
+};
+
+/* Visits all cells and tombstones in a row, putting the encountered changes into buckets
+ * sorted by timestamp first and ttl second (see `_updates`).
+ */
+struct extract_row_visitor {
+    std::map<change_key_t, row_update> _updates;
+
+    void cell(const column_definition& cdef, const atomic_cell_view& cell) {
+        _updates[std::pair(cell.timestamp(), get_ttl(cell))].atomic_entries.push_back({cdef.id, atomic_cell(*cdef.type, cell)});
+    }
+
+    void live_atomic_cell(const column_definition& cdef, const atomic_cell_view& c) {
+        cell(cdef, c);
+    }
+
+    void dead_atomic_cell(const column_definition& cdef, const atomic_cell_view& c) {
+        cell(cdef, c);
+    }
+
+    void collection_column(const column_definition& cdef, auto&& visit_collection) {
+        visit(*cdef.type, make_visitor(
+        [&] (const collection_type_impl& ctype) {
+            struct collection_visitor : public extract_collection_visitor<collection_visitor> {
+                data_type _value_type;
+
+                collection_visitor(column_id id, std::map<change_key_t, row_update>& updates, const collection_type_impl& ctype)
+                    : extract_collection_visitor<collection_visitor>(id, updates), _value_type(ctype.value_comparator()) {}
+
+                data_type get_value_type(bytes_view) {
+                    return _value_type;
+                }
+            } v(cdef.id, _updates, ctype);
+
+            visit_collection(v);
+        },
+        [&] (const user_type_impl& utype) {
+            struct udt_visitor : public extract_collection_visitor<udt_visitor> {
+                const user_type_impl& _utype;
+
+                udt_visitor(column_id id, std::map<change_key_t, row_update>& updates, const user_type_impl& utype)
+                    : extract_collection_visitor<udt_visitor>(id, updates), _utype(utype) {}
+
+                data_type get_value_type(bytes_view key) {
+                    return _utype.type(deserialize_field_index(key));
+                }
+            } v(cdef.id, _updates, utype);
+
+            visit_collection(v);
+        },
+        [&] (const abstract_type& o) {
+            throw std::runtime_error(format("extract_changes: unknown collection type:", o.name()));
         }
+        ));
+    }
 
-        auto is_insert = [&] (api::timestamp_type timestamp, gc_clock::duration ttl) {
-            if (!marker.is_live()) {
-                return false;
+    constexpr bool finished() const { return false; }
+};
+
+struct extract_changes_visitor {
+    set_of_changes _result;
+
+    void static_row_cells(auto&& visit_row_cells) {
+        extract_row_visitor v;
+        visit_row_cells(v);
+
+        for (auto& [ts_ttl, row_update]: v._updates) {
+            _result[ts_ttl.first].static_updates.push_back({
+                ts_ttl.second,
+                std::move(row_update.atomic_entries),
+                std::move(row_update.nonatomic_entries)
+            });
+        }
+    }
+
+    void clustered_row_cells(const clustering_key& ckey, auto&& visit_row_cells) {
+        struct clustered_cells_visitor : public extract_row_visitor {
+            api::timestamp_type _marker_ts;
+            gc_clock::duration _marker_ttl;
+            std::optional<row_marker> _marker;
+
+            void marker(const row_marker& rm) {
+                _marker_ts = rm.timestamp();
+                _marker_ttl = get_ttl(rm);
+                _marker = rm;
+
+                // make sure that an entry corresponding to the row marker's timestamp and ttl is in the map
+                (void)_updates[std::pair(_marker_ts, _marker_ttl)];
             }
+        } v;
+        visit_row_cells(v);
 
-            return timestamp == marker_timestamp && ttl == marker_ttl;
-        };
-
-        for (auto& [k, up]: cr_updates) {
+        for (auto& [ts_ttl, row_update]: v._updates) {
             // It is important that changes in the resulting `set_of_changes` are listed
             // in increasing TTL order. The reason is explained in a comment in cdc/log.cc,
             // search for "#6070".
-            auto [timestamp, ttl] = k;
+            auto [ts, ttl] = ts_ttl;
 
-            if (is_insert(timestamp, ttl)) {
-                res[timestamp].clustered_inserts.push_back({
+            if (v._marker && ts == v._marker_ts && ttl == v._marker_ttl) {
+                _result[ts].clustered_inserts.push_back({
                         ttl,
-                        cr.key(),
-                        marker,
-                        std::move(up.atomic_entries),
+                        ckey,
+                        *v._marker,
+                        std::move(row_update.atomic_entries),
                         {}
                     });
 
-                auto& cr_insert = res[timestamp].clustered_inserts.back();
+                auto& cr_insert = _result[ts].clustered_inserts.back();
                 bool clustered_update_exists = false;
-                for (auto& nonatomic_up: up.nonatomic_entries) {
+                for (auto& nonatomic_up: row_update.nonatomic_entries) {
                     // Updating a collection column with an INSERT statement implies inserting a tombstone.
                     //
                     // For example, suppose that we have:
@@ -269,9 +354,9 @@ set_of_changes extract_changes(const mutation& base_mutation) {
                         cr_insert.nonatomic_entries.push_back(std::move(nonatomic_up));
                     } else {
                         if (!clustered_update_exists) {
-                            res[timestamp].clustered_updates.push_back({
+                            _result[ts].clustered_updates.push_back({
                                 ttl,
-                                cr.key(),
+                                ckey,
                                 {},
                                 {}
                             });
@@ -292,38 +377,40 @@ set_of_changes extract_changes(const mutation& base_mutation) {
                             clustered_update_exists = true;
                         }
 
-                        auto& cr_update = res[timestamp].clustered_updates.back();
+                        auto& cr_update = _result[ts].clustered_updates.back();
                         cr_update.nonatomic_entries.push_back(std::move(nonatomic_up));
                     }
                 }
             } else {
-                res[timestamp].clustered_updates.push_back({
+                _result[ts].clustered_updates.push_back({
                         ttl,
-                        cr.key(),
-                        std::move(up.atomic_entries),
-                        std::move(up.nonatomic_entries)
+                        ckey,
+                        std::move(row_update.atomic_entries),
+                        std::move(row_update.nonatomic_entries)
                     });
             }
         }
-
-        auto row_tomb = cr.row().deleted_at().regular();
-        if (row_tomb) {
-            res[row_tomb.timestamp].clustered_row_deletions.push_back({cr.key(), row_tomb});
-        }
     }
 
-    for (const auto& rt: p.row_tombstones()) {
-        if (rt.tomb.timestamp != api::missing_timestamp) {
-            res[rt.tomb.timestamp].clustered_range_deletions.push_back({rt});
-        }
+    void clustered_row_delete(const clustering_key& ckey, const tombstone& t) {
+        _result[t.timestamp].clustered_row_deletions.push_back({ckey, t});
     }
 
-    auto partition_tomb_timestamp = p.partition_tombstone().timestamp;
-    if (partition_tomb_timestamp != api::missing_timestamp) {
-        res[partition_tomb_timestamp].partition_deletions = {p.partition_tombstone()};
+    void range_delete(const range_tombstone& rt) {
+        _result[rt.tomb.timestamp].clustered_range_deletions.push_back({rt});
     }
 
-    return res;
+    void partition_delete(const tombstone& t) {
+        _result[t.timestamp].partition_deletions = {t};
+    }
+
+    constexpr bool finished() const { return false; }
+};
+
+set_of_changes extract_changes(const mutation& m) {
+    extract_changes_visitor v;
+    cdc::inspect_mutation(m, v);
+    return std::move(v._result);
 }
 
 namespace cdc {
