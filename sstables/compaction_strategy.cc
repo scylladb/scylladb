@@ -1022,19 +1022,19 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
 
     switch(strategy) {
     case compaction_strategy_type::null:
-        impl = make_shared<null_compaction_strategy>(null_compaction_strategy());
+        impl = ::make_shared<null_compaction_strategy>();
         break;
     case compaction_strategy_type::size_tiered:
-        impl = make_shared<size_tiered_compaction_strategy>(size_tiered_compaction_strategy(options));
+        impl = ::make_shared<size_tiered_compaction_strategy>(options);
         break;
     case compaction_strategy_type::leveled:
-        impl = make_shared<leveled_compaction_strategy>(leveled_compaction_strategy(options));
+        impl = ::make_shared<leveled_compaction_strategy>(options);
         break;
     case compaction_strategy_type::date_tiered:
-        impl = make_shared<date_tiered_compaction_strategy>(date_tiered_compaction_strategy(options));
+        impl = ::make_shared<date_tiered_compaction_strategy>(options);
         break;
     case compaction_strategy_type::time_window:
-        impl = make_shared<time_window_compaction_strategy>(time_window_compaction_strategy(options));
+        impl = ::make_shared<time_window_compaction_strategy>(options);
         break;
     default:
         throw std::runtime_error("strategy not supported");
