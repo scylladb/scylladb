@@ -141,6 +141,14 @@ struct row_update {
     std::vector<nonatomic_column_update> nonatomic_entries;
 };
 
+static gc_clock::duration get_ttl(const atomic_cell_view& acv) {
+    return acv.is_live_and_has_ttl() ? acv.ttl() : gc_clock::duration(0);
+}
+
+static gc_clock::duration get_ttl(const row_marker& rm) {
+    return rm.is_expiring() ? rm.ttl() : gc_clock::duration(0);
+}
+
 static
 std::map<std::pair<api::timestamp_type, gc_clock::duration>, row_update>
 extract_row_updates(const row& r, column_kind ckind, const schema& schema) {
@@ -370,156 +378,117 @@ api::timestamp_type find_timestamp(const mutation& m) {
     return v._ts;
 }
 
-bool should_split(const mutation& base_mutation) {
-    const auto& base_schema = *base_mutation.schema();
-    auto& p = base_mutation.partition();
+/* If a mutation contains multiple timestamps, multiple ttls, or multiple types of changes
+ * (e.g. it was created from a batch that both updated a clustered row and deleted a clustered row),
+ * we split it into multiple mutations, each with exactly one timestamp, at most one ttl, and a single type of change.
+ * We also split if we find both a change with no ttl (e.g. a cell tombstone) and a change with ttl (e.g. a ttled cell update).
+ *
+ * The `should_split` function checks whether the mutation requires such splitting, using `should_split_visitor`.
+ * The visitor uses the order in which the mutation is being visited (see the documentation of ChangeVisitor),
+ * remembers a bunch of state based on whatever was visited until now (e.g. was there a static row update?
+ * Was there a clustered row update? Was there a clustered row delete? Was there a TTL?)
+ * and tells the caller to stop on the first occurence of a second timestamp/ttl/type of change.
+ */
+struct should_split_visitor {
+    bool _had_static_row = false;
+    bool _had_clustered_row = false;
+    bool _had_upsert = false;
+    bool _had_row_marker = false;
+    bool _had_range_delete = false;
 
-    api::timestamp_type found_ts = api::missing_timestamp;
-    std::optional<gc_clock::duration> found_ttl; // 0 = "no ttl"
+    bool _result = false;
 
-    auto check_or_set = [&] (api::timestamp_type ts, gc_clock::duration ttl) {
-        if (found_ts != api::missing_timestamp && found_ts != ts) {
-            return true;
+    // This becomes a valid (non-missing) timestamp after visiting the first change.
+    // Then, if we encounter any different timestamp, it means that we should split.
+    api::timestamp_type _ts = api::missing_timestamp;
+
+    // This becomes non-null after visiting the fist change.
+    // If the change did not have a ttl (e.g. a non-ttled cell, or a tombstone), we store gc_clock::duration(0) there,
+    // because specifying ttl = 0 is equivalent to not specifying a TTL.
+    // Otherwise we store the change's ttl.
+    std::optional<gc_clock::duration> _ttl = std::nullopt;
+
+    inline bool finished() const { return _result; }
+    inline void stop() { _result = true; }
+
+    void visit(api::timestamp_type ts, gc_clock::duration ttl = gc_clock::duration(0)) {
+        if (_ts != api::missing_timestamp && _ts != ts) {
+            return stop();
         }
-        found_ts = ts;
+        _ts = ts;
 
-        if (found_ttl && *found_ttl != ttl) {
-            return true;
+        if (_ttl && *_ttl != ttl) {
+            return stop();
         }
-        found_ttl = ttl;
-
-        return false;
-    };
-
-    bool had_static_row = false;
-
-    bool should_split = false;
-    p.static_row().get().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
-        had_static_row = true;
-
-        auto& cdef = base_schema.column_at(column_kind::static_column, id);
-        if (cdef.is_atomic()) {
-            auto view = cell.as_atomic_cell(cdef);
-            if (check_or_set(view.timestamp(), view.is_live_and_has_ttl() ? view.ttl() : gc_clock::duration(0))) {
-                should_split = true;
-            }
-            return;
-        }
-
-        cell.as_collection_mutation().with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
-            auto desc = mview.materialize(*cdef.type);
-            for (auto& [k, v]: desc.cells) {
-                if (check_or_set(v.timestamp(), v.is_live_and_has_ttl() ? v.ttl() : gc_clock::duration(0))) {
-                    should_split = true;
-                    return;
-                }
-            }
-
-            if (desc.tomb) {
-                if (check_or_set(desc.tomb.timestamp + 1, gc_clock::duration(0))) {
-                    should_split = true;
-                    return;
-                }
-            }
-        });
-    });
-
-    if (should_split) {
-        return true;
+        _ttl = { ttl };
     }
 
-    bool had_clustered_row = false;
+    void visit(const atomic_cell_view& cell) { visit(cell.timestamp(), get_ttl(cell)); }
 
-    if (!p.clustered_rows().empty() && had_static_row) {
-        return true;
+    void live_atomic_cell(const column_definition&, const atomic_cell_view& cell) { visit(cell); }
+    void dead_atomic_cell(const column_definition&, const atomic_cell_view& cell) { visit(cell); }
+
+    void collection_tombstone(const tombstone& t) { visit(t.timestamp + 1); }
+
+    void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
+        if (_had_row_marker) {
+            // nonatomic updates cannot be expressed with an INSERT.
+            return stop();
+        }
+        visit(cell);
     }
-    for (const rows_entry& cr : p.clustered_rows()) {
-        had_clustered_row = true;
+    void dead_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
+    void collection_column(const column_definition&, auto&& visit_collection) { visit_collection(*this); }
 
-        const auto& marker = cr.row().marker();
-        if (marker.is_live() && check_or_set(marker.timestamp(), marker.is_expiring() ? marker.ttl() : gc_clock::duration(0))) {
-            return true;
+    void marker(const row_marker& rm) {
+        _had_row_marker = true;
+        visit(rm.timestamp(), get_ttl(rm));
+    }
+
+    void static_row_cells(auto&& visit_row_cells) {
+        _had_static_row = true;
+        visit_row_cells(*this);
+    }
+
+    void clustered_row_cells(const clustering_key&, auto&& visit_row_cells) {
+        if (_had_static_row) {
+            return stop();
         }
+        _had_clustered_row = _had_upsert = true;
+        visit_row_cells(*this);
+    }
 
-        bool is_insert = marker.is_live();
-
-        bool had_cells = false;
-        cr.row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
-            had_cells = true;
-
-            auto& cdef = base_schema.column_at(column_kind::regular_column, id);
-            if (cdef.is_atomic()) {
-                auto view = cell.as_atomic_cell(cdef);
-                if (check_or_set(view.timestamp(), view.is_live_and_has_ttl() ? view.ttl() : gc_clock::duration(0))) {
-                    should_split = true;
-                }
-                return;
-            }
-
-            cell.as_collection_mutation().with_deserialized(*cdef.type, [&] (collection_mutation_view_description mview) {
-                for (auto& [k, v]: mview.cells) {
-                    if (check_or_set(v.timestamp(), v.is_live_and_has_ttl() ? v.ttl() : gc_clock::duration(0))) {
-                        should_split = true;
-                        return;
-                    }
-
-                    if (is_insert) {
-                        // nonatomic updates cannot be expressed with an INSERT.
-                        should_split = true;
-                        return;
-                    }
-                }
-
-                if (mview.tomb) {
-                    if (check_or_set(mview.tomb.timestamp + 1, gc_clock::duration(0))) {
-                        should_split = true;
-                        return;
-                    }
-                }
-            });
-        });
-
-        if (should_split) {
-            return true;
+    void clustered_row_delete(const clustering_key&, const tombstone& t) {
+        if (_had_static_row || _had_upsert) {
+            return stop();
         }
+        _had_clustered_row = true;
+        visit(t.timestamp);
+    }
 
-        auto row_tomb = cr.row().deleted_at().regular();
-        if (row_tomb) {
-            if (had_cells) {
-                return true;
-            }
+    void range_delete(const range_tombstone& t) {
+        if (_had_static_row || _had_clustered_row) {
+            return stop();
+        }
+        _had_range_delete = true;
+        visit(t.tomb.timestamp);
+    }
 
-            // there were no cells, so no ttl
-            assert(!found_ttl);
-            if (found_ts != api::missing_timestamp && found_ts != row_tomb.timestamp) {
-                return true;
-            }
-
-            found_ts = row_tomb.timestamp;
+    void partition_delete(const tombstone&) {
+        if (_had_range_delete || _had_static_row || _had_clustered_row) {
+            return stop();
         }
     }
+};
 
-    if (!p.row_tombstones().empty() && (had_static_row || had_clustered_row)) {
-        return true;
-    }
+bool should_split(const mutation& m) {
+    should_split_visitor v;
 
-    for (const auto& rt: p.row_tombstones()) {
-        if (rt.tomb) {
-            if (found_ts != api::missing_timestamp && found_ts != rt.tomb.timestamp) {
-                return true;
-            }
+    cdc::inspect_mutation(m, v);
 
-            found_ts = rt.tomb.timestamp;
-        }
-    }
-
-    if (p.partition_tombstone().timestamp != api::missing_timestamp
-            && (!p.row_tombstones().empty() || had_static_row || had_clustered_row)) {
-        return true;
-    }
-
-    // A mutation with no timestamp will be split into 0 mutations
-    return found_ts == api::missing_timestamp;
+    return v._result
+    // A mutation with no timestamp will be split into 0 mutations:
+        || v._ts == api::missing_timestamp;
 }
 
 void process_changes_with_splitting(const mutation& base_mutation, change_processor& processor,
