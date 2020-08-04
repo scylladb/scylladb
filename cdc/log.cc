@@ -733,6 +733,109 @@ auto make_maybe_back_inserter(Container& c, const abstract_type& type, collectio
     return maybe_back_insert_iterator<Container, T>(c, type, s);
 }
 
+static size_t collection_size(const bytes_opt& bo) {
+    if (bo) {
+        bytes_view bv(*bo);
+        return read_collection_size(bv, cql_serialization_format::internal());
+    }
+    return 0;
+}
+template<typename Func>
+static void udt_for_each(const bytes_opt& bo, Func&& f) {
+    if (bo) {
+        bytes_view bv(*bo);
+        std::for_each(tuple_deserializing_iterator::start(bv), tuple_deserializing_iterator::finish(bv), std::forward<Func>(f));
+    }
+}
+static bytes merge(const collection_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+    std::vector<std::pair<bytes_view, bytes_view>> res;
+    res.reserve(collection_size(prev) + collection_size(next));
+    auto type = ctype.name_comparator();
+    auto cmp = [&type = *type](const std::pair<bytes_view, bytes_view>& p1, const std::pair<bytes_view, bytes_view>& p2) {
+        return type.compare(p1.first, p2.first) < 0;
+    };
+    collection_iterator<std::pair<bytes_view, bytes_view>> e, i(prev), j(next);
+    // note order: set_union, when finding doubles, use value from first1 (j here). So
+    // since this is next, it has prio
+    std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, collection_iterator<bytes_view>(deleted)), cmp);
+    return map_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
+}
+static bytes merge(const set_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+    std::vector<bytes_view> res;
+    res.reserve(collection_size(prev) + collection_size(next));
+    auto type = ctype.name_comparator();
+    auto cmp = [&type = *type](bytes_view k1, bytes_view k2) {
+        return type.compare(k1, k2) < 0;
+    };
+    collection_iterator<bytes_view> e, i(prev), j(next), d(deleted);
+    std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, d), cmp);
+    return set_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
+}
+static bytes merge(const user_type_impl& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+    std::vector<bytes_view_opt> res(type.size());
+    udt_for_each(prev, [&res, i = res.begin()](bytes_view_opt k) mutable {
+        *i++ = k;
+    });
+    udt_for_each(next, [&res, i = res.begin()](bytes_view_opt k) mutable {
+        if (k) {
+            *i = k;
+        }
+        ++i;
+    });
+    collection_iterator<bytes_view> e, d(deleted);
+    std::for_each(d, e, [&res](bytes_view k) {
+        auto index = deserialize_field_index(k);
+        res[index] = std::nullopt;
+    });
+    return type.build_value(res);
+}
+static bytes merge(const abstract_type& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+    throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
+}
+
+using cell_map = std::unordered_map<const column_definition*, bytes_opt>;
+using row_states_map = std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality>;
+
+static bytes_opt get_col_from_row_state(const cell_map* state, const column_definition& cdef) {
+    if (state) {
+        if (auto it = state->find(&cdef); it != state->end()) {
+            return it->second;
+        }
+    }
+    return std::nullopt;
+}
+
+static cell_map* get_row_state(row_states_map& row_states, const clustering_key& ck) {
+    auto it = row_states.find(ck);
+    return it == row_states.end() ? nullptr : &it->second;
+}
+
+static bytes_opt get_preimage_col_value(const column_definition& cdef, const cql3::untyped_result_set_row *pirow) {
+    if (!pirow || !pirow->has(cdef.name_as_text())) {
+        return std::nullopt;
+    }
+    return cdef.is_atomic()
+        ? pirow->get_blob(cdef.name_as_text())
+        : visit(*cdef.type, make_visitor(
+            // flatten set
+            [&] (const set_type_impl& type) {
+                auto v = pirow->get_view(cdef.name_as_text());
+                auto f = cql_serialization_format::internal();
+                auto n = read_collection_size(v, f);
+                std::vector<bytes_view> tmp;
+                tmp.reserve(n);
+                while (n--) {
+                    tmp.emplace_back(read_collection_value(v, f)); // key
+                    read_collection_value(v, f); // value. ignore.
+                }
+                return set_type_impl::serialize_partially_deserialized_form(tmp, f);
+            },
+            [&] (const abstract_type& o) -> bytes {
+                return pirow->get_blob(cdef.name_as_text());
+            }
+        ));
+}
+
 /* Given a timestamp, generates a timeuuid with the following properties:
  * 1. `t1` < `t2` implies timeuuid_type->less(timeuuid_type->decompose(generate_timeuuid(`t1`)),
  *                                            timeuuid_type->decompose(generate_timeuuid(`t2`))),
@@ -940,18 +1043,16 @@ private:
      * its post-image will still show {1:1} for the collection column. Good.
      */
 
-    stats::part_type_set _touched_parts;
-
-    using cell_map = std::unordered_map<const column_definition*, bytes_opt>;
-    std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality> _clustering_row_states;
+    row_states_map _clustering_row_states;
     cell_map _static_row_state;
 
     std::vector<mutation> _result_mutations;
-
     std::optional<log_mutation_builder> _builder;
 
     // When enabled, process_change will update _clustering_row_states and _static_row_state
     bool _enable_updating_state = false;
+
+    stats::part_type_set _touched_parts;
 
     // Remove non-key columns or entire delta rows, according to `delta` setting in `cdc` options.
     void adjust_or_delete_deltas() {
@@ -1014,66 +1115,6 @@ public:
     {
     }
 
-    static size_t collection_size(const bytes_opt& bo) {
-        if (bo) {
-            bytes_view bv(*bo);
-            return read_collection_size(bv, cql_serialization_format::internal());
-        }
-        return 0;
-    }
-    template<typename Func>
-    static void udt_for_each(const bytes_opt& bo, Func&& f) {
-        if (bo) {
-            bytes_view bv(*bo);
-            std::for_each(tuple_deserializing_iterator::start(bv), tuple_deserializing_iterator::finish(bv), std::forward<Func>(f));
-        }
-    }
-    static bytes merge(const collection_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-        std::vector<std::pair<bytes_view, bytes_view>> res;
-        res.reserve(collection_size(prev) + collection_size(next));
-        auto type = ctype.name_comparator();
-        auto cmp = [&type = *type](const std::pair<bytes_view, bytes_view>& p1, const std::pair<bytes_view, bytes_view>& p2) {
-            return type.compare(p1.first, p2.first) < 0;
-        };
-        collection_iterator<std::pair<bytes_view, bytes_view>> e, i(prev), j(next);
-        // note order: set_union, when finding doubles, use value from first1 (j here). So 
-        // since this is next, it has prio
-        std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, collection_iterator<bytes_view>(deleted)), cmp);
-        return map_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
-    }
-    static bytes merge(const set_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-        std::vector<bytes_view> res;
-        res.reserve(collection_size(prev) + collection_size(next));
-        auto type = ctype.name_comparator();
-        auto cmp = [&type = *type](bytes_view k1, bytes_view k2) {
-            return type.compare(k1, k2) < 0;
-        };
-        collection_iterator<bytes_view> e, i(prev), j(next), d(deleted);
-        std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, d), cmp);
-        return set_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
-    }
-    static bytes merge(const user_type_impl& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-        std::vector<bytes_view_opt> res(type.size());
-        udt_for_each(prev, [&res, i = res.begin()](bytes_view_opt k) mutable {
-            *i++ = k;
-        });
-        udt_for_each(next, [&res, i = res.begin()](bytes_view_opt k) mutable {
-            if (k) {
-                *i = k;
-            }
-            ++i;
-        });
-        collection_iterator<bytes_view> e, d(deleted);
-        std::for_each(d, e, [&res](bytes_view k) {
-            auto index = deserialize_field_index(k);
-            res[index] = std::nullopt;
-        });
-        return type.build_value(res);
-    }
-    static bytes merge(const abstract_type& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-        throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
-    }
-
     // DON'T move the transformer after this
     void begin_timestamp(api::timestamp_type ts, bool is_last) override {
         const auto stream_id = _ctx._cdc_metadata.get_stream(ts, _dk.token());
@@ -1105,7 +1146,7 @@ public:
 
         cell_map* row_state;
         if (ck) {
-            row_state = get_current_clustering_row_state(*ck);
+            row_state = get_row_state(_clustering_row_states, *ck);
             if (!row_state) {
                 // We have no data for this row, we can stop here
                 return;
@@ -1334,7 +1375,7 @@ public:
             } else {
                 _touched_parts.set_if<stats::part_type::CLUSTERING_ROW>(!p.clustered_rows().empty());
                 for (const rows_entry& r : p.clustered_rows()) {
-                    auto* row_state = get_current_clustering_row_state(r.key());
+                    auto* row_state = get_row_state(_clustering_row_states, r.key());
 
                     auto log_ck = _builder->allocate_new_log_row();
                     _builder->set_clustering_columns(log_ck, r.key());
@@ -1370,46 +1411,6 @@ public:
     std::tuple<std::vector<mutation>, stats::part_type_set> finish() && {
         adjust_or_delete_deltas();
         return std::make_pair<std::vector<mutation>, stats::part_type_set>(std::move(_result_mutations), std::move(_touched_parts));
-    }
-
-    bytes_opt get_col_from_row_state(const cell_map* state, const column_definition& cdef) const {
-        if (state) {
-            if (auto it = state->find(&cdef); it != state->end()) {
-                return it->second;
-            }
-        }
-        return std::nullopt;
-    }
-
-    cell_map* get_current_clustering_row_state(const clustering_key& ck) {
-        auto it = _clustering_row_states.find(ck);
-        return it == _clustering_row_states.end() ? nullptr : &it->second;
-    }
-
-    bytes_opt get_preimage_col_value(const column_definition& cdef, const cql3::untyped_result_set_row *pirow) {
-        if (!pirow || !pirow->has(cdef.name_as_text())) {
-            return std::nullopt;
-        }
-        return cdef.is_atomic()
-            ? pirow->get_blob(cdef.name_as_text())
-            : visit(*cdef.type, make_visitor(
-                // flatten set
-                [&] (const set_type_impl& type) {
-                    auto v = pirow->get_view(cdef.name_as_text());
-                    auto f = cql_serialization_format::internal();
-                    auto n = read_collection_size(v, f);
-                    std::vector<bytes_view> tmp;
-                    tmp.reserve(n);
-                    while (n--) {
-                        tmp.emplace_back(read_collection_value(v, f)); // key
-                        read_collection_value(v, f); // value. ignore.
-                    }
-                    return set_type_impl::serialize_partially_deserialized_form(tmp, f);
-                },
-                [&] (const abstract_type& o) -> bytes {
-                    return pirow->get_blob(cdef.name_as_text());
-                }
-            ));
     }
 
     static db::timeout_clock::time_point default_timeout() {
