@@ -43,6 +43,7 @@ utils/logalloc* @tgrabiec
 # MATERIALIZED VIEWS
 db/view/* @nyh @psarna
 cql3/statements/*view* @nyh @psarna
+test/boost/view_* @nyh @psarna
 
 # PACKAGING
 dist/* @syuu1228
@@ -59,6 +60,7 @@ schema* @tgrabiec @nyh
 # SECONDARY INDEXES
 db/index/* @nyh @penberg @psarna
 cql3/statements/*index* @nyh @penberg @psarna
+test/boost/*index* @nyh @penberg @psarna
 
 # SSTABLES
 sstables/* @tgrabiec @raphaelsc @nyh
@@ -69,7 +71,11 @@ service/storage_service.* @tgrabiec @asias
 
 # ALTERNATOR
 alternator/* @nyh @psarna
-alternator-test/* @nyh @psarna
+test/alternator/* @nyh @psarna
 
 # HINTED HANDOFF
 db/hints/* @haaawk @piodul @vladzcloudius
+
+# REDIS
+redis/* @nyh @syuu1228
+redis-test/* @nyh @syuu1228
