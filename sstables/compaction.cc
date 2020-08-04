@@ -196,10 +196,6 @@ public:
         }
     }
 
-    virtual void write_failed() override {
-        _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(std::move(_sst));
-    }
-
     virtual uint64_t written() const {
         if (_tracker) {
             return _tracker->offset;
@@ -219,12 +215,14 @@ public:
 struct compaction_writer {
     // We use a ptr for pointer stability and so that it can be null
     // when using a noop monitor.
-    std::unique_ptr<compaction_write_monitor> monitor;
     sstable_writer writer;
+    // The order in here is important. A monitor must be destroyed before the writer it is monitoring since it has a
+    // periodic timer that checks the writer.
+    std::unique_ptr<compaction_write_monitor> monitor;
     shared_sstable sst;
 
     compaction_writer(std::unique_ptr<compaction_write_monitor> monitor, sstable_writer writer, shared_sstable sst)
-        : monitor(std::move(monitor)), writer(std::move(writer)), sst(std::move(sst)) {}
+        : writer(std::move(writer)), monitor(std::move(monitor)), sst(std::move(sst)) {}
     compaction_writer(sstable_writer writer, shared_sstable sst)
         : compaction_writer(nullptr, std::move(writer), std::move(sst)) {}
 };

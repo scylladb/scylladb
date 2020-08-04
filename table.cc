@@ -731,7 +731,6 @@ public:
         // we ensure the permit doesn't outlive this continuation.
         _permit = sstable_write_permit::unconditional();
     }
-    virtual void write_failed() override { }
 };
 
 // Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc
@@ -772,12 +771,6 @@ public:
         permit_monitor::on_data_write_completed();
         _progress_seen = _tracker->offset;
         _tracker = nullptr;
-    }
-
-    virtual void write_failed() override {
-        if (_sst) {
-            _compaction_strategy.get_backlog_tracker().revert_charges(std::move(_sst));
-        }
     }
 
     virtual uint64_t written() const override {
