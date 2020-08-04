@@ -31,6 +31,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 
 #include <seastar/core/seastar.hh>
+#include <seastar/core/future-util.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/gate.hh>
 
