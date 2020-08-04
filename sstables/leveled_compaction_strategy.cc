@@ -143,7 +143,7 @@ compaction_descriptor
 leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
     std::array<std::vector<shared_sstable>, leveled_manifest::MAX_LEVELS> level_info;
 
-    auto is_disjoint = [this, schema] (const std::vector<shared_sstable>& sstables, unsigned tolerance) {
+    auto is_disjoint = [this, schema] (const std::vector<shared_sstable>& sstables, unsigned tolerance) -> std::tuple<bool, unsigned> {
         unsigned overlapping_sstables = 0;
         auto prev_last = dht::ring_position::min();
         for (auto& sst : sstables) {
@@ -152,7 +152,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
             }
             prev_last = dht::ring_position(sst->get_last_decorated_key());
         }
-        return overlapping_sstables <= tolerance;
+        return { overlapping_sstables <= tolerance, overlapping_sstables };
     };
 
     for (auto& sst : input) {
@@ -193,8 +193,9 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         }
         max_filled_level = std::max(max_filled_level, level);
 
-        if (!is_disjoint(level_info[level], tolerance)) {
-            leveled_manifest::logger.warn("Turns out that level {} is not disjoint, so compacting everything on behalf of {}.{}", level, schema->ks_name(), schema->cf_name());
+        auto [disjoint, overlapping_sstables] = is_disjoint(level_info[level], tolerance);
+        if (!disjoint) {
+            leveled_manifest::logger.warn("Turns out that level {} is not disjoint, found {} overlapping SSTables, so compacting everything on behalf of {}.{}", level, overlapping_sstables, schema->ks_name(), schema->cf_name());
             // Unfortunately no good limit to limit input size to max_sstables for LCS major
             compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, max_filled_level, _max_sstable_size_in_mb * 1024 * 1024);
             desc.options = compaction_options::make_reshape();
