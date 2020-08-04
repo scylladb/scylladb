@@ -62,12 +62,22 @@ bool as_json_function::requires_thread() const { return false; }
 
 thread_local std::unordered_multimap<function_name, shared_ptr<function>> functions::_declared = init();
 
-void functions::clear_functions() {
+void functions::clear_functions() noexcept {
     functions::_declared = init();
 }
 
 std::unordered_multimap<function_name, shared_ptr<function>>
-functions::init() {
+functions::init() noexcept {
+    // It is possible that this function will fail with a
+    // std::bad_alloc causing std::unexpected to be called. Since
+    // this is used during initialization, we would have to abort
+    // somehow. We could add a try/catch to print a better error
+    // message before aborting, but that would produce a core file
+    // that has less information in it. Given how unlikely it is that
+    // we will run out of memory this early, having a better core dump
+    // if we do seems like a good trade-off.
+    memory::disable_failure_guard dfg;
+
     std::unordered_multimap<function_name, shared_ptr<function>> ret;
     auto declare = [&ret] (shared_ptr<function> f) { ret.emplace(f->name(), f); };
     declare(aggregate_fcts::make_count_rows_function());
