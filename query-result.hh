@@ -323,36 +323,63 @@ public:
 class result {
     bytes_ostream _w;
     std::optional<result_digest> _digest;
-    std::optional<uint32_t> _row_count;
+    std::optional<uint32_t> _row_count_low_bits;
     api::timestamp_type _last_modified = api::missing_timestamp;
     short_read _short_read;
     query::result_memory_tracker _memory_tracker;
     std::optional<uint32_t> _partition_count;
+    std::optional<uint32_t> _row_count_high_bits;
 public:
     class builder;
     class partition_writer;
     friend class result_merger;
 
     result();
-    result(bytes_ostream&& w, short_read sr, std::optional<uint32_t> c, std::optional<uint32_t> pc,
-           result_memory_tracker memory_tracker = { })
+    result(bytes_ostream&& w, short_read sr, std::optional<uint32_t> c_low_bits, std::optional<uint32_t> pc,
+           std::optional<uint32_t> c_high_bits, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
-        , _row_count(c)
+        , _row_count_low_bits(c_low_bits)
         , _short_read(sr)
         , _memory_tracker(std::move(memory_tracker))
         , _partition_count(pc)
+        , _row_count_high_bits(c_high_bits)
     {
         w.reduce_chunk_count();
     }
     result(bytes_ostream&& w, std::optional<result_digest> d, api::timestamp_type last_modified,
-           short_read sr, std::optional<uint32_t> c, std::optional<uint32_t> pc, result_memory_tracker memory_tracker = { })
+           short_read sr, std::optional<uint32_t> c_low_bits, std::optional<uint32_t> pc, std::optional<uint32_t> c_high_bits, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _digest(d)
-        , _row_count(c)
+        , _row_count_low_bits(c_low_bits)
         , _last_modified(last_modified)
         , _short_read(sr)
         , _memory_tracker(std::move(memory_tracker))
         , _partition_count(pc)
+        , _row_count_high_bits(c_high_bits)
+    {
+        w.reduce_chunk_count();
+    }
+    result(bytes_ostream&& w, short_read sr, uint64_t c, std::optional<uint32_t> pc,
+           result_memory_tracker memory_tracker = { })
+        : _w(std::move(w))
+        , _row_count_low_bits(static_cast<uint32_t>(c))
+        , _short_read(sr)
+        , _memory_tracker(std::move(memory_tracker))
+        , _partition_count(pc)
+        , _row_count_high_bits(static_cast<uint32_t>(c >> 32))
+    {
+        w.reduce_chunk_count();
+    }
+    result(bytes_ostream&& w, std::optional<result_digest> d, api::timestamp_type last_modified,
+           short_read sr, uint64_t c, std::optional<uint32_t> pc, result_memory_tracker memory_tracker = { })
+        : _w(std::move(w))
+        , _digest(d)
+        , _row_count_low_bits(static_cast<uint32_t>(c))
+        , _last_modified(last_modified)
+        , _short_read(sr)
+        , _memory_tracker(std::move(memory_tracker))
+        , _partition_count(pc)
+        , _row_count_high_bits(static_cast<uint32_t>(c >> 32))
     {
         w.reduce_chunk_count();
     }
@@ -369,8 +396,29 @@ public:
         return _digest;
     }
 
-    const std::optional<uint32_t>& row_count() const {
-        return _row_count;
+    const std::optional<uint32_t> row_count_low_bits() const {
+        return _row_count_low_bits;
+    }
+
+    const std::optional<uint32_t> row_count_high_bits() const {
+        return _row_count_high_bits;
+    }
+
+    const std::optional<uint64_t> row_count() const {
+        if (!_row_count_low_bits) {
+            return _row_count_low_bits;
+        }
+        return (static_cast<uint64_t>(_row_count_high_bits.value_or(0)) << 32) | _row_count_low_bits.value();
+    }
+
+    void set_row_count(std::optional<uint64_t> row_count) {
+        if (!row_count) {
+            _row_count_low_bits = std::nullopt;
+            _row_count_high_bits = std::nullopt;
+        } else {
+            _row_count_low_bits = std::make_optional(static_cast<uint32_t>(row_count.value()));
+            _row_count_high_bits = std::make_optional(static_cast<uint32_t>(row_count.value() >> 32));
+        }
     }
 
     const api::timestamp_type last_modified() const {

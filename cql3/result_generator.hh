@@ -38,8 +38,8 @@ private:
         const schema& _schema;
         std::vector<bytes> _partition_key;
         std::vector<bytes> _clustering_key;
-        uint32_t _partition_row_count = 0;
-        uint32_t _total_row_count = 0;
+        uint64_t _partition_row_count = 0;
+        uint64_t _total_row_count = 0;
         Visitor& _visitor;
         const selection::selection& _selection;
     private:
@@ -55,11 +55,11 @@ private:
         query_result_visitor(const schema& s, Visitor& visitor, const selection::selection& select)
             : _schema(s), _visitor(visitor), _selection(select) { }
 
-        void accept_new_partition(const partition_key& key, uint32_t row_count) {
+        void accept_new_partition(const partition_key& key, uint64_t row_count) {
             _partition_key = key.explode(_schema);
             accept_new_partition(row_count);
         }
-        void accept_new_partition(uint32_t row_count) {
+        void accept_new_partition(uint64_t row_count) {
             _partition_row_count = row_count;
             _total_row_count += row_count;
         }
@@ -114,7 +114,7 @@ private:
             }
         }
 
-        uint32_t rows_read() const { return _total_row_count; }
+        uint64_t rows_read() const { return _total_row_count; }
     };
 public:
     result_generator() = default;

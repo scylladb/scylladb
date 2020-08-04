@@ -102,7 +102,7 @@ lw_shared_ptr<query::read_command> cas_request::read_command(service::storage_pr
         ranges.reserve(op.ranges.size());
         std::copy(op.ranges.begin(), op.ranges.end(), std::back_inserter(ranges));
     }
-    uint32_t max_rows = query::max_rows;
+    uint64_t max_rows = query::partition_max_rows;
     if (ranges.empty()) {
         // With only a static condition, we still want to make the distinction between
         // a non-existing partition and one that exists (has some live data) but has not

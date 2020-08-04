@@ -243,9 +243,9 @@ select_statement::make_partition_slice(const query_options& options) const
         std::move(static_columns), std::move(regular_columns), _opts, nullptr, options.get_cql_serialization_format(), get_per_partition_limit(options));
 }
 
-uint32_t select_statement::do_get_limit(const query_options& options, ::shared_ptr<term> limit) const {
+uint64_t select_statement::do_get_limit(const query_options& options, ::shared_ptr<term> limit, uint64_t default_limit) const {
     if (!limit || _selection->is_aggregate()) {
-        return query::max_rows;
+        return default_limit;
     }
 
     auto val = limit->bind_and_get(options);
@@ -253,7 +253,7 @@ uint32_t select_statement::do_get_limit(const query_options& options, ::shared_p
         throw exceptions::invalid_request_exception("Invalid null value of limit");
     }
     if (val.is_unset_value()) {
-        return query::max_rows;
+        return default_limit;
     }
   return with_linearized(*val, [&] (bytes_view bv) {
     try {
@@ -304,7 +304,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
 
     validate_for_read(cl);
 
-    int32_t limit = get_limit(options);
+    uint64_t limit = get_limit(options);
     auto now = gc_clock::now();
 
     const bool restrictions_need_filtering = _restrictions->need_filtering();
@@ -525,7 +525,7 @@ indexed_table_select_statement::do_execute_base_query(
         query::result_merger merger;
         service::query_ranges_to_vnodes_generator ranges_to_vnodes;
         size_t concurrency = 1;
-        base_query_state(uint32_t row_limit, service::query_ranges_to_vnodes_generator&& ranges_to_vnodes_)
+        base_query_state(uint64_t row_limit, service::query_ranges_to_vnodes_generator&& ranges_to_vnodes_)
                 : merger(row_limit, query::max_partitions)
                 , ranges_to_vnodes(std::move(ranges_to_vnodes_))
                 {}
@@ -533,7 +533,7 @@ indexed_table_select_statement::do_execute_base_query(
         base_query_state(const base_query_state&) = delete;
     };
 
-    base_query_state query_state{cmd->row_limit * queried_ranges_count, std::move(ranges_to_vnodes)};
+    base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
     return do_with(std::move(query_state), [this, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
         auto& [merger, ranges_to_vnodes, concurrency] = query_state;
         return repeat([this, &ranges_to_vnodes, &merger, &proxy, &state, &options, &concurrency, cmd, timeout]() {
@@ -599,7 +599,7 @@ indexed_table_select_statement::do_execute_base_query(
         query::result_merger merger;
         std::vector<primary_key> primary_keys;
         std::vector<primary_key>::iterator current_primary_key;
-        base_query_state(uint32_t row_limit, std::vector<primary_key>&& keys)
+        base_query_state(uint64_t row_limit, std::vector<primary_key>&& keys)
                 : merger(row_limit, query::max_partitions)
                 , primary_keys(std::move(keys))
                 , current_primary_key(primary_keys.begin())
@@ -608,7 +608,7 @@ indexed_table_select_statement::do_execute_base_query(
         base_query_state(const base_query_state&) = delete;
     };
 
-    base_query_state query_state{cmd->row_limit, std::move(primary_keys)};
+    base_query_state query_state{cmd->get_row_limit(), std::move(primary_keys)};
     return do_with(std::move(query_state), [this, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
         auto &merger = query_state.merger;
         auto &keys = query_state.primary_keys;
@@ -619,7 +619,7 @@ indexed_table_select_statement::do_execute_base_query(
             auto key_it_end = std::min(key_it + std::distance(keys.begin(), key_it) + 1, keys.end());
             auto command = ::make_lw_shared<query::read_command>(*cmd);
 
-            query::result_merger oneshot_merger(cmd->row_limit, query::max_partitions);
+            query::result_merger oneshot_merger(cmd->get_row_limit(), query::max_partitions);
             return map_reduce(key_it, key_it_end, [this, &proxy, &state, &options, cmd, timeout] (auto& key) {
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
                 // for each partition, read just one clustering row (TODO: can
@@ -676,7 +676,7 @@ select_statement::execute(service::storage_proxy& proxy,
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &proxy, &state, &options, cmd, timeout](auto& prs) {
             assert(cmd->partition_limit == query::max_partitions);
-            query::result_merger merger(cmd->row_limit * prs.size(), query::max_partitions);
+            query::result_merger merger(cmd->get_row_limit() * prs.size(), query::max_partitions);
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd, timeout] (auto& pr) {
                 dht::partition_range_vector prange { pr };
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
@@ -740,7 +740,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
                 _stats.filtered_rows_read_total += *results->row_count();
                 query::result_view::consume(*results, cmd->slice,
                         cql3::selection::result_set_builder::visitor(builder, *_schema,
-                                *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->row_limit, _schema, cmd->slice.partition_row_limit())));
+                                *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _schema, cmd->slice.partition_row_limit())));
             } else {
                 query::result_view::consume(*results, cmd->slice,
                         cql3::selection::result_set_builder::visitor(builder, *_schema,
@@ -753,7 +753,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
                 if (_is_reversed) {
                     rs->reverse();
                 }
-                rs->trim(cmd->row_limit);
+                rs->trim(cmd->get_row_limit());
             }
             update_stats_rows_read(rs->size());
             _stats.filtered_rows_matched_total += restrictions_need_filtering ? rs->size() : 0;
@@ -999,7 +999,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                     if (restrictions_need_filtering) {
                         _stats.filtered_rows_read_total += *results->row_count();
                         query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
-                                cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->row_limit, _schema, cmd->slice.partition_row_limit())));
+                                cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _schema, cmd->slice.partition_row_limit())));
                     } else {
                         query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection));
                     }
@@ -1147,7 +1147,7 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_l
 future<::shared_ptr<cql_transport::messages::result_message::rows>>
 indexed_table_select_statement::read_posting_list(service::storage_proxy& proxy,
                   const query_options& options,
-                  int32_t limit,
+                  uint64_t limit,
                   service::query_state& state,
                   gc_clock::time_point now,
                   db::timeout_clock::time_point timeout,

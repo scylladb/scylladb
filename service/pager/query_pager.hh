@@ -81,8 +81,8 @@ protected:
     // remember if we use clustering. if not, each partition == one row
     const bool _has_clustering_keys;
     bool _exhausted = false;
-    uint32_t _max;
-    uint32_t _per_partition_limit;
+    uint64_t _max;
+    uint64_t _per_partition_limit;
 
     std::optional<partition_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
@@ -95,7 +95,7 @@ protected:
     dht::partition_range_vector _ranges;
     paging_state::replicas_per_token_range _last_replicas;
     std::optional<db::read_repair_decision> _query_read_repair_decision;
-    uint32_t _rows_fetched_for_last_partition = 0;
+    uint64_t _rows_fetched_for_last_partition = 0;
     stats _stats;
 public:
     query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
@@ -136,7 +136,7 @@ public:
      * returned (note that it's not how many we *will* return, just the upper
      * limit on it).
      */
-    int max_remaining() const {
+    uint64_t max_remaining() const {
         return _max;
     }
 
@@ -166,8 +166,8 @@ protected:
                       const foreign_ptr<lw_shared_ptr<query::result>>& results,
                       uint32_t page_size, gc_clock::time_point now);
 
-    virtual uint32_t max_rows_to_fetch(uint32_t page_size) {
-        return std::min(_max, page_size);
+    virtual uint64_t max_rows_to_fetch(uint32_t page_size) {
+        return std::min(_max, static_cast<uint64_t>(page_size));
     }
 
     virtual void maybe_adjust_per_partition_limit(uint32_t page_size) const { }

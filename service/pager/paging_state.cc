@@ -58,18 +58,34 @@
 
 service::pager::paging_state::paging_state(partition_key pk,
         std::optional<clustering_key> ck,
-        uint32_t rem,
+        uint32_t rem_low_bits,
         utils::UUID query_uuid,
         replicas_per_token_range last_replicas,
         std::optional<db::read_repair_decision> query_read_repair_decision,
-        uint32_t rows_fetched_for_last_partition)
+        uint32_t rows_fetched_for_last_partition_low_bits,
+        uint32_t rem_high_bits,
+        uint32_t rows_fetched_for_last_partition_high_bits)
     : _partition_key(std::move(pk))
     , _clustering_key(std::move(ck))
-    , _remaining(rem)
+    , _remaining_low_bits(rem_low_bits)
     , _query_uuid(query_uuid)
     , _last_replicas(std::move(last_replicas))
     , _query_read_repair_decision(query_read_repair_decision)
-    , _rows_fetched_for_last_partition(rows_fetched_for_last_partition) {
+    , _rows_fetched_for_last_partition_low_bits(rows_fetched_for_last_partition_low_bits)
+    , _remaining_high_bits(rem_high_bits)
+    , _rows_fetched_for_last_partition_high_bits(rows_fetched_for_last_partition_high_bits) {
+}
+
+service::pager::paging_state::paging_state(partition_key pk,
+        std::optional<clustering_key> ck,
+        uint64_t rem,
+        utils::UUID query_uuid,
+        replicas_per_token_range last_replicas,
+        std::optional<db::read_repair_decision> query_read_repair_decision,
+        uint64_t rows_fetched_for_last_partition)
+    : paging_state(std::move(pk), std::move(ck), static_cast<uint32_t>(rem), query_uuid, std::move(last_replicas), query_read_repair_decision,
+            static_cast<uint32_t>(rows_fetched_for_last_partition), static_cast<uint32_t>(rem >> 32),
+            static_cast<uint32_t>(rows_fetched_for_last_partition >> 32)) {
 }
 
 lw_shared_ptr<service::pager::paging_state> service::pager::paging_state::deserialize(

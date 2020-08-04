@@ -36,16 +36,31 @@ class frozen_reconcilable_result;
 
 // Can be read by other cores after publishing.
 struct partition {
-    uint32_t _row_count;
+    uint32_t _row_count_low_bits;
     frozen_mutation _m; // FIXME: We don't need cf UUID, which frozen_mutation includes.
-
-    partition(uint32_t row_count, frozen_mutation m)
-        : _row_count(row_count)
+    uint32_t _row_count_high_bits;
+    partition(uint32_t row_count_low_bits, frozen_mutation m, uint32_t row_count_high_bits)
+        : _row_count_low_bits(row_count_low_bits)
         , _m(std::move(m))
+        , _row_count_high_bits(row_count_high_bits)
     { }
 
-    uint32_t row_count() const {
-        return _row_count;
+    partition(uint64_t row_count, frozen_mutation m)
+        : _row_count_low_bits(static_cast<uint32_t>(row_count))
+        , _m(std::move(m))
+        , _row_count_high_bits(static_cast<uint32_t>(row_count >> 32))
+    { }
+
+    uint32_t row_count_low_bits() const {
+        return _row_count_low_bits;
+    }
+
+    uint32_t row_count_high_bits() const {
+        return _row_count_high_bits;
+    }
+    
+    uint64_t row_count() const {
+        return (static_cast<uint64_t>(_row_count_high_bits) << 32) | _row_count_low_bits;
     }
 
     const frozen_mutation& mut() const {
@@ -58,7 +73,7 @@ struct partition {
 
 
     bool operator==(const partition& other) const {
-        return _row_count == other._row_count && _m.representation() == other._m.representation();
+        return row_count() == other.row_count() && _m.representation() == other._m.representation();
     }
 
     bool operator!=(const partition& other) const {
@@ -71,23 +86,34 @@ struct partition {
 //
 // Can be read by other cores after publishing.
 class reconcilable_result {
-    uint32_t _row_count;
+    uint32_t _row_count_low_bits;
     query::short_read _short_read;
     query::result_memory_tracker _memory_tracker;
     utils::chunked_vector<partition> _partitions;
+    uint32_t _row_count_high_bits;
 public:
     ~reconcilable_result();
     reconcilable_result();
     reconcilable_result(reconcilable_result&&) = default;
     reconcilable_result& operator=(reconcilable_result&&) = default;
-    reconcilable_result(uint32_t row_count, utils::chunked_vector<partition> partitions, query::short_read short_read,
+    reconcilable_result(uint32_t row_count_low_bits, utils::chunked_vector<partition> partitions, query::short_read short_read,
+                        uint32_t row_count_high_bits, query::result_memory_tracker memory_tracker = { });
+    reconcilable_result(uint64_t row_count, utils::chunked_vector<partition> partitions, query::short_read short_read,
                         query::result_memory_tracker memory_tracker = { });
 
     const utils::chunked_vector<partition>& partitions() const;
     utils::chunked_vector<partition>& partitions();
 
-    uint32_t row_count() const {
-        return _row_count;
+    uint32_t row_count_low_bits() const {
+        return _row_count_low_bits;
+    }
+
+    uint32_t row_count_high_bits() const {
+        return _row_count_high_bits;
+    }
+
+    uint64_t row_count() const {
+        return (static_cast<uint64_t>(_row_count_high_bits) << 32) | _row_count_low_bits;
     }
 
     query::short_read is_short_read() const {
@@ -115,11 +141,11 @@ class reconcilable_result_builder {
     const query::partition_slice& _slice;
 
     utils::chunked_vector<partition> _result;
-    uint32_t _live_rows{};
+    uint64_t _live_rows{};
 
     bool _return_static_content_on_partition_with_no_rows{};
     bool _static_row_is_alive{};
-    uint32_t _total_live_rows = 0;
+    uint64_t _total_live_rows = 0;
     query::result_memory_accounter _memory_accounter;
     stop_iteration _stop;
     std::optional<streamed_mutation_freezer> _mutation_consumer;
@@ -139,7 +165,7 @@ public:
     reconcilable_result consume_end_of_stream();
 };
 
-query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&, uint32_t row_limit, uint32_t partition_limit, query::result_options opts = query::result_options::only_result());
+query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&, uint64_t row_limit, uint32_t partition_limit, query::result_options opts = query::result_options::only_result());
 
 // Performs a query on given data source returning data in reconcilable form.
 //
@@ -157,7 +183,7 @@ future<reconcilable_result> mutation_query(
     mutation_source source,
     const dht::partition_range& range,
     const query::partition_slice& slice,
-    uint32_t row_limit,
+    uint64_t row_limit,
     uint32_t partition_limit,
     gc_clock::time_point query_time,
     db::timeout_clock::time_point timeout,
@@ -171,7 +197,7 @@ future<> data_query(
     const mutation_source& source,
     const dht::partition_range& range,
     const query::partition_slice& slice,
-    uint32_t row_limit,
+    uint64_t row_limit,
     uint32_t partition_limit,
     gc_clock::time_point query_time,
     query::result::builder& builder,

@@ -1378,7 +1378,7 @@ private:
         const std::vector<query::clustering_range>& row_ranges,
         bool always_return_static_content,
         bool reverse,
-        uint32_t row_limit,
+        uint64_t row_limit,
         can_gc_fn&);
 
     // Calls func for each row entry inside row_ranges until func returns stop_iteration::yes.
@@ -1407,9 +1407,9 @@ public:
     //
     // The row_limit parameter must be > 0.
     //
-    uint32_t compact_for_query(const schema& s, gc_clock::time_point query_time,
+    uint64_t compact_for_query(const schema& s, gc_clock::time_point query_time,
         const std::vector<query::clustering_range>& row_ranges, bool always_return_static_content,
-        bool reversed, uint32_t row_limit);
+        bool reversed, uint64_t row_limit);
 
     // Performs the following:
     //   - expires cells based on compaction_time
@@ -1463,7 +1463,7 @@ public:
     // The partition should be first compacted with compact_for_query(), otherwise
     // results may include data which is deleted/expired.
     // At most row_limit CQL rows will be written and digested.
-    void query_compacted(query::result::partition_writer& pw, const schema& s, uint32_t row_limit) const;
+    void query_compacted(query::result::partition_writer& pw, const schema& s, uint64_t row_limit) const;
     void accept(const schema&, mutation_partition_visitor&) const;
 
     // Returns the number of live CQL rows in this partition.
@@ -1472,13 +1472,13 @@ public:
     // static row, the static row counts as one row. If there is at least one
     // regular row live, static row doesn't count.
     //
-    size_t live_row_count(const schema&,
+    uint64_t live_row_count(const schema&,
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 
     bool is_static_row_live(const schema&,
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 
-    size_t row_count() const;
+    uint64_t row_count() const;
 
     size_t external_memory_usage(const schema&) const;
 private:

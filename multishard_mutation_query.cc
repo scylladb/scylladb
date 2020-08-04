@@ -621,13 +621,13 @@ static future<reconcilable_result> do_query_mutations(
             auto reader = make_flat_multi_range_reader(s, ctx->db().local().get_reader_concurrency_semaphore().make_permit(), std::move(ms), ranges,
                     cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
 
-            auto compaction_state = make_lw_shared<compact_for_mutation_query_state>(*s, cmd.timestamp, cmd.slice, cmd.row_limit,
+            auto compaction_state = make_lw_shared<compact_for_mutation_query_state>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
                     cmd.partition_limit);
 
             return do_with(std::move(reader), std::move(compaction_state), [&, accounter = std::move(accounter), timeout] (
                         flat_mutation_reader& reader, lw_shared_ptr<compact_for_mutation_query_state>& compaction_state) mutable {
                 auto rrb = reconcilable_result_builder(*reader.schema(), cmd.slice, std::move(accounter));
-                return query::consume_page(reader, compaction_state, cmd.slice, std::move(rrb), cmd.row_limit, cmd.partition_limit, cmd.timestamp,
+                return query::consume_page(reader, compaction_state, cmd.slice, std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp,
                         timeout, *cmd.max_result_size).then([&] (consume_result&& result) mutable {
                     return make_ready_future<page_consume_result>(page_consume_result(std::move(result), reader.detach_buffer(), std::move(compaction_state)));
                 });
@@ -659,7 +659,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    if (cmd.row_limit == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
+    if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         return make_ready_future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(
             std::tuple(
                 make_foreign(make_lw_shared<reconcilable_result>()),

@@ -2913,7 +2913,7 @@ class data_read_resolver : public abstract_read_resolver {
     };
     struct mutation_and_live_row_count {
         mutation mut;
-        size_t live_row_count;
+        uint64_t live_row_count;
     };
 
     struct primary_key {
@@ -2959,10 +2959,10 @@ class data_read_resolver : public abstract_read_resolver {
         };
     };
 
-    size_t _total_live_count = 0;
-    uint32_t _max_live_count = 0;
+    uint64_t _total_live_count = 0;
+    uint64_t _max_live_count = 0;
     uint32_t _short_read_diff = 0;
-    uint32_t _max_per_partition_live_count = 0;
+    uint64_t _max_per_partition_live_count = 0;
     uint32_t _partition_count = 0;
     uint32_t _live_partition_count = 0;
     bool _increase_per_partition_limit = false;
@@ -2983,7 +2983,7 @@ private:
         return _data_results.size();
     }
 
-    void register_live_count(const std::vector<version>& replica_versions, uint32_t reconciled_live_rows, uint32_t limit) {
+    void register_live_count(const std::vector<version>& replica_versions, uint64_t reconciled_live_rows, uint64_t limit) {
         bool any_not_at_end = boost::algorithm::any_of(replica_versions, [] (const version& v) {
             return !v.reached_partition_end;
         });
@@ -2993,7 +2993,7 @@ private:
         }
     }
     void find_short_partitions(const std::vector<mutation_and_live_row_count>& rp, const std::vector<std::vector<version>>& versions,
-                               uint32_t per_partition_limit, uint32_t row_limit, uint32_t partition_limit) {
+                               uint64_t per_partition_limit, uint64_t row_limit, uint32_t partition_limit) {
         // Go through the partitions that weren't limited by the total row limit
         // and check whether we got enough rows to satisfy per-partition row
         // limit.
@@ -3035,7 +3035,7 @@ private:
         return get_last_row(s, *last_partition, is_reversed);
     }
 
-    static primary_key get_last_reconciled_row(const schema& s, const mutation_and_live_row_count& m_a_rc, const query::read_command& cmd, uint32_t limit, bool is_reversed) {
+    static primary_key get_last_reconciled_row(const schema& s, const mutation_and_live_row_count& m_a_rc, const query::read_command& cmd, uint64_t limit, bool is_reversed) {
         const auto& m = m_a_rc.mut;
         auto mp = mutation_partition(s, m.partition());
         auto&& ranges = cmd.slice.row_ranges(s, m.key());
@@ -3108,7 +3108,7 @@ private:
                     ranges.emplace_back(is_reversed ? query::clustering_range::make_starting_with(std::move(*shortest_read->clustering))
                                                     : query::clustering_range::make_ending_with(std::move(*shortest_read->clustering)));
                     it->live_row_count = it->mut.partition().compact_for_query(s, cmd.timestamp, ranges, always_return_static_content,
-                            is_reversed, query::max_rows);
+                            is_reversed, query::partition_max_rows);
                 }
             }
 
@@ -3117,7 +3117,7 @@ private:
 
             // Update total live count and live partition count
             _live_partition_count = 0;
-            _total_live_count = boost::accumulate(rp, uint32_t(0), [this] (uint32_t lc, const mutation_and_live_row_count& m_a_rc) {
+            _total_live_count = boost::accumulate(rp, uint64_t(0), [this] (uint64_t lc, const mutation_and_live_row_count& m_a_rc) {
                 _live_partition_count += !!m_a_rc.live_row_count;
                 return lc + m_a_rc.live_row_count;
             });
@@ -3126,8 +3126,8 @@ private:
         return false;
     }
 
-    bool got_incomplete_information(const schema& s, const query::read_command& cmd, uint32_t original_row_limit, uint32_t original_per_partition_limit,
-                            uint32_t original_partition_limit, std::vector<mutation_and_live_row_count>& rp, const std::vector<std::vector<version>>& versions) {
+    bool got_incomplete_information(const schema& s, const query::read_command& cmd, uint64_t original_row_limit, uint64_t original_per_partition_limit,
+                            uint64_t original_partition_limit, std::vector<mutation_and_live_row_count>& rp, const std::vector<std::vector<version>>& versions) {
         // We need to check whether the reconciled result contains all information from all available
         // replicas. It is possible that some of the nodes have returned less rows (because the limit
         // was set and they had some tombstones missing) than the others. In such cases we cannot just
@@ -3148,7 +3148,7 @@ private:
             if (row_count < rows_left && partitions_left > !!row_count) {
                 rows_left -= row_count;
                 partitions_left -= !!row_count;
-                if (original_per_partition_limit != query::max_rows) {
+                if (original_per_partition_limit < query:: max_rows_if_set) {
                     auto&& last_row = get_last_reconciled_row(s, m_a_rc, cmd, original_per_partition_limit, is_reversed);
                     if (got_incomplete_information_in_partition(s, last_row, *pv, is_reversed)) {
                         _increase_per_partition_limit = true;
@@ -3201,7 +3201,7 @@ public:
     bool all_reached_end() const {
         return _all_reached_end;
     }
-    std::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint32_t original_row_limit, uint32_t original_per_partition_limit,
+    std::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint64_t original_row_limit, uint64_t original_per_partition_limit,
             uint32_t original_partition_limit) {
         assert(_data_results.size());
 
@@ -3234,7 +3234,7 @@ public:
 
         for (auto& r : _data_results) {
             _is_short_read = _is_short_read || r.result->is_short_read();
-            r.reached_end = !r.result->is_short_read() && r.result->row_count() < cmd.row_limit
+            r.reached_end = !r.result->is_short_read() && r.result->row_count() < cmd.get_row_limit()
                             && (cmd.partition_limit == query::max_partitions
                                 || boost::range::count_if(r.result->partitions(), [] (const partition& p) {
                                     return p.row_count();
@@ -3528,10 +3528,10 @@ protected:
         return when_all_succeed(std::move(f_data), std::move(f_digest)).discard_result().handle_exception([] (auto&&) { });
     }
     virtual void got_cl() {}
-    uint32_t original_row_limit() const {
-        return _cmd->row_limit;
+    uint64_t original_row_limit() const {
+        return _cmd->get_row_limit();
     }
-    uint32_t original_per_partition_row_limit() const {
+    uint64_t original_per_partition_row_limit() const {
         return _cmd->slice.partition_row_limit();
     }
     uint32_t original_partition_limit() const {
@@ -3560,7 +3560,7 @@ protected:
                                || data_resolver->live_partition_count() >= original_partition_limit())
                         && !data_resolver->any_partition_short_read()) {
                     auto result = ::make_foreign(::make_lw_shared<query::result>(
-                            to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->row_limit, cmd->partition_limit)));
+                            to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), cmd->partition_limit)));
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
                     // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
@@ -3582,26 +3582,33 @@ protected:
                 } else {
                     _proxy->get_stats().read_retries++;
                     _retry_cmd = make_lw_shared<query::read_command>(*cmd);
-                    // We asked t (= cmd->row_limit) live columns and got l (=data_resolver->total_live_count) ones.
+                    // We asked t (= cmd->get_row_limit()) live columns and got l (=data_resolver->total_live_count) ones.
                     // From that, we can estimate that on this row, for x requested
                     // columns, only l/t end up live after reconciliation. So for next
                     // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
-                    auto x = [](uint64_t t, uint64_t l) -> uint32_t {
-                        auto ret = std::min(static_cast<uint64_t>(query::max_rows), l == 0 ? t + 1 : ((t * t) / l) + 1);
-                        return static_cast<uint32_t>(ret);
+                    auto x = [](uint64_t t, uint64_t l) -> uint64_t {
+                        using uint128_t = unsigned __int128;
+                        auto ret = std::min<uint128_t>(query::max_rows, l == 0 ? t + 1 : (uint128_t) t * t / l + 1);
+                        return static_cast<uint64_t>(ret);
+                    };
+                    auto all_partitions_x = [](uint64_t x, uint32_t partitions) -> uint64_t {
+                        using uint128_t = unsigned __int128;
+                        auto ret = std::min<uint128_t>(query::max_rows, (uint128_t) x * partitions);
+                        return static_cast<uint64_t>(ret);
                     };
                     if (data_resolver->any_partition_short_read() || data_resolver->increase_per_partition_limit()) {
                         // The number of live rows was bounded by the per partition limit.
-                        auto new_limit = x(cmd->slice.partition_row_limit(), data_resolver->max_per_partition_live_count());
-                        _retry_cmd->slice.set_partition_row_limit(new_limit);
-                        _retry_cmd->row_limit = std::max(cmd->row_limit, data_resolver->partition_count() * new_limit);
+                        auto new_partition_limit = x(cmd->slice.partition_row_limit(), data_resolver->max_per_partition_live_count());
+                        _retry_cmd->slice.set_partition_row_limit(new_partition_limit);
+                        auto new_limit = all_partitions_x(new_partition_limit, data_resolver->partition_count());
+                        _retry_cmd->set_row_limit(std::max(cmd->get_row_limit(), new_limit));
                     } else {
                         // The number of live rows was bounded by the total row limit or partition limit.
                         if (cmd->partition_limit != query::max_partitions) {
-                            _retry_cmd->partition_limit = x(cmd->partition_limit, data_resolver->live_partition_count());
+                            _retry_cmd->partition_limit = std::min<uint64_t>(query::max_partitions, x(cmd->partition_limit, data_resolver->live_partition_count()));
                         }
-                        if (cmd->row_limit != query::max_rows) {
-                            _retry_cmd->row_limit = x(cmd->row_limit, data_resolver->total_live_count());
+                        if (cmd->get_row_limit() != query::max_rows) {
+                            _retry_cmd->set_row_limit(x(cmd->get_row_limit(), data_resolver->total_live_count()));
                         }
                     }
 
@@ -3900,7 +3907,7 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
         return query_nonsingular_mutations_locally(s, cmd, {pr}, std::move(trace_state), timeout).then([s, cmd, opts] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>&& r_ht) {
             auto&& [r, ht] = r_ht;
             return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(
-                    rpc::tuple(::make_foreign(::make_lw_shared<query::result>(to_data_query_result(*r, s, cmd->slice,  cmd->row_limit, cmd->partition_limit, opts))), ht));
+                    rpc::tuple(::make_foreign(::make_lw_shared<query::result>(to_data_query_result(*r, s, cmd->slice,  cmd->get_row_limit(), cmd->partition_limit, opts))), ht));
         });
     }
 }
@@ -3957,7 +3964,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         get_stats().reads_coordinator_outside_replica_set++;
     }
 
-    query::result_merger merger(cmd->row_limit, cmd->partition_limit);
+    query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
     merger.reserve(exec.size());
 
     auto used_replicas = make_lw_shared<replicas_per_token_range>();
@@ -4001,7 +4008,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         query_ranges_to_vnodes_generator&& ranges_to_vnodes,
         int concurrency_factor,
         tracing::trace_state_ptr trace_state,
-        uint32_t remaining_row_count,
+        uint64_t remaining_row_count,
         uint32_t remaining_partition_count,
         replicas_per_token_range preferred_replicas,
         service_permit permit) {
@@ -4112,7 +4119,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
     }
 
-    query::result_merger merger(cmd->row_limit, cmd->partition_limit);
+    query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
     merger.reserve(exec.size());
 
     auto f = ::map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
@@ -4152,7 +4159,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             }
             return make_ready_future<query_partition_key_range_concurrent_result>(query_partition_key_range_concurrent_result{std::move(results), std::move(used_replicas)});
         } else {
-            cmd->row_limit = remaining_row_count;
+            cmd->set_row_limit(remaining_row_count);
             cmd->partition_limit = remaining_partition_count;
             return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(ranges_to_vnodes),
                     concurrency_factor * 2, std::move(trace_state), remaining_row_count, remaining_partition_count, std::move(preferred_replicas), std::move(permit));
@@ -4181,7 +4188,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
 
     slogger.debug("Estimated result rows per range: {}; requested rows: {}, concurrent range requests: {}",
-            result_rows_per_range, cmd->row_limit, concurrency_factor);
+            result_rows_per_range, cmd->get_row_limit(), concurrency_factor);
 
     // The call to `query_partition_key_range_concurrent()` below
     // updates `cmd` directly when processing the results. Under
@@ -4193,7 +4200,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     // declare the query exhausted due to the non-full page. To avoid
     // this save the original values of the limits here and pass these
     // to the lambda below.
-    const auto row_limit = cmd->row_limit;
+    const auto row_limit = cmd->get_row_limit();
     const auto partition_limit = cmd->partition_limit;
 
     return query_partition_key_range_concurrent(query_options.timeout(*this),
@@ -4203,7 +4210,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             std::move(ranges_to_vnodes),
             concurrency_factor,
             std::move(query_options.trace_state),
-            cmd->row_limit,
+            cmd->get_row_limit(),
             cmd->partition_limit,
             std::move(query_options.preferred_replicas),
             std::move(query_options.permit)).then([row_limit, partition_limit] (

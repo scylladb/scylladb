@@ -76,7 +76,7 @@ future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy& proxy
     auto schema = get_schema(proxy, options.get_keyspace_name(), redis::STRINGs);
     auto ps = partition_slice_builder(*schema).build();
     const auto max_result_size = proxy.get_max_result_size(ps);
-    query::read_command cmd(schema->id(), schema->version(), ps, 1, gc_clock::now(), std::nullopt, 1, utils::UUID(), query::is_first_page::no, max_result_size);
+    query::read_command cmd(schema->id(), schema->version(), ps, 1, gc_clock::now(), std::nullopt, 1, utils::UUID(), query::is_first_page::no, max_result_size, 0);
     auto pkey = partition_key::from_single_value(*schema, key);
     auto partition_range = dht::partition_range::make_singular(dht::decorate_key(*schema, std::move(pkey)));
     dht::partition_range_vector partition_ranges;

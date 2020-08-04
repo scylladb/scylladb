@@ -122,9 +122,9 @@ public:
 struct result_visitor {
     void accept_new_partition(
         const partition_key& key, // FIXME: use view for the key
-        uint32_t row_count) {}
+        uint64_t row_count) {}
 
-    void accept_new_partition(uint32_t row_count) {}
+    void accept_new_partition(uint64_t row_count) {}
 
     void accept_new_row(
         const clustering_key& key, // FIXME: use view for the key
@@ -138,7 +138,7 @@ struct result_visitor {
 
 template<typename Visitor>
 concept ResultVisitor = requires(Visitor visitor, const partition_key& pkey,
-                                      uint32_t row_count, const clustering_key& ckey,
+                                      uint64_t row_count, const clustering_key& ckey,
                                       const result_row_view& static_row, const result_row_view& row)
 {
     visitor.accept_new_partition(pkey, row_count);
@@ -195,11 +195,11 @@ public:
         }
     }
 
-    std::tuple<uint32_t, uint32_t> count_partitions_and_rows() const {
+    std::tuple<uint32_t, uint64_t> count_partitions_and_rows() const {
         auto&& ps = _v.partitions();
         auto rows = boost::accumulate(ps | boost::adaptors::transformed([] (auto& p) {
             return std::max(p.rows().size(), size_t(1));
-        }), uint32_t(0));
+        }), uint64_t(0));
         return std::make_tuple(ps.size(), rows);
     }
 

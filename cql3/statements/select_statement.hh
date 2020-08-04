@@ -148,12 +148,12 @@ public:
     bool has_group_by() const { return _group_by_cell_indices && !_group_by_cell_indices->empty(); }
 
 protected:
-    uint32_t do_get_limit(const query_options& options, ::shared_ptr<term> limit) const;
-    uint32_t get_limit(const query_options& options) const {
-        return do_get_limit(options, _limit);
+    uint64_t do_get_limit(const query_options& options, ::shared_ptr<term> limit, uint64_t default_limit) const;
+    uint64_t get_limit(const query_options& options) const {
+        return do_get_limit(options, _limit, query::max_rows);
     }
-    uint32_t get_per_partition_limit(const query_options& options) const {
-        return do_get_limit(options, _per_partition_limit);
+    uint64_t get_per_partition_limit(const query_options& options) const {
+        return do_get_limit(options, _per_partition_limit, query::partition_max_rows);
     }
     bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {
@@ -291,7 +291,7 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message::rows>>read_posting_list(
             service::storage_proxy& proxy,
             const query_options& options,
-            int32_t limit,
+            uint64_t limit,
             service::query_state& state,
             gc_clock::time_point now,
             db::timeout_clock::time_point timeout,

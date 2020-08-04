@@ -2858,7 +2858,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
                 "Consistent reads are not allowed on global indexes (GSI)"));
     }
     rjson::value* limit_json = rjson::find(request, "Limit");
-    uint32_t limit = limit_json ? limit_json->GetUint64() : query::max_partitions;
+    uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
     if (limit <= 0) {
         return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
     }
@@ -3306,7 +3306,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
                 "Consistent reads are not allowed on global indexes (GSI)"));
     }
     rjson::value* limit_json = rjson::find(request, "Limit");
-    uint32_t limit = limit_json ? limit_json->GetUint64() : query::max_partitions;
+    uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
     if (limit <= 0) {
         return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
     }

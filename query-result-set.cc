@@ -43,13 +43,13 @@ class result_set_builder {
     const partition_slice& _slice;
     std::vector<result_set_row> _rows;
     std::unordered_map<sstring, non_null_data_value> _pkey_cells;
-    uint32_t _row_count;
+    uint64_t _row_count;
 public:
     // Keep slice live as long as the builder is used.
     result_set_builder(schema_ptr schema, const partition_slice& slice);
     result_set build();
-    void accept_new_partition(const partition_key& key, uint32_t row_count);
-    void accept_new_partition(uint32_t row_count);
+    void accept_new_partition(const partition_key& key, uint64_t row_count);
+    void accept_new_partition(uint64_t row_count);
     void accept_new_row(const clustering_key& key, const result_row_view& static_row, const result_row_view& row);
     void accept_new_row(const result_row_view &static_row, const result_row_view &row);
     void accept_partition_end(const result_row_view& static_row);
@@ -91,13 +91,13 @@ result_set result_set_builder::build() {
     return { _schema, std::move(_rows) };
 }
 
-void result_set_builder::accept_new_partition(const partition_key& key, uint32_t row_count)
+void result_set_builder::accept_new_partition(const partition_key& key, uint64_t row_count)
 {
     _pkey_cells = deserialize(key);
     accept_new_partition(row_count);
 }
 
-void result_set_builder::accept_new_partition(uint32_t row_count)
+void result_set_builder::accept_new_partition(uint64_t row_count)
 {
     _row_count = row_count;
 }

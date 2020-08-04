@@ -1307,7 +1307,7 @@ public:
 
         class visitor {
             cql_server::response& _response;
-            int32_t _row_count = 0;
+            int64_t _row_count = 0;
         public:
             visitor(cql_server::response& r) : _response(r) { }
 
@@ -1319,12 +1319,12 @@ public:
             }
             void end_row() { }
 
-            int32_t row_count() const { return _row_count; }
+            int64_t row_count() const { return _row_count; }
         };
 
         auto v = visitor(_response);
         rs.visit(v);
-        row_count_plhldr.write(v.row_count());
+        row_count_plhldr.write(v.row_count()); // even though the placeholder is for int32_t we won't overflow because of memory limits
     }
 };
 

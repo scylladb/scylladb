@@ -82,7 +82,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
         (void)_;
 
         auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), 7, gc_clock::now(), std::nullopt, query::max_partitions,
-                utils::make_random_uuid(), query::is_first_page::yes, query::max_result_size(query::result_memory_limiter::unlimited_result_size));
+                utils::make_random_uuid(), query::is_first_page::yes, query::max_result_size(query::result_memory_limiter::unlimited_result_size), 0);
 
         query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, db::no_timeout).get();
 
@@ -127,7 +127,7 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
     const auto query_uuid = is_stateful ? utils::make_random_uuid() : utils::UUID{};
     std::vector<mutation> results;
     auto cmd = query::read_command(s->id(), s->version(), slice, page_size, gc_clock::now(), std::nullopt, query::max_partitions, query_uuid,
-            query::is_first_page::yes, query::max_result_size(max_size));
+            query::is_first_page::yes, query::max_result_size(max_size), 0);
 
     bool has_more = true;
 

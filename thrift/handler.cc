@@ -350,7 +350,7 @@ public:
                 cmd->partition_limit = range.count;
             } else {
                 // For static CFs each thrift row maps to a CQL row.
-                cmd->row_limit = range.count;
+                cmd->set_row_limit(static_cast<uint64_t>(range.count));
             }
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, &proxy, schema, cmd, prange = std::move(prange), consistency_level] () mutable {
@@ -369,14 +369,14 @@ public:
         auto opts = query_opts(s);
         std::vector<query::clustering_range> clustering_ranges;
         query::column_id_vector regular_columns;
-        uint32_t row_limit;
+        uint64_t row_limit;
         uint32_t partition_limit;
         std::unique_ptr<query::specific_ranges> specific_ranges = nullptr;
         // KeyRange::count is the number of thrift columns to return (unlike get_range_slices).
         if (s.thrift().is_dynamic()) {
             // For dynamic CFs we must limit the number of rows returned. We use the query::specific_ranges to constrain
             // the first partition, of which we are only interested in the columns after start_column.
-            row_limit = column_limit;
+            row_limit = static_cast<uint64_t>(column_limit);
             partition_limit = query::max_partitions;
             if (start_column) {
                 auto sr = query::specific_ranges(*range[0].start()->value().key(), {make_clustering_range_and_validate(s, *start_column, std::string())});
@@ -387,7 +387,7 @@ public:
             // For static CFs we must limit the number of columns returned. Since we don't implement a cell limit,
             // we ask for as many partitions as those that are capable of exhausting the limit and later filter out
             // any excess cells.
-            row_limit = query::max_rows;
+            row_limit = static_cast<uint64_t>(std::numeric_limits<uint32_t>::max());
             partition_limit = (column_limit + s.regular_columns_count() - 1) / s.regular_columns_count();
             schema::const_iterator start_col = start_column
                                              ? s.regular_lower_bound(to_bytes(*start_column))
@@ -432,7 +432,7 @@ public:
                 return acc + ks.columns.size();
             });
             std::move(slices.begin(), slices.end(), std::back_inserter(output));
-            if (columns == 0 || columns == column_limit || (slices.size() < cmd->partition_limit && columns < cmd->row_limit)) {
+            if (columns == 0 || columns == column_limit || (slices.size() < cmd->partition_limit && columns < cmd->get_row_limit())) {
                 if (!output.empty() || !start_key) {
                     if (range.size() > 1 && columns < column_limit) {
                         range.erase(range.begin());
@@ -636,7 +636,7 @@ public:
             query::column_id_vector regular_columns;
             std::vector<query::clustering_range> clustering_ranges;
             auto opts = query_opts(s);
-            uint32_t row_limit;
+            uint64_t row_limit;
             if (s.thrift().is_dynamic()) {
                 row_limit = request.count;
                 auto cmp = bound_view::compare(s);
@@ -651,7 +651,7 @@ public:
                     opts.set(query::partition_slice::option::reversed);
                 }
             } else {
-                row_limit = query::max_rows;
+                row_limit = static_cast<uint64_t>(std::numeric_limits<uint32_t>::max());
                 clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
                 auto cmp = [&s](auto&& s1, auto&& s2) { return s.regular_column_name_type()->compare(s1, s2); };
                 auto ranges = make_non_overlapping_ranges<bytes>(std::move(request.column_slices), [](auto&& cslice) {
@@ -1475,7 +1475,7 @@ private:
         auto opts = query_opts(s);
         std::vector<query::clustering_range> clustering_ranges;
         query::column_id_vector regular_columns;
-        uint32_t per_partition_row_limit = query::max_rows;
+        uint64_t per_partition_row_limit = static_cast<uint64_t>(std::numeric_limits<uint32_t>::max());
         if (predicate.__isset.column_names) {
             thrift_validation::validate_column_names(predicate.column_names);
             auto unique_column_names = boost::copy_range<std::vector<std::string>>(predicate.column_names | boost::adaptors::uniqued);
@@ -1502,7 +1502,7 @@ private:
                 std::swap(range.start, range.finish);
                 opts.set(query::partition_slice::option::reversed);
             }
-            per_partition_row_limit = static_cast<uint32_t>(range.count);
+            per_partition_row_limit = static_cast<uint64_t>(range.count);
             if (s.thrift().is_dynamic()) {
                 clustering_ranges.emplace_back(make_clustering_range_and_validate(s, range.start, range.finish));
                 regular_columns.emplace_back(s.regular_begin()->id);
