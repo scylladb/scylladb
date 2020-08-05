@@ -69,9 +69,9 @@ template<typename Func, typename... Args,
          typename RetType = typename std::enable_if<is_future<std::result_of_t<Func(Args&&...)>>::value>::type>
 auto do_io_check(const io_error_handler& error_handler, Func&& func, Args&&... args) noexcept {
     return futurize_invoke(func, std::forward<Args>(args)...).handle_exception([&error_handler] (auto ep) {
-            error_handler(ep);
-            return futurize<std::result_of_t<Func(Args&&...)>>::make_exception_future(ep);
-        });
+        error_handler(ep);
+        return futurize<std::result_of_t<Func(Args&&...)>>::make_exception_future(ep);
+    });
 }
 
 template<typename Func, typename... Args>
