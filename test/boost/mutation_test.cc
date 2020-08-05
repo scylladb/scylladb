@@ -473,17 +473,9 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_serialization_exception_safety) {
     // We need an undisturbed run first to create all thread_local variables.
     cmd.serialize(*collection_type);
 
-    auto& injector = memory::local_failure_injector();
-    uint64_t i = 0;
-    do {
-        try {
-            injector.fail_after(i++);
-            cmd.serialize(*collection_type);
-            injector.cancel();
-        } catch (const std::bad_alloc&) {
-            // expected
-        }
-    } while (injector.failed());
+    memory::with_allocation_failures([&] {
+        cmd.serialize(*collection_type);
+    });
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
@@ -1010,18 +1002,10 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
 
             auto expected = target + second;
 
-            auto& injector = memory::local_failure_injector();
-            size_t fail_offset = 0;
-            do {
-                mutation m = target;
-                auto m2 = mutation_partition(*m.schema(), second.partition());
-                injector.fail_after(fail_offset++);
-                try {
-                    m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker, app_stats);
-                    injector.cancel();
-                    assert_that(m).is_equal_to(expected)
-                        .has_same_continuity(expected);
-                } catch (const std::bad_alloc&) {
+            mutation m = target;
+            auto m2 = mutation_partition(*m.schema(), second.partition());
+            memory::with_allocation_failures([&] {
+                auto d = defer([&] {
                     auto&& s = *gen.schema();
                     auto c1 = m.partition().get_continuity(s);
                     auto c2 = m2.get_continuity(s);
@@ -1036,8 +1020,11 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                     }
                     m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker, app_stats);
                     assert_that(m).is_equal_to(expected);
-                }
-            } while (injector.failed());
+                });
+                m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker, app_stats);
+                d.cancel();
+            });
+            assert_that(m).is_equal_to(expected).has_same_continuity(expected);
         });
     };
 

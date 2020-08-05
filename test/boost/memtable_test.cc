@@ -443,18 +443,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_range_reads) {
             mt->apply(m);
         }
 
-        auto& injector = memory::local_failure_injector();
-        uint64_t i = 0;
-        do {
-            try {
-                injector.fail_after(i++);
-                assert_that(mt->make_flat_reader(s, tests::make_permit(), query::full_partition_range))
-                    .produces(ms);
-                injector.cancel();
-            } catch (const std::bad_alloc&) {
-                // expected
-            }
-        } while (injector.failed());
+        memory::with_allocation_failures([&] {
+            assert_that(mt->make_flat_reader(s, tests::make_permit(), query::full_partition_range))
+                .produces(ms);
+        });
     });
 }
 
@@ -469,19 +461,13 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
             mt->apply(m);
         }
 
-        auto& injector = memory::local_failure_injector();
-        uint64_t i = 0;
-        do {
-            try {
-                injector.fail_after(i++);
-                assert_that(mt->make_flush_reader(s, default_priority_class()))
-                    .produces(ms);
-                injector.cancel();
-            } catch (const std::bad_alloc&) {
-                // expected
-            }
-            mt->revert_flushed_memory();
-        } while (injector.failed());
+        memory::with_allocation_failures([&] {
+            auto revert = defer([&] {
+                mt->revert_flushed_memory();
+            });
+            assert_that(mt->make_flush_reader(s, default_priority_class()))
+                .produces(ms);
+        });
     });
 }
 
@@ -496,18 +482,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
             mt->apply(m);
         }
 
-        auto& injector = memory::local_failure_injector();
-        uint64_t i = 0;
-        do {
-            try {
-                injector.fail_after(i++);
-                assert_that(mt->make_flat_reader(s, tests::make_permit(), dht::partition_range::make_singular(ms[1].decorated_key())))
-                    .produces(ms[1]);
-                injector.cancel();
-            } catch (const std::bad_alloc&) {
-                // expected
-            }
-        } while (injector.failed());
+        memory::with_allocation_failures([&] {
+            assert_that(mt->make_flat_reader(s, tests::make_permit(), dht::partition_range::make_singular(ms[1].decorated_key())))
+                .produces(ms[1]);
+        });
     });
 }
 

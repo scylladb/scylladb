@@ -2280,11 +2280,10 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
         orig.push_back(muts[3]);
         orig.push_back(muts[4]);
 
-        auto&& injector = memory::local_failure_injector();
-        uint64_t i = 0;
-        do {
-            memtable_snapshot_source underlying(s.schema());
+        memtable_snapshot_source underlying(s.schema());
+        memory::with_allocation_failures([&] {
             for (auto&& m : orig) {
+                memory::disable_failure_guard dfg;
                 underlying.apply(m);
             }
 
@@ -2304,41 +2303,8 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
             auto rd1_v1 = assert_that(make_reader(population_range));
             std::optional<flat_mutation_reader> snap;
 
-            try {
-                auto mt = make_lw_shared<memtable>(cache.schema());
-                for (auto&& m : muts2) {
-                    mt->apply(m);
-                }
-
-                injector.fail_after(i++);
-
-                // Make snapshot on pkeys[2]
-                auto pr = dht::partition_range::make_singular(pkeys[2]);
-                snap = mt->make_flat_reader(s.schema(), tests::make_permit(), pr);
-                snap->set_max_buffer_size(1);
-                snap->fill_buffer(db::no_timeout).get();
-
-                cache.update([&] {
-                    auto mt2 = make_lw_shared<memtable>(cache.schema());
-                    for (auto&& m : muts2) {
-                        mt2->apply(m);
-                    }
-                    underlying.apply(std::move(mt2));
-                }, *mt).get();
-
-                injector.cancel();
-
-                assert_that(cache.make_reader(cache.schema(), tests::make_permit()))
-                    .produces(muts2)
-                    .produces_end_of_stream();
-
-                rd1_v1.produces(muts[0])
-                    .produces(muts2[1])
-                    .produces(muts2[2])
-                    .produces(muts2[3])
-                    .produces_end_of_stream();
-            } catch (const std::bad_alloc&) {
-                // expected
+            auto d = defer([&] {
+                memory::disable_failure_guard dfg;
                 assert_that(cache.make_reader(cache.schema(), tests::make_permit()))
                     .produces(orig)
                     .produces_end_of_stream();
@@ -2346,8 +2312,39 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
                 rd1_v1.produces(muts[0])
                     .produces(muts[3])
                     .produces_end_of_stream();
+            });
+
+            auto mt = make_lw_shared<memtable>(cache.schema());
+            for (auto&& m : muts2) {
+                mt->apply(m);
             }
-        } while (injector.failed());
+
+            // Make snapshot on pkeys[2]
+            auto pr = dht::partition_range::make_singular(pkeys[2]);
+            snap = mt->make_flat_reader(s.schema(), tests::make_permit(), pr);
+            snap->set_max_buffer_size(1);
+            snap->fill_buffer(db::no_timeout).get();
+
+            cache.update([&] {
+                auto mt2 = make_lw_shared<memtable>(cache.schema());
+                for (auto&& m : muts2) {
+                    mt2->apply(m);
+                }
+                underlying.apply(std::move(mt2));
+            }, *mt).get();
+
+            d.cancel();
+
+            assert_that(cache.make_reader(cache.schema(), tests::make_permit()))
+                .produces(muts2)
+                .produces_end_of_stream();
+
+            rd1_v1.produces(muts[0])
+                .produces(muts2[1])
+                .produces(muts2[2])
+                .produces(muts2[3])
+                .produces_end_of_stream();
+        });
         tracker.cleaner().drain().get();
         BOOST_REQUIRE_EQUAL(0, tracker.get_stats().rows);
         BOOST_REQUIRE_EQUAL(0, tracker.get_stats().partitions);
@@ -2365,50 +2362,39 @@ SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
         underlying.apply(mut);
 
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
-        auto&& injector = memory::local_failure_injector();
 
         auto run_queries = [&] {
             auto slice = partition_slice_builder(*s).with_ranges(gen.make_random_ranges(3)).build();
             auto&& ranges = slice.row_ranges(*s, mut.key());
-            uint64_t i = 0;
-            while (true) {
-                try {
-                    injector.fail_after(i++);
-                    auto rd = cache.make_reader(s, tests::make_permit(), query::full_partition_range, slice);
-                    auto got_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
-                    BOOST_REQUIRE(got_opt);
-                    BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0());
-                    injector.cancel();
 
-                    assert_that(*got_opt).is_equal_to(mut, ranges);
-                    assert_that(cache.make_reader(s, tests::make_permit(), query::full_partition_range, slice))
-                        .produces(mut, ranges);
+            memory::with_allocation_failures([&] {
+                auto rd = cache.make_reader(s, tests::make_permit(), query::full_partition_range, slice);
+                auto got_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
+                BOOST_REQUIRE(got_opt);
+                BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0());
 
-                    if (!injector.failed()) {
-                        break;
-                    }
-                } catch (const std::bad_alloc&) {
-                    // expected
-                }
-            }
+                assert_that(*got_opt).is_equal_to(mut, ranges);
+                assert_that(cache.make_reader(s, tests::make_permit(), query::full_partition_range, slice))
+                    .produces(mut, ranges);
+            });
         };
 
         auto run_query = [&] {
             auto slice = partition_slice_builder(*s).with_ranges(gen.make_random_ranges(3)).build();
             auto&& ranges = slice.row_ranges(*s, mut.key());
-            injector.fail_after(0);
-            assert_that(cache.make_reader(s, tests::make_permit(), query::full_partition_range, slice))
-                .produces(mut, ranges);
-            injector.cancel();
+            memory::with_allocation_failures([&] {
+                assert_that(cache.make_reader(s, tests::make_permit(), query::full_partition_range, slice))
+                    .produces(mut, ranges);
+            });
         };
 
         run_queries();
 
+        auto&& injector = memory::local_failure_injector();
         injector.run_with_callback([&] {
             if (tracker.region().reclaiming_enabled()) {
                 tracker.region().full_compaction();
             }
-            injector.fail_after(0);
         }, run_query);
 
         injector.run_with_callback([&] {
@@ -2436,36 +2422,26 @@ SEASTAR_TEST_CASE(test_exception_safety_of_transitioning_from_underlying_read_to
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto&& injector = memory::local_failure_injector();
-
         auto slice = partition_slice_builder(*s.schema())
             .with_range(s.make_ckey_range(0, 1))
             .with_range(s.make_ckey_range(3, 6))
             .build();
 
-        uint64_t i = 0;
-        while (true) {
-            try {
+        memory::with_allocation_failures([&] {
+            {
+                memory::disable_failure_guard dfg;
                 cache.evict();
                 populate_range(cache, pr, s.make_ckey_range(6, 10));
-
-                injector.fail_after(i++);
-                auto rd = cache.make_reader(s.schema(), tests::make_permit(), pr, slice);
-                auto got_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
-                BOOST_REQUIRE(got_opt);
-                auto mfopt = rd(db::no_timeout).get0();
-                BOOST_REQUIRE(!mfopt);
-                injector.cancel();
-
-                assert_that(*got_opt).is_equal_to(mut);
-
-                if (!injector.failed()) {
-                    break;
-                }
-            } catch (const std::bad_alloc&) {
-                // expected
             }
-        }
+
+            auto rd = cache.make_reader(s.schema(), tests::make_permit(), pr, slice);
+            auto got_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
+            BOOST_REQUIRE(got_opt);
+            auto mfopt = rd(db::no_timeout).get0();
+            BOOST_REQUIRE(!mfopt);
+
+            assert_that(*got_opt).is_equal_to(mut);
+        });
     });
 }
 
@@ -2487,24 +2463,18 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_scan) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto&& injector = memory::local_failure_injector();
-
-        uint64_t i = 0;
-        do {
-            try {
+        memory::with_allocation_failures([&] {
+            {
+                memory::disable_failure_guard dfg;
                 cache.evict();
                 populate_range(cache, dht::partition_range::make_singular(pkeys[1]));
                 populate_range(cache, dht::partition_range::make({pkeys[3]}, {pkeys[5]}));
-
-                injector.fail_after(i++);
-                assert_that(cache.make_reader(s.schema(), tests::make_permit()))
-                    .produces(muts)
-                    .produces_end_of_stream();
-                injector.cancel();
-            } catch (const std::bad_alloc&) {
-                // expected
             }
-        } while (injector.failed());
+
+            assert_that(cache.make_reader(s.schema(), tests::make_permit()))
+                .produces(muts)
+                .produces_end_of_stream();
+        });
     });
 }
 

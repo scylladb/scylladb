@@ -30,6 +30,8 @@
 #include "test/boost/range_tombstone_list_assertions.hh"
 #include "test/lib/log.hh"
 
+#include <seastar/util/defer.hh>
+
 static thread_local schema_ptr s = schema_builder("ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck1", int32_type, column_kind::clustering_key)
@@ -837,33 +839,26 @@ BOOST_AUTO_TEST_CASE(test_exception_safety) {
     expected.apply(*s, to_apply);
 
     // test apply_monotonically()
-    auto&& injector = memory::local_failure_injector();
-    uint64_t i = 0;
-    do {
+    memory::with_allocation_failures([&] () {
         auto list = original;
-        try {
-            injector.fail_after(i++);
-            list.apply_monotonically(*s, to_apply);
-            injector.cancel();
-            assert_that(*s, list).is_equal_to(expected);
-        } catch (const std::bad_alloc&) { // expected
+        auto d = defer([&] {
+            memory::disable_failure_guard dfg;
             assert_that(*s, list).has_no_less_information_than(original);
-        }
-    } while (injector.failed());
+        });
+        list.apply_monotonically(*s, to_apply);
+        assert_that(*s, list).is_equal_to(expected);
+    });
 
     // test apply_reversibly()
-    i = 0;
-    do {
+    memory::with_allocation_failures([&] () {
         auto list = original;
-        try {
-            injector.fail_after(i++);
-            list.apply_reversibly(*s, to_apply).cancel();
-            injector.cancel();
-            assert_that(*s, list).is_equal_to(expected);
-        } catch (const std::bad_alloc&) { // expected
+        auto d = defer([&] () {
+            memory::disable_failure_guard dfg;
             assert_that(*s, list).is_equal_to_either(original, expected);
-        }
-    } while (injector.failed());
+        });
+        list.apply_reversibly(*s, to_apply).cancel();
+        assert_that(*s, list).is_equal_to(expected);
+    });
 }
 
 BOOST_AUTO_TEST_CASE(test_accumulator) {
