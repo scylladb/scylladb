@@ -102,6 +102,7 @@ ln -s "$SCYLLA" "$SCYLLA_LINK"
         --skip-wait-for-gossip-to-settle 0 \
         --logger-log-level compaction=warn \
         --logger-log-level migration_manager=warn \
+        --num-tokens 16 \
         >"$tmp_dir/log" 2>&1 &
 SCYLLA_PROCESS=$!
 

@@ -471,11 +471,18 @@ def test_streams_change_type(test_table_ss_keys_only):
 # list_shards() only returns the shard IDs, not the information about the
 # shards' sequence number range, which is also returned by DescribeStream.
 def list_shards(dynamodbstreams, arn):
-    response = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
+    # By default DescribeStream lists a limit of 100 shards. For faster
+    # tests we reduced the number of shards in the testing setup to
+    # 32 (16 vnodes x 2 cpus), see issue #6979, so to still exercise this
+    # paging feature, lets use a limit of 10.
+    limit = 10
+    response = dynamodbstreams.describe_stream(StreamArn=arn, Limit=limit)['StreamDescription']
+    assert len(response['Shards']) <= limit
     shards = [x['ShardId'] for x in response['Shards']]
     while 'LastEvaluatedShardId' in response:
-        response = dynamodbstreams.describe_stream(StreamArn=arn,
+        response = dynamodbstreams.describe_stream(StreamArn=arn, Limit=limit,
             ExclusiveStartShardId=response['LastEvaluatedShardId'])['StreamDescription']
+        assert len(response['Shards']) <= limit
         shards.extend([x['ShardId'] for x in response['Shards']])
     print('Number of shards in stream: {}'.format(len(shards)))
     return shards
