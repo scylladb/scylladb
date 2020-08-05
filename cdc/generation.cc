@@ -59,14 +59,57 @@ static void copy_int_to_bytes(int64_t i, size_t offset, bytes& b) {
     std::copy_n(reinterpret_cast<int8_t*>(&i), sizeof(int64_t), b.begin() + offset);
 }
 
-stream_id::stream_id(int64_t first, int64_t second)
+static constexpr auto stream_id_version_bits = 4;
+static constexpr auto stream_id_random_bits = 38;
+static constexpr auto stream_id_index_bits = sizeof(uint64_t)*8 - stream_id_version_bits - stream_id_random_bits;
+
+static constexpr auto stream_id_version_shift = 0;
+static constexpr auto stream_id_index_shift = stream_id_version_shift + stream_id_version_bits;
+static constexpr auto stream_id_random_shift = stream_id_index_shift + stream_id_index_bits;
+
+/**
+ * Responsibilty for encoding stream_id moved from factory method to
+ * this constructor, to keep knowledge of composition in a single place.
+ * Note this is private and friended to topology_description_generator,
+ * because he is the one who defined the "order" we view vnodes etc.
+ */
+stream_id::stream_id(dht::token token, size_t vnode_index)
     : _value(bytes::initialized_later(), 2 * sizeof(int64_t))
 {
-    copy_int_to_bytes(first, 0, _value);
-    copy_int_to_bytes(second, sizeof(int64_t), _value);
+    static thread_local std::mt19937_64 rand_gen(std::random_device{}());
+    static thread_local std::uniform_int_distribution<uint64_t> rand_dist;
+
+    auto rand = rand_dist(rand_gen);
+    auto mask_shift = [](uint64_t val, size_t bits, size_t shift) {
+        return (val & ((1ull << bits) - 1u)) << shift;
+    };
+    /**
+     *  Low qword:
+     * 0-4: version
+     * 5-26: vnode index as when created (see generation below). This excludes shards
+     * 27-64: random value (maybe to be replaced with timestamp)
+     */
+    auto low_qword = mask_shift(version_1, stream_id_version_bits, stream_id_version_shift)
+        | mask_shift(vnode_index, stream_id_index_bits, stream_id_index_shift)
+        | mask_shift(rand, stream_id_random_bits, stream_id_random_shift)
+        ;
+
+    copy_int_to_bytes(dht::token::to_int64(token), 0, _value);
+    copy_int_to_bytes(low_qword, sizeof(int64_t), _value);
+    // not a hot code path. make sure we did not mess up the shifts and masks.
+    assert(version() == version_1);
+    assert(index() == vnode_index);
 }
 
-stream_id::stream_id(bytes b) : _value(std::move(b)) { }
+stream_id::stream_id(bytes b)
+    : _value(std::move(b))
+{
+    // this is not a very solid check. Id:s previous to GA/versioned id:s
+    // have fully random bits in low qword, so this could go either way...
+    if (version() > version_1) {
+        throw std::invalid_argument("Unknown CDC stream id version");
+    }
+}
 
 bool stream_id::is_set() const {
     return !_value.empty();
@@ -91,16 +134,24 @@ static int64_t bytes_to_int64(bytes_view b, size_t offset) {
     return net::ntoh(res);
 }
 
-int64_t stream_id::first() const {
-    return token_from_bytes(_value);
-}
-
-int64_t stream_id::second() const {
-    return bytes_to_int64(_value, sizeof(int64_t));
+dht::token stream_id::token() const {
+    return dht::token::from_int64(token_from_bytes(_value));
 }
 
 int64_t stream_id::token_from_bytes(bytes_view b) {
     return bytes_to_int64(b, 0);
+}
+
+static uint64_t unpack_value(bytes_view b, size_t off, size_t shift, size_t bits) {
+    return (uint64_t(bytes_to_int64(b, off)) >> shift) & ((1ull << bits) - 1u);
+}
+
+uint8_t stream_id::version() const {
+    return unpack_value(_value, sizeof(int64_t), stream_id_version_shift, stream_id_version_bits);
+}
+
+size_t stream_id::index() const {
+    return unpack_value(_value, sizeof(int64_t), stream_id_index_shift, stream_id_index_bits);
 }
 
 const bytes& stream_id::to_bytes() const {
@@ -125,13 +176,6 @@ bool topology_description::operator==(const topology_description& o) const {
 
 const std::vector<token_range_description>& topology_description::entries() const {
     return _entries;
-}
-
-static stream_id create_stream_id(dht::token t) {
-    static thread_local std::mt19937_64 rand_gen(std::random_device().operator()());
-    static thread_local std::uniform_int_distribution<int64_t> rand_dist(std::numeric_limits<int64_t>::min());
-
-    return {dht::token::to_int64(t), rand_dist(rand_gen)};
 }
 
 class topology_description_generator final {
@@ -167,7 +211,7 @@ class topology_description_generator final {
         }
     }
 
-    token_range_description create_description(dht::token start, dht::token end) const {
+    token_range_description create_description(size_t index, dht::token start, dht::token end) const {
         token_range_description desc;
 
         desc.token_range_end = end;
@@ -179,7 +223,10 @@ class topology_description_generator final {
         dht::sharder sharder(shard_count, ignore_msb);
         for (size_t shard_idx = 0; shard_idx < shard_count; ++shard_idx) {
             auto t = dht::find_first_token_for_shard(sharder, start, end, shard_idx);
-            desc.streams.push_back(create_stream_id(t));
+            // compose the id from token and the "index" of the range end owning vnode
+            // as defined by token sort order. Basically grouping within this
+            // shard set.
+            desc.streams.emplace_back(stream_id(t, index));
         }
 
         return desc;
@@ -217,10 +264,10 @@ public:
         vnode_descriptions.reserve(tokens.size());
 
         vnode_descriptions.push_back(
-                create_description(tokens.back(), tokens.front()));
+                create_description(0, tokens.back(), tokens.front()));
         for (size_t idx = 1; idx < tokens.size(); ++idx) {
             vnode_descriptions.push_back(
-                    create_description(tokens[idx - 1], tokens[idx]));
+                    create_description(idx, tokens[idx - 1], tokens[idx]));
         }
 
         return {std::move(vnode_descriptions)};
