@@ -26,10 +26,7 @@
 
 namespace auth {
 
-const sstring& allow_all_authorizer_name() {
-    static const sstring name = make_sstring(meta::AUTH_PACKAGE_NAME, "AllowAllAuthorizer");
-    return name;
-}
+constexpr std::string_view allow_all_authorizer_name("org.apache.cassandra.auth.AllowAllAuthorizer");
 
 // To ensure correct initialization order, we unfortunately need to use a string literal.
 static const class_registrator<

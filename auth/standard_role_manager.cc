@@ -49,11 +49,7 @@ namespace meta {
 namespace role_members_table {
 
 constexpr std::string_view name{"role_members" , 12};
-
-static std::string_view qualified_name() noexcept {
-    static const sstring instance = make_sstring(meta::AUTH_KS, ".", name);
-    return instance;
-}
+constexpr std::string_view qualified_name("system_auth.role_members");
 
 }
 
@@ -84,7 +80,7 @@ static db::consistency_level consistency_for_role(std::string_view role_name) no
 
 static future<std::optional<record>> find_record(cql3::query_processor& qp, std::string_view role_name) {
     static const sstring query = format("SELECT * FROM {} WHERE {} = ?",
-            meta::roles_table::qualified_name(),
+            meta::roles_table::qualified_name,
             meta::roles_table::role_col_name);
 
     return qp.execute_internal(
@@ -148,7 +144,7 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
             "  member text,"
             "  PRIMARY KEY (role, member)"
             ")",
-            meta::role_members_table::qualified_name());
+            meta::role_members_table::qualified_name);
 
 
     return when_all_succeed(
@@ -168,7 +164,7 @@ future<> standard_role_manager::create_default_role_if_missing() const {
     return default_role_row_satisfies(_qp, &has_can_login).then([this](bool exists) {
         if (!exists) {
             static const sstring query = format("INSERT INTO {} ({}, is_superuser, can_login) VALUES (?, true, true)",
-                    meta::roles_table::qualified_name(),
+                    meta::roles_table::qualified_name,
                     meta::roles_table::role_col_name);
 
             return _qp.execute_internal(
@@ -256,7 +252,7 @@ future<> standard_role_manager::stop() {
 
 future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c) const {
     static const sstring query = format("INSERT INTO {} ({}, is_superuser, can_login) VALUES (?, ?, ?)",
-            meta::roles_table::qualified_name(),
+            meta::roles_table::qualified_name,
             meta::roles_table::role_col_name);
 
     return _qp.execute_internal(
@@ -301,7 +297,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
 
         return _qp.execute_internal(
                 format("UPDATE {} SET {} WHERE {} = ?",
-                        meta::roles_table::qualified_name(),
+                        meta::roles_table::qualified_name,
                         build_column_assignments(u),
                         meta::roles_table::role_col_name),
                 consistency_for_role(role_name),
@@ -319,7 +315,7 @@ future<> standard_role_manager::drop(std::string_view role_name) const {
         // First, revoke this role from all roles that are members of it.
         const auto revoke_from_members = [this, role_name] {
             static const sstring query = format("SELECT member FROM {} WHERE role = ?",
-                    meta::role_members_table::qualified_name());
+                    meta::role_members_table::qualified_name);
 
             return _qp.execute_internal(
                     query,
@@ -357,7 +353,7 @@ future<> standard_role_manager::drop(std::string_view role_name) const {
         // Finally, delete the role itself.
         auto delete_role = [this, role_name] {
             static const sstring query = format("DELETE FROM {} WHERE {} = ?",
-                    meta::roles_table::qualified_name(),
+                    meta::roles_table::qualified_name,
                     meta::roles_table::role_col_name);
 
             return _qp.execute_internal(
@@ -383,7 +379,7 @@ standard_role_manager::modify_membership(
     const auto modify_roles = [this, role_name, grantee_name, ch] {
         const auto query = format(
                 "UPDATE {} SET member_of = member_of {} ? WHERE {} = ?",
-                meta::roles_table::qualified_name(),
+                meta::roles_table::qualified_name,
                 (ch == membership_change::add ? '+' : '-'),
                 meta::roles_table::role_col_name);
 
@@ -399,7 +395,7 @@ standard_role_manager::modify_membership(
             case membership_change::add:
                 return _qp.execute_internal(
                         format("INSERT INTO {} (role, member) VALUES (?, ?)",
-                                meta::role_members_table::qualified_name()),
+                                meta::role_members_table::qualified_name),
                         consistency_for_role(role_name),
                         internal_distributed_timeout_config(),
                         {sstring(role_name), sstring(grantee_name)}).discard_result();
@@ -407,7 +403,7 @@ standard_role_manager::modify_membership(
             case membership_change::remove:
                 return _qp.execute_internal(
                         format("DELETE FROM {} WHERE role = ? AND member = ?",
-                                meta::role_members_table::qualified_name()),
+                                meta::role_members_table::qualified_name),
                         consistency_for_role(role_name),
                         internal_distributed_timeout_config(),
                         {sstring(role_name), sstring(grantee_name)}).discard_result();
@@ -416,7 +412,7 @@ standard_role_manager::modify_membership(
         return make_ready_future<>();
     };
 
-    return when_all_succeed(modify_roles(), modify_role_members()).discard_result();
+    return when_all_succeed(modify_roles(), modify_role_members).discard_result();
 }
 
 future<>
@@ -504,7 +500,7 @@ future<role_set> standard_role_manager::query_granted(std::string_view grantee_n
 future<role_set> standard_role_manager::query_all() const {
     static const sstring query = format("SELECT {} FROM {}",
             meta::roles_table::role_col_name,
-            meta::roles_table::qualified_name());
+            meta::roles_table::qualified_name);
 
     // To avoid many copies of a view.
     static const auto role_col_name_string = sstring(meta::roles_table::role_col_name);

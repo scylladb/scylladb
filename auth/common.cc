@@ -34,7 +34,6 @@ namespace auth {
 
 namespace meta {
 
-constexpr std::string_view DEFAULT_SUPERUSER_NAME("cassandra");
 constexpr std::string_view AUTH_KS("system_auth");
 constexpr std::string_view USERS_CF("users");
 constexpr std::string_view AUTH_PACKAGE_NAME("org.apache.cassandra.auth.");

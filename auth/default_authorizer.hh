@@ -51,8 +51,6 @@
 
 namespace auth {
 
-const sstring& default_authorizer_name();
-
 class default_authorizer : public authorizer {
     cql3::query_processor& _qp;
 
@@ -71,9 +69,7 @@ public:
 
     virtual future<> stop() override;
 
-    virtual std::string_view qualified_java_name() const override {
-        return default_authorizer_name();
-    }
+    virtual std::string_view qualified_java_name() const override;
 
     virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override;
 

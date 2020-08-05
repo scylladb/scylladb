@@ -48,19 +48,19 @@ SEASTAR_TEST_CASE(test_default_authenticator) {
     return do_with_cql_env([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
         BOOST_REQUIRE(!a.require_authentication());
-        BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::allow_all_authenticator_name());
+        BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::allow_all_authenticator_name);
         return make_ready_future();
     });
 }
 
 SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
     auto cfg = make_shared<db::config>();
-    cfg->authenticator(auth::password_authenticator_name());
+    cfg->authenticator(sstring(auth::password_authenticator_name));
 
     return do_with_cql_env([](cql_test_env& env) {
         auto& a = env.local_auth_service().underlying_authenticator();
         BOOST_REQUIRE(a.require_authentication());
-        BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::password_authenticator_name());
+        BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::password_authenticator_name);
         return make_ready_future();
     }, cfg);
 }
@@ -96,7 +96,7 @@ future<> require_throws(seastar::future<Args...> fut) {
 
 SEASTAR_TEST_CASE(test_password_authenticator_operations) {
     auto cfg = make_shared<db::config>();
-    cfg->authenticator(auth::password_authenticator_name());
+    cfg->authenticator(sstring(auth::password_authenticator_name));
 
     /**
      * Not using seastar::async due to apparent ASan bug.

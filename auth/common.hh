@@ -53,7 +53,7 @@ namespace auth {
 
 namespace meta {
 
-extern const std::string_view DEFAULT_SUPERUSER_NAME;
+constexpr std::string_view DEFAULT_SUPERUSER_NAME("cassandra");
 extern const std::string_view AUTH_KS;
 extern const std::string_view USERS_CF;
 extern const std::string_view AUTH_PACKAGE_NAME;

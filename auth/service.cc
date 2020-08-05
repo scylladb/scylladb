@@ -129,11 +129,11 @@ service::service(
     // The password authenticator requires that the `standard_role_manager` is running so that the roles metadata table
     // it manages is created and updated. This cross-module dependency is rather gross, but we have to maintain it for
     // the sake of compatibility with Apache Cassandra and its choice of auth. schema.
-    if ((_authenticator->qualified_java_name() == password_authenticator_name())
+    if ((_authenticator->qualified_java_name() == password_authenticator_name)
             && (_role_manager->qualified_java_name() != standard_role_manager_name())) {
         throw incompatible_module_combination(
                 format("The {} authenticator must be loaded alongside the {} role-manager.",
-                        password_authenticator_name(),
+                        password_authenticator_name,
                         standard_role_manager_name()));
     }
 }
@@ -376,10 +376,10 @@ future<permission_set> get_permissions(const service& ser, const authenticated_u
 }
 
 bool is_enforcing(const service& ser)  {
-    const bool enforcing_authorizer = ser.underlying_authorizer().qualified_java_name() != allow_all_authorizer_name();
+    const bool enforcing_authorizer = ser.underlying_authorizer().qualified_java_name() != allow_all_authorizer_name;
 
     const bool enforcing_authenticator = ser.underlying_authenticator().qualified_java_name()
-            != allow_all_authenticator_name();
+            != allow_all_authenticator_name;
 
     return enforcing_authorizer || enforcing_authenticator;
 }

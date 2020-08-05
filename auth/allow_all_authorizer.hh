@@ -34,7 +34,7 @@ class migration_manager;
 
 namespace auth {
 
-const sstring& allow_all_authorizer_name();
+extern const std::string_view allow_all_authorizer_name;
 
 class allow_all_authorizer final  : public authorizer {
 public:
@@ -50,7 +50,7 @@ public:
     }
 
     virtual std::string_view qualified_java_name() const override {
-        return allow_all_authorizer_name();
+        return allow_all_authorizer_name;
     }
 
     virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override {

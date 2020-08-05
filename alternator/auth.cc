@@ -126,7 +126,7 @@ std::string get_signature(std::string_view access_key_id, std::string_view secre
 
 future<std::string> get_key_from_roles(cql3::query_processor& qp, std::string username) {
     static const sstring query = format("SELECT salted_hash FROM {} WHERE {} = ?",
-            auth::meta::roles_table::qualified_name(), auth::meta::roles_table::role_col_name);
+            auth::meta::roles_table::qualified_name, auth::meta::roles_table::role_col_name);
 
     auto cl = auth::password_authenticator::consistency_for_user(username);
     auto& timeout = auth::internal_distributed_timeout_config();
