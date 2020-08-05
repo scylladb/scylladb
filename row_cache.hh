@@ -293,6 +293,7 @@ public:
     using partitions_type = double_decker<int64_t, cache_entry,
                             dht::raw_token_less_comparator, dht::ring_position_comparator,
                             16, bplus::key_search::linear>;
+    static_assert(bplus::SimpleLessCompare<int64_t, dht::raw_token_less_comparator>);
     friend class cache::autoupdating_underlying_reader;
     friend class single_partition_populating_reader;
     friend class cache_entry;

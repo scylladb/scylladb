@@ -201,6 +201,16 @@ struct raw_token_less_comparator {
     bool operator()(const int64_t k1, const Key& k2) const noexcept {
         return dht::tri_compare_raw(k1, k2.token().raw()) < 0;
     }
+
+    template <typename Key>
+    requires TokenCarrier<Key>
+    int64_t simplify_key(const Key& k) const noexcept {
+        return k.token().raw();
+    }
+
+    int64_t simplify_key(int64_t k) const noexcept {
+        return k;
+    }
 };
 
 const token& minimum_token() noexcept;

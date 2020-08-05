@@ -27,6 +27,7 @@
 #include "utils/logalloc.hh"
 #include "utils/collection-concepts.hh"
 #include "utils/neat-object-id.hh"
+#include "utils/array-search.hh"
 
 namespace bplus {
 
@@ -38,6 +39,18 @@ enum class with_debug { no, yes };
  * should be used (and the result must coincide).
  */
 enum class key_search { linear, binary, both };
+
+/*
+ * The less-comparator can be any, but in trivial case when it is
+ * literally 'a < b' it may define the conversion of a lookup Key
+ * into a 64-bit integer type. Then the intra-node keys scan will
+ * use simd instructions.
+ */
+
+template <typename Key, typename Less>
+concept SimpleLessCompare = requires (Less l, Key k) {
+    { l.simplify_key(k) } noexcept -> std::same_as<int64_t>;
+};
 
 /*
  * This wrapper prevents the value from being default-constructed
@@ -54,12 +67,33 @@ enum class key_search { linear, binary, both };
 template <typename Value, typename Less>
 union maybe_key {
     Value v;
+
+    /*
+     * When using simple lesser the avx searcher needs the unused keys
+     * to be set to minimal value (see comment in array_search_gt() why),
+     * so the default constructor and reset() need special implementation
+     * for this case
+     */
+
+    template <typename L = Less>
+    requires (!SimpleLessCompare<Value, L>)
     maybe_key() noexcept {}
+
+    template <typename L = Less>
+    requires (!SimpleLessCompare<Value, L>)
+    void reset() noexcept { v.~Value(); }
+
+    template <typename L = Less>
+    requires (SimpleLessCompare<Value, L>)
+    maybe_key() noexcept : v(utils::simple_key_unused_value) {}
+
+    template <typename L = Less>
+    requires (SimpleLessCompare<Value, L>)
+    void reset() noexcept { v = utils::simple_key_unused_value; }
+
     ~maybe_key() {}
     maybe_key(const maybe_key&) = delete;
     maybe_key(maybe_key&&) = delete;
-
-    void reset() noexcept { v.~Value(); }
 
     /*
      * Constructs the value inside the empty maybe wrapper.
@@ -870,6 +904,15 @@ struct searcher<K, Key, Less, Size, key_search::linear> {
 
         return i;
     };
+};
+
+template <typename K, typename Less, size_t Size>
+requires SimpleLessCompare<K, Less>
+struct searcher<K, int64_t, Less, Size, key_search::linear> {
+    static_assert(sizeof(maybe_key<int64_t, Less>) == sizeof(int64_t));
+    static size_t gt(const K& k, const maybe_key<int64_t, Less>* keys, size_t nr, Less less) noexcept {
+        return utils::array_search_gt(less.simplify_key(k), reinterpret_cast<const int64_t*>(keys), Size, nr);
+    }
 };
 
 template <typename K, typename Key, typename Less, size_t Size>
