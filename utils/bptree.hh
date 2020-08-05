@@ -51,7 +51,7 @@ enum class key_search { linear, binary, both };
  * the value into another maybe-location (.emplace(maybe&&)) and
  * constructing the new in place of the existing one (.replace(args...))
  */
-template <typename Value>
+template <typename Value, typename Less>
 union maybe_key {
     Value v;
     maybe_key() noexcept {}
@@ -859,7 +859,7 @@ struct searcher { };
 
 template <typename K, typename Key, typename Less, size_t Size>
 struct searcher<K, Key, Less, Size, key_search::linear> {
-    static size_t gt(const K& k, const maybe_key<Key>* keys, size_t nr, Less less) noexcept {
+    static size_t gt(const K& k, const maybe_key<Key, Less>* keys, size_t nr, Less less) noexcept {
         size_t i;
 
         for (i = 0; i < nr; i++) {
@@ -874,7 +874,7 @@ struct searcher<K, Key, Less, Size, key_search::linear> {
 
 template <typename K, typename Key, typename Less, size_t Size>
 struct searcher<K, Key, Less, Size, key_search::binary> {
-    static size_t gt(const K& k, const maybe_key<Key>* keys, size_t nr, Less less) noexcept {
+    static size_t gt(const K& k, const maybe_key<Key, Less>* keys, size_t nr, Less less) noexcept {
         ssize_t s = 0, e = nr - 1; // signed for below s <= e corner cases
 
         while (s <= e) {
@@ -892,7 +892,7 @@ struct searcher<K, Key, Less, Size, key_search::binary> {
 
 template <typename K, typename Key, typename Less, size_t Size>
 struct searcher<K, Key, Less, Size, key_search::both> {
-    static size_t gt(const K& k, const maybe_key<Key>* keys, size_t nr, Less less) noexcept {
+    static size_t gt(const K& k, const maybe_key<Key, Less>* keys, size_t nr, Less less) noexcept {
         size_t rl = searcher<K, Key, Less, Size, key_search::linear>::gt(k, keys, nr, less);
         size_t rb = searcher<K, Key, Less, Size, key_search::binary>::gt(k, keys, nr, less);
         assert(rl == rb);
@@ -977,7 +977,7 @@ class node final {
      * at index 0 for the non-leaf node.
      */
 
-    maybe_key<Key> _keys[NodeSize];
+    maybe_key<Key, Less> _keys[NodeSize];
     node_or_data _kids[NodeSize + 1];
 
     // Type-aliases for code-reading convenience
@@ -1188,7 +1188,7 @@ class node final {
         move_keys_and_kids(off, to, _num_keys - off);
     }
 
-    void grab_from_left(node& from, maybe_key<Key>& sep) noexcept {
+    void grab_from_left(node& from, maybe_key<Key, Less>& sep) noexcept {
         /*
          * Grab one element from the left sibling and return
          * the new separation key for them.
@@ -1260,7 +1260,7 @@ class node final {
         move_keys_and_kids(0, t, _num_keys);
     }
 
-    void grab_from_right(node& from, maybe_key<Key>& sep) noexcept {
+    void grab_from_right(node& from, maybe_key<Key, Less>& sep) noexcept {
         /*
          * Grab one element from the right sibling and return
          * the new separation key for them.
@@ -1424,7 +1424,7 @@ class node final {
         assert(_num_keys == NodeSize);
 
         node* nn = nodes.pop();
-        maybe_key<Key> sep;
+        maybe_key<Key, Less> sep;
 
         /*
          * Insertion with split.
