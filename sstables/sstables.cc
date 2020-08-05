@@ -868,7 +868,7 @@ void write(sstable_version_types v, file_writer& out, const compression& c) {
 
 // This is small enough, and well-defined. Easier to just read it all
 // at once
-future<> sstable::read_toc() {
+future<> sstable::read_toc() noexcept {
     if (_recognized_components.size()) {
         return make_ready_future<>();
     }
@@ -1266,7 +1266,7 @@ void sstable::rewrite_statistics(const io_priority_class& pc) {
     sstable_write_io_check(rename_file, file_path, filename(component_type::Statistics)).get();
 }
 
-future<> sstable::read_summary(const io_priority_class& pc) {
+future<> sstable::read_summary(const io_priority_class& pc) noexcept {
     if (_components->summary) {
         return make_ready_future<>();
     }
@@ -1404,7 +1404,7 @@ void sstable::write_filter(const io_priority_class& pc) {
 
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
-future<> sstable::load(const io_priority_class& pc) {
+future<> sstable::load(const io_priority_class& pc) noexcept {
     return read_toc().then([this, &pc] {
         // read scylla-meta after toc. Might need it to parse
         // rest (hint extensions)
@@ -1426,7 +1426,8 @@ future<> sstable::load(const io_priority_class& pc) {
     });
 }
 
-future<> sstable::load(sstables::foreign_sstable_open_info info) {
+future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
+    static_assert(std::is_nothrow_move_constructible_v<sstables::foreign_sstable_open_info>);
     return read_toc().then([this, info = std::move(info)] () mutable {
         _components = std::move(info.components);
         _data_file = make_checked_file(_read_error_handler, info.data.to_file());
@@ -2185,7 +2186,7 @@ components_writer::~components_writer() {
 }
 
 future<>
-sstable::read_scylla_metadata(const io_priority_class& pc) {
+sstable::read_scylla_metadata(const io_priority_class& pc) noexcept {
     if (_components->scylla_metadata) {
         return make_ready_future<>();
     }

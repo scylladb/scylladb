@@ -185,11 +185,11 @@ public:
                                                  version_types v, format_types f);
 
     // load sstable using components shared by a shard
-    future<> load(foreign_sstable_open_info info);
+    future<> load(foreign_sstable_open_info info) noexcept;
     // load all components from disk
     // this variant will be useful for testing purposes and also when loading
     // a new sstable from scratch for sharing its components.
-    future<> load(const io_priority_class& pc = default_priority_class());
+    future<> load(const io_priority_class& pc = default_priority_class()) noexcept;
     future<> open_data() noexcept;
     future<> update_info_for_opened_data();
 
@@ -573,14 +573,14 @@ private:
     future<> read_compression(const io_priority_class& pc);
     void write_compression(const io_priority_class& pc);
 
-    future<> read_scylla_metadata(const io_priority_class& pc);
+    future<> read_scylla_metadata(const io_priority_class& pc) noexcept;
     void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier);
 
     future<> read_filter(const io_priority_class& pc);
 
     void write_filter(const io_priority_class& pc);
 
-    future<> read_summary(const io_priority_class& pc);
+    future<> read_summary(const io_priority_class& pc) noexcept;
 
     void write_summary(const io_priority_class& pc) {
         write_simple<component_type::Summary>(_components->summary, pc);
@@ -678,7 +678,7 @@ private:
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
 public:
-    future<> read_toc();
+    future<> read_toc() noexcept;
 
     schema_ptr get_schema() const {
         return _schema;

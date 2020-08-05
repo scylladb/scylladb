@@ -132,7 +132,7 @@ public:
         return _sst->_components->statistics;
     }
 
-    future<> read_summary() {
+    future<> read_summary() noexcept {
         return _sst->read_summary(default_priority_class());
     }
 
@@ -148,7 +148,7 @@ public:
         return std::move(_sst->_components->summary);
     }
 
-    future<> read_toc() {
+    future<> read_toc() noexcept {
         return _sst->read_toc();
     }
 
