@@ -133,12 +133,10 @@ static future<file> open_sstable_component_file_non_checked(std::string_view nam
     return open_file_dma(name, flags, options);
 }
 
-future<file> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name, file fd) {
+future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name) {
     return sstable_write_io_check(rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
         sstlog.error("Could not rename SSTable component {} to {}. Found exception: {}", from_name, to_name, ep);
         return make_exception_future<>(ep);
-    }).then([fd = std::move(fd)] {
-        return make_ready_future<file>(fd);
     });
 }
 
@@ -169,7 +167,9 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
             sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
             return make_exception_future<file>(ep);
         }).then([this, type, name = std::move(name)] (file fd) mutable {
-            return rename_new_sstable_component_file(name, filename(type), std::move(fd));
+            return rename_new_sstable_component_file(name, filename(type)).then([fd = std::move(fd)] () mutable {
+                return make_ready_future<file>(std::move(fd));
+            });
         });
     }
     return f;
