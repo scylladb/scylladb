@@ -561,7 +561,7 @@ private:
     void write_digest(uint32_t full_checksum);
 
     future<> rename_new_sstable_component_file(sstring from_file, sstring to_file);
-    future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {});
+    future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {}) noexcept;
 
     future<> touch_temp_dir();
     future<> remove_temp_dir();

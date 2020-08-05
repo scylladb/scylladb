@@ -140,7 +140,8 @@ future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring t
     });
 }
 
-future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) {
+future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) noexcept {
+  try {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
     auto name = !readonly && _temp_dir ? temp_filename(type) : filename(type);
@@ -173,6 +174,9 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
         });
     }
     return f;
+  } catch (...) {
+      return current_exception_as_future<file>();
+  }
 }
 
 utils::phased_barrier& background_jobs() {
