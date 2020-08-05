@@ -98,7 +98,7 @@ const column_definition* single_column(const binary_operator& oper) {
 
 /// True iff expr bounds clustering key from both above and below OR it has no clustering-key bounds at all.
 /// See #6493.
-bool bounded_ck(const expression& expr) {
+bool bounds_ck_symmetrically(const expression& expr) {
     return std::visit(overloaded_functor{
             [] (bool b) { return true; }, // false means empty, true means no bounds at all; both fit the condition.
             [] (const binary_operator& oper) {
@@ -166,7 +166,7 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, variable_spe
     prepare_conditions(db, *schema, bound_names, *stmt);
     stmt->process_where_clause(db, _where_clause, bound_names);
     if (!db.supports_infinite_bound_range_deletions() &&
-        !bounded_ck(stmt->restrictions().get_clustering_columns_restrictions()->expression)) {
+        !bounds_ck_symmetrically(stmt->restrictions().get_clustering_columns_restrictions()->expression)) {
         throw exceptions::invalid_request_exception(
                 "A range deletion operation needs to specify both bounds for clusters without sstable mc format support");
     }
