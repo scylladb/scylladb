@@ -449,10 +449,10 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                 auto shard = rjson::empty_object();
 
                 if (prev != e) {
-                    auto token = dht::token::from_int64(id.first());
+                    auto token = id.token();
                     auto& pids = prev->second.streams();
                     auto pid = std::upper_bound(pids.begin(), pids.end(), token, [](const dht::token& t, const cdc::stream_id& id) {
-                        return t < dht::token::from_int64(id.first());
+                        return t < id.token();
                     });
                     if (pid != pids.end()) {
                         rjson::set(shard, "ParentShardId", shard_id(schema->id(), prev->first, *pid));

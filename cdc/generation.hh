@@ -64,21 +64,26 @@ namespace cdc {
 class stream_id final {
     bytes _value;
 public:
+    static constexpr uint8_t version_1 = 1;
+
     stream_id() = default;
-    stream_id(int64_t, int64_t);
     stream_id(bytes);
+
     bool is_set() const;
     bool operator==(const stream_id&) const;
     bool operator!=(const stream_id&) const;
     bool operator<(const stream_id&) const;
 
-    int64_t first() const;
-    int64_t second() const;
-
+    uint8_t version() const;
+    size_t index() const;
     const bytes& to_bytes() const;
+    dht::token token() const;
 
     partition_key to_partition_key(const schema& log_schema) const;
     static int64_t token_from_bytes(bytes_view);
+private:
+    friend class topology_description_generator;
+    stream_id(dht::token, size_t);
 };
 
 /* Describes a mapping of tokens to CDC streams in a token range.
