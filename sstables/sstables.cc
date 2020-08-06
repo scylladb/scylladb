@@ -125,8 +125,8 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-static future<file> open_sstable_component_file_non_checked(const sstring& name, open_flags flags, file_open_options options,
-        bool check_integrity) {
+static future<file> open_sstable_component_file_non_checked(std::string_view name, open_flags flags, file_open_options options,
+        bool check_integrity) noexcept {
     if (flags != open_flags::ro && check_integrity) {
         return open_integrity_checked_file_dma(name, flags, options);
     }
