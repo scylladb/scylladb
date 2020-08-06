@@ -116,8 +116,8 @@ integrity_checked_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov, con
     return get_file_impl(_file)->write_dma(pos, iov, pc);
 }
 
-inline file make_integrity_checked_file(sstring name, file f) {
-    return file(::make_shared<integrity_checked_file_impl>(std::move(name), f));
+inline file make_integrity_checked_file(std::string_view name, file f) {
+    return file(::make_shared<integrity_checked_file_impl>(sstring(name), f));
 }
 
 inline open_flags adjust_flags_for_integrity_checked_file(open_flags flags) {
@@ -128,16 +128,17 @@ inline open_flags adjust_flags_for_integrity_checked_file(open_flags flags) {
 }
 
 future<file>
-open_integrity_checked_file_dma(sstring name, open_flags flags, file_open_options options) {
-    return with_file_close_on_failure(open_file_dma(name, adjust_flags_for_integrity_checked_file(flags), options), [name] (file f) {
-        return make_ready_future<file>(make_integrity_checked_file(std::move(name), f));
+open_integrity_checked_file_dma(std::string_view name, open_flags flags, file_open_options options) noexcept {
+    static_assert(std::is_nothrow_move_constructible_v<file_open_options>);
+    return with_file_close_on_failure(open_file_dma(name, adjust_flags_for_integrity_checked_file(flags), std::move(options)), [name] (file f) {
+        return make_ready_future<file>(make_integrity_checked_file(name, f));
     });
 }
 
 future<file>
-open_integrity_checked_file_dma(sstring name, open_flags flags) {
+open_integrity_checked_file_dma(std::string_view name, open_flags flags) noexcept {
     return with_file_close_on_failure(open_file_dma(name, adjust_flags_for_integrity_checked_file(flags)), [name] (file f) {
-        return make_ready_future<file>(make_integrity_checked_file(std::move(name), f));
+        return make_ready_future<file>(make_integrity_checked_file(name, f));
     });
 }
 
