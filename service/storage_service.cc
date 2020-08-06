@@ -1213,7 +1213,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         remove_endpoint(ep);
     }
     slogger.debug("handle_state_normal: endpoint={} owned_tokens = {}", endpoint, owned_tokens);
-    if (!owned_tokens.empty()) {
+    if (!owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
         db::system_keyspace::update_tokens(endpoint, owned_tokens).then_wrapped([endpoint] (auto&& f) {
             try {
                 f.get();
