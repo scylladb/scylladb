@@ -182,7 +182,7 @@ static inline int tri_compare_raw(const int64_t l1, const int64_t l2) noexcept {
 
 template <typename T>
 concept TokenCarrier = requires (const T& v) {
-    { v.token() } -> std::same_as<const token&>;
+    { v.token() } noexcept -> std::same_as<const token&>;
 };
 
 struct raw_token_less_comparator {
