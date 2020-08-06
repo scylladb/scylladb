@@ -27,6 +27,7 @@
 #include "utils/logalloc.hh"
 #include "utils/collection-concepts.hh"
 #include "utils/neat-object-id.hh"
+#include "utils/array-search.hh"
 
 namespace bplus {
 
@@ -40,6 +41,18 @@ enum class with_debug { no, yes };
 enum class key_search { linear, binary, both };
 
 /*
+ * The less-comparator can be any, but in trivial case when it is
+ * literally 'a < b' it may define the conversion of a lookup Key
+ * into a 64-bit integer type. Then the intra-node keys scan will
+ * use simd instructions.
+ */
+
+template <typename Key, typename Less>
+concept SimpleLessCompare = requires (Less l, Key k) {
+    { l.simplify_key(k) } noexcept -> std::same_as<int64_t>;
+};
+
+/*
  * This wrapper prevents the value from being default-constructed
  * when its container is created. The intended usage is to wrap
  * elements of static arrays or containers with .emplace() methods
@@ -51,15 +64,36 @@ enum class key_search { linear, binary, both };
  * the value into another maybe-location (.emplace(maybe&&)) and
  * constructing the new in place of the existing one (.replace(args...))
  */
-template <typename Value>
+template <typename Value, typename Less>
 union maybe_key {
     Value v;
+
+    /*
+     * When using simple lesser the avx searcher needs the unused keys
+     * to be set to minimal value (see comment in array_search_gt() why),
+     * so the default constructor and reset() need special implementation
+     * for this case
+     */
+
+    template <typename L = Less>
+    requires (!SimpleLessCompare<Value, L>)
     maybe_key() noexcept {}
+
+    template <typename L = Less>
+    requires (!SimpleLessCompare<Value, L>)
+    void reset() noexcept { v.~Value(); }
+
+    template <typename L = Less>
+    requires (SimpleLessCompare<Value, L>)
+    maybe_key() noexcept : v(utils::simple_key_unused_value) {}
+
+    template <typename L = Less>
+    requires (SimpleLessCompare<Value, L>)
+    void reset() noexcept { v = utils::simple_key_unused_value; }
+
     ~maybe_key() {}
     maybe_key(const maybe_key&) = delete;
     maybe_key(maybe_key&&) = delete;
-
-    void reset() noexcept { v.~Value(); }
 
     /*
      * Constructs the value inside the empty maybe wrapper.
@@ -859,7 +893,7 @@ struct searcher { };
 
 template <typename K, typename Key, typename Less, size_t Size>
 struct searcher<K, Key, Less, Size, key_search::linear> {
-    static size_t gt(const K& k, const maybe_key<Key>* keys, size_t nr, Less less) noexcept {
+    static size_t gt(const K& k, const maybe_key<Key, Less>* keys, size_t nr, Less less) noexcept {
         size_t i;
 
         for (i = 0; i < nr; i++) {
@@ -872,9 +906,18 @@ struct searcher<K, Key, Less, Size, key_search::linear> {
     };
 };
 
+template <typename K, typename Less, size_t Size>
+requires SimpleLessCompare<K, Less>
+struct searcher<K, int64_t, Less, Size, key_search::linear> {
+    static_assert(sizeof(maybe_key<int64_t, Less>) == sizeof(int64_t));
+    static size_t gt(const K& k, const maybe_key<int64_t, Less>* keys, size_t nr, Less less) noexcept {
+        return utils::array_search_gt(less.simplify_key(k), reinterpret_cast<const int64_t*>(keys), Size, nr);
+    }
+};
+
 template <typename K, typename Key, typename Less, size_t Size>
 struct searcher<K, Key, Less, Size, key_search::binary> {
-    static size_t gt(const K& k, const maybe_key<Key>* keys, size_t nr, Less less) noexcept {
+    static size_t gt(const K& k, const maybe_key<Key, Less>* keys, size_t nr, Less less) noexcept {
         ssize_t s = 0, e = nr - 1; // signed for below s <= e corner cases
 
         while (s <= e) {
@@ -892,7 +935,7 @@ struct searcher<K, Key, Less, Size, key_search::binary> {
 
 template <typename K, typename Key, typename Less, size_t Size>
 struct searcher<K, Key, Less, Size, key_search::both> {
-    static size_t gt(const K& k, const maybe_key<Key>* keys, size_t nr, Less less) noexcept {
+    static size_t gt(const K& k, const maybe_key<Key, Less>* keys, size_t nr, Less less) noexcept {
         size_t rl = searcher<K, Key, Less, Size, key_search::linear>::gt(k, keys, nr, less);
         size_t rb = searcher<K, Key, Less, Size, key_search::binary>::gt(k, keys, nr, less);
         assert(rl == rb);
@@ -977,7 +1020,7 @@ class node final {
      * at index 0 for the non-leaf node.
      */
 
-    maybe_key<Key> _keys[NodeSize];
+    maybe_key<Key, Less> _keys[NodeSize];
     node_or_data _kids[NodeSize + 1];
 
     // Type-aliases for code-reading convenience
@@ -1188,7 +1231,7 @@ class node final {
         move_keys_and_kids(off, to, _num_keys - off);
     }
 
-    void grab_from_left(node& from, maybe_key<Key>& sep) noexcept {
+    void grab_from_left(node& from, maybe_key<Key, Less>& sep) noexcept {
         /*
          * Grab one element from the left sibling and return
          * the new separation key for them.
@@ -1260,7 +1303,7 @@ class node final {
         move_keys_and_kids(0, t, _num_keys);
     }
 
-    void grab_from_right(node& from, maybe_key<Key>& sep) noexcept {
+    void grab_from_right(node& from, maybe_key<Key, Less>& sep) noexcept {
         /*
          * Grab one element from the right sibling and return
          * the new separation key for them.
@@ -1424,7 +1467,7 @@ class node final {
         assert(_num_keys == NodeSize);
 
         node* nn = nodes.pop();
-        maybe_key<Key> sep;
+        maybe_key<Key, Less> sep;
 
         /*
          * Insertion with split.

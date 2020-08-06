@@ -330,3 +330,41 @@ BOOST_AUTO_TEST_CASE(test_erase_range) {
     BOOST_REQUIRE(t.find(24) == t.end());
     BOOST_REQUIRE(*t.find(25) == 25);
 }
+
+static bool key_simplified = false;
+
+static void check_conversions() {
+    BOOST_REQUIRE(key_simplified);
+}
+
+BOOST_AUTO_TEST_CASE(test_avx_search) {
+    struct int64_compare {
+        bool operator()(const int64_t& a, const int64_t& b) const noexcept { return a < b; }
+        int64_t simplify_key(int64_t k) const noexcept {
+            key_simplified = true;
+            return k;
+        }
+    };
+
+    using test_tree = tree<int64_t, unsigned long, int64_compare, 4, key_search::linear>;
+
+    test_tree t(int64_compare{});
+
+    t.emplace(std::numeric_limits<int64_t>::min() + 1, 321);
+    t.emplace(0, 213);
+    t.emplace(std::numeric_limits<int64_t>::max(), 123);
+
+    auto i = t.find(std::numeric_limits<int64_t>::min() + 1);
+    BOOST_REQUIRE(*i++ == 321);
+    BOOST_REQUIRE(*i++ == 213);
+    BOOST_REQUIRE(*i++ == 123);
+    BOOST_REQUIRE(i == t.end());
+
+    i = t.find(0);
+    BOOST_REQUIRE(*i == 213);
+    i = t.find(std::numeric_limits<int64_t>::max());
+    BOOST_REQUIRE(*i == 123);
+
+    t.clear();
+    check_conversions();
+}

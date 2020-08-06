@@ -112,7 +112,7 @@ public:
     int tri_compare(const schema& s, const decorated_key& other) const;
     int tri_compare(const schema& s, const ring_position& other) const;
 
-    const dht::token& token() const {
+    const dht::token& token() const noexcept {
         return _token;
     }
 
@@ -278,7 +278,7 @@ public:
         , _key(std::make_optional(std::move(dk._key)))
     { }
 
-    const dht::token& token() const {
+    const dht::token& token() const noexcept {
         return _token;
     }
 
@@ -422,7 +422,7 @@ public:
         , _weight(static_cast<std::underlying_type_t<token_bound>>(bound))
     { }
 
-    const dht::token& token() const { return *_token; }
+    const dht::token& token() const noexcept { return *_token; }
     const partition_key* key() const { return _key; }
 
     // Only when key() == nullptr
@@ -551,7 +551,7 @@ public:
         , _weight(static_cast<std::underlying_type_t<token_bound>>(bound))
     { }
 
-    const dht::token& token() const { return _token; }
+    const dht::token& token() const noexcept { return _token; }
     const std::optional<partition_key>& key() const { return _key; }
 
     // Only when key() == std::nullopt
