@@ -1464,6 +1464,15 @@ private:
         opts.set(query::partition_slice::option::send_partition_key);
         return opts;
     }
+    static void sort_ranges(const schema& s, std::vector<query::clustering_range>& ranges) {
+        position_in_partition::less_compare less(s);
+        std::sort(ranges.begin(), ranges.end(),
+            [&less] (const query::clustering_range& r1, const query::clustering_range& r2) {
+                return less(
+                    position_in_partition_view::for_range_start(r1),
+                    position_in_partition_view::for_range_start(r2));
+            });
+    }
     static lw_shared_ptr<query::read_command> slice_pred_to_read_cmd(const schema& s, const SlicePredicate& predicate) {
         auto opts = query_opts(s);
         std::vector<query::clustering_range> clustering_ranges;
@@ -1477,6 +1486,7 @@ private:
                     auto ckey = make_clustering_prefix(s, to_bytes(name));
                     clustering_ranges.emplace_back(query::clustering_range::make_singular(std::move(ckey)));
                 }
+                sort_ranges(s, clustering_ranges);
                 regular_columns.emplace_back(s.regular_begin()->id);
             } else {
                 clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
