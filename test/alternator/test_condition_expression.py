@@ -1455,3 +1455,43 @@ def test_condition_expression_unsigned_bytes(test_table_s):
         ConditionExpression='b >= :oldval',
         ExpressionAttributeValues={':newval': 5, ':oldval': bytearray([127])})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 5
+
+# In all other tests above, we use ConditionExpression to check a condition
+# on one the non-key attributes. In this test we confirm that a condition may
+# also be on a key attribute. We demonstrate this through a useful DynamoDB
+# idiom for creating an item unless an item already exists with the same key,
+# by using a "<>" (not equal) condition.
+def test_update_item_condition_key_ne(test_table_s):
+    p = random_string()
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # Create an empty item with key p, but only an item with p exists yet.
+    # Note how when the item does not exist, the <> (not equal) test succeeds
+    # (we already tested that in test_update_condition_ne())
+    test_table_s.update_item(Key={'p': p},
+        ConditionExpression='p <> :p',
+        ExpressionAttributeValues={':p': p})
+    assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # If we do the same again, the item does exist, and the <> condition will
+    # fail.
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            ConditionExpression='p <> :p',
+            ExpressionAttributeValues={':p': p})
+
+# Another example of a condition on the key, again an idiom for creating an
+# item if no item already has that key. This time, using the
+# attribute_not_exists() instead of the <> (not equal) operator in the test
+# above.
+def test_update_item_condition_key_attribute_not_exists(test_table_s):
+    p = random_string()
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # Create an empty item with key p, but only an item with p exists yet.
+    # Note how when the item does not exist, attribute_not_exists() succeeds
+    test_table_s.update_item(Key={'p': p},
+        ConditionExpression='attribute_not_exists(p)')
+    assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # If we do the same again, the item does exist, and the
+    # attribute_not_exists() condition will fail.
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            ConditionExpression='attribute_not_exists(p)')
