@@ -107,7 +107,7 @@ public:
         if (it == _restrictions.end()) {
             return bytes_opt{};
         } else {
-            const auto values = std::get<value_list>(possible_lhs_values(&cdef, it->second->expression, options));
+            const auto values = std::get<expr::value_list>(possible_lhs_values(&cdef, it->second->expression, options));
             assert(values.size() == 1);
             return values.front();
         }
@@ -129,7 +129,7 @@ public:
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         for (auto&& e : _restrictions) {
-            if (cql3::restrictions::uses_function(e.second->expression, ks_name, function_name)) {
+            if (expr::uses_function(e.second->expression, ks_name, function_name)) {
                 return true;
             }
         }
@@ -164,9 +164,10 @@ public:
         }
     }
 
-    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const override {
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager,
+                                      expr::allow_local_index allow_local) const override {
         for (auto&& e : _restrictions) {
-            if (cql3::restrictions::has_supporting_index(e.second->expression, index_manager, allow_local)) {
+            if (expr::has_supporting_index(e.second->expression, index_manager, allow_local)) {
                 return true;
             }
         }
@@ -232,7 +233,7 @@ public:
     bool has_multiple_contains() const {
         uint32_t number_of_contains = 0;
         for (auto&& e : _restrictions) {
-            number_of_contains += count_if(e.second->expression, is_on_collection);
+            number_of_contains += count_if(e.second->expression, expr::is_on_collection);
             if (number_of_contains > 1) {
                 return true;
             }

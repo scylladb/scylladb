@@ -419,7 +419,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
     auto clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
     if (dynamic_pointer_cast<cql3::restrictions::multi_column_restriction>(clustering_columns_restrictions)) {
         clustering_key_prefix ckey = clustering_key_prefix::from_exploded(clustering_key);
-        return restrictions::is_satisfied_by(
+        return expr::is_satisfied_by(
                 clustering_columns_restrictions->expression,
                 partition_key, clustering_key, static_row, row, selection, _options);
     }
@@ -440,7 +440,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                 continue;
             }
             restrictions::single_column_restriction& restriction = *restr_it->second;
-            bool regular_restriction_matches = restrictions::is_satisfied_by(
+            bool regular_restriction_matches = expr::is_satisfied_by(
                     restriction.expression, partition_key, clustering_key, static_row, row, selection, _options);
             if (!regular_restriction_matches) {
                 _current_static_row_does_not_match = (cdef->kind == column_kind::static_column);
@@ -458,7 +458,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                 continue;
             }
             restrictions::single_column_restriction& restriction = *restr_it->second;
-            if (!restrictions::is_satisfied_by(
+            if (!expr::is_satisfied_by(
                         restriction.expression, partition_key, clustering_key, static_row, row, selection, _options)) {
                 _current_partition_key_does_not_match = true;
                 return false;
@@ -478,7 +478,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                 return false;
             }
             restrictions::single_column_restriction& restriction = *restr_it->second;
-            if (!restrictions::is_satisfied_by(
+            if (!expr::is_satisfied_by(
                         restriction.expression, partition_key, clustering_key, static_row, row, selection, _options)) {
                 return false;
             }

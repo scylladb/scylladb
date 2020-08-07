@@ -86,7 +86,7 @@ namespace raw {
 
 namespace {
 
-using namespace restrictions;
+using namespace expr;
 
 /// If oper.lhs is a single column, returns it; otherwise, returns null.
 const column_definition* single_column(const binary_operator& oper) {

@@ -179,13 +179,13 @@ void stats::register_stats() {
 
 bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key, gc_clock::time_point now) {
     const auto r = view.select_statement().get_restrictions()->get_partition_key_restrictions();
-    return cql3::restrictions::is_satisfied_by(
+    return cql3::expr::is_satisfied_by(
             r->expression, base, key.key(), clustering_key_prefix::make_empty(), row(), cql3::query_options({ }), now);
 }
 
 bool clustering_prefix_matches(const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck, gc_clock::time_point now) {
     const auto r = view.select_statement().get_restrictions()->get_clustering_columns_restrictions();
-    return cql3::restrictions::is_satisfied_by(
+    return cql3::expr::is_satisfied_by(
             r->expression,
             base, key, ck, row(), cql3::query_options({ }), now);
 }
@@ -243,7 +243,7 @@ bool matches_view_filter(const schema& base, const view_info& view, const partit
             && boost::algorithm::all_of(
                 view.select_statement().get_restrictions()->get_non_pk_restriction() | boost::adaptors::map_values,
                 [&] (auto&& r) {
-                    return cql3::restrictions::is_satisfied_by(
+                    return cql3::expr::is_satisfied_by(
                             r->expression, base, key, update.key(), update.cells(), cql3::query_options({ }), now);
                 });
 }

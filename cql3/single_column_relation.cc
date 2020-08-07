@@ -48,7 +48,7 @@
 #include "types/map.hh"
 #include "types/list.hh"
 
-using namespace cql3::restrictions;
+using namespace cql3::expr;
 
 namespace cql3 {
 
@@ -69,7 +69,7 @@ single_column_relation::to_term(const std::vector<lw_shared_ptr<column_specifica
 single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, variable_specifications& bound_names) {
     const column_definition& column_def = to_column_definition(*schema, *_entity);
     if (!_map_key) {
-        auto r = ::make_shared<single_column_restriction>(column_def);
+        auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
         auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
         r->expression = make_column_op(&column_def, operator_type::EQ, std::move(term));
         return r;
@@ -77,7 +77,7 @@ single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, vari
     auto&& receivers = to_receivers(*schema, column_def);
     auto&& entry_key = to_term({receivers[0]}, *_map_key, db, schema->ks_name(), bound_names);
     auto&& entry_value = to_term({receivers[1]}, *_value, db, schema->ks_name(), bound_names);
-    auto r = make_shared<single_column_restriction>(column_def);
+    auto r = make_shared<restrictions::single_column_restriction>(column_def);
     r->expression = binary_operator{
         column_value(&column_def, std::move(entry_key)), &operator_type::EQ, std::move(entry_value)};
     return r;
@@ -117,7 +117,7 @@ single_column_relation::new_LIKE_restriction(
                 format("LIKE is allowed only on string types, which {} is not", column_def.name_as_text()));
     }
     auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
-    auto r = ::make_shared<single_column_restriction>(column_def);
+    auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
     r->expression = make_column_op(&column_def, operator_type::LIKE, std::move(term));
     return r;
 }
