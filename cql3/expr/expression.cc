@@ -25,6 +25,8 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptors.hpp>
 
+#include <fmt/ostream.h>
+
 #include "cql3/lists.hh"
 #include "cql3/tuples.hh"
 #include "types/list.hh"
@@ -870,3 +872,32 @@ expression replace_column_def(const expression& expr, const column_definition* n
 
 } // namespace expr
 } // namespace cql3
+
+
+template <>
+struct fmt::formatter<cql3::expr::expression> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const cql3::expr::expression& expr, FormatContext& ctx) {
+        std::ostringstream os;
+        os << expr;
+        return format_to(ctx.out(), "{}", os.str());
+    }
+};
+
+template <>
+struct fmt::formatter<cql3::expr::column_value> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const cql3::expr::column_value& col, FormatContext& ctx) {
+        std::ostringstream os;
+        os << col;
+        return format_to(ctx.out(), "{}", os.str());
+    }
+};

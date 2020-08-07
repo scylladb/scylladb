@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <fmt/ostream.h>
+#include <fmt/core.h>
 #include <seastar/core/shared_ptr.hh>
 #include <variant>
 
@@ -215,31 +215,7 @@ inline const operator_type* pick_operator(statements::bound b, bool inclusive) {
 } // namespace cql3
 
 /// Required for fmt::join() to work on expression.
-template <>
-struct fmt::formatter<cql3::expr::expression> {
-    constexpr auto parse(format_parse_context& ctx) {
-        return ctx.end();
-    }
-
-    template <typename FormatContext>
-    auto format(const cql3::expr::expression& expr, FormatContext& ctx) {
-        std::ostringstream os;
-        os << expr;
-        return format_to(ctx.out(), "{}", os.str());
-    }
-};
+template <> struct fmt::formatter<cql3::expr::expression>;
 
 /// Required for fmt::join() to work on column_value.
-template <>
-struct fmt::formatter<cql3::expr::column_value> {
-    constexpr auto parse(format_parse_context& ctx) {
-        return ctx.end();
-    }
-
-    template <typename FormatContext>
-    auto format(const cql3::expr::column_value& col, FormatContext& ctx) {
-        std::ostringstream os;
-        os << col;
-        return format_to(ctx.out(), "{}", os.str());
-    }
-};
+template <> struct fmt::formatter<cql3::expr::column_value>;
