@@ -25,6 +25,7 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
+#include <fmt/ostream.h>
 #include <functional>
 #include <ranges>
 #include <stdexcept>
@@ -1404,3 +1405,31 @@ expression replace_column_def(const expression& expr, const column_definition* n
 
 } // namespace restrictions
 } // namespace cql3
+
+template <>
+struct fmt::formatter<cql3::restrictions::expression> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const cql3::restrictions::expression& expr, FormatContext& ctx) {
+        std::ostringstream os;
+        os << expr;
+        return format_to(ctx.out(), "{}", os.str());
+    }
+};
+
+template <>
+struct fmt::formatter<cql3::restrictions::column_value> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const cql3::restrictions::column_value& col, FormatContext& ctx) {
+        std::ostringstream os;
+        os << col;
+        return format_to(ctx.out(), "{}", os.str());
+    }
+};
