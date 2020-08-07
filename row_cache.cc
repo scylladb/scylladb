@@ -753,6 +753,8 @@ row_cache::make_reader(schema_ptr s,
     auto ctx = make_lw_shared<read_context>(*this, s, std::move(permit), range, slice, pc, trace_state, fwd_mr);
 
     if (!ctx->is_range_query() && !fwd_mr) {
+        tracing::trace(trace_state, "Querying cache for range {} and slice {}",
+                range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
         auto mr = _read_section(_tracker.region(), [&] {
             return with_linearized_managed_bytes([&] {
                 dht::ring_position_comparator cmp(*_schema);
@@ -766,6 +768,7 @@ row_cache::make_reader(schema_ptr s,
                 } else if (i->continuous()) {
                     return make_empty_flat_reader(std::move(s));
                 } else {
+                    tracing::trace(trace_state, "Range {} not found in cache", range);
                     on_partition_miss();
                     return make_flat_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
                 }
@@ -779,6 +782,8 @@ row_cache::make_reader(schema_ptr s,
         }
     }
 
+    tracing::trace(trace_state, "Scanning cache for range {} and slice {}",
+            range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
     auto mr = make_scanning_reader(range, std::move(ctx));
     if (fwd == streamed_mutation::forwarding::yes) {
         return make_forwardable(std::move(mr));
