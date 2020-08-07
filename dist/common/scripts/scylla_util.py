@@ -615,21 +615,6 @@ def swap_exists():
     swaps = out('swapon --noheadings --raw')
     return True if swaps != '' else False
 
-def get_memtotal():
-    with open('/proc/meminfo') as f:
-        meminfo = f.read()
-    matched = re.search(r'^MemTotal:\s+(\d+)', meminfo)
-    return int(matched.groups()[0])
-
-def get_memtotal_gb():
-    return int(get_memtotal() / 1024 / 1024)
-
-def get_disk_free(path):
-    return shutil.disk_usage(path)[2]
-
-def get_disk_free_gb(path):
-    return int(get_disk_free(path) / 1024 / 1024 / 1024)
-
 class SystemdException(Exception):
     pass
 

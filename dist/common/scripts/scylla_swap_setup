@@ -23,6 +23,7 @@
 import os
 import sys
 import argparse
+import psutil
 from pathlib import Path
 from scylla_util import *
 
@@ -39,9 +40,10 @@ if __name__ == '__main__':
         print('swap already configured, exiting setup')
         sys.exit(1)
 
-    memtotal = get_memtotal_gb()
+    memtotal_kb = int(psutil.virtual_memory().total / 1024)
+    memtotal = int(memtotal_kb / 1024 / 1024)
     if memtotal == 0:
-        print('memory too small: {} KB'.format(get_memtotal()))
+        print('memory too small: {} KB'.format(memtotal_kb))
         sys.exit(1)
 
     # Scylla document says 'swap size should be set to either total_mem/3 or
@@ -49,7 +51,7 @@ if __name__ == '__main__':
     # choose lower one
     # see: https://docs.scylladb.com/faq/#do-i-need-to-configure-swap-on-a-scylla-node
     swapsize = 16 if 16 < int(memtotal / 3) else int(memtotal / 3)
-    diskfree = get_disk_free_gb(args.swap_directory)
+    diskfree = int(psutil.disk_usage(args.swap_directory).free / 1024 / 1024 / 1024)
     if swapsize > diskfree:
         print('swap directory {} does not have enough disk space. {}GB space required.'.format(args.swap_directory, swapsize))
         sys.exit(1)
