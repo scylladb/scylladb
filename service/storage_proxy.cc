@@ -3895,7 +3895,7 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
             auto trace_state = gt.get();
-            tracing::trace(trace_state, "Start querying the token range that starts with {}", seastar::value_of([&prv] { return prv.begin()->start()->value().token(); }));
+            tracing::trace(trace_state, "Start querying singular range {}", prv.front());
             return db.query(gs, *cmd, opts, prv, trace_state, timeout).then([trace_state](std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& f_ht) {
                 auto&& [f, ht] = f_ht;
                 tracing::trace(trace_state, "Querying is done");
@@ -3904,8 +3904,10 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
         });
     } else {
         // FIXME: adjust multishard_mutation_query to accept an smp_service_group and propagate it there
-        return query_nonsingular_mutations_locally(s, cmd, {pr}, std::move(trace_state), timeout).then([s, cmd, opts] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>&& r_ht) {
+        tracing::trace(trace_state, "Start querying token range {}", pr);
+        return query_nonsingular_mutations_locally(s, cmd, {pr}, trace_state, timeout).then([s, cmd, opts, trace_state = std::move(trace_state)] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>&& r_ht) {
             auto&& [r, ht] = r_ht;
+            tracing::trace(trace_state, "Querying is done");
             return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(
                     rpc::tuple(::make_foreign(::make_lw_shared<query::result>(to_data_query_result(*r, s, cmd->slice,  cmd->get_row_limit(), cmd->partition_limit, opts))), ht));
         });
