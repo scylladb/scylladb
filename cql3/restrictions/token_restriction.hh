@@ -75,10 +75,11 @@ public:
     }
 
     bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return cql3::restrictions::uses_function(expression, ks_name, function_name);
+        return expr::uses_function(expression, ks_name, function_name);
     }
 
-    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const override {
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager,
+                                      expr::allow_local_index allow_local) const override {
         return false;
     }
 
@@ -91,10 +92,10 @@ public:
 
     std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
         auto values = possible_lhs_values(nullptr, expression, options);
-        if (values == value_set(value_list{})) {
+        if (values == expr::value_set(expr::value_list{})) {
             return {};
         }
-        const auto bounds = to_range(values);
+        const auto bounds = expr::to_range(values);
         const auto start_token = bounds.start() ? dht::token::from_bytes(bounds.start()->value())
                 : dht::minimum_token();
         auto end_token = bounds.end() ? dht::token::from_bytes(bounds.end()->value()) : dht::maximum_token();

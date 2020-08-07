@@ -103,7 +103,7 @@ public:
         , _allow_filtering(allow_filtering)
         , _restrictions(::make_shared<single_column_restrictions>(schema))
     {
-        this->expression = conjunction{};  // This will track _restrictions, which is a conjunction.
+        this->expression = expr::conjunction{};  // This will track _restrictions, which is a conjunction.
     }
 
     // Convert another primary key restrictions type into this type, possibly using different schema
@@ -174,9 +174,9 @@ public:
     }
 
     virtual void merge_with(::shared_ptr<restriction> restriction) override {
-        if (find_atom(restriction->expression, [] (const binary_operator& b) {
-                    return std::holds_alternative<std::vector<column_value>>(b.lhs)
-                            && std::get<std::vector<column_value>>(b.lhs).size() > 1;
+        if (find_atom(restriction->expression, [] (const expr::binary_operator& b) {
+                    return std::holds_alternative<std::vector<expr::column_value>>(b.lhs)
+                            && std::get<std::vector<expr::column_value>>(b.lhs).size() > 1;
                 })) {
             throw exceptions::invalid_request_exception(
                 "Mixing single column relations and multi column relations on clustering columns is not allowed");
@@ -195,7 +195,7 @@ public:
         for (auto&& e : restrictions()) {
             auto&& r = e.second;
             assert(!has_slice(r->expression));
-            auto values = std::get<value_list>(possible_lhs_values(e.first, r->expression, options));
+            auto values = std::get<expr::value_list>(possible_lhs_values(e.first, r->expression, options));
             if (values.empty()) {
                 return {};
             }
@@ -225,7 +225,7 @@ private:
         if (_restrictions->is_all_eq()) {
             if (_restrictions->size() == 1) {
                 auto&& e = *restrictions().begin();
-                const auto b = std::get<binary_operator>(e.second->expression).rhs->bind_and_get(options);
+                const auto b = std::get<expr::binary_operator>(e.second->expression).rhs->bind_and_get(options);
                 if (!b) {
                     throw exceptions::invalid_request_exception(sprint(invalid_null_msg, e.first->name_as_text()));
                 }
@@ -236,7 +236,7 @@ private:
             for (auto&& e : restrictions()) {
                 const column_definition* def = e.first;
                 assert(components.size() == _schema->position(*def));
-                const auto b = std::get<binary_operator>(e.second->expression).rhs->bind_and_get(options);
+                const auto b = std::get<expr::binary_operator>(e.second->expression).rhs->bind_and_get(options);
                 if (!b) {
                     throw exceptions::invalid_request_exception(sprint(invalid_null_msg, e.first->name_as_text()));
                 }
@@ -250,7 +250,7 @@ private:
             const column_definition* def = e.first;
             auto&& r = e.second;
 
-            if (vec_of_values.size() != _schema->position(*def) || cql3::restrictions::needs_filtering(r->expression)) {
+            if (vec_of_values.size() != _schema->position(*def) || expr::needs_filtering(r->expression)) {
                 // The prefixes built so far are the longest we can build,
                 // the rest of the constraints will have to be applied using filtering.
                 break;
@@ -258,10 +258,10 @@ private:
 
             if (has_slice(r->expression)) {
                 const auto values = possible_lhs_values(def, r->expression, options);
-                if (values == value_set(value_list{})) {
+                if (values == expr::value_set(expr::value_list{})) {
                     return {};
                 }
-                const auto b = to_range(values);
+                const auto b = expr::to_range(values);
                 if (cartesian_product_is_empty(vec_of_values)) {
                     // TODO: use b.transform().
                     const auto make_bound = [&] (const std::optional<::range_bound<bytes>>& bytes_bound) {
@@ -302,7 +302,7 @@ private:
                 return ranges;
             }
 
-            auto values = std::get<value_list>(possible_lhs_values(def, r->expression, options));
+            auto values = std::get<expr::value_list>(possible_lhs_values(def, r->expression, options));
             if (values.empty()) {
                 return {};
             }
@@ -342,7 +342,8 @@ public:
         return _restrictions->restrictions();
     }
 
-    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager, allow_local_index allow_local) const override {
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager,
+                                      expr::allow_local_index allow_local) const override {
         return _restrictions->has_supporting_index(index_manager, allow_local);
     }
 
@@ -442,7 +443,7 @@ inline unsigned single_column_primary_key_restrictions<clustering_key>::num_pref
     column_id position = 0;
     unsigned int count = 0;
     for (const auto& restriction : restrictions() | boost::adaptors::map_values) {
-        if (cql3::restrictions::needs_filtering(restriction->expression)
+        if (expr::needs_filtering(restriction->expression)
             || position != restriction->get_column_def().id) {
             return count;
         }

@@ -86,7 +86,7 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
     auto term = to_term(to_receivers(*schema, column_defs), *_value, db,
             schema->ks_name(), bound_names);
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
-    using namespace restrictions;
+    using namespace expr;
     r->expression = binary_operator{token{}, &operator_type::EQ, std::move(term)};
     return r;
 }
@@ -108,7 +108,7 @@ std::vector<lw_shared_ptr<cql3::column_specification>> cql3::token_relation::to_
     auto term = to_term(to_receivers(*schema, column_defs), *_value, db,
             schema->ks_name(), bound_names);
     auto r = ::make_shared<restrictions::token_restriction>(column_defs);
-    using namespace restrictions;
+    using namespace expr;
     r->expression = binary_operator{token{}, pick_operator(bound, inclusive), std::move(term)};
     return r;
 }
