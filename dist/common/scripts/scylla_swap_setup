@@ -53,10 +53,17 @@ if __name__ == '__main__':
     # choose lower one
     # see: https://docs.scylladb.com/faq/#do-i-need-to-configure-swap-on-a-scylla-node
     swapsize = GB(16) if GB(16) < int(memtotal / 3) else int(memtotal / 3)
+
+    # We should not fill entire disk space with swapfile, it's safer to limit
+    # swap size 50% of diskfree
     diskfree = psutil.disk_usage(args.swap_directory).free
-    if swapsize > diskfree:
-        print('swap directory {} does not have enough disk space. {}GB space required.'.format(args.swap_directory, to_GB(swapsize)))
-        sys.exit(1)
+    half_of_diskfree = int(diskfree / 2)
+    if swapsize > half_of_diskfree:
+        # out of disk space, abort setup
+        if half_of_diskfree <= GB(1):
+            print('swap directory {} does not have enough disk space.')
+            sys.exit(1)
+        swapsize = half_of_diskfree
 
     swapsize_mb = int(swapsize / 1024 / 1024)
     swapfile = Path(args.swap_directory) / 'swapfile'
