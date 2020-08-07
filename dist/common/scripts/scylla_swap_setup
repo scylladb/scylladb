@@ -27,6 +27,12 @@ import psutil
 from pathlib import Path
 from scylla_util import *
 
+def GB(n):
+    return n * 1024 * 1024 * 1024
+
+def to_GB(n):
+    return '{:.2f}'.format(n / 1024 / 1024 / 1024)
+
 if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
@@ -40,27 +46,24 @@ if __name__ == '__main__':
         print('swap already configured, exiting setup')
         sys.exit(1)
 
-    memtotal_kb = int(psutil.virtual_memory().total / 1024)
-    memtotal = int(memtotal_kb / 1024 / 1024)
-    if memtotal == 0:
-        print('memory too small: {} KB'.format(memtotal_kb))
-        sys.exit(1)
+    memtotal = psutil.virtual_memory().total
 
     # Scylla document says 'swap size should be set to either total_mem/3 or
     # 16GB - lower of the two', so we need to compare 16g vs memtotal/3 and
     # choose lower one
     # see: https://docs.scylladb.com/faq/#do-i-need-to-configure-swap-on-a-scylla-node
-    swapsize = 16 if 16 < int(memtotal / 3) else int(memtotal / 3)
-    diskfree = int(psutil.disk_usage(args.swap_directory).free / 1024 / 1024 / 1024)
+    swapsize = GB(16) if GB(16) < int(memtotal / 3) else int(memtotal / 3)
+    diskfree = psutil.disk_usage(args.swap_directory).free
     if swapsize > diskfree:
-        print('swap directory {} does not have enough disk space. {}GB space required.'.format(args.swap_directory, swapsize))
+        print('swap directory {} does not have enough disk space. {}GB space required.'.format(args.swap_directory, to_GB(swapsize)))
         sys.exit(1)
 
+    swapsize_mb = int(swapsize / 1024 / 1024)
     swapfile = Path(args.swap_directory) / 'swapfile'
     if swapfile.exists():
         print('swapfile {} already exists'.format(swapfile))
         sys.exit(1)
-    run('dd if=/dev/zero of={} bs=1G count={}'.format(swapfile, swapsize))
+    run('dd if=/dev/zero of={} bs=1M count={}'.format(swapfile, swapsize_mb))
     swapfile.chmod(0o600)
     run('mkswap -f {}'.format(swapfile))
     swapunit_bn = out('systemd-escape -p --suffix=swap {}'.format(swapfile))
