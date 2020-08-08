@@ -142,6 +142,51 @@ if __name__ == "__main__":
             yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
             ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
             ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+        elif gcp_instance().is_gce_instance():
+            idata = gcp_instance()
 
+            if idata.is_recommended_instance():
+                disk_properties = {}
+                disk_properties["mountpoint"] = datadir()
+                nr_disks = idata.nvmeDiskCount
+                # below is based on https://cloud.google.com/compute/docs/disks/local-ssd#performance
+                # and https://cloud.google.com/compute/docs/disks/local-ssd#nvme
+                # note that scylla iotune might measure more, this is GCP recommended
+                mbs=1024*1024
+                if nr_disks >= 1 & nr_disks < 4:
+                    disk_properties["read_iops"] = 170000 * nr_disks
+                    disk_properties["read_bandwidth"] = 660 * mbs * nr_disks
+                    disk_properties["write_iops"] = 90000 * nr_disks
+                    disk_properties["write_bandwidth"] = 350 * mbs * nr_disks
+                elif nr_disks >= 4 & nr_disks <= 8:
+                    disk_properties["read_iops"] = 680000
+                    disk_properties["read_bandwidth"] = 2650 * mbs
+                    disk_properties["write_iops"] = 360000
+                    disk_properties["write_bandwidth"] = 1400 * mbs
+                elif nr_disks == "16":
+                    disk_properties["read_iops"] = 1600000
+                    disk_properties["read_bandwidth"] = 4521251328
+                    #below is google, above is our measured
+                    #disk_properties["read_bandwidth"] = 6240 * mbs
+                    disk_properties["write_iops"] = 800000
+                    disk_properties["write_bandwidth"] = 2759452672
+                    #below is google, above is our measured
+                    #disk_properties["write_bandwidth"] = 3120 * mbs
+                elif nr_disks == "24":
+                    disk_properties["read_iops"] = 2400000
+                    disk_properties["read_bandwidth"] = 5921532416
+                    #below is google, above is our measured
+                    #disk_properties["read_bandwidth"] = 9360 * mbs
+                    disk_properties["write_iops"] = 1200000
+                    disk_properties["write_bandwidth"] = 4663037952
+                    #below is google, above is our measured
+                    #disk_properties["write_bandwidth"] = 4680 * mbs
+                properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
+                yaml.dump({"disks": [disk_properties]}, properties_file,  default_flow_style=False)
+                ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
+                ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+            else:
+                logging.error('This is not a recommended Google Cloud instance setup for auto tuning, running manual iotune.')
+                run_iotune()
         else:
             run_iotune()
