@@ -30,6 +30,60 @@ import logging
 import sys
 import scylla_blocktune as blocktune
 
+def run_iotune():
+            if "SCYLLA_CONF" in os.environ:
+                conf_dir = os.environ["SCYLLA_CONF"]
+            else:
+                conf_dir = etcdir() + "/scylla"
+            cfg = yaml.safe_load(open(os.path.join(conf_dir, "scylla.yaml")))
+            default_path = cfg.get('workdir') or datadir()
+            if not "data_file_directories" in cfg:
+                cfg["data_file_directories"] = [os.path.join(default_path, 'data')]
+            data_dirs = cfg["data_file_directories"]
+
+            for t in [ "commitlog", "hints", "view_hints", "saved_caches" ]:
+                key = "%s_directory" % t
+                if key in cfg:
+                    data_dirs += [ cfg[key] ]
+                elif os.path.isdir(os.path.join(default_path, t)):
+                    data_dirs += [ os.path.join(default_path, t) ]
+
+            iotune_args = []
+            for data_dir in data_dirs:
+                if os.path.exists(data_dir) == False:
+                    logging.error("%s was not found. Please check the configuration and run scylla_io_setup again.\n", data_dir)
+                    sys.exit(1)
+                if os.path.isdir(data_dir) == False:
+                    logging.error("%s is not a directory. Please check the configuration and run scylla_io_setup again.\n", data_dir)
+                    sys.exit(1)
+                st = os.statvfs(data_dir)
+                avail = st.f_bavail * st.f_frsize
+                rec = 10000000000
+                if avail < rec:
+                    logging.error("Filesystem at %s has only %d bytes available; that is less than the recommended 10 GB. Please free up space and run scylla_io_setup again.\n", data_dir, avail)
+                    sys.exit(1)
+                blocktune.tune_fs(data_dir, '2')
+                iotune_args += [ "--evaluation-directory", data_dir ]
+
+            if cpudata.cpuset():
+                iotune_args += [ "--cpuset", ",".join(map(str, cpudata.cpuset())) ]
+            elif cpudata.smp():
+                iotune_args += [ "--smp", str(cpudata.smp()) ]
+
+            try:
+                subprocess.check_call([bindir() + "/iotune",
+                                       "--format", "envfile",
+                                       "--options-file", etcdir() + "/scylla.d/io.conf",
+                                       "--properties-file", etcdir() + "/scylla.d/io_properties.yaml"] + iotune_args)
+            except Exception as e:
+                logging.error(e)
+                logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
+                              "This is a non-supported setup, and performance is expected to be very bad.\n"
+                              "For better performance, placing your data on XFS-formatted directories is required.\n"
+                              "To override this error, enable developer mode as follow:\n"
+                              "sudo %s/scylla_dev_mode_setup --developer-mode 1", data_dirs, scriptsdir())
+                sys.exit(1)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='IO Setup script for Scylla.')
     parser.add_argument('--ami', dest='ami', action='store_true',
@@ -88,56 +142,6 @@ if __name__ == "__main__":
             yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
             ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
             ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+
         else:
-            if "SCYLLA_CONF" in os.environ:
-                conf_dir = os.environ["SCYLLA_CONF"]
-            else:
-                conf_dir = etcdir() + "/scylla"
-            cfg = yaml.safe_load(open(os.path.join(conf_dir, "scylla.yaml")))
-            default_path = cfg.get('workdir') or datadir()
-            if not "data_file_directories" in cfg:
-                cfg["data_file_directories"] = [os.path.join(default_path, 'data')]
-            data_dirs = cfg["data_file_directories"]
-
-            for t in [ "commitlog", "hints", "view_hints", "saved_caches" ]:
-                key = "%s_directory" % t
-                if key in cfg:
-                    data_dirs += [ cfg[key] ]
-                elif os.path.isdir(os.path.join(default_path, t)):
-                    data_dirs += [ os.path.join(default_path, t) ]
-
-            iotune_args = []
-            for data_dir in data_dirs:
-                if os.path.exists(data_dir) == False:
-                    logging.error("%s was not found. Please check the configuration and run scylla_io_setup again.\n", data_dir)
-                    sys.exit(1)
-                if os.path.isdir(data_dir) == False:
-                    logging.error("%s is not a directory. Please check the configuration and run scylla_io_setup again.\n", data_dir)
-                    sys.exit(1)
-                st = os.statvfs(data_dir)
-                avail = st.f_bavail * st.f_frsize
-                rec = 10000000000
-                if avail < rec:
-                    logging.error("Filesystem at %s has only %d bytes available; that is less than the recommended 10 GB. Please free up space and run scylla_io_setup again.\n", data_dir, avail)
-                    sys.exit(1)
-                blocktune.tune_fs(data_dir, '2')
-                iotune_args += [ "--evaluation-directory", data_dir ]
-
-            if cpudata.cpuset():
-                iotune_args += [ "--cpuset", ",".join(map(str, cpudata.cpuset())) ]
-            elif cpudata.smp():
-                iotune_args += [ "--smp", str(cpudata.smp()) ]
-
-            try:
-                subprocess.check_call([bindir() + "/iotune",
-                                       "--format", "envfile",
-                                       "--options-file", etcdir() + "/scylla.d/io.conf",
-                                       "--properties-file", etcdir() + "/scylla.d/io_properties.yaml"] + iotune_args)
-            except Exception:
-                logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
-                              "This is a non-supported setup, and performance is expected to be very bad.\n"
-                              "For better performance, placing your data on XFS-formatted directories is required.\n"
-                              "To override this error, enable developer mode as follow:\n"
-                              "sudo %s/scylla_dev_mode_setup --developer-mode 1", data_dirs, scriptsdir())
-                sys.exit(1)
-
+            run_iotune()
