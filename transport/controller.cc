@@ -92,7 +92,11 @@ future<> controller::do_start_server() {
             std::shared_ptr<seastar::tls::credentials_builder> cred;
         };
 
-        std::vector<listen_cfg> configs({{ socket_address{ip, cfg.native_transport_port()}, false }});
+        std::vector<listen_cfg> configs;
+
+        if (cfg.native_transport_port() != 0) {
+            configs.push_back(listen_cfg{ socket_address{ip, cfg.native_transport_port()}, false });
+        }
         if (cfg.native_shard_aware_transport_port.is_set()) {
             configs.push_back(listen_cfg{ socket_address{ip, cfg.native_shard_aware_transport_port()}, true });
         }
