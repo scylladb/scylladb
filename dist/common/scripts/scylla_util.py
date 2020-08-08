@@ -87,12 +87,13 @@ def datadir():
 def scyllabindir():
     return str(scyllabindir_p())
 
-def curl(url, byte=False):
+# @param headers dict of k:v
+def curl(url, byte=False, headers={}):
     max_retries = 5
     retries = 0
     while True:
         try:
-            req = urllib.request.Request(url)
+            req = urllib.request.Request(url,headers=headers)
             with urllib.request.urlopen(req) as res:
                 if byte:
                     return res.read()
