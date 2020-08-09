@@ -2978,9 +2978,10 @@ fsync_directory(const io_error_handler& error_handler, sstring fname) {
 }
 
 static future<>
-remove_by_toc_name(sstring sstable_toc_name) noexcept {
-    sstring prefix, new_toc_name, dir;
+remove_by_toc_name(std::string_view sstable_toc_strview) noexcept {
+    sstring sstable_toc_name, prefix, new_toc_name, dir;
     try {
+        sstable_toc_name = sstring(sstable_toc_strview);
         prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
         new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
         dir = dirname(sstable_toc_name);
@@ -3256,7 +3257,7 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
 
 future<>
 delete_sstables(std::vector<sstring> tocs) {
-    return parallel_for_each(tocs, [] (sstring name) {
+    return parallel_for_each(tocs, [] (const sstring& name) {
         return remove_by_toc_name(name);
     });
 }
