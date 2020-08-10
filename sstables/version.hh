@@ -58,10 +58,6 @@ inline seastar::sstring to_string(sstable_version_types format) {
     throw std::runtime_error("Wrong sstable format");
 }
 
-inline bool is_latest_supported(sstable_version_types format) {
-    return format == sstable_version_types::mc;
-}
-
 inline int operator<=>(sstable_version_types a, sstable_version_types b) {
     auto to_int = [] (sstable_version_types x) {
         return static_cast<std::underlying_type_t<sstable_version_types>>(x);
