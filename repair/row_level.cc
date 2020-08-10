@@ -48,6 +48,7 @@
 #include "gms/gossiper.hh"
 #include "repair/row_level.hh"
 #include "mutation_source_metadata.hh"
+#include "utils/stall_free.hh"
 
 extern logging::logger rlogger;
 
@@ -1261,13 +1262,11 @@ private:
         stats().rx_row_nr += row_diff.size();
         stats().rx_row_nr_peer[from] += row_diff.size();
         if (update_buf) {
-            std::list<repair_row> tmp;
-            tmp.swap(_working_row_buf);
             // Both row_diff and _working_row_buf and are ordered, merging
             // two sored list to make sure the combination of row_diff
             // and _working_row_buf are ordered.
-            std::merge(tmp.begin(), tmp.end(), row_diff.begin(), row_diff.end(), std::back_inserter(_working_row_buf),
-                [this] (const repair_row& x, const repair_row& y) { thread::maybe_yield(); return _cmp(x.boundary(), y.boundary()) < 0; });
+            utils::merge_to_gently(_working_row_buf, row_diff,
+                 [this] (const repair_row& x, const repair_row& y) { return _cmp(x.boundary(), y.boundary()) < 0; });
         }
         if (update_hash_set) {
             _peer_row_hash_sets[node_idx] = boost::copy_range<repair_hash_set>(row_diff |
