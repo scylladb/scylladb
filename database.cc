@@ -1851,7 +1851,11 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                             // TODO: indexes.
                             // Note: since discard_sstables was changed to only count tables owned by this shard,
                             // we can get zero rp back. Changed assert, and ensure we save at least low_mark.
-                            assert(low_mark <= rp || rp == db::replay_position());
+                            // #6995 - the assert below was broken in c2c6c71 and remained so for many years. 
+                            // We nowadays do not flush tables with sstables but autosnapshot=false. This means
+                            // the low_mark assertion does not hold, because we maybe/probably never got around to 
+                            // creating the sstables that would create them.
+                            assert(!should_flush || low_mark <= rp || rp == db::replay_position());
                             rp = std::max(low_mark, rp);
                             return truncate_views(cf, truncated_at, should_flush).then([&cf, truncated_at, rp] {
                                 // save_truncation_record() may actually fail after we cached the truncation time
