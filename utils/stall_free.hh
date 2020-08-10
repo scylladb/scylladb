@@ -24,6 +24,8 @@
 #include <list>
 #include <algorithm>
 #include <seastar/core/thread.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/future-util.hh>
 #include "utils/collection-concepts.hh"
 
 namespace utils {
@@ -52,6 +54,17 @@ void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare com
             ++first1;
         }
     }
+}
+
+template<class T>
+seastar::future<> clear_gently(std::list<T>& list) {
+    return repeat([&list] () mutable {
+        if (list.empty()) {
+            return seastar::stop_iteration::yes;
+        }
+        list.pop_back();
+        return seastar::stop_iteration::no;
+    });
 }
 
 }
