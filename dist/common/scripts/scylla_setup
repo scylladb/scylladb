@@ -98,6 +98,15 @@ def interactive_choose_swap_directory():
         else:
             return d
 
+def interactive_choose_swap_size():
+    print('Please input swap size in GB:')
+    while True:
+        s = input('> ')
+        try:
+            return int(s)
+        except Exception as e:
+            print(f'"{s}" is not valid number, input again')
+
 def do_verify_package(pkg):
     if is_debian_variant():
         res = run('dpkg -s {}'.format(pkg), silent=True, exception=False)
@@ -166,6 +175,8 @@ if __name__ == '__main__':
                         help='specify subdomain of pool.ntp.org (ex: centos, fedora or amazon)')
     parser.add_argument('--swap-directory',
                         help='specify swapfile directory (ex: /)')
+    parser.add_argument('--swap-size', type=int,
+                        help='specify swapfile size in GB')
     parser.add_argument('--ami', action='store_true', default=False,
                         help='setup AMI instance')
     parser.add_argument('--setup-nic-and-disks', action='store_true', default=False,
@@ -230,6 +241,7 @@ if __name__ == '__main__':
     nic = args.nic
     set_nic_and_disks = args.setup_nic_and_disks
     swap_directory = args.swap_directory
+    swap_size = args.swap_size
     ec2_check = not args.no_ec2_check
     kernel_check = not args.no_kernel_check
     verify_package = not args.no_verify_package
@@ -458,14 +470,22 @@ if __name__ == '__main__':
             swap_setup = interactive_ask_service('Do you want to configure swapfile?', 'Answer yes to setup swapfile to Scylla, Answer no to do nothing.', swap_setup)
             args.no_swap_setup = not swap_setup
             if swap_setup:
+                options = ""
                 if interactive:
                     skip_choose_swap_directory = interactive_ask_service('Do you want to create swapfile on root directory?', 'Anser yes to create swapfile on /, no to choose swap directory.', True)
                     if not skip_choose_swap_directory:
                         swap_directory = interactive_choose_swap_directory()
+
+                    skip_choose_swap_size = interactive_ask_service('Do you want to auto configure swap size?', 'Anser yes to auto configure, no to manually configure swap size.', True)
+                    if not skip_choose_swap_size:
+                        swap_size = interactive_choose_swap_size()
+
                 if swap_directory:
-                    run_setup_script('swap', 'scylla_swap_setup --swap-directory {}'.format(swap_directory))
-                else:
-                    run_setup_script('swap', 'scylla_swap_setup')
+                    options += f' --swap-directory {swap_directory}'
+                if swap_size:
+                    options += f' --swap-size {swap_size}'
+
+                run_setup_script('swap', 'scylla_swap_setup' + options)
 
     print('ScyllaDB setup finished.')
 
