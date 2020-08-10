@@ -54,5 +54,16 @@ void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare com
     }
 }
 
+template<class T>
+future<> clear_gently(std::list<T>& list) {
+    return repeat([&list] () mutable {
+        if (list.empty()) {
+            return stop_iteration::yes;
+        }
+        list.pop_back();
+        return stop_iteration::no;
+    });
+}
+
 }
 
