@@ -178,7 +178,13 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
 
     size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
     size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
-    unsigned tolerance = mode == reshape_mode::strict ? 0 : leveled_manifest::leveled_fan_out * 2;
+    auto tolerance = [mode] (unsigned level) -> unsigned {
+        if (mode == reshape_mode::strict) {
+            return 0;
+        }
+        constexpr unsigned fan_out = leveled_manifest::leveled_fan_out;
+        return std::max(double(fan_out), std::ceil(std::pow(fan_out, level) * 0.1));
+    };
 
     if (level_info[0].size() > offstrategy_threshold) {
         level_info[0].resize(std::min(level_info[0].size(), max_sstables));
@@ -193,7 +199,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         }
         max_filled_level = std::max(max_filled_level, level);
 
-        auto [disjoint, overlapping_sstables] = is_disjoint(level_info[level], tolerance);
+        auto [disjoint, overlapping_sstables] = is_disjoint(level_info[level], tolerance(level));
         if (!disjoint) {
             leveled_manifest::logger.warn("Turns out that level {} is not disjoint, found {} overlapping SSTables, so compacting everything on behalf of {}.{}", level, overlapping_sstables, schema->ks_name(), schema->cf_name());
             // Unfortunately no good limit to limit input size to max_sstables for LCS major
