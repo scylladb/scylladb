@@ -1180,27 +1180,20 @@ void sstable::validate_min_max_metadata() {
     }
 
     // The min/max metadata is wrong if:
-    // 1) it's not empty and schema defines no clustering key.
-    // 2) their size differ.
-    // 3) column name is stored instead of clustering value.
-    // 4) clustering component is stored as composite.
-    if ((!_schema->clustering_key_size() && (min_column_names.size() || max_column_names.size())) ||
-            (min_column_names.size() != max_column_names.size())) {
+    // - it's not empty and schema defines no clustering key.
+    //
+    // Notes:
+    // - we are going to rely on min/max column names for
+    //   clustering filtering only from md-format sstables,
+    //   see sstable::may_contain_rows().
+    //   We choose not to clear_incorrect_min_max_column_names
+    //   from older versions here as this disturbs sstable unit tests.
+    //
+    // - now that we store min/max metadata for range tombstones,
+    //   their size may differ.
+    if (!_schema->clustering_key_size()) {
         clear_incorrect_min_max_column_names();
         return;
-    }
-
-    for (auto i = 0U; i < min_column_names.size(); i++) {
-        if (_schema->get_column_definition(min_column_names[i].value) || _schema->get_column_definition(max_column_names[i].value)) {
-            clear_incorrect_min_max_column_names();
-            break;
-        }
-
-        if (_schema->is_compound() && _schema->clustering_key_size() > 1 && _schema->is_dense() &&
-                (composite_view(min_column_names[i].value).is_valid() || composite_view(max_column_names[i].value).is_valid())) {
-            clear_incorrect_min_max_column_names();
-            break;
-        }
     }
 }
 
