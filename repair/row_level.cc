@@ -1095,24 +1095,32 @@ private:
         });
     }
 
+    future<> clear_row_buf() {
+        return utils::clear_gently(_row_buf);
+    }
+
+    future<> clear_working_row_buf() {
+        return utils::clear_gently(_working_row_buf).then([this] {
+            _working_row_buf_combined_hash.clear();
+        });
+    }
+
     // Read rows from disk until _max_row_buf_size of rows are filled into _row_buf.
     // Calculate the combined checksum of the rows
     // Calculate the total size of the rows in _row_buf
     future<get_sync_boundary_response>
     get_sync_boundary(std::optional<repair_sync_boundary> skipped_sync_boundary) {
+        auto f = make_ready_future<>();
         if (skipped_sync_boundary) {
             _current_sync_boundary = skipped_sync_boundary;
-            _row_buf.clear();
-            _working_row_buf.clear();
-            _working_row_buf_combined_hash.clear();
-        } else {
-            _working_row_buf.clear();
-            _working_row_buf_combined_hash.clear();
+            f = clear_row_buf();
         }
         // Here is the place we update _last_sync_boundary
         rlogger.trace("SET _last_sync_boundary from {} to {}", _last_sync_boundary, _current_sync_boundary);
         _last_sync_boundary = _current_sync_boundary;
-        return row_buf_size().then([this, sb = std::move(skipped_sync_boundary)] (size_t cur_size) {
+      return f.then([this, sb = std::move(skipped_sync_boundary)] () mutable {
+       return clear_working_row_buf().then([this, sb = sb] () mutable {
+        return row_buf_size().then([this, sb = std::move(sb)] (size_t cur_size) {
             return read_rows_from_disk(cur_size).then_unpack([this, sb = std::move(sb)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
                 size_t new_rows_nr = new_rows.size();
                 _row_buf.splice(_row_buf.end(), new_rows);
@@ -1129,6 +1137,8 @@ private:
                 });
             });
         });
+       });
+      });
     }
 
     future<> move_row_buf_to_working_row_buf() {
