@@ -87,12 +87,13 @@ def datadir():
 def scyllabindir():
     return str(scyllabindir_p())
 
-def curl(url, byte=False):
+# @param headers dict of k:v
+def curl(url, byte=False, headers={}):
     max_retries = 5
     retries = 0
     while True:
         try:
-            req = urllib.request.Request(url)
+            req = urllib.request.Request(url,headers=headers)
             with urllib.request.urlopen(req) as res:
                 if byte:
                     return res.read()
@@ -105,6 +106,209 @@ def curl(url, byte=False):
             if (retries >= max_retries):
                 raise
 
+class gcp_instance:
+    """Describe several aspects of the current GCP instance"""
+
+    EPHEMERAL = "ephemeral"
+    ROOT = "root"
+
+    def __init__(self):
+        self.__type = None
+        self.__cpu = None
+        self.__memoryGB = None
+        self.__nvmeDiskCount = None
+        self.__firstNvmeSize = None
+        self.__osDisks = None
+
+    @staticmethod
+    def is_gce_instance():
+        """Check if it's GCE instance via DNS lookup to metadata server."""
+        import socket
+        try:
+            addrlist = socket.getaddrinfo('metadata.google.internal', 80)
+        except socket.gaierror:
+            return False
+        for res in addrlist:
+            af, socktype, proto, canonname, sa = res
+            if af == socket.AF_INET:
+                addr, port = sa
+                if addr == "169.254.169.254":
+                    return True
+        return False
+
+    def __instance_metadata(self, path):
+        """query GCP metadata server, recursively!"""
+        return curl("http://169.254.169.254/computeMetadata/v1/instance/" + path+"?recursive=true", headers={"Metadata-Flavor": "Google"})
+        #169.254.169.254 is metadata.google.internal
+
+    def _non_root_nvmes(self):
+        """get list of nvme disks from os, filter away if one of them is root"""
+        nvme_re = re.compile(r"nvme\d+n\d+$")
+
+        root_dev_candidates = [x for x in psutil.disk_partitions() if x.mountpoint == "/"]
+        if len(root_dev_candidates) != 1:
+            raise Exception("found more than one disk mounted at root ".format(root_dev_candidates))
+
+        root_dev = root_dev_candidates[0].device
+        # if root_dev.startswith("/dev/mapper"):
+        #     raise Exception("mapper used for root, not checking if nvme is used ".format(root_dev))
+
+        nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
+        return {self.ROOT: [root_dev], self.EPHEMERAL: [x for x in nvmes_present if not root_dev.startswith(os.path.join("/dev/", x))]}
+
+    @property
+    def os_disks(self):
+        """populate disks from /dev/ and root mountpoint"""
+        if self.__osDisks is None:
+            __osDisks = {}
+            nvmes_present = self._non_root_nvmes()
+            for k, v in nvmes_present.items():
+                __osDisks[k] = v
+            self.__osDisks = __osDisks
+        return self.__osDisks
+
+    def getEphemeralOsDisks(self):
+        """return just transient disks"""
+        return self.os_disks[self.EPHEMERAL]
+
+    @staticmethod
+    def isNVME(gcpdiskobj):
+        """check if disk from GCP metadata is a NVME disk"""
+        if gcpdiskobj["interface"]=="NVME":
+            return True
+        return False
+
+    def __get_nvme_disks_from_metadata(self):
+        """get list of nvme disks from metadata server"""
+        import json
+        try:
+            disksREST=self.__instance_metadata("disks")
+            disksobj=json.loads(disksREST)
+            nvmedisks=list(filter(self.isNVME, disksobj))
+        except Exception as e:
+            print ("Problem when parsing disks from metadata:")
+            print (e)
+            nvmedisks={}
+        return nvmedisks
+
+    @property
+    def nvmeDiskCount(self):
+        """get # of nvme disks available for scylla raid"""
+        if self.__nvmeDiskCount is None:
+            try:
+                ephemeral_disks = self.getEphemeralOsDisks()
+                count_os_disks=len(ephemeral_disks)
+            except Exception as e:
+                print ("Problem when parsing disks from OS:")
+                print (e)
+                count_os_disks=0
+            nvme_metadata_disks = self.__get_nvme_disks_from_metadata()
+            count_metadata_nvme_disks=len(nvme_metadata_disks)
+            self.__nvmeDiskCount = count_os_disks if count_os_disks<count_metadata_nvme_disks else count_metadata_nvme_disks
+        return self.__nvmeDiskCount
+
+    @property
+    def instancetype(self):
+        """return the type of this instance, e.g. n2-standard-2"""
+        if self.__type is None:
+            self.__type = self.__instance_metadata("machine-type").split("/")[-1]
+        return self.__type
+
+    @property
+    def cpu(self):
+        """return the # of cpus of this instance"""
+        if self.__cpu is None:
+            self.__cpu = psutil.cpu_count()
+        return self.__cpu
+
+    @property
+    def memoryGB(self):
+        """return the size of memory in GB of this instance"""
+        if self.__memoryGB is None:
+            self.__memoryGB = psutil.virtual_memory().total/1024/1024/1024
+        return self.__memoryGB
+
+    def instance_size(self):
+        """Returns the size of the instance we are running in. i.e.: 2"""
+        return self.instancetype.split("-")[2]
+
+    def instance_class(self):
+        """Returns the class of the instance we are running in. i.e.: n2"""
+        return self.instancetype.split("-")[0]
+
+    def instance_purpose(self):
+        """Returns the purpose of the instance we are running in. i.e.: standard"""
+        return self.instancetype.split("-")[1]
+
+    m1supported="m1-megamem-96" #this is the only exception of supported m1 as per https://cloud.google.com/compute/docs/machine-types#m1_machine_types
+
+    def is_unsupported_instance(self):
+        """Returns if this instance type belongs to unsupported ones for nvmes"""
+        if self.instancetype == self.m1supported:
+            return False
+        if self.instance_class() in ['e2', 'f1', 'g1', 'm2', 'm1']:
+            return True
+        return False
+
+    def is_supported_instance(self):
+        """Returns if this instance type belongs to supported ones for nvmes"""
+        if self.instancetype == self.m1supported:
+            return True
+        if self.instance_class() in ['n1', 'n2', 'n2d' ,'c2']:
+            return True
+        return False
+
+    def is_recommended_instance_size(self):
+        """if this instance has at least 2 cpus, it has a recommended size"""
+        if int(self.instance_size()) > 1:
+            return True
+        return False
+
+    @staticmethod
+    def get_file_size_by_seek(filename):
+        "Get the file size by seeking at end"
+        fd= os.open(filename, os.O_RDONLY)
+        try:
+            return os.lseek(fd, 0, os.SEEK_END)
+        finally:
+            os.close(fd)
+
+    # note that GCP has 3TB physical devices actually, which they break into smaller 375GB disks and share the same mem with multiple machines
+    # this is a reference value, disk size shouldn't be lower than that
+    GCP_NVME_DISK_SIZE_2020=375
+
+    @property
+    def firstNvmeSize(self):
+        """return the size of first non root NVME disk in GB"""
+        if self.__firstNvmeSize is None:
+            ephemeral_disks = self.getEphemeralOsDisks()
+            firstDisk = ephemeral_disks[0]
+            firstDiskSize = self.get_file_size_by_seek(os.path.join("/dev/", firstDisk))
+            firstDiskSizeGB = firstDiskSize/1024/1024/1024
+            if firstDiskSizeGB >= self.GCP_NVME_DISK_SIZE_2020:
+                self.__firstNvmeSize = firstDiskSizeGB
+            else:
+                raise Exception("First nvme is smaller than lowest expected size. ".format(firstDisk))
+        return self.__firstNvmeSize
+
+    def is_recommended_instance(self):
+        if self.is_recommended_instance_size() and not self.is_unsupported_instance() and self.is_supported_instance():
+            # at least 1:2GB cpu:ram ratio , GCP is at 1:4, so this should be fine
+            if self.cpu/self.memoryGB < 0.5:
+              # 30:1 Disk/RAM ratio must be kept at least(AWS), we relax this a little bit
+              # on GCP we are OK with 50:1 , n1-standard-2 can cope with 1 disk, not more
+              diskCount = self.nvmeDiskCount
+              # to reach max performance for > 16 disks we mandate 32 or more vcpus
+              # https://cloud.google.com/compute/docs/disks/local-ssd#performance
+              if diskCount >= 16 and self.cpu < 32:
+                  return False
+              diskSize= self.firstNvmeSize
+              if diskCount < 1:
+                  return False
+              disktoramratio = (diskCount*diskSize)/self.memoryGB
+              if (disktoramratio <= 50) and (disktoramratio > 0):
+                  return True
+        return False
 
 class aws_instance:
     """Describe several aspects of the current AWS instance"""
@@ -574,7 +778,7 @@ def create_perftune_conf(cfg):
     if len(params) > 0:
         if os.path.exists('/etc/scylla.d/perftune.yaml'):
             return True
-        
+
         mode = get_tune_mode(nic)
         params += ' --mode {mode} --dump-options-file'.format(mode=mode)
         yaml = out('/opt/scylladb/scripts/perftune.py ' + params)
