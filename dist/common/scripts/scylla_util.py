@@ -835,6 +835,9 @@ class systemd_unit:
             raise SystemdException('unit {} is not found or invalid'.format(unit))
         self._unit = unit
 
+    def __str__(self):
+        return self._unit
+
     def start(self):
         return run('systemctl {} start {}'.format(self.ctlparam, self._unit))
 
