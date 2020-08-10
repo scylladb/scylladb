@@ -531,14 +531,9 @@ future<std::vector<permission_details>> list_filtered_permissions(
                     ? auth::expand_resource_family(r)
                     : auth::resource_set{r};
 
-            all_details.erase(
-                    std::remove_if(
-                            all_details.begin(),
-                            all_details.end(),
-                            [&resources](const permission_details& pd) {
-                        return resources.count(pd.resource) == 0;
-                    }),
-                    all_details.end());
+            std::erase_if(all_details, [&resources](const permission_details& pd) {
+                return resources.count(pd.resource) == 0;
+            });
         }
 
         std::transform(
@@ -551,11 +546,9 @@ future<std::vector<permission_details>> list_filtered_permissions(
                 });
 
         // Eliminate rows with an empty permission set.
-        all_details.erase(
-                std::remove_if(all_details.begin(), all_details.end(), [](const permission_details& pd) {
-                    return pd.permissions.mask() == 0;
-                }),
-                all_details.end());
+        std::erase_if(all_details, [](const permission_details& pd) {
+            return pd.permissions.mask() == 0;
+        });
 
         if (!role_name) {
             return make_ready_future<std::vector<permission_details>>(std::move(all_details));
@@ -567,14 +560,9 @@ future<std::vector<permission_details>> list_filtered_permissions(
 
         return do_with(std::move(all_details), [&ser, role_name](auto& all_details) {
             return ser.get_roles(*role_name).then([&all_details](role_set all_roles) {
-                all_details.erase(
-                        std::remove_if(
-                                all_details.begin(),
-                                all_details.end(),
-                                [&all_roles](const permission_details& pd) {
-                            return all_roles.count(pd.role_name) == 0;
-                        }),
-                        all_details.end());
+                std::erase_if(all_details, [&all_roles](const permission_details& pd) {
+                    return all_roles.count(pd.role_name) == 0;
+                });
 
                 return make_ready_future<std::vector<permission_details>>(std::move(all_details));
             });

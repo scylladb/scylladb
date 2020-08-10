@@ -1459,7 +1459,7 @@ std::ostream& operator<<(std::ostream& out, const db::replay_position& p) {
 void db::commitlog::segment_manager::discard_unused_segments() {
     clogger.trace("Checking for unused segments ({} active)", _segments.size());
 
-    auto i = std::remove_if(_segments.begin(), _segments.end(), [=](sseg_ptr s) {
+    std::erase_if(_segments, [=](sseg_ptr s) {
         if (s->can_delete()) {
             clogger.debug("Segment {} is unused", *s);
             return true;
@@ -1473,9 +1473,6 @@ void db::commitlog::segment_manager::discard_unused_segments() {
         }
         return false;
     });
-    if (i != _segments.end()) {
-        _segments.erase(i, _segments.end());
-    }
 
     // launch in background, but guard with gate so this deletion is
     // sure to finish in shutdown, because at least through this path,

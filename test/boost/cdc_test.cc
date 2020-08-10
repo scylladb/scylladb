@@ -399,9 +399,9 @@ static std::vector<std::vector<bytes_opt>> filter_by_operation(const cql_transpo
     auto op_index = column_index(rows, cdc::log_meta_column_name("operation"));
     auto op_bytes = op_type->decompose(std::underlying_type_t<cdc::operation>(op));
 
-    results.erase(std::remove_if(results.begin(), results.end(), [&](const std::vector<bytes_opt>& bo) {
+    std::erase_if(results, [&](const std::vector<bytes_opt>& bo) {
         return !comp(op_bytes, bo[op_index]);
-    }), results.end());
+    });
 
     return results;
 }

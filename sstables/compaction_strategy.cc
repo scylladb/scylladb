@@ -874,9 +874,9 @@ date_tiered_manifest::filter_old_sstables(std::vector<sstables::shared_sstable> 
     }
     int64_t cutoff = now - max_sstable_age;
 
-    sstables.erase(std::remove_if(sstables.begin(), sstables.end(), [cutoff] (auto& sst) {
+    std::erase_if(sstables, [cutoff] (auto& sst) {
         return sst->get_stats_metadata().max_timestamp < cutoff;
-    }), sstables.end());
+    });
 
     return sstables;
 }

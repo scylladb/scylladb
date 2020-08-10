@@ -184,9 +184,8 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
                 //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                 //So we need to be careful to only be strict when endpoints == RF
                 if (old_endpoints.size() == strat.get_replication_factor()) {
-                    auto it = std::remove_if(old_endpoints.begin(), old_endpoints.end(),
+                    std::erase_if(old_endpoints,
                         [&new_endpoints] (inet_address ep) { return new_endpoints.count(ep); });
-                    old_endpoints.erase(it, old_endpoints.end());
                     if (old_endpoints.size() != 1) {
                         throw std::runtime_error(format("Expected 1 endpoint but found {:d}", old_endpoints.size()));
                     }

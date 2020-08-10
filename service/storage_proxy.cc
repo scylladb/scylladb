@@ -1236,9 +1236,9 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
                 auto mutations = std::move(std::get<0>(t));
                 auto tracker = std::move(std::get<1>(t));
                 // Pick only the CDC ("augmenting") mutations
-                mutations.erase(std::remove_if(mutations.begin(), mutations.end(), [base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
+                std::erase_if(mutations, [base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
                     return v.schema()->id() == base_tbl_id;
-                }), mutations.end());
+                });
                 if (mutations.empty()) {
                     return make_ready_future<>();
                 }
