@@ -962,7 +962,10 @@ void table::set_metrics() {
                 ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
                 ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
-                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
+                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks),
+                ms::make_gauge("pending_sstable_deletions",
+                        ms::description("Number of tasks waiting to delete sstables from a table"),
+                        [this] { return _sstable_deletion_sem.waiters(); })(cf)(ks)
         });
 
         // Metrics related to row locking
