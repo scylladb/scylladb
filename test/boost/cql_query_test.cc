@@ -3443,10 +3443,13 @@ SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
 }
 
 uint64_t
-run_and_examine_cache_stat_change(cql_test_env& e, uint64_t cache_tracker::stats::*metric, std::function<void (cql_test_env& e)> func) {
+run_and_examine_cache_read_stats_change(cql_test_env& e, std::string_view cf_name, std::function<void (cql_test_env& e)> func) {
     auto read_stat = [&] {
-        auto local_read_metric = [metric] (database& db) { return db.row_cache_tracker().get_stats().*metric; };
-        return e.db().map_reduce0(local_read_metric, uint64_t(0), std::plus<uint64_t>()).get0();
+        return e.db().map_reduce0([&cf_name] (const database& db) {
+            auto& t = db.find_column_family("ks", sstring(cf_name));
+            auto& stats = t.get_row_cache().stats();
+            return stats.reads_with_misses.count() + stats.reads_with_no_misses.count();
+        }, uint64_t(0), std::plus<uint64_t>()).get0();
     };
     auto before = read_stat();
     func(e);
@@ -3457,11 +3460,11 @@ run_and_examine_cache_stat_change(cql_test_env& e, uint64_t cache_tracker::stats
 SEASTAR_TEST_CASE(test_cache_bypass) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (k int PRIMARY KEY)").get();
-        auto with_cache = run_and_examine_cache_stat_change(e, &cache_tracker::stats::reads, [] (cql_test_env& e) {
+        auto with_cache = run_and_examine_cache_read_stats_change(e, "t", [] (cql_test_env& e) {
             e.execute_cql("SELECT * FROM t").get();
         });
         BOOST_REQUIRE(with_cache >= smp::count);  // scan may make multiple passes per shard
-        auto without_cache = run_and_examine_cache_stat_change(e, &cache_tracker::stats::reads, [] (cql_test_env& e) {
+        auto without_cache = run_and_examine_cache_read_stats_change(e, "t", [] (cql_test_env& e) {
             e.execute_cql("SELECT * FROM t BYPASS CACHE").get();
         });
         BOOST_REQUIRE_EQUAL(without_cache, 0);
