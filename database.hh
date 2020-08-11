@@ -1246,7 +1246,6 @@ private:
     size_t max_memory_streaming_concurrent_reads() { return _dbcfg.available_memory * 0.02; }
     static constexpr size_t max_count_system_concurrent_reads{10};
     size_t max_memory_system_concurrent_reads() { return _dbcfg.available_memory * 0.02; };
-    static constexpr size_t max_concurrent_sstable_loads() { return 3; }
     size_t max_memory_pending_view_updates() const { return _dbcfg.available_memory * 0.1; }
 
     struct db_stats {
@@ -1282,8 +1281,6 @@ private:
     reader_concurrency_semaphore _streaming_concurrency_sem;
     reader_concurrency_semaphore _compaction_concurrency_sem;
     reader_concurrency_semaphore _system_read_concurrency_sem;
-
-    named_semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads(), named_semaphore_exception_factory{"sstable load concurrency"}};
 
     db::timeout_semaphore _view_update_concurrency_sem{max_memory_pending_view_updates()};
 
@@ -1557,9 +1554,6 @@ public:
     std::unordered_set<sstring> get_initial_tokens();
     std::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
-    named_semaphore& sstable_load_concurrency_sem() {
-        return _sstable_load_concurrency_sem;
-    }
     void register_connection_drop_notifier(netw::messaging_service& ms);
 
     db_stats& get_stats() {
