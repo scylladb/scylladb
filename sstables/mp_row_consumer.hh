@@ -773,6 +773,19 @@ public:
         }
     }
 
+    virtual position_in_partition_view position() override {
+        if (_in_progress) {
+            return _in_progress->position();
+        }
+        if (_ready) {
+            return _ready->position();
+        }
+        if (_is_mutation_end) {
+            return position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{});
+        }
+        return position_in_partition_view(position_in_partition_view::partition_start_tag_t{});
+    }
+
     // Changes current fragment range.
     //
     // When there are no more fragments for current range,
@@ -1421,6 +1434,22 @@ public:
             _in_progress_row.reset();
             _is_mutation_end = false;
         }
+    }
+
+    virtual position_in_partition_view position() override {
+        if (_inside_static_row) {
+            return position_in_partition_view(position_in_partition_view::static_row_tag_t{});
+        }
+        if (_stored_tombstone) {
+            return _stored_tombstone->position();
+        }
+        if (_in_progress_row) {
+            return _in_progress_row->position();
+        }
+        if (_is_mutation_end) {
+            return position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{});
+        }
+        return position_in_partition_view(position_in_partition_view::partition_start_tag_t{});
     }
 };
 

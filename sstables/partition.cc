@@ -294,8 +294,8 @@ private:
         }
 
         if (!_consumer.is_mutation_end()) {
-            // FIXME: give more details from _context
-            throw malformed_sstable_exception("consumer not at partition boundary", _sst->get_filename());
+            throw malformed_sstable_exception(format("consumer not at partition boundary, position: {}",
+                    position_in_partition_view::printer(*_schema, _consumer.position())), _sst->get_filename());
         }
 
         // It's better to obtain partition information from the index if we already have it.

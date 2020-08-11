@@ -413,6 +413,10 @@ public:
     }
 
     virtual void reset(indexable_element) override { }
+
+    virtual position_in_partition_view position() override {
+        return position_in_partition_view(position_in_partition_view::partition_start_tag_t{});
+    }
 };
 
 SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
@@ -496,6 +500,9 @@ public:
         return proceed::yes;
     }
     virtual void reset(indexable_element) override { }
+    virtual position_in_partition_view position() override {
+        return position_in_partition_view(position_in_partition_view::partition_start_tag_t{});
+    }
 };
 
 
