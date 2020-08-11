@@ -48,8 +48,11 @@ private:
     };
     std::unordered_map<lw_shared_ptr<table>, std::vector<sstables::shared_sstable>> _sstables_with_tables;
     std::unordered_map<lw_shared_ptr<table>, std::vector<sstables::shared_sstable>> _sstables_to_move;
+    metrics::metric_groups _metrics;
 public:
-    view_update_generator(database& db) : _db(db) { }
+    view_update_generator(database& db) : _db(db) {
+        setup_metrics();
+    }
 
     future<> start();
     future<> stop();
@@ -58,6 +61,7 @@ public:
     ssize_t available_register_units() const { return _registration_sem.available_units(); }
 private:
     bool should_throttle() const;
+    void setup_metrics();
 };
 
 }

@@ -152,4 +152,21 @@ future<> view_update_generator::register_staging_sstable(sstables::shared_sstabl
     }
 }
 
+void view_update_generator::setup_metrics() {
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("view_update_generator", {
+        sm::make_gauge("pending_registrations", sm::description("Number of tasks waiting to register staging sstables"),
+                [this] { return _registration_sem.waiters(); }),
+
+        sm::make_gauge("queued_batches_count", 
+                sm::description("Number of sets of sstables queued for view update generation"),
+                [this] { return _sstables_with_tables.size(); }),
+
+        sm::make_gauge("sstables_to_move_count",
+                sm::description("Number of sets of sstables which are already processed and wait to be moved from their staging directory"),
+                [this] { return _sstables_to_move.size(); })
+    });
+}
+
 }
