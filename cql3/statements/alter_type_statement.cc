@@ -87,6 +87,15 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, b
         throw exceptions::invalid_request_exception(format("No user type named {} exists.", _name.to_string()));
     }
 
+    for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
+        for (auto&& column : schema->partition_key_columns()) {
+            if (column.type->references_user_type(_name.get_keyspace(), _name.get_user_type_name())) {
+                throw exceptions::invalid_request_exception(format("Cannot add new field to type {} because it is used in the partition key column {} of table {}.{}",
+                    _name.to_string(), column.name_as_text(), schema->ks_name(), schema->cf_name()));
+            }
+        }
+    }
+
     auto&& updated = make_updated_type(db, to_update->second);
 
     // Now, we need to announce the type update to basically change it for new tables using this type,
