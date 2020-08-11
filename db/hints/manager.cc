@@ -529,7 +529,7 @@ bool manager::check_dc_for(ep_key_type ep) const noexcept {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
         return _hinted_dcs.empty() || have_ep_manager(ep) ||
-               _hinted_dcs.find(_local_snitch_ptr->get_datacenter(ep)) != _hinted_dcs.end();
+               _hinted_dcs.contains(_local_snitch_ptr->get_datacenter(ep));
     } catch (...) {
         // if we failed to check the DC - block this hint
         return false;

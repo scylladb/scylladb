@@ -1607,10 +1607,10 @@ SEASTAR_TEST_CASE(check_compaction_ancestor_metadata) {
                 for (auto& ancestor : cm.ancestors.elements) {
                     ancestors.insert(ancestor);
                 }
-                BOOST_REQUIRE(ancestors.find(42) != ancestors.end());
-                BOOST_REQUIRE(ancestors.find(43) != ancestors.end());
-                BOOST_REQUIRE(ancestors.find(44) != ancestors.end());
-                BOOST_REQUIRE(ancestors.find(45) != ancestors.end());
+                BOOST_REQUIRE(ancestors.contains(42));
+                BOOST_REQUIRE(ancestors.contains(43));
+                BOOST_REQUIRE(ancestors.contains(44));
+                BOOST_REQUIRE(ancestors.contains(45));
 
                 return make_ready_future<>();
             });
@@ -1785,8 +1785,7 @@ SEASTAR_TEST_CASE(leveled_01) {
 
     std::set<unsigned long> gens = { 1, 2 };
     for (auto& sst : candidate.sstables) {
-        auto it = gens.find(sst->generation());
-        BOOST_REQUIRE(it != gens.end());
+        BOOST_REQUIRE(gens.contains(sst->generation()));
         gens.erase(sst->generation());
         BOOST_REQUIRE(sst->get_sstable_level() == 0);
     }
@@ -1837,8 +1836,7 @@ SEASTAR_TEST_CASE(leveled_02) {
 
     std::set<unsigned long> gens = { 1, 2, 3 };
     for (auto& sst : candidate.sstables) {
-        auto it = gens.find(sst->generation());
-        BOOST_REQUIRE(it != gens.end());
+        BOOST_REQUIRE(gens.contains(sst->generation()));
         gens.erase(sst->generation());
         BOOST_REQUIRE(sst->get_sstable_level() == 0);
     }
@@ -1957,8 +1955,7 @@ SEASTAR_TEST_CASE(leveled_04) {
 
     std::set<unsigned long> levels = { 1, 2 };
     for (auto& sst : candidate.sstables) {
-        auto it = levels.find(sst->get_sstable_level());
-        BOOST_REQUIRE(it != levels.end());
+        BOOST_REQUIRE(levels.contains(sst->get_sstable_level()));
         levels.erase(sst->get_sstable_level());
     }
     BOOST_REQUIRE(levels.empty());

@@ -130,7 +130,7 @@ class error_injection {
     std::map<sstring, bool, str_less> _enabled;
 
     bool is_enabled(const std::string_view& injection_name) const {
-        return _enabled.find(injection_name) != _enabled.end();
+        return _enabled.contains(injection_name);
     }
 
     bool is_one_shot(const std::string_view& injection_name) const {

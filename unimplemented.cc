@@ -67,8 +67,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
 }
 
 void warn(cause c) {
-    auto i = _warnings.find(c);
-    if (i == _warnings.end()) {
+    if (!_warnings.contains(c)) {
         _warnings.insert({c, true});
         ulogger.debug("{}", c);
     }

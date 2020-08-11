@@ -426,7 +426,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
         auto& dc_replicas_dc_set = dc_replicas[dc];
 
         // have we already found all replicas for this dc?
-        if (datacenters.find(dc) == datacenters.end() ||
+        if (!datacenters.contains(dc) ||
             has_sufficient_replicas(dc, dc_replicas, all_endpoints, datacenters)) {
             continue;
         }
@@ -441,7 +441,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
         } else {
             sstring rack = snitch->get_rack(ep);
             // is this a new rack? - we prefer to replicate on different racks
-            if (seen_racks_dc_set.find(rack) != seen_racks_dc_set.end()) {
+            if (seen_racks_dc_set.contains(rack)) {
                 skipped_dc_endpoints_set.push_back(ep);
             } else { // this IS a new rack
                 dc_replicas_dc_set.insert(ep);

@@ -50,16 +50,14 @@ property_definitions::property_definitions()
 { }
 
 void property_definitions::add_property(const sstring& name, sstring value) {
-    auto it = _properties.find(name);
-    if (it != _properties.end()) {
+    if (_properties.contains(name)) {
         throw exceptions::syntax_exception(format("Multiple definition for property '{}'", name));
     }
     _properties.emplace(name, value);
 }
 
 void property_definitions::add_property(const sstring& name, const std::map<sstring, sstring>& value) {
-    auto it = _properties.find(name);
-    if (it != _properties.end()) {
+    if (_properties.contains(name)) {
         throw exceptions::syntax_exception(format("Multiple definition for property '{}'", name));
     }
     _properties.emplace(name, value);
@@ -106,7 +104,7 @@ std::optional<std::map<sstring, sstring>> property_definitions::get_map(const ss
 }
 
 bool property_definitions::has_property(const sstring& name) const {
-    return _properties.find(name) != _properties.end();
+    return _properties.contains(name);
 }
 
 std::optional<property_definitions::value_type> property_definitions::get(const sstring& name) const {

@@ -743,7 +743,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     }
     cql_protocol_extension_enum_set cql_proto_exts;
     for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
-        if (options.find(protocol_extension_name(ext)) != options.cend()) {
+        if (options.contains(protocol_extension_name(ext))) {
             cql_proto_exts.set(ext);
         }
     }

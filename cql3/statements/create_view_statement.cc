@@ -125,7 +125,7 @@ static bool validate_primary_key(
     }
 
     bool new_non_pk_column = false;
-    if (base_pk.find(def) == base_pk.end()) {
+    if (!base_pk.contains(def)) {
         if (has_non_pk_column) {
             throw exceptions::invalid_request_exception(format("Cannot include more than one non-primary key column '{}' in materialized view primary key", def->name_as_text()));
         }
@@ -271,12 +271,12 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     // used in the view and whether or not to generate a tombstone. In order to not surprise our users, we require
     // that they include all of the columns. We provide them with a list of all of the columns left to include.
     for (auto& def : schema->all_columns()) {
-        bool included_def = included.empty() || included.find(&def) != included.end();
+        bool included_def = included.empty() || included.contains(&def);
         if (included_def && def.is_static()) {
             throw exceptions::invalid_request_exception(format("Unable to include static column '{}' which would be included by Materialized View SELECT * statement", def));
         }
 
-        bool def_in_target_pk = std::find(target_primary_keys.begin(), target_primary_keys.end(), &def) != target_primary_keys.end();
+        bool def_in_target_pk = target_primary_keys.contains(&def);
         if (included_def && !def_in_target_pk) {
             target_non_pk_columns.push_back(&def);
         }
@@ -310,7 +310,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     // problem. And this case actually works correctly.
     auto non_pk_restrictions = restrictions->get_non_pk_restriction();
     if (non_pk_restrictions.size() == 1 && has_non_pk_column &&
-            std::find(target_primary_keys.begin(), target_primary_keys.end(), non_pk_restrictions.cbegin()->first) != target_primary_keys.end()) {
+            target_primary_keys.contains(non_pk_restrictions.cbegin()->first)) {
         // This case (filter by new PK column of the view) works, as explained above
     } else if (!non_pk_restrictions.empty()) {
         auto column_names = ::join(", ", non_pk_restrictions | boost::adaptors::map_keys | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)));

@@ -170,7 +170,7 @@ public:
         }
 
         if (!expired.empty()) {
-            auto is_expired = [&] (const shared_sstable& s) { return expired.find(s) != expired.end(); };
+            auto is_expired = [&] (const shared_sstable& s) { return expired.contains(s); };
             candidates.erase(boost::remove_if(candidates, is_expired), candidates.end());
         }
 

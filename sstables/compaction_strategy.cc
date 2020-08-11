@@ -788,7 +788,7 @@ date_tiered_manifest::get_next_sstables(column_family& cf, std::vector<sstables:
     auto expired = get_fully_expired_sstables(cf, uncompacting, gc_before);
 
     if (!expired.empty()) {
-        auto is_expired = [&] (const sstables::shared_sstable& s) { return expired.find(s) != expired.end(); };
+        auto is_expired = [&] (const sstables::shared_sstable& s) { return expired.contains(s); };
         uncompacting.erase(boost::remove_if(uncompacting, is_expired), uncompacting.end());
     }
 

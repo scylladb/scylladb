@@ -1586,7 +1586,7 @@ static
 auto make_datasets() {
     std::map<std::string, std::unique_ptr<dataset>> dsets;
     auto add = [&] (std::unique_ptr<dataset> ds) {
-        if (dsets.find(ds->name()) != dsets.end()) {
+        if (dsets.contains(ds->name())) {
             throw std::runtime_error(format("Dataset with name '{}' already exists", ds->name()));
         }
         auto name = ds->name();
@@ -1857,7 +1857,7 @@ int main(int argc, char** argv) {
                 auto enabled_dataset_names = app.configuration()["datasets"].as<std::vector<std::string>>();
                 auto enabled_datasets = boost::copy_range<std::vector<dataset*>>(enabled_dataset_names
                                         | boost::adaptors::transformed([&](auto&& name) {
-                    if (datasets.find(name) == datasets.end()) {
+                    if (!datasets.contains(name)) {
                         throw std::runtime_error(format("No such dataset: {}", name));
                     }
                     return datasets[name].get();

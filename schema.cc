@@ -1127,8 +1127,7 @@ schema_builder& schema_builder::with_index(const index_metadata& im) {
 }
 
 schema_builder& schema_builder::without_index(const sstring& name) {
-    const auto& it = _raw._indices_by_name.find(name);
-    if (it != _raw._indices_by_name.end()) {
+    if (_raw._indices_by_name.contains(name)) {
         _raw._indices_by_name.erase(name);
     }
     return *this;

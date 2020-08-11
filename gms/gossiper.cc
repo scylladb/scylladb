@@ -1790,8 +1790,7 @@ void gossiper::maybe_initialize_local_state(int generation_nbr) {
     endpoint_state local_state(hb_state);
     local_state.mark_alive();
     inet_address ep = get_broadcast_address();
-    auto it = endpoint_state_map.find(ep);
-    if (it == endpoint_state_map.end()) {
+    if (!endpoint_state_map.contains(ep)) {
         endpoint_state_map.emplace(ep, local_state);
     }
 }

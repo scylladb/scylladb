@@ -74,7 +74,7 @@ future<> create_type_statement::check_access(service::storage_proxy& proxy, cons
 inline bool create_type_statement::type_exists_in(::keyspace& ks) const
 {
     auto&& keyspace_types = ks.metadata()->user_types().get_all_types();
-    return keyspace_types.find(_name.get_user_type_name()) != keyspace_types.end();
+    return keyspace_types.contains(_name.get_user_type_name());
 }
 
 void create_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const

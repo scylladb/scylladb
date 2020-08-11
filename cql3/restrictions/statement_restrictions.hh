@@ -429,7 +429,7 @@ public:
      * @return true if column is restricted by some restriction, false otherwise
      */
     bool is_restricted(const column_definition* cdef) const {
-        if (_not_null_columns.find(cdef) != _not_null_columns.end()) {
+        if (_not_null_columns.contains(cdef)) {
             return true;
         }
 

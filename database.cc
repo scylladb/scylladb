@@ -1101,8 +1101,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
 
 future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, bool is_bootstrap) {
-    auto i = _keyspaces.find(ksm->name());
-    if (i != _keyspaces.end()) {
+    if (_keyspaces.contains(ksm->name())) {
         return make_ready_future<>();
     }
 
@@ -1906,7 +1905,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
         // if specific keyspaces names were given - filter only these keyspaces directories
         if (!ks_names_set.empty()) {
             filter = std::make_unique<lister::filter_type>([ks_names_set = std::move(ks_names_set)] (const fs::path& parent_dir, const directory_entry& dir_entry) {
-                return ks_names_set.find(dir_entry.name) != ks_names_set.end();
+                return ks_names_set.contains(dir_entry.name);
             });
         }
 

@@ -873,7 +873,7 @@ future<> migration_manager::announce_new_view(view_ptr view, bool announce_local
     auto& db = get_local_storage_proxy().get_db().local();
     try {
         auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
-        if (keyspace->cf_meta_data().find(view->cf_name()) != keyspace->cf_meta_data().end()) {
+        if (keyspace->cf_meta_data().contains(view->cf_name())) {
             throw exceptions::already_exists_exception(view->ks_name(), view->cf_name());
         }
         mlogger.info("Create new view: {}", view);

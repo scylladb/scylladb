@@ -1426,7 +1426,7 @@ future<> view_builder::calculate_shard_build_step(
     std::vector<std::vector<view_build_status>> view_build_status_per_shard;
     for (auto& [view_name, first_token, next_token_opt, cpu_id] : in_progress) {
         if (auto view = maybe_fetch_view(view_name)) {
-            if (built_views.find(view->id()) != built_views.end()) {
+            if (built_views.contains(view->id())) {
                 if (this_shard_id() == 0) {
                     auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([view = std::move(view)] {
                         return system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
@@ -1477,8 +1477,8 @@ future<> view_builder::calculate_shard_build_step(
 
     auto all_views = _db.get_views();
     auto is_new = [&] (const view_ptr& v) {
-        return base_table_exists(v) && loaded_views.find(v->id()) == loaded_views.end()
-                && built_views.find(v->id()) == built_views.end();
+        return base_table_exists(v) && !loaded_views.contains(v->id())
+                && !built_views.contains(v->id());
     };
     for (auto&& view : all_views | boost::adaptors::filtered(is_new)) {
         bookkeeping_ops->push_back(add_new_view(view, get_or_create_build_step(view->view_info()->base_id())));

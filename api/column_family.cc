@@ -878,7 +878,7 @@ void set_column_family(http_context& ctx, routes& r) {
             column_family& cf = ctx.db.local().find_column_family(uuid);
             res.reserve(cf.get_index_manager().list_indexes().size());
             for (auto&& i : cf.get_index_manager().list_indexes()) {
-                if (vp.find(secondary_index::index_table_name(i.metadata().name())) == vp.end()) {
+                if (!vp.contains(secondary_index::index_table_name(i.metadata().name()))) {
                     res.emplace_back(i.metadata().name());
                 }
             }

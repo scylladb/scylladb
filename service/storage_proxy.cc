@@ -488,8 +488,7 @@ public:
     // return true if handler is no longer needed because
     // CL cannot be reached
     bool failure_response(gms::inet_address from, size_t count) {
-        auto it = _targets.find(from);
-        if (it == _targets.end()) {
+        if (!_targets.contains(from)) {
             // There is a little change we can get outdated reply
             // if the coordinator was restarted after sending a request and
             // getting reply back. The chance is low though since initial
@@ -748,7 +747,7 @@ public:
         for (auto& target : targets) {
             auto dc = snitch_ptr->get_datacenter(target);
 
-            if (_dc_responses.find(dc) == _dc_responses.end()) {
+            if (!_dc_responses.contains(dc)) {
                 auto pending_for_dc = boost::range::count_if(pending_endpoints, [&snitch_ptr, &dc] (const gms::inet_address& ep){
                     return snitch_ptr->get_datacenter(ep) == dc;
                 });
@@ -1743,7 +1742,7 @@ void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep
     sstring dc = get_dc(ep);
     // if this is the first time we see an endpoint from this DC - add a
     // corresponding collectd metric
-    if (_dc_stats.find(dc) == _dc_stats.end()) {
+    if (!_dc_stats.contains(dc)) {
         _metrics.add_group(_category, {
             sm::make_derive(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
                             sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {storage_proxy_stats::current_scheduling_group_label(), datacenter_label(dc), op_type_label(_op_type)})
@@ -2067,7 +2066,7 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
         // called storage_proxy::on_down(), and removed some of the ongoing
         // handlers, including this id. If this happens, we need to ignore
         // this id - not try to look it up or start a send.
-        if (_response_handlers.find(response_id) == _response_handlers.end()) {
+        if (!_response_handlers.contains(response_id)) {
             protected_response.release(); // Don't try to remove this id again
             // Requests that time-out normally below after response_wait()
             // result in an exception (see ~abstract_write_response_handler())
@@ -5230,7 +5229,7 @@ void storage_proxy::on_down(const gms::inet_address& endpoint) {
     auto it = _view_update_handlers_list->begin();
     while (it != _view_update_handlers_list->end()) {
         auto guard = it->shared_from_this();
-        if (it->get_targets().count(endpoint) > 0 && _response_handlers.find(it->id()) != _response_handlers.end()) {
+        if (it->get_targets().count(endpoint) > 0 && _response_handlers.contains(it->id())) {
             it->timeout_cb();
         }
         ++it;
@@ -5244,7 +5243,7 @@ void storage_proxy::on_down(const gms::inet_address& endpoint) {
 future<> storage_proxy::drain_on_shutdown() {
     return do_with(::shared_ptr<abstract_write_response_handler>(), [this] (::shared_ptr<abstract_write_response_handler>& intrusive_list_guard) {
         return do_for_each(*_view_update_handlers_list, [this, &intrusive_list_guard] (abstract_write_response_handler& handler) {
-            if (_response_handlers.find(handler.id()) != _response_handlers.end()) {
+            if (_response_handlers.contains(handler.id())) {
                 intrusive_list_guard = handler.shared_from_this();
                 handler.timeout_cb();
             }

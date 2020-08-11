@@ -308,7 +308,7 @@ sstring to_string(cdc::delta_mode dm) {
 } // anon. namespace
 
 cdc::options::options(const std::map<sstring, sstring>& map) {
-    if (map.find("enabled") == std::end(map)) {
+    if (!map.contains("enabled")) {
         return;
     }
 

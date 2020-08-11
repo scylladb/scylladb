@@ -894,7 +894,7 @@ public:
         repair_hash_set set_diff;
         // Note std::set_difference needs x and y are sorted.
         std::copy_if(x.begin(), x.end(), std::inserter(set_diff, set_diff.end()),
-                [&y] (auto& item) { thread::maybe_yield(); return y.find(item) == y.end(); });
+                [&y] (auto& item) { thread::maybe_yield(); return !y.contains(item); });
         return set_diff;
     }
 
