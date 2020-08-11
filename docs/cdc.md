@@ -12,6 +12,21 @@ public:
 ```
 When a write is performed to a CDC-enabled user-created table (the "base table"), a corresponding write, or a set of writes, is synchronously performed to the CDC table associated with the base table (the "log table"); the partition key for these log writes is chosen from some set of stream IDs. Where this set comes from and how those stream IDs are chosen is described below.
 
+The 128 bits are composed of:
+
+```
+128           64            27            4             0
+  | <token:64> | <random:38> | <index:22> | <version:4> |
+
+```
+
+With `version` making up the lowest 4 bits. The id is stored as bytes, and sorted on string ordering, i.e. the high qword (token) is msb in ordering. 
+
+The `index` bits indicate the vnode index the id belongs to, i.e. the vnode owning the end of the token range in which the id sits.
+
+The random bits exist to help ensure ids are sufficiently unique across
+generations.
+
 ### Generations
 A __CDC generation__ is a structure consisting of:
 1. a __generation timestamp__, describing the time point from which this generation "starts operating" (more on that later),
