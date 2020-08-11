@@ -90,7 +90,11 @@ void manager::register_metrics(const sstring& group_name) {
 
         sm::make_gauge("pending_drains", 
                         sm::description("Number of tasks waiting in the queue for draining hints"),
-                        [this] { return _drain_lock.waiters(); })
+                        [this] { return _drain_lock.waiters(); }),
+
+        sm::make_gauge("pending_sends",
+                        sm::description("Number of tasks waiting in the queue for sending a hint"),
+                        [this] { return _resource_manager.sending_queue_length(); })
     });
 }
 
