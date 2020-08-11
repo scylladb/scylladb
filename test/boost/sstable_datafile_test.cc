@@ -55,7 +55,7 @@
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/make_random_string.hh"
 #include "test/lib/normalizing_reader.hh"
-#include "test/boost/sstable_run_based_compaction_strategy_for_tests.hh"
+#include "test/lib/sstable_run_based_compaction_strategy_for_tests.hh"
 #include "compatible_ring_position.hh"
 #include "mutation_compactor.hh"
 #include "service/priority_manager.hh"
