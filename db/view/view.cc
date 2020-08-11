@@ -1213,6 +1213,29 @@ view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_di
         : _db(db)
         , _sys_dist_ks(sys_dist_ks)
         , _mnotifier(mn) {
+    setup_metrics();
+}
+
+void view_builder::setup_metrics() {
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("view_builder", {
+        sm::make_gauge("pending_bookkeeping_ops",
+                sm::description("Number of tasks waiting to perform bookkeeping operations"),
+                [this] { return _sem.waiters(); }),
+
+        sm::make_derive("steps_performed",
+                sm::description("Number of performed build steps."),
+                _stats.steps_performed),
+
+        sm::make_derive("steps_failed",
+                sm::description("Number of failed build steps."),
+                _stats.steps_failed),
+
+        sm::make_gauge("builds_in_progress",
+                sm::description("Number of currently active view builds."),
+                [this] { return _base_to_build_step.size(); })
+    });
 }
 
 future<> view_builder::start(service::migration_manager& mm) {
@@ -1599,6 +1622,7 @@ future<> view_builder::do_build_step() {
         exponential_backoff_retry r(1s, 1min);
         while (!_base_to_build_step.empty() && !_as.abort_requested()) {
             auto units = get_units(_sem, 1).get0();
+            ++_stats.steps_performed;
             try {
                 execute(_current_step->second, exponential_backoff_retry(1s, 1min));
                 r.reset();
@@ -1606,6 +1630,7 @@ future<> view_builder::do_build_step() {
                 return;
             } catch (...) {
                 ++_current_step->second.base->cf_stats()->view_building_paused;
+                ++_stats.steps_failed;
                 auto base = _current_step->second.base->schema();
                 vlogger.warn("Error executing build step for base {}.{}: {}", base->ks_name(), base->cf_name(), std::current_exception());
                 r.retry(_as).get();
