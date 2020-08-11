@@ -100,6 +100,7 @@ listen_address: localhost
 
 # port for the CQL native transport to listen for clients on
 # For security reasons, you should not expose this port to the internet.  Firewall it if needed.
+# To disable the CQL native transport, set this option to 0.
 native_transport_port: 9042
 
 # Like native_transport_port, but clients are forwarded to specific shards, based on the
