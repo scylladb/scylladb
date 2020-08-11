@@ -15,7 +15,6 @@ import bisect
 import os
 import subprocess
 import time
-import html
 
 
 def template_arguments(gdb_type):
@@ -717,7 +716,7 @@ class histogram:
         h.add('item2') # Equivalent to h['item2'] += 1
         h.add('item2')
         h.add('item3')
-        h.print()
+        h.print_to_console()
 
     Would print:
         4 item1 ++++++++++++++++++++++++++++++++++++++++
@@ -799,7 +798,7 @@ class histogram:
     def __repr__(self):
         return 'histogram({})'.format(self._counts)
 
-    def print(self):
+    def print_to_console(self):
         gdb.write(str(self) + '\n')
 
 
@@ -3080,6 +3079,10 @@ class scylla_memtables(gdb.Command):
                 gdb.write('  (memtable*) 0x%x: total=%d, used=%d, free=%d, flushed=%d\n' % (mt, reg.total(), reg.used(), reg.free(), mt['_flushed_memory']))
 
 
+def escape_html(s):
+    return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
 class scylla_generate_object_graph(gdb.Command):
     """Generate an object graph for an object.
 
@@ -3183,7 +3186,7 @@ class scylla_generate_object_graph(gdb.Command):
             if vtable_symbol_name:
                 symbol_name = vtable_symbol_name[prefix_len:] if len(vtable_symbol_name) > prefix_len else vtable_symbol_name
                 output_file.write('{} [label=<{} ({}, {})<br/>{}>]; // {}\n'.format(addr, addr_str, size, state,
-                    html.escape(symbol_name[:32]), vtable_symbol_name))
+                    escape_html(symbol_name[:32]), vtable_symbol_name))
             else:
                 output_file.write('{} [label=<{} ({}, {})>];\n'.format(addr, addr_str, size, state, ptr_meta))
 
