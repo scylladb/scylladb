@@ -159,6 +159,14 @@ void migration_manager::init_messaging_service()
     ms.register_schema_check([] {
         return make_ready_future<utils::UUID>(service::get_local_storage_proxy().get_db().local().get_version());
     });
+    ms.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
+        get_local_storage_proxy().get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
+        return container().invoke_on(shard, [v] (auto&& sp) {
+            mlogger.debug("Schema version request for {}", v);
+            return local_schema_registry().get_frozen(v);
+        });
+    });
 }
 
 future<> migration_manager::uninit_messaging_service()
@@ -167,7 +175,8 @@ future<> migration_manager::uninit_messaging_service()
     return when_all_succeed(
         ms.unregister_migration_request(),
         ms.unregister_definitions_update(),
-        ms.unregister_schema_check()
+        ms.unregister_schema_check(),
+        ms.unregister_get_schema_version()
     ).discard_result();
 }
 

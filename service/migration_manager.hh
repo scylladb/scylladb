@@ -63,7 +63,8 @@ namespace service {
 template<typename M>
 concept MergeableMutation = std::is_same<M, canonical_mutation>::value || std::is_same<M, frozen_mutation>::value;
 
-class migration_manager : public seastar::async_sharded_service<migration_manager> {
+class migration_manager : public seastar::async_sharded_service<migration_manager>,
+                            public seastar::peering_sharded_service<migration_manager> {
 private:
     migration_notifier& _notifier;
 

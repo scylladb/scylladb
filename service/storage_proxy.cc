@@ -5017,15 +5017,6 @@ void storage_proxy::init_messaging_service() {
         });
     });
 
-    ms.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
-        get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
-        return container().invoke_on(shard, [v] (auto&& sp) {
-            slogger.debug("Schema version request for {}", v);
-            return local_schema_registry().get_frozen(v);
-        });
-    });
-
     // Register PAXOS verb handlers
     ms.register_paxos_prepare([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
                 query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
@@ -5141,7 +5132,6 @@ future<> storage_proxy::uninit_messaging_service() {
         ms.unregister_read_mutation_data(),
         ms.unregister_read_digest(),
         ms.unregister_truncate(),
-        ms.unregister_get_schema_version(),
         ms.unregister_paxos_prepare(),
         ms.unregister_paxos_accept(),
         ms.unregister_paxos_learn(),
