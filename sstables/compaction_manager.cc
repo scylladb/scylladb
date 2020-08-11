@@ -198,8 +198,19 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const c
 }
 
 void compaction_manager::register_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables) {
+    std::unordered_set<sstables::shared_sstable> sstables_to_merge;
+    sstables_to_merge.reserve(sstables.size());
     for (auto& sst : sstables) {
-        _compacting_sstables.insert(sst);
+        sstables_to_merge.insert(sst);
+    }
+
+    // make all required allocations in advance to merge
+    // so it should not throw
+    _compacting_sstables.reserve(_compacting_sstables.size() + sstables.size());
+    try {
+        _compacting_sstables.merge(sstables_to_merge);
+    } catch (...) {
+        cmlog.error("Unexpected error when registering compacting SSTables: {}. Ignored...", std::current_exception());
     }
 }
 
