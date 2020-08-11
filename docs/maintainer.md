@@ -205,6 +205,6 @@ After this is done, backporting seastar patches can proceed:
  7. Use `cd ..` to return to scylla.git.
  8. Use `git submodule summary seastar` to create a change log.
  9. Commit using `git commit seastar`, populate change log from
-    step 7.
+    step 8.
  10. Publish using `git push`.
 
