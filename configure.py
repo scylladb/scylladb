@@ -393,6 +393,7 @@ scylla_tests = set([
     'test/boost/virtual_reader_test',
     'test/boost/bptree_test',
     'test/boost/double_decker_test',
+    'test/boost/stall_free_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
