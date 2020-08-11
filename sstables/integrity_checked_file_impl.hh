@@ -98,9 +98,9 @@ inline file make_integrity_checked_file(sstring name, file f);
 inline open_flags adjust_flags_for_integrity_checked_file(open_flags flags);
 
 future<file>
-open_integrity_checked_file_dma(sstring name, open_flags flags, file_open_options options);
+open_integrity_checked_file_dma(std::string_view name, open_flags flags, file_open_options options) noexcept;
 
 future<file>
-open_integrity_checked_file_dma(sstring name, open_flags flags);
+open_integrity_checked_file_dma(std::string_view name, open_flags flags) noexcept;
 
 }

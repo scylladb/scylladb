@@ -185,12 +185,12 @@ public:
                                                  version_types v, format_types f);
 
     // load sstable using components shared by a shard
-    future<> load(foreign_sstable_open_info info);
+    future<> load(foreign_sstable_open_info info) noexcept;
     // load all components from disk
     // this variant will be useful for testing purposes and also when loading
     // a new sstable from scratch for sharing its components.
-    future<> load(const io_priority_class& pc = default_priority_class());
-    future<> open_data();
+    future<> load(const io_priority_class& pc = default_priority_class()) noexcept;
+    future<> open_data() noexcept;
     future<> update_info_for_opened_data();
 
     future<> set_generation(int64_t generation);
@@ -547,7 +547,7 @@ private:
 public:
     const bool has_component(component_type f) const;
 private:
-    future<file> open_file(component_type, open_flags, file_open_options = {});
+    future<file> open_file(component_type, open_flags, file_open_options = {}) noexcept;
 
     template <component_type Type, typename T>
     future<> read_simple(T& comp, const io_priority_class& pc);
@@ -560,8 +560,11 @@ private:
     void write_crc(const checksum& c);
     void write_digest(uint32_t full_checksum);
 
-    future<file> rename_new_sstable_component_file(sstring from_file, sstring to_file, file fd);
-    future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {});
+    future<> rename_new_sstable_component_file(sstring from_file, sstring to_file);
+    future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {}) noexcept;
+
+    future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
+            open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
     future<> touch_temp_dir();
     future<> remove_temp_dir();
@@ -573,14 +576,14 @@ private:
     future<> read_compression(const io_priority_class& pc);
     void write_compression(const io_priority_class& pc);
 
-    future<> read_scylla_metadata(const io_priority_class& pc);
+    future<> read_scylla_metadata(const io_priority_class& pc) noexcept;
     void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier);
 
     future<> read_filter(const io_priority_class& pc);
 
     void write_filter(const io_priority_class& pc);
 
-    future<> read_summary(const io_priority_class& pc);
+    future<> read_summary(const io_priority_class& pc) noexcept;
 
     void write_summary(const io_priority_class& pc) {
         write_simple<component_type::Summary>(_components->summary, pc);
@@ -614,7 +617,7 @@ private:
     // to be called when loading an existing sstable or after writing a new one.
     void set_clustering_components_ranges();
 
-    future<> create_data();
+    future<> create_data() noexcept;
 
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
@@ -675,8 +678,10 @@ private:
         serialization_header& s = *static_cast<serialization_header *>(p.get());
         return s;
     }
+
+    future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
 public:
-    future<> read_toc();
+    future<> read_toc() noexcept;
 
     schema_ptr get_schema() const {
         return _schema;

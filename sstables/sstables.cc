@@ -47,7 +47,6 @@
 #include "compress.hh"
 #include "unimplemented.hh"
 #include "index_reader.hh"
-#include "remove.hh"
 #include "memtable.hh"
 #include "range.hh"
 #include "downsampling.hh"
@@ -66,7 +65,6 @@
 #include "utils/bloom_filter.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/cached_file.hh"
-
 #include "checked-file-impl.hh"
 #include "integrity_checked_file_impl.hh"
 #include "db/extensions.hh"
@@ -125,24 +123,23 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-static future<file> open_sstable_component_file_non_checked(const sstring& name, open_flags flags, file_open_options options,
-        bool check_integrity) {
+static future<file> open_sstable_component_file_non_checked(std::string_view name, open_flags flags, file_open_options options,
+        bool check_integrity) noexcept {
     if (flags != open_flags::ro && check_integrity) {
         return open_integrity_checked_file_dma(name, flags, options);
     }
     return open_file_dma(name, flags, options);
 }
 
-future<file> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name, file fd) {
+future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name) {
     return sstable_write_io_check(rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
         sstlog.error("Could not rename SSTable component {} to {}. Found exception: {}", from_name, to_name, ep);
         return make_exception_future<>(ep);
-    }).then([fd = std::move(fd)] {
-        return make_ready_future<file>(fd);
     });
 }
 
-future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) {
+future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) noexcept {
+  try {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
     auto name = !readonly && _temp_dir ? temp_filename(type) : filename(type);
@@ -152,7 +149,7 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
 
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
         for (auto * ext : _manager.config().extensions().sstable_file_io_extensions()) {
-            f = f.then([ext, this, type, flags](file f) {
+            f = with_file_close_on_failure(std::move(f), [ext, this, type, flags] (file f) {
                return ext->wrap_file(*this, type, f, flags).then([f](file nf) mutable {
                    return nf ? nf : std::move(f);
                });
@@ -160,19 +157,24 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
         }
     }
 
-    f = f.then([&error_handler](file f) {
+    f = with_file_close_on_failure(std::move(f), [&error_handler] (file f) {
         return make_checked_file(error_handler, std::move(f));
     });
 
     if (!readonly) {
-        f = f.handle_exception([name] (auto ep) {
+        f = with_file_close_on_failure(std::move(f).handle_exception([name] (auto ep) {
             sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
             return make_exception_future<file>(ep);
-        }).then([this, type, name = std::move(name)] (file fd) mutable {
-            return rename_new_sstable_component_file(name, filename(type), std::move(fd));
+        }), [this, type, name = std::move(name)] (file fd) mutable {
+            return rename_new_sstable_component_file(name, filename(type)).then([fd = std::move(fd)] () mutable {
+                return make_ready_future<file>(std::move(fd));
+            });
         });
     }
     return f;
+  } catch (...) {
+      return current_exception_as_future<file>();
+  }
 }
 
 utils::phased_barrier& background_jobs() {
@@ -864,26 +866,24 @@ void write(sstable_version_types v, file_writer& out, const compression& c) {
 
 // This is small enough, and well-defined. Easier to just read it all
 // at once
-future<> sstable::read_toc() {
+future<> sstable::read_toc() noexcept {
     if (_recognized_components.size()) {
         return make_ready_future<>();
     }
 
-    auto file_path = filename(component_type::TOC);
+    sstlog.debug("Reading TOC file {}", filename(component_type::TOC));
 
-    sstlog.debug("Reading TOC file {} ", file_path);
-
-    return new_sstable_component_file(_read_error_handler, component_type::TOC, open_flags::ro).then([this, file_path] (file f) {
+    return with_file(new_sstable_component_file(_read_error_handler, component_type::TOC, open_flags::ro), [this] (file f) {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
         auto buf = bufptr.get();
 
         auto fut = f.dma_read(0, buf, 4096);
-        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr), file_path] (size_t size) mutable {
+        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
             // This file is supposed to be very small. Theoretically we should check its size,
             // but if we so much as read a whole page from it, there is definitely something fishy
             // going on - and this simplifies the code.
             if (size >= 4096) {
-                throw malformed_sstable_exception("SSTable too big: " + to_sstring(size) + " bytes", file_path);
+                throw malformed_sstable_exception("SSTable TOC too big: " + to_sstring(size) + " bytes", filename(component_type::TOC));
             }
 
             std::string_view buf(bufptr.get(), size);
@@ -900,20 +900,19 @@ future<> sstable::read_toc() {
                     _recognized_components.insert(reverse_map(c, sstable_version_constants::get_component_map(_version)));
                 } catch (std::out_of_range& oor) {
                     _unrecognized_components.push_back(c);
-                    sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, file_path);
+                    sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, filename(component_type::TOC));
                 }
             }
             if (!_recognized_components.size()) {
-                throw malformed_sstable_exception("Empty TOC", file_path);
+                throw malformed_sstable_exception("Empty TOC", filename(component_type::TOC));
             }
-            return f.close().finally([f] {});
         });
-    }).then_wrapped([file_path] (future<> f) {
+    }).then_wrapped([this] (future<> f) {
         try {
             f.get();
         } catch (std::system_error& e) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                throw malformed_sstable_exception(file_path + ": file not found");
+                throw malformed_sstable_exception(filename(component_type::TOC) + ": file not found");
             }
             throw;
         }
@@ -940,6 +939,46 @@ void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
     _recognized_components.insert(component_type::Scylla);
 }
 
+file_writer::~file_writer() {
+    if (_closed) {
+        return;
+    }
+    try {
+        // close() should be called by the owner of the file_writer.
+        // However it may not be called on exception handling paths
+        // so auto-close the output_stream so it won't be destructed while open.
+        _out.close().get();
+    } catch (...) {
+        sstlog.warn("Error while auto-closing {}: {}. Ignored.", get_filename(), std::current_exception());
+    }
+}
+
+void file_writer::close() {
+    assert(!_closed && "file_writer already closed");
+    try {
+        _out.close().get();
+        _closed = true;
+    } catch (...) {
+        auto e = std::current_exception();
+        sstlog.error("Error while closing {}: {}", get_filename(), e);
+        std::rethrow_exception(e);
+    }
+}
+
+const char* file_writer::get_filename() const noexcept {
+    return _filename ? _filename->c_str() : "<anonymous output_stream>";
+}
+
+future<file_writer> sstable::make_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags) noexcept {
+    // Note: file_writer::make closes the file if file_writer creation fails
+    // so we don't need to use with_file_close_on_failure here.
+    return futurize_invoke([this, c] { return filename(c); }).then([this, c, options = std::move(options), oflags] (sstring filename) mutable {
+        return new_sstable_component_file(_write_error_handler, c, oflags).then([options = std::move(options), filename = std::move(filename)] (file f) mutable {
+            return file_writer::make(std::move(f), std::move(options), std::move(filename));
+        });
+    });
+}
+
 void sstable::write_toc(const io_priority_class& pc) {
     touch_temp_dir().get0();
     auto file_path = filename(component_type::TemporaryTOC);
@@ -950,21 +989,19 @@ void sstable::write_toc(const io_priority_class& pc) {
     // If creation of temporary TOC failed, it implies that that boot failed to
     // delete a sstable with temporary for this column family, or there is a
     // sstable being created in parallel with the same generation.
-    file f = new_sstable_component_file(_write_error_handler, component_type::TemporaryTOC, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file_output_stream_options options;
+    options.buffer_size = 4096;
+    options.io_priority_class = pc;
+    auto w = make_component_file_writer(component_type::TemporaryTOC, std::move(options)).get0();
 
     bool toc_exists = file_exists(filename(component_type::TOC)).get0();
     if (toc_exists) {
         // TOC will exist at this point if write_components() was called with
         // the generation of a sstable that exists.
-        f.close().get();
+        w.close();
         remove_file(file_path).get();
         throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {:d} of {}.{}", _generation, _schema->ks_name(), _schema->cf_name()));
     }
-
-    file_output_stream_options options;
-    options.buffer_size = 4096;
-    options.io_priority_class = pc;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
 
     for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
@@ -1015,12 +1052,9 @@ void sstable::write_crc(const checksum& c) {
     auto file_path = filename(component_type::CRC);
     sstlog.debug("Writing CRC file {} ", file_path);
 
-    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    file f = new_sstable_component_file(_write_error_handler, component_type::CRC, oflags).get0();
-
     file_output_stream_options options;
     options.buffer_size = 4096;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
+    auto w = make_component_file_writer(component_type::CRC, std::move(options)).get0();
     write(get_version(), w, c);
     w.close();
 }
@@ -1030,12 +1064,9 @@ void sstable::write_digest(uint32_t full_checksum) {
     auto file_path = filename(component_type::Digest);
     sstlog.debug("Writing Digest file {} ", file_path);
 
-    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    auto f = new_sstable_component_file(_write_error_handler, component_type::Digest, oflags).get0();
-
     file_output_stream_options options;
     options.buffer_size = 4096;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
+    auto w = make_component_file_writer(component_type::Digest, std::move(options)).get0();
 
     auto digest = to_sstring<bytes>(full_checksum);
     write(get_version(), w, digest);
@@ -1078,12 +1109,11 @@ void sstable::do_write_simple(component_type type, const io_priority_class& pc,
         noncopyable_function<void (version_types version, file_writer& writer)> write_component) {
     auto file_path = filename(type);
     sstlog.debug(("Writing " + sstable_version_constants::get_component_map(_version).at(type) + " file {} ").c_str(), file_path);
-    file f = new_sstable_component_file(_write_error_handler, type, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
+    auto w = make_component_file_writer(type, std::move(options)).get0();
     std::exception_ptr eptr;
     try {
         write_component(_version, w);
@@ -1251,12 +1281,12 @@ void sstable::write_statistics(const io_priority_class& pc) {
 void sstable::rewrite_statistics(const io_priority_class& pc) {
     auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
-    file f = new_sstable_component_file(_write_error_handler, component_type::TemporaryStatistics, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
-    auto w = file_writer::make(std::move(f), std::move(options)).get0();
+    auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
+            open_flags::wo | open_flags::create | open_flags::truncate).get0();
     write(_version, w, _components->statistics);
     w.flush();
     w.close();
@@ -1264,7 +1294,7 @@ void sstable::rewrite_statistics(const io_priority_class& pc) {
     sstable_write_io_check(rename_file, file_path, filename(component_type::Statistics)).get();
 }
 
-future<> sstable::read_summary(const io_priority_class& pc) {
+future<> sstable::read_summary(const io_priority_class& pc) noexcept {
     if (_components->summary) {
         return make_ready_future<>();
     }
@@ -1283,18 +1313,19 @@ future<> sstable::read_summary(const io_priority_class& pc) {
     });
 }
 
-future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) {
+future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) noexcept {
     return new_sstable_component_file(_read_error_handler, type, flags, opts);
 }
 
-future<> sstable::open_data() {
-    return when_all(open_file(component_type::Index, open_flags::ro),
-                    open_file(component_type::Data, open_flags::ro))
-                    .then([this] (auto files) {
+future<> sstable::open_or_create_data(open_flags oflags, file_open_options options) noexcept {
+    return when_all_succeed(
+        open_file(component_type::Index, oflags, options).then([this] (file f) { _index_file = std::move(f); }),
+        open_file(component_type::Data, oflags, options).then([this] (file f) { _data_file = std::move(f); })
+    ).discard_result();
+}
 
-        _index_file = std::get<file>(std::get<0>(files).get());
-        _data_file = std::get<file>(std::get<1>(files).get());
-
+future<> sstable::open_data() noexcept {
+    return open_or_create_data(open_flags::ro).then([this] {
         return this->update_info_for_opened_data();
     }).then([this] {
         if (_shards.empty()) {
@@ -1361,21 +1392,12 @@ future<> sstable::update_info_for_opened_data() {
     });
 }
 
-future<> sstable::create_data() {
+future<> sstable::create_data() noexcept {
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     file_open_options opt;
     opt.extent_allocation_size_hint = 32 << 20;
     opt.sloppy_size = true;
-    return when_all(open_file(component_type::Index, oflags, opt),
-                    open_file(component_type::Data, oflags, opt)).then([this] (auto files) {
-        // FIXME: If both files could not be created, the first get below will
-        // throw an exception, and second get() will not be attempted, and
-        // we'll get a warning about the second future being destructed
-        // without its exception being examined.
-
-        _index_file = std::get<file>(std::get<0>(files).get());
-        _data_file = std::get<file>(std::get<1>(files).get());
-    });
+    return open_or_create_data(oflags, std::move(opt));
 }
 
 future<> sstable::read_filter(const io_priority_class& pc) {
@@ -1410,7 +1432,7 @@ void sstable::write_filter(const io_priority_class& pc) {
 
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
-future<> sstable::load(const io_priority_class& pc) {
+future<> sstable::load(const io_priority_class& pc) noexcept {
     return read_toc().then([this, &pc] {
         // read scylla-meta after toc. Might need it to parse
         // rest (hint extensions)
@@ -1432,7 +1454,8 @@ future<> sstable::load(const io_priority_class& pc) {
     });
 }
 
-future<> sstable::load(sstables::foreign_sstable_open_info info) {
+future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
+    static_assert(std::is_nothrow_move_constructible_v<sstables::foreign_sstable_open_info>);
     return read_toc().then([this, info = std::move(info)] () mutable {
         _components = std::move(info.components);
         _data_file = make_checked_file(_read_error_handler, info.data.to_file());
@@ -1990,7 +2013,7 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
     options.buffer_size = sst.sstable_buffer_size;
     options.io_priority_class = pc;
     options.write_behind = 10;
-    return file_writer::make(std::move(sst._index_file), std::move(options)).get0();
+    return file_writer::make(std::move(sst._index_file), std::move(options), sst.filename(component_type::Index)).get0();
 }
 
 // Returns the cost for writing a byte to summary such that the ratio of summary
@@ -2191,7 +2214,7 @@ components_writer::~components_writer() {
 }
 
 future<>
-sstable::read_scylla_metadata(const io_priority_class& pc) {
+sstable::read_scylla_metadata(const io_priority_class& pc) noexcept {
     if (_components->scylla_metadata) {
         return make_ready_future<>();
     }
@@ -2274,11 +2297,11 @@ void sstable_writer_k_l::prepare_file_writer()
 
     if (!_compression_enabled) {
         auto out = make_file_data_sink(std::move(_sst._data_file), options).get0();
-        _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(out), options.buffer_size);
+        _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(out), options.buffer_size, _sst.get_filename());
     } else {
         auto out = make_file_output_stream(std::move(_sst._data_file), std::move(options)).get0();
         _writer = std::make_unique<file_writer>(make_compressed_file_k_l_format_output_stream(
-                std::move(out), &_sst._components->compression, _schema.get_compressor_params()));
+                std::move(out), &_sst._components->compression, _schema.get_compressor_params()), _sst.get_filename());
     }
 }
 
@@ -2985,58 +3008,79 @@ fsync_directory(const io_error_handler& error_handler, sstring fname) {
     });
 }
 
-future<>
-remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handler) {
-    return seastar::async([sstable_toc_name, &error_handler] () mutable {
-        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
-        auto new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
-        sstring dir;
+static future<>
+remove_by_toc_name(std::string_view sstable_toc_strview) noexcept {
+    sstring sstable_toc_name, prefix, new_toc_name, dir;
+    try {
+        sstable_toc_name = sstring(sstable_toc_strview);
+        prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
+        new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
+        dir = dirname(sstable_toc_name);
+    } catch (...) {
+        return current_exception_as_future();
+    }
 
+    return do_with(std::move(sstable_toc_name), std::move(prefix), std::move(new_toc_name), std::move(dir),
+            [] (sstring& sstable_toc_name, sstring& prefix, sstring& new_toc_name, sstring& dir) {
         sstlog.debug("Removing by TOC name: {}", sstable_toc_name);
-        if (sstable_io_check(error_handler, file_exists, sstable_toc_name).get0()) {
-            dir = dirname(sstable_toc_name);
-            sstable_io_check(error_handler, rename_file, sstable_toc_name, new_toc_name).get();
-            fsync_directory(error_handler, dir).get();
-        } else if (sstable_io_check(error_handler, file_exists, new_toc_name).get0()) {
-            dir = dirname(new_toc_name);
-        } else {
-            sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
-            return;
-        }
-
-        auto toc_file = open_checked_file_dma(error_handler, new_toc_name, open_flags::ro).get0();
-        auto in = make_file_input_stream(toc_file);
-        auto size = toc_file.size().get0();
-        auto text = in.read_exactly(size).get0();
-        in.close().get();
-        std::vector<sstring> components;
-        sstring all(text.begin(), text.end());
-        boost::split(components, all, boost::is_any_of("\n"));
-        parallel_for_each(components, [prefix, &error_handler] (sstring component) mutable {
-            if (component.empty()) {
-                // eof
+        return sstable_io_check(sstable_write_error_handler, file_exists, sstable_toc_name).then([&] (bool toc_exists) {
+            if (toc_exists) {
+                // If new_toc_name exists it will be atomically replaced.  See rename(2)
+                return sstable_io_check(sstable_write_error_handler, rename_file, sstable_toc_name, new_toc_name).then([&dir] {
+                    return fsync_directory(sstable_write_error_handler, dir);
+                }).then([] {
+                    return make_ready_future<bool>(true);
+                });
+            } else {
+                return sstable_io_check(sstable_write_error_handler, file_exists, new_toc_name);
+            }
+        }).then([&] (bool exists) {
+            if (!exists) {
+                sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
                 return make_ready_future<>();
             }
-            if (component == sstable_version_constants::TOC_SUFFIX) {
-                // already deleted
-                return make_ready_future<>();
-            }
-            auto fname = prefix + component;
-            return sstable_io_check(error_handler, remove_file, prefix + component).then_wrapped([fname = std::move(fname)] (future<> f) {
-                // forgive ENOENT, since the component may not have been written;
-                try {
-                    f.get();
-                } catch (std::system_error& e) {
-                    if (!is_system_error_errno(ENOENT)) {
-                        throw;
-                    }
-                    sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
-                }
-                return make_ready_future<>();
+            return with_file(open_checked_file_dma(sstable_write_error_handler, new_toc_name, open_flags::ro), [&] (file& toc_file) {
+                return toc_file.size().then([&] (size_t size) {
+                    return do_with(make_file_input_stream(toc_file), [&, size] (input_stream<char>& in) {
+                        return in.read_exactly(size).then([&] (temporary_buffer<char> text) {
+                            std::vector<sstring> components;
+                            sstring all(text.begin(), text.end());
+                            boost::split(components, all, boost::is_any_of("\n"));
+                            return parallel_for_each(components, [&prefix] (sstring component) {
+                                if (component.empty()) {
+                                    // eof
+                                    return make_ready_future<>();
+                                }
+                                if (component == sstable_version_constants::TOC_SUFFIX) {
+                                    // already renamed
+                                    return make_ready_future<>();
+                                }
+                                auto fname = prefix + component;
+                                return sstable_io_check(sstable_write_error_handler, remove_file, fname).handle_exception([fname = std::move(fname)] (std::exception_ptr eptr) {
+                                    // forgive ENOENT, since the component may not have been written;
+                                    try {
+                                        std::rethrow_exception(eptr);
+                                    } catch (const std::system_error& e) {
+                                        if (!is_system_error_errno(ENOENT)) {
+                                            return make_exception_future<>(eptr);
+                                        }
+                                        sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
+                                        return make_ready_future<>();
+                                    }
+                                    __builtin_unreachable();
+                                });
+                            }).then([&dir] {
+                                return fsync_directory(sstable_write_error_handler, dir);
+                            }).then([&new_toc_name] {
+                                return sstable_io_check(sstable_write_error_handler, remove_file, new_toc_name);
+                            });
+                        }).finally([&in] () mutable {
+                            return in.close();
+                        });
+                    });
+                });
             });
-        }).get();
-        fsync_directory(error_handler, dir).get();
-        sstable_io_check(error_handler, remove_file, new_toc_name).get();
+        });
     });
 }
 
@@ -3242,11 +3286,9 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
     return utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, key)));
 }
 
-// FIXME: although this is unused at the moment
-// keep it around to be used for replaying pending_delete logs
 future<>
 delete_sstables(std::vector<sstring> tocs) {
-    return parallel_for_each(tocs, [] (sstring name) {
+    return parallel_for_each(tocs, [] (const sstring& name) {
         return remove_by_toc_name(name);
     });
 }
@@ -3315,7 +3357,7 @@ delete_atomically(std::vector<shared_sstable> ssts) {
             // Write all toc names into the log file.
             file_output_stream_options options;
             options.buffer_size = 4096;
-            auto w = file_writer::make(std::move(f), options).get0();
+            auto w = file_writer::make(std::move(f), options, tmp_pending_delete_log).get0();
 
             for (const auto& sst : ssts) {
                 auto toc = sst->component_basename(component_type::TOC);
@@ -3513,10 +3555,11 @@ sstable::sstable(schema_ptr schema,
     tracker.add(*this);
 }
 
-future<file_writer> file_writer::make(file f, file_output_stream_options options) noexcept {
+future<file_writer> file_writer::make(file f, file_output_stream_options options, sstring filename) noexcept {
+    // note: make_file_output_stream closes the file if the stream creation fails
     return make_file_output_stream(std::move(f), std::move(options))
-        .then([](output_stream<char>&& out) {
-            return file_writer(std::move(out));
+        .then([filename = std::move(filename)] (output_stream<char>&& out) {
+            return file_writer(std::move(out), std::move(filename));
         });
 }
 
