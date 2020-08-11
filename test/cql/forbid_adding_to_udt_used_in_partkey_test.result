@@ -1,0 +1,30 @@
+create type ut (a int);
+{
+	"status" : "ok"
+}
+create table t (pk frozen<ut> primary key);
+{
+	"status" : "ok"
+}
+alter type ut add b int;
+{
+	"message" : "exceptions::invalid_request_exception (Cannot add new field to type ks.ut because it is used in the partition key column pk of table ks.t)",
+	"status" : "error"
+}
+drop table t;
+{
+	"status" : "ok"
+}
+alter type ut add c int;
+{
+	"status" : "ok"
+}
+create table t2 (pk frozen<list<frozen<ut>>> primary key);
+{
+	"status" : "ok"
+}
+alter type ut add d int;
+{
+	"message" : "exceptions::invalid_request_exception (Cannot add new field to type ks.ut because it is used in the partition key column pk of table ks.t2)",
+	"status" : "error"
+}
