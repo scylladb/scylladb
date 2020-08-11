@@ -1262,7 +1262,7 @@ def configure_seastar(build_dir, mode):
 
     dpdk = args.dpdk
     if dpdk is None:
-        dpdk = mode == 'release'
+        dpdk = platform.machine() == 'x86_64' and mode == 'release'
     if dpdk:
         seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=wsm']
     if args.split_dwarf:
