@@ -147,7 +147,7 @@ sstable_set::select(const dht::partition_range& range) const {
 }
 
 std::vector<sstable_run>
-sstable_set::select(const std::vector<shared_sstable>& sstables) const {
+sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
     auto run_ids = boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
     return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (utils::UUID run_id) {
         return _all_runs.at(run_id);

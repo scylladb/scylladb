@@ -28,7 +28,7 @@ sstable_run_based_compaction_strategy_for_tests::sstable_run_based_compaction_st
 
 compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(column_family& cf, std::vector<sstables::shared_sstable> uncompacting_sstables) {
     // Get unique runs from all uncompacting sstables
-    std::vector<sstable_run> runs = cf.get_sstable_set().select(uncompacting_sstables);
+    std::vector<sstable_run> runs = cf.get_sstable_set().select_sstable_runs(uncompacting_sstables);
 
     // Group similar sized runs into a bucket.
     std::map<uint64_t, std::vector<sstable_run>> similar_sized_runs;

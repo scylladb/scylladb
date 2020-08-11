@@ -58,8 +58,8 @@ public:
     sstable_set& operator=(const sstable_set&);
     sstable_set& operator=(sstable_set&&) noexcept;
     std::vector<shared_sstable> select(const dht::partition_range& range) const;
-    // Select all runs which contain any of the input sstables.
-    std::vector<sstable_run> select(const std::vector<shared_sstable>& sstables) const;
+    // Return all runs which contain any of the input sstables.
+    std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
     lw_shared_ptr<sstable_list> all() const { return _all; }
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);
