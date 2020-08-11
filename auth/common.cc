@@ -109,7 +109,12 @@ future<> wait_for_schema_agreement(::service::migration_manager& mm, const datab
 }
 
 const timeout_config& internal_distributed_timeout_config() noexcept {
+#ifdef DEBUG
+    // Give the much slower debug tests more headroom for completing auth queries.
+    static const auto t = 30s;
+#else
     static const auto t = 5s;
+#endif
     static const timeout_config tc{t, t, t, t, t, t, t};
     return tc;
 }
