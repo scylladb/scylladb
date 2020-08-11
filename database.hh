@@ -901,7 +901,7 @@ public:
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
-    std::vector<sstables::shared_sstable> candidates_for_compaction() const;
+    std::vector<sstables::shared_sstable> non_staging_sstables() const;
     std::vector<sstables::shared_sstable> sstables_need_rewrite() const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
