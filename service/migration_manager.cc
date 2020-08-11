@@ -348,9 +348,9 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
 {
     mlogger.debug("Applying schema mutations from {}", src);
-    return map_reduce(mutations, [src](const frozen_mutation& fm) {
+    return map_reduce(mutations, [this, src](const frozen_mutation& fm) {
         // schema table's schema is not syncable so just use get_schema_definition()
-        return get_schema_definition(fm.schema_version(), src).then([&fm](schema_ptr s) {
+        return get_schema_definition(fm.schema_version(), src, _messaging).then([&fm](schema_ptr s) {
             s->registry_entry()->mark_synced();
             return fm.unfreeze(std::move(s));
         });
@@ -1107,20 +1107,19 @@ static future<> maybe_sync(const schema_ptr& s, netw::messaging_service::msg_add
     });
 }
 
-future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst) {
-    return local_schema_registry().get_or_load(v, [dst] (table_schema_version v) {
+future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+    return local_schema_registry().get_or_load(v, [&ms, dst] (table_schema_version v) {
         mlogger.debug("Requesting schema {} from {}", v, dst);
-        auto& ms = netw::get_local_messaging_service();
         return ms.send_get_schema_version(dst, v);
     });
 }
 
-future<schema_ptr> get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst) {
-    return get_schema_definition(v, dst);
+future<schema_ptr> get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+    return get_schema_definition(v, dst, ms);
 }
 
-future<schema_ptr> get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst) {
-    return get_schema_definition(v, dst).then([dst] (schema_ptr s) {
+future<schema_ptr> get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+    return get_schema_definition(v, dst, ms).then([dst] (schema_ptr s) {
         return maybe_sync(s, dst).then([s] {
             return s;
         });

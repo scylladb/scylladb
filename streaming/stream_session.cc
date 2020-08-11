@@ -125,7 +125,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms)
             return make_ready_future<>();
         });
     });
-    ms.register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
+    ms.register_stream_mutation_fragments([&ms] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         sslog.trace("Got stream_mutation_fragments from {} reason {}", from, int(reason));
@@ -135,7 +135,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms)
                     utils::fb_utilities::get_broadcast_address())));
         }
 
-        return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
+        return service::get_schema_for_write(schema_id, from, ms).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
             auto sink = stream_session::ms().make_sink_for_stream_mutation_fragments(source);
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
