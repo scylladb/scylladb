@@ -381,6 +381,7 @@ scylla_tests = set([
     'test/boost/view_schema_ckey_test',
     'test/boost/vint_serialization_test',
     'test/boost/virtual_reader_test',
+    'test/boost/stall_free_test',
     'test/manual/ec2_snitch_test',
     'test/manual/gce_snitch_test',
     'test/manual/gossip',
