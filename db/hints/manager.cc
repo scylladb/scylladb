@@ -87,6 +87,10 @@ void manager::register_metrics(const sstring& group_name) {
 
         sm::make_derive("corrupted_files", _stats.corrupted_files,
                         sm::description("Number of hints files that were discarded during sending because the file was corrupted.")),
+
+        sm::make_gauge("pending_drains", 
+                        sm::description("Number of tasks waiting in the queue for draining hints"),
+                        [this] { return _drain_lock.waiters(); })
     });
 }
 
