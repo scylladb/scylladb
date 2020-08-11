@@ -66,7 +66,6 @@
 #include "db_clock.hh"
 #include "mutation_compactor.hh"
 #include "leveled_manifest.hh"
-#include "utils/observable.hh"
 #include "dht/token.hh"
 
 namespace sstables {
@@ -284,68 +283,73 @@ public:
 // When compaction finishes, all the temporary sstables generated here will be deleted and removed
 // from table's sstable set.
 class garbage_collected_sstable_writer {
-    compaction* _c = nullptr;
-    std::vector<shared_sstable> _temp_sealed_gc_sstables;
-    std::deque<compaction_write_monitor> _active_write_monitors = {};
-    shared_sstable _sst;
-    std::optional<sstable_writer> _writer;
-    std::optional<utils::observer<>> _on_new_sstable_sealed_observer;
-    utils::UUID _run_identifier = utils::make_random_uuid();
-    bool _consuming_new_partition {};
-private:
-    void setup_on_new_sstable_sealed_handler();
-    void maybe_create_new_sstable_writer();
-    void finish_sstable_writer();
-    void on_end_of_stream();
 public:
-    garbage_collected_sstable_writer() = default;
-    explicit garbage_collected_sstable_writer(compaction& c) : _c(&c) {
-        setup_on_new_sstable_sealed_handler();
-    }
+    // Data for GC writer is stored separately to allow compaction class to communicate directly
+    // with garbage_collected_sstable_writer which is moved into mutation_compaction, making it
+    // unreachable after the compaction process has started.
+    class data {
+        compaction* _c = nullptr;
+        // Garbage collected sstables that are sealed but were not added to SSTable set yet.
+        std::vector<shared_sstable> _unused_garbage_collected_sstables;
+        // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
+        std::vector<shared_sstable> _used_garbage_collected_sstables;
+        std::deque<compaction_write_monitor> _active_write_monitors = {};
+        shared_sstable _sst;
+        std::optional<sstable_writer> _writer;
+        utils::UUID _run_identifier = utils::make_random_uuid();
+    public:
+        explicit data(compaction& c) : _c(&c) {
+        }
+
+        data& operator=(const data&) = delete;
+        data(const data&) = delete;
+
+        void maybe_create_new_sstable_writer();
+        void finish_sstable_writer();
+
+        // Retrieves all unused garbage collected sstables that will be subsequently added
+        // to the SSTable set, and mark them as used.
+        std::vector<shared_sstable> consume_unused_garbage_collected_sstables() {
+            auto unused = std::exchange(_unused_garbage_collected_sstables, {});
+            _used_garbage_collected_sstables.insert(_used_garbage_collected_sstables.end(), unused.begin(), unused.end());
+            return unused;
+        }
+
+        const std::vector<shared_sstable>& used_garbage_collected_sstables() const {
+            return _used_garbage_collected_sstables;
+        }
+
+        friend class garbage_collected_sstable_writer;
+    };
+private:
+    garbage_collected_sstable_writer::data* _data = nullptr;
+public:
+    explicit garbage_collected_sstable_writer() = default;
+    explicit garbage_collected_sstable_writer(garbage_collected_sstable_writer::data& data) : _data(&data) {}
 
     garbage_collected_sstable_writer& operator=(const garbage_collected_sstable_writer&) = delete;
     garbage_collected_sstable_writer(const garbage_collected_sstable_writer&) = delete;
 
-    garbage_collected_sstable_writer(garbage_collected_sstable_writer&& other)
-            : _c(other._c)
-            , _temp_sealed_gc_sstables(std::move(other._temp_sealed_gc_sstables))
-            , _active_write_monitors(std::move(other._active_write_monitors))
-            , _sst(std::move(other._sst))
-            , _writer(std::move(other._writer))
-            , _run_identifier(other._run_identifier)
-            , _consuming_new_partition(other._consuming_new_partition) {
-        other._on_new_sstable_sealed_observer->disconnect();
-        setup_on_new_sstable_sealed_handler();
-    }
-
-    garbage_collected_sstable_writer& operator=(garbage_collected_sstable_writer&& other) {
-        if (this != &other) {
-            this->~garbage_collected_sstable_writer();
-            new (this) garbage_collected_sstable_writer(std::move(other));
-        }
-        return *this;
-    }
+    garbage_collected_sstable_writer(garbage_collected_sstable_writer&& other) = default;
+    garbage_collected_sstable_writer& operator=(garbage_collected_sstable_writer&& other) = default;
 
     void consume_new_partition(const dht::decorated_key& dk) {
-        maybe_create_new_sstable_writer();
-        _writer->consume_new_partition(dk);
-        _consuming_new_partition = true;
+        _data->maybe_create_new_sstable_writer();
+        _data->_writer->consume_new_partition(dk);
     }
 
-    void consume(tombstone t) { _writer->consume(t); }
-    stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer->consume(std::move(sr)); }
-    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _writer->consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone&& rt) { return _writer->consume(std::move(rt)); }
+    void consume(tombstone t) { _data->_writer->consume(t); }
+    stop_iteration consume(static_row&& sr, tombstone, bool) { return _data->_writer->consume(std::move(sr)); }
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _data->_writer->consume(std::move(cr)); }
+    stop_iteration consume(range_tombstone&& rt) { return _data->_writer->consume(std::move(rt)); }
 
     stop_iteration consume_end_of_partition() {
-        _writer->consume_end_of_partition();
-        _consuming_new_partition = false;
+        _data->_writer->consume_end_of_partition();
         return stop_iteration::no;
     }
 
     void consume_end_of_stream() {
-        finish_sstable_writer();
-        on_end_of_stream();
+        _data->finish_sstable_writer();
     }
 };
 
@@ -380,6 +384,7 @@ public:
 class compaction {
 protected:
     column_family& _cf;
+    creator_fn _sstable_creator;
     schema_ptr _schema;
     std::vector<shared_sstable> _sstables;
     // Unused sstables are tracked because if compaction is interrupted we can only delete them.
@@ -393,15 +398,17 @@ protected:
     std::vector<unsigned long> _ancestors;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
-    utils::observable<> _on_new_sstable_sealed;
     bool _contains_multi_fragment_runs = false;
+    garbage_collected_sstable_writer::data _gc_sstable_writer_data;
 protected:
-    compaction(column_family& cf, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level)
+    compaction(column_family& cf, creator_fn creator, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level)
         : _cf(cf)
+        , _sstable_creator(std::move(creator))
         , _schema(cf.schema())
         , _sstables(std::move(sstables))
         , _max_sstable_size(max_sstable_size)
         , _sstable_level(sstable_level)
+        , _gc_sstable_writer_data(*this)
     {
         _info->cf = &cf;
         for (auto& sst : _sstables) {
@@ -434,10 +441,6 @@ protected:
         writer = std::nullopt;
         sst->open_data().get0();
         _info->end_size += sst->bytes_on_disk();
-        // Notify GC'ed-data sstable writer's handler that an output sstable has just been sealed.
-        // The handler is responsible for making sure that deleting an input sstable will not
-        // result in resurrection on failure.
-        _on_new_sstable_sealed();
     }
 
     api::timestamp_type maximum_timestamp() const {
@@ -445,10 +448,6 @@ protected:
             return sst1->get_stats_metadata().max_timestamp < sst2->get_stats_metadata().max_timestamp;
         });
         return (*m)->get_stats_metadata().max_timestamp;
-    }
-
-    utils::observer<> add_on_new_sstable_sealed_handler(std::function<void (void)> handler) noexcept {
-        return _on_new_sstable_sealed.observe(std::move(handler));
     }
 
     encoding_stats get_encoding_stats() const {
@@ -562,10 +561,9 @@ private:
         };
     }
 
-    virtual shared_sstable create_new_sstable() const = 0;
-
     // select a sstable writer based on decorated key.
     virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) = 0;
+
     // stop current writer
     virtual void stop_sstable_writer() = 0;
     // finish all writers.
@@ -588,20 +586,9 @@ private:
             sst->mark_for_deletion();
         }
     }
-
-    void setup_garbage_collected_sstable(shared_sstable sst) {
-        // Add new sstable to table's set because expired tombstone should be available if compaction is abruptly stopped.
-        _cf.add_sstable_and_update_cache(std::move(sst)).get();
-    }
-
-    void eventually_delete_garbage_collected_sstable(shared_sstable sst) {
-        // Add sstable to compaction's input list for it to be eventually removed from table's set.
-        sst->mark_for_deletion();
-        _sstables.push_back(std::move(sst));
-    }
 public:
     garbage_collected_sstable_writer make_garbage_collected_sstable_writer() {
-        return garbage_collected_sstable_writer(*this);
+        return garbage_collected_sstable_writer(_gc_sstable_writer_data);
     }
 
     bool contains_multi_fragment_runs() const {
@@ -616,6 +603,7 @@ public:
 
     friend class compacting_sstable_writer;
     friend class garbage_collected_sstable_writer;
+    friend class garbage_collected_sstable_writer::data;
 };
 
 void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
@@ -642,22 +630,9 @@ void compacting_sstable_writer::consume_end_of_stream() {
     _c.finish_sstable_writer();
 }
 
-void garbage_collected_sstable_writer::setup_on_new_sstable_sealed_handler() {
-    _on_new_sstable_sealed_observer = _c->add_on_new_sstable_sealed_handler([this] {
-        // NOTE: This handler is called, BEFORE an input sstable is possibly deleted
-        // *AND* AFTER a new output sstable is sealed, to flush a garbage collected
-        // sstable being currently written.
-        // That way, data is resurrection is prevented by making sure that the
-        // GC'able data is still reachable in a temporary sstable.
-        assert(!_consuming_new_partition);
-        // Wait for current gc'ed-only-sstable to be flushed and added to table's set.
-        this->finish_sstable_writer();
-    });
-}
-
-void garbage_collected_sstable_writer::maybe_create_new_sstable_writer() {
+void garbage_collected_sstable_writer::data::maybe_create_new_sstable_writer() {
     if (!_writer) {
-        _sst = _c->create_new_sstable();
+        _sst = _c->_sstable_creator(this_shard_id());
 
         auto&& priority = service::get_local_compaction_priority();
         _active_write_monitors.emplace_back(_sst, _c->_cf, _c->maximum_timestamp(), _c->_sstable_level);
@@ -668,25 +643,16 @@ void garbage_collected_sstable_writer::maybe_create_new_sstable_writer() {
     }
 }
 
-void garbage_collected_sstable_writer::finish_sstable_writer() {
+void garbage_collected_sstable_writer::data::finish_sstable_writer() {
     if (_writer) {
         _writer->consume_end_of_stream();
         _writer = std::nullopt;
         _sst->open_data().get0();
-        _c->setup_garbage_collected_sstable(_sst);
-        _temp_sealed_gc_sstables.push_back(std::move(_sst));
-    }
-}
-
-void garbage_collected_sstable_writer::on_end_of_stream() {
-    for (auto&& sst : _temp_sealed_gc_sstables) {
-        clogger.debug("Asking for deletion of temporary tombstone-only sstable {}", sst->get_filename());
-        _c->eventually_delete_garbage_collected_sstable(std::move(sst));
+        _unused_garbage_collected_sstables.push_back(std::move(_sst));
     }
 }
 
 class regular_compaction : public compaction {
-    std::function<shared_sstable()> _creator;
     replacer_fn _replacer;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
     // store a clone of sstable set for column family, which needs to be alive for incremental selector.
@@ -701,10 +667,9 @@ class regular_compaction : public compaction {
     std::deque<compaction_write_monitor> _active_write_monitors = {};
     utils::UUID _run_identifier;
 public:
-    regular_compaction(column_family& cf, compaction_descriptor descriptor, std::function<shared_sstable()> creator, replacer_fn replacer)
-        : compaction(cf, std::move(descriptor.sstables), descriptor.max_sstable_bytes, descriptor.level)
-        , _creator(std::move(creator))
-        , _replacer(std::move(replacer))
+    regular_compaction(column_family& cf, compaction_descriptor descriptor)
+        : compaction(cf, std::move(descriptor.creator), std::move(descriptor.sstables), descriptor.max_sstable_bytes, descriptor.level)
+        , _replacer(std::move(descriptor.replacer))
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
         , _set(cf.get_sstable_set())
         , _selector(_set.make_incremental_selector())
@@ -755,13 +720,9 @@ public:
         };
     }
 
-    virtual shared_sstable create_new_sstable() const override {
-        return _creator();
-    }
-
     virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
         if (!_writer) {
-            _sst = _creator();
+            _sst = _sstable_creator(0);
             setup_new_sstable(_sst);
 
             _active_write_monitors.emplace_back(_sst, _cf, maximum_timestamp(), _sstable_level);
@@ -834,6 +795,15 @@ private:
                 // Fully expired sstable is not actually compacted, therefore it's not present in the compacting set.
                 _compacting->erase(sst);
             });
+            // Make sure SSTable created by garbage collected writer is made available
+            // before exhausted SSTable is released, so as to prevent data resurrection.
+            _gc_sstable_writer_data.finish_sstable_writer();
+            // Added Garbage collected SSTables to list of unused SSTables that will be added
+            // to SSTable set. GC SSTables should be added before compaction completes because
+            // a failure could result in data resurrection if data is not made available.
+            auto unused_gc_sstables = _gc_sstable_writer_data.consume_unused_garbage_collected_sstables();
+            _new_unused_sstables.insert(_new_unused_sstables.end(), unused_gc_sstables.begin(), unused_gc_sstables.end());
+
             auto exhausted_ssts = std::vector<shared_sstable>(exhausted, _sstables.end());
             _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
@@ -842,11 +812,16 @@ private:
     }
 
     void replace_remaining_exhausted_sstables() {
-        if (!_sstables.empty()) {
-            std::vector<shared_sstable> sstables_compacted;
-            std::move(_sstables.begin(), _sstables.end(), std::back_inserter(sstables_compacted));
-            _replacer(get_compaction_completion_desc(std::move(sstables_compacted), std::move(_new_unused_sstables)));
-        }
+        if (!_sstables.empty() || !_gc_sstable_writer_data.used_garbage_collected_sstables().empty()) {
+            std::vector<shared_sstable> old_sstables;
+            std::move(_sstables.begin(), _sstables.end(), std::back_inserter(old_sstables));
+
+            // Remove Garbage Collected SSTables from the SSTable set if any was previously added.
+            auto& used_garbage_collected_sstables = _gc_sstable_writer_data.used_garbage_collected_sstables();
+            old_sstables.insert(old_sstables.end(), used_garbage_collected_sstables.begin(), used_garbage_collected_sstables.end());
+
+            _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
+         }
     }
 
     void do_pending_replacements() {
@@ -909,8 +884,8 @@ protected:
         return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges_for_for_invalidation)};
     }
 public:
-    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, std::function<shared_sstable()> creator, replacer_fn replacer)
-        : regular_compaction(cf, std::move(descriptor), std::move(creator), std::move(replacer))
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor)
+        : regular_compaction(cf, std::move(descriptor))
         , _owned_ranges(service::get_local_storage_service().get_local_ranges(_schema->ks_name()))
     {
         _info->type = compaction_type::Cleanup;
@@ -1114,9 +1089,8 @@ private:
     compaction_options::scrub _options;
 
 public:
-    scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_options::scrub options, std::function<shared_sstable()> creator,
-            replacer_fn replacer)
-        : regular_compaction(cf, std::move(descriptor), std::move(creator), std::move(replacer))
+    scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_options::scrub options)
+        : regular_compaction(cf, std::move(descriptor))
         , _options(options) {
         _info->type = compaction_type::Scrub;
     }
@@ -1143,7 +1117,6 @@ flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_co
 class resharding_compaction final : public compaction {
     std::vector<std::pair<shared_sstable, std::optional<sstable_writer>>> _output_sstables;
     shard_id _shard; // shard of current sstable writer
-    std::function<shared_sstable(shard_id)> _sstable_creator;
     compaction_backlog_tracker _resharding_backlog_tracker;
 
     // Partition count estimation for a shard S:
@@ -1168,11 +1141,9 @@ private:
         return ceil(double(_estimation_per_shard[s].estimated_partitions) / estimated_sstables);
     }
 public:
-    resharding_compaction(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable(shard_id)> creator,
-            uint64_t max_sstable_size, uint32_t sstable_level)
-        : compaction(cf, std::move(sstables), max_sstable_size, sstable_level)
+    resharding_compaction(column_family& cf, sstables::compaction_descriptor descriptor)
+        : compaction(cf, std::move(descriptor.creator), std::move(descriptor.sstables), descriptor.max_sstable_bytes, descriptor.level)
         , _output_sstables(smp::count)
-        , _sstable_creator(std::move(creator))
         , _resharding_backlog_tracker(std::make_unique<resharding_backlog_tracker>())
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
@@ -1223,10 +1194,6 @@ public:
     }
 
     void backlog_tracker_adjust_charges() override { }
-
-    shared_sstable create_new_sstable() const override {
-        return _sstable_creator(_shard);
-    }
 
     sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
         _shard = dht::shard_of(*_schema, dk.token());
@@ -1298,38 +1265,35 @@ compaction_type compaction_options::type() const {
     return index_to_type[_options.index()];
 }
 
-static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::compaction_descriptor descriptor,
-        std::function<shared_sstable()> creator, replacer_fn replacer) {
+static std::unique_ptr<compaction> make_compaction(column_family& cf, sstables::compaction_descriptor descriptor) {
     struct {
         column_family& cf;
         sstables::compaction_descriptor&& descriptor;
-        std::function<shared_sstable()>&& creator;
-        replacer_fn&& replacer;
 
         std::unique_ptr<compaction> operator()(compaction_options::regular) {
-            return std::make_unique<regular_compaction>(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+            return std::make_unique<regular_compaction>(cf, std::move(descriptor));
         }
         std::unique_ptr<compaction> operator()(compaction_options::cleanup) {
-            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor));
         }
         std::unique_ptr<compaction> operator()(compaction_options::upgrade) {
-            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+            return std::make_unique<cleanup_compaction>(cf, std::move(descriptor));
         }
         std::unique_ptr<compaction> operator()(compaction_options::scrub scrub_options) {
-            return std::make_unique<scrub_compaction>(cf, std::move(descriptor), scrub_options, std::move(creator), std::move(replacer));
+            return std::make_unique<scrub_compaction>(cf, std::move(descriptor), scrub_options);
         }
-    } visitor_factory{cf, std::move(descriptor), std::move(creator), std::move(replacer)};
+    } visitor_factory{cf, std::move(descriptor)};
 
     return descriptor.options.visit(visitor_factory);
 }
 
 future<compaction_info>
-compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator, replacer_fn replacer) {
+compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf) {
     if (descriptor.sstables.empty()) {
         throw std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}", compaction_name(descriptor.options.type()),
                 cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
-    auto c = make_compaction(cf, std::move(descriptor), std::move(creator), std::move(replacer));
+    auto c = make_compaction(cf, std::move(descriptor));
     if (c->contains_multi_fragment_runs()) {
         auto gc_writer = c->make_garbage_collected_sstable_writer();
         return compaction::run(std::move(c), std::move(gc_writer));
@@ -1343,7 +1307,10 @@ reshard_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
     if (sstables.empty()) {
         throw std::runtime_error(format("Called resharding with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
-    auto c = std::make_unique<resharding_compaction>(std::move(sstables), cf, std::move(creator), max_sstable_size, sstable_level);
+    sstables::compaction_descriptor descriptor(std::move(sstables), sstable_level, max_sstable_size);
+    descriptor.creator = std::move(creator);
+
+    auto c = std::make_unique<resharding_compaction>(cf, std::move(descriptor));
     return compaction::run(std::move(c)).then([] (auto ret) {
         return std::move(ret.new_sstables);
     });

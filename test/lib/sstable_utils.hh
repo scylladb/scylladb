@@ -355,5 +355,7 @@ public:
     }
 };
 
-
 } // namespace sstables
+
+future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf,
+        std::function<shared_sstable()> creator, replacer_fn replacer = sstables::replacer_fn_no_op());
