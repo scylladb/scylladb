@@ -5309,8 +5309,8 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(table->candidates_for_compaction().size() == 1);
-            BOOST_REQUIRE(table->candidates_for_compaction().front() == sst);
+            BOOST_REQUIRE(table->non_staging_sstables().size() == 1);
+            BOOST_REQUIRE(table->non_staging_sstables().front() == sst);
 
             auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment>& mfs) {
                 auto r = assert_that(sst->as_mutation_source().make_reader(schema, tests::make_permit()));
@@ -5331,7 +5331,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             // We expect the scrub with skip_corrupted=false to stop on the first invalid fragment.
             compaction_manager.perform_sstable_scrub(table.get(), false).get();
 
-            BOOST_REQUIRE(table->candidates_for_compaction().size() == 1);
+            BOOST_REQUIRE(table->non_staging_sstables().size() == 1);
             verify_fragments(sst, corrupt_fragments);
 
             testlog.info("Scrub with --skip-corrupted=true");
@@ -5339,9 +5339,9 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             // We expect the scrub with skip_corrupted=true to get rid of all invalid data.
             compaction_manager.perform_sstable_scrub(table.get(), true).get();
 
-            BOOST_REQUIRE(table->candidates_for_compaction().size() == 1);
-            BOOST_REQUIRE(table->candidates_for_compaction().front() != sst);
-            verify_fragments(table->candidates_for_compaction().front(), scrubbed_fragments);
+            BOOST_REQUIRE(table->non_staging_sstables().size() == 1);
+            BOOST_REQUIRE(table->non_staging_sstables().front() != sst);
+            verify_fragments(table->non_staging_sstables().front(), scrubbed_fragments);
         });
     }, test_cfg);
 }

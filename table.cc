@@ -1180,7 +1180,7 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
     return _sstables->select(range);
 }
 
-std::vector<sstables::shared_sstable> table::candidates_for_compaction() const {
+std::vector<sstables::shared_sstable> table::non_staging_sstables() const {
     return boost::copy_range<std::vector<sstables::shared_sstable>>(*get_sstables()
             | boost::adaptors::filtered([this] (auto& sst) {
         return !_sstables_staging.contains(sst->generation());
