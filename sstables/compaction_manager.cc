@@ -218,7 +218,7 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const c
     auto& cs = cf.get_compaction_strategy();
 
     // Filter out sstables that are being compacted.
-    for (auto& sst : cf.candidates_for_compaction()) {
+    for (auto& sst : cf.non_staging_sstables()) {
         if (_compacting_sstables.count(sst)) {
             continue;
         }
@@ -680,7 +680,7 @@ future<> compaction_manager::perform_cleanup(database& db, column_family* cf) {
         auto& rs = db.find_keyspace(schema->ks_name()).get_replication_strategy();
         auto sorted_owned_ranges = rs.get_ranges_in_thread(utils::fb_utilities::get_broadcast_address());
         auto sstables = std::vector<sstables::shared_sstable>{};
-        const auto candidates = cf->candidates_for_compaction();
+        const auto candidates = get_candidates(*cf);
         std::copy_if(candidates.begin(), candidates.end(), std::back_inserter(sstables), [&sorted_owned_ranges, schema] (const sstables::shared_sstable& sst) {
             seastar::thread::maybe_yield();
             return sorted_owned_ranges.empty() || needs_cleanup(sst, sorted_owned_ranges, schema);
@@ -703,7 +703,7 @@ future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exc
         return cf->run_with_compaction_disabled([this, cf, &tables, exclude_current_version] {
             auto last_version = cf->get_sstables_manager().get_highest_supported_format();
 
-            for (auto& sst : cf->candidates_for_compaction()) {
+            for (auto& sst : get_candidates(*cf)) {
                 // if we are a "normal" upgrade, we only care about
                 // tables with older versions, but potentially
                 // we are to actually rewrite everything. (-a)
@@ -728,8 +728,8 @@ future<> compaction_manager::perform_sstable_upgrade(column_family* cf, bool exc
 
 // Submit a column family to be scrubbed and wait for its termination.
 future<> compaction_manager::perform_sstable_scrub(column_family* cf, bool skip_corrupted) {
-    return rewrite_sstables(cf, sstables::compaction_options::make_scrub(skip_corrupted), [] (const table& cf) {
-        return cf.candidates_for_compaction();
+    return rewrite_sstables(cf, sstables::compaction_options::make_scrub(skip_corrupted), [this] (const table& cf) {
+        return get_candidates(cf);
     });
 }
 
