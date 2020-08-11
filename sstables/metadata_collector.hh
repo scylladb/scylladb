@@ -46,7 +46,11 @@
 #include "utils/murmur_hash.hh"
 #include "hyperloglog.hh"
 #include "db/commitlog/replay_position.hh"
+#include "clustering_bounds_comparator.hh"
+
 #include <algorithm>
+
+class range_tombstone;
 
 namespace sstables {
 
@@ -145,6 +149,8 @@ public:
         return hll::HyperLogLog();
     }
 private:
+    const schema& _schema;
+    sstring _name;
     // EH of 150 can track a max value of 1697806495183, i.e., > 1.5PB
     utils::estimated_histogram _estimated_partition_size{150};
     // EH of 114 can track a max value of 2395318855, i.e., > 2B cells
@@ -158,8 +164,8 @@ private:
     std::set<int> _ancestors;
     utils::streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
     int _sstable_level = 0;
-    std::vector<bytes_opt> _min_column_names;
-    std::vector<bytes_opt> _max_column_names;
+    std::optional<clustering_key_prefix> _min_clustering_key;
+    std::optional<clustering_key_prefix> _max_clustering_key;
     bool _has_legacy_counter_shards = false;
     uint64_t _columns_count = 0;
     uint64_t _rows_count = 0;
@@ -172,20 +178,23 @@ private:
      */
     hll::HyperLogLog _cardinality = hyperloglog(13, 25);
 private:
-    /*
-     * Convert a vector of bytes into a disk array of disk_string<uint16_t>.
-     */
-    static void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, std::vector<bytes_opt>&& from) {
-        for (auto i = 0U; i < from.size(); i++) {
-            if (!from[i]) {
-                break;
-            }
-            disk_string<uint16_t> s;
-            s.value = std::move(from[i].value());
-            to.elements.push_back(std::move(s));
+    void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, const std::optional<clustering_key_prefix>& from);
+public:
+    explicit metadata_collector(const schema& schema, sstring name)
+        : _schema(schema)
+        , _name(name)
+    {
+        if (!schema.clustering_key_size()) {
+            // Empty min/max components represent the full range
+            // And so they will never be narrowed down.
+            update_min_max_components(clustering_key_prefix::make_empty(_schema));
         }
     }
-public:
+
+    const schema& get_schema() {
+        return _schema;
+    }
+
     void add_key(bytes_view key) {
         long hashed = utils::murmur_hash::hash2_64(key, 0);
         _cardinality.offer_hashed(hashed);
@@ -231,17 +240,13 @@ public:
         _sstable_level = sstable_level;
     }
 
-    std::vector<bytes_opt>& min_column_names() {
-        return _min_column_names;
-    }
-
-    std::vector<bytes_opt>& max_column_names() {
-        return _max_column_names;
-    }
-
     void update_has_legacy_counter_shards(bool has_legacy_counter_shards) {
         _has_legacy_counter_shards = _has_legacy_counter_shards || has_legacy_counter_shards;
     }
+
+    void update_min_max_components(const clustering_key_prefix& key);
+
+    void update_min_max_components(const range_tombstone& rt);
 
     void update(column_stats&& stats) {
         _timestamp_tracker.update(stats.timestamp_tracker);
@@ -277,8 +282,8 @@ public:
         m.estimated_tombstone_drop_time = std::move(_estimated_tombstone_drop_time);
         m.sstable_level = _sstable_level;
         m.repaired_at = _repaired_at;
-        convert(m.min_column_names, std::move(_min_column_names));
-        convert(m.max_column_names, std::move(_max_column_names));
+        convert(m.min_column_names, _min_clustering_key);
+        convert(m.max_column_names, _max_clustering_key);
         m.has_legacy_counter_shards = _has_legacy_counter_shards;
         m.columns_count = _columns_count;
         m.rows_count = _rows_count;

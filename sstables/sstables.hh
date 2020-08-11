@@ -61,6 +61,7 @@
 #include "utils/observable.hh"
 #include "sstables/shareable_components.hh"
 #include "sstables/open_info.hh"
+#include "query-request.hh"
 
 #include <seastar/util/optimized_optional.hh>
 #include <boost/intrusive/list.hpp>
@@ -305,7 +306,7 @@ public:
     }
 
     void add_ancestor(int64_t generation) {
-        _collector.add_ancestor(generation);
+        _collector->add_ancestor(generation);
     }
 
     // Returns true iff this sstable contains data which belongs to many shards.
@@ -408,8 +409,15 @@ public:
 
     bool requires_view_building() const;
 
+    bool has_metadata_collector() const {
+        return _collector.has_value();
+    }
+
     metadata_collector& get_metadata_collector() {
-        return _collector;
+        if (!_collector.has_value()) {
+            on_internal_error(sstlog, "No metadata collector");
+        }
+        return *_collector;
     }
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
@@ -468,7 +476,7 @@ private:
     bool _open = false;
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
-    metadata_collector _collector;
+    std::optional<metadata_collector> _collector;
     column_stats _c_stats;
     file _index_file;
     file _data_file;
@@ -477,7 +485,7 @@ private:
     uint64_t _filter_file_size = 0;
     uint64_t _bytes_on_disk = 0;
     db_clock::time_point _data_file_write_time;
-    std::vector<nonwrapping_range<bytes_view>> _clustering_components_ranges;
+    position_range _position_range = position_range::all_clustered_rows();
     std::vector<unsigned> _shards;
     std::optional<dht::decorated_key> _first;
     std::optional<dht::decorated_key> _last;
@@ -611,11 +619,10 @@ private:
 
     void set_first_and_last_keys();
 
-    // Create one range for each clustering component of this sstable.
-    // Each range stores min and max value for that specific component.
+    // Create a position range based on the min/max_column_names metadata of this sstable.
     // It does nothing if schema defines no clustering key, and it's supposed
     // to be called when loading an existing sstable or after writing a new one.
-    void set_clustering_components_ranges();
+    void set_position_range();
 
     future<> create_data() noexcept;
 
@@ -680,6 +687,8 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
+
+    void make_metadata_collector();
 public:
     future<> read_toc() noexcept;
 
@@ -715,7 +724,7 @@ public:
     }
 
     bool has_correct_max_deletion_time() const {
-        return (_version == sstable_version_types::mc) || has_scylla_component();
+        return (_version >= sstable_version_types::mc) || has_scylla_component();
     }
 
     bool filter_has_key(const key& key) const {
@@ -817,8 +826,6 @@ public:
         return _components->summary;
     }
 
-    const std::vector<nonwrapping_range<bytes_view>>& clustering_components_ranges() const;
-
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells expired before gc_before and regular tombstones older than gc_before.
     double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
@@ -833,6 +840,13 @@ public:
 
     void update_stats_on_end_of_stream();
 
+    bool has_correct_min_max_column_names() const noexcept {
+        return _version >= sstable_version_types::md;
+    }
+
+    // Return true if this sstable possibly stores clustering row(s) specified by ranges.
+    bool may_contain_rows(const query::clustering_row_ranges& ranges) const;
+
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
@@ -842,6 +856,8 @@ public:
     friend class sstable_writer_k_l;
     friend class mc::writer;
     friend class index_reader;
+    friend class sstable_writer;
+    friend class compaction;
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);

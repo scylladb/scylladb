@@ -1774,7 +1774,7 @@ int main(int argc, char** argv) {
         ("test-case-duration", bpo::value<double>()->default_value(1), "Duration in seconds of a single test case (0 for a single run).")
         ("data-directory", bpo::value<sstring>()->default_value("./perf_large_partition_data"), "Data directory")
         ("output-directory", bpo::value<sstring>()->default_value("./perf_fast_forward_output"), "Results output directory (for 'json')")
-        ("sstable-format", bpo::value<std::string>()->default_value("mc"), "Sstable format version to use during population")
+        ("sstable-format", bpo::value<std::string>()->default_value("md"), "Sstable format version to use during population")
         ("use-binary-search-in-promoted-index", bpo::value<bool>()->default_value(true), "Use binary search based variant of the promoted index cursor")
         ("dump-all-results", "Write results of all iterations of all tests to text files in the output directory")
         ;
@@ -1815,10 +1815,15 @@ int main(int argc, char** argv) {
         db_cfg.virtual_dirty_soft_limit(1.0); // prevent background memtable flushes.
 
         auto sstable_format_name = app.configuration()["sstable-format"].as<std::string>();
-        if (sstable_format_name == "mc") {
+        if (sstable_format_name == "md") {
             db_cfg.enable_sstables_mc_format(true);
+            db_cfg.enable_sstables_md_format(true);
+        } else if (sstable_format_name == "mc") {
+            db_cfg.enable_sstables_mc_format(true);
+            db_cfg.enable_sstables_md_format(false);
         } else if (sstable_format_name == "la") {
             db_cfg.enable_sstables_mc_format(false);
+            db_cfg.enable_sstables_md_format(false);
         } else {
             throw std::runtime_error(format("Unsupported sstable format: {}", sstable_format_name));
         }

@@ -38,7 +38,7 @@
 
 #include "dht/sharder.hh"
 #include "types.hh"
-#include "mc/writer.hh"
+#include "sstables/mx/writer.hh"
 #include "writer.hh"
 #include "writer_impl.hh"
 #include "m_format_read_helpers.hh"
@@ -199,6 +199,7 @@ std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_t
     { sstable::version_types::ka , "ka" },
     { sstable::version_types::la , "la" },
     { sstable::version_types::mc , "mc" },
+    { sstable::version_types::md , "md" },
 };
 
 std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
@@ -663,7 +664,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                 case metadata_type::Stats:
                     return parse<stats_metadata>(schema, v, in, s.contents[type]);
                 case metadata_type::Serialization:
-                    if (v != sstable_version_types::mc) {
+                    if (v < sstable_version_types::mc) {
                         throw std::runtime_error(
                             "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
                     } else {
@@ -1209,27 +1210,20 @@ void sstable::validate_min_max_metadata() {
     }
 
     // The min/max metadata is wrong if:
-    // 1) it's not empty and schema defines no clustering key.
-    // 2) their size differ.
-    // 3) column name is stored instead of clustering value.
-    // 4) clustering component is stored as composite.
-    if ((!_schema->clustering_key_size() && (min_column_names.size() || max_column_names.size())) ||
-            (min_column_names.size() != max_column_names.size())) {
+    // - it's not empty and schema defines no clustering key.
+    //
+    // Notes:
+    // - we are going to rely on min/max column names for
+    //   clustering filtering only from md-format sstables,
+    //   see sstable::may_contain_rows().
+    //   We choose not to clear_incorrect_min_max_column_names
+    //   from older versions here as this disturbs sstable unit tests.
+    //
+    // - now that we store min/max metadata for range tombstones,
+    //   their size may differ.
+    if (!_schema->clustering_key_size()) {
         clear_incorrect_min_max_column_names();
         return;
-    }
-
-    for (auto i = 0U; i < min_column_names.size(); i++) {
-        if (_schema->get_column_definition(min_column_names[i].value) || _schema->get_column_definition(max_column_names[i].value)) {
-            clear_incorrect_min_max_column_names();
-            break;
-        }
-
-        if (_schema->is_compound() && _schema->clustering_key_size() > 1 && _schema->is_dense() &&
-                (composite_view(min_column_names[i].value).is_valid() || composite_view(max_column_names[i].value).is_valid())) {
-            clear_incorrect_min_max_column_names();
-            break;
-        }
     }
 }
 
@@ -1241,23 +1235,29 @@ void sstable::validate_max_local_deletion_time() {
     }
 }
 
-void sstable::set_clustering_components_ranges() {
+void sstable::set_position_range() {
     if (!_schema->clustering_key_size()) {
         return;
     }
-    auto& min_column_names = get_stats_metadata().min_column_names.elements;
-    auto& max_column_names = get_stats_metadata().max_column_names.elements;
 
-    auto s = std::min(min_column_names.size(), max_column_names.size());
-    _clustering_components_ranges.reserve(s);
-    for (auto i = 0U; i < s; i++) {
-        auto r = nonwrapping_range<bytes_view>({{ min_column_names[i].value, true }}, {{ max_column_names[i].value, true }});
-        _clustering_components_ranges.push_back(std::move(r));
+    auto& min_elements = get_stats_metadata().min_column_names.elements;
+    auto& max_elements = get_stats_metadata().max_column_names.elements;
+
+    if (min_elements.empty() && max_elements.empty()) {
+        return;
     }
-}
 
-const std::vector<nonwrapping_range<bytes_view>>& sstable::clustering_components_ranges() const {
-    return _clustering_components_ranges;
+    auto pip = [] (const utils::chunked_vector<disk_string<uint16_t>>& column_names, bound_kind kind) {
+        std::vector<bytes> key_bytes;
+        key_bytes.reserve(column_names.size());
+        for (auto& value : column_names) {
+            key_bytes.emplace_back(bytes_view(value));
+        }
+        auto ckp = clustering_key_prefix(std::move(key_bytes));
+        return position_in_partition(position_in_partition::range_tag_t(), kind, std::move(ckp));
+    };
+
+    _position_range = position_range(pip(min_elements, bound_kind::incl_start), pip(max_elements, bound_kind::incl_end));
 }
 
 double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
@@ -1370,7 +1370,7 @@ future<> sstable::update_info_for_opened_data() {
         }
         return make_ready_future<>();
     }).then([this] {
-        this->set_clustering_components_ranges();
+        this->set_position_range();
         this->set_first_and_last_keys();
         _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(utils::make_random_uuid());
 
@@ -1411,7 +1411,7 @@ future<> sstable::read_filter(const io_priority_class& pc) {
         read_simple<component_type::Filter>(filter, pc).get();
         auto nr_bits = filter.buckets.elements.size() * std::numeric_limits<typename decltype(filter.buckets.elements)::value_type>::digits;
         large_bitset bs(nr_bits, std::move(filter.buckets.elements));
-        utils::filter_format format = (_version == sstable_version_types::mc)
+        utils::filter_format format = (_version >= sstable_version_types::mc)
                                       ? utils::filter_format::m_format
                                       : utils::filter_format::k_l_format;
         _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs), format);
@@ -1760,10 +1760,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
     maybe_write_row_marker(out, schema, clustered_row.marker(), clustering_key);
     maybe_write_row_tombstone(out, clustering_key, clustered_row);
 
-    if (schema.clustering_key_size()) {
-        column_name_helper::min_max_components(schema, _collector.min_column_names(), _collector.max_column_names(),
-            clustered_row.key().components());
-    }
+    get_metadata_collector().update_min_max_components(clustered_row.key());
 
     // Write all cells of a partition's row.
     clustered_row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
@@ -2058,7 +2055,7 @@ void components_writer::consume_new_partition(const dht::decorated_key& dk) {
 
     maybe_add_summary_entry(dk.token(), bytes_view(*_partition_key));
     _sst._components->filter->add(bytes_view(*_partition_key));
-    _sst._collector.add_key(bytes_view(*_partition_key));
+    _sst.get_metadata_collector().add_key(bytes_view(*_partition_key));
 
     auto p_key = disk_string_view<uint16_t>();
     p_key.value = bytes_view(*_partition_key);
@@ -2172,7 +2169,7 @@ stop_iteration components_writer::consume_end_of_partition() {
     _sst.get_large_data_handler().maybe_log_too_many_rows(_sst, *_partition_key, _sst._c_stats.rows_count);
 
     // update is about merging column_stats with the data being stored by collector.
-    _sst._collector.update(std::move(_sst._c_stats));
+    _sst.get_metadata_collector().update(std::move(_sst._c_stats));
     _sst._c_stats.reset();
 
     if (!_first_key) {
@@ -2195,11 +2192,11 @@ void components_writer::consume_end_of_stream() {
     _index.close();
 
     if (_sst.has_component(component_type::CompressionInfo)) {
-        _sst._collector.add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
+        _sst.get_metadata_collector().add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
     }
 
     _sst.set_first_and_last_keys();
-    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst._collector, _schema.get_partitioner().name(), _schema.bloom_filter_fp_chance(),
+    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(), _schema.get_partitioner().name(), _schema.bloom_filter_fp_chance(),
             _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key());
 }
 
@@ -2250,11 +2247,41 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
 
+void
+sstable::make_metadata_collector() {
+    if (!_collector) {
+        _collector.emplace(*get_schema(), get_filename());
+    }
+}
+
 void sstable::update_stats_on_end_of_stream()
 {
     if (_c_stats.capped_local_deletion_time) {
         _stats.on_capped_local_deletion_time();
     }
+}
+
+bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {
+    if (_version < sstables::sstable_version_types::md) {
+        return true;
+    }
+
+    // Include sstables with tombstones that are not scylla's since
+    // they may contain partition tombstones that are not taken into
+    // account in min/max coloumn names metadata.
+    // We clear min/max metadata for partition tombstones so they
+    // will match as containing the rows we're looking for.
+    if (!has_scylla_component()) {
+        if (get_stats_metadata().estimated_tombstone_drop_time.bin.size()) {
+            return true;
+        }
+    }
+
+    return std::ranges::any_of(ranges, [this] (const query::clustering_range& range) {
+        return _position_range.overlaps(*_schema,
+            position_in_partition_view::for_range_start(range),
+            position_in_partition_view::for_range_end(range));
+    });
 }
 
 class sstable_writer_k_l : public sstable_writer::writer_impl {
@@ -2379,7 +2406,8 @@ void sstable_writer_k_l::consume_end_of_stream()
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, const io_priority_class& pc, shard_id shard) {
-    if (sst.get_version() == sstable_version_types::mc) {
+    sst.make_metadata_collector();
+    if (sst.get_version() >= sstable_version_types::mc) {
         _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
     } else {
         _impl = std::make_unique<sstable_writer_k_l>(sst, s, estimated_partitions, cfg, pc, shard);
@@ -2477,11 +2505,11 @@ future<> sstable::write_components(
         encoding_stats stats,
         const io_priority_class& pc) {
     assert_large_data_handler_is_running();
-    if (cfg.replay_position) {
-        _collector.set_replay_position(cfg.replay_position.value());
-    }
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
+        if (cfg.replay_position) {
+            get_metadata_collector().set_replay_position(cfg.replay_position.value());
+        }
         auto validator = mutation_fragment_stream_validating_filter(format("sstable writer {}", get_filename()), *schema,
                 cfg.validate_keys);
         mr.consume_in_thread(std::move(wr), std::move(validator), db::no_timeout);
@@ -2539,7 +2567,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                     auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                             sem->make_permit(), s, trust_promoted_index::yes, *_schema, "", index_file, std::move(options), 0, index_size,
-                            (_version == sstable_version_types::mc
+                            (_version >= sstable_version_types::mc
                                 ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
                                 : std::optional<column_values_fixed_lengths>{}));
                     return ctx->consume_input().finally([ctx] {
@@ -2638,6 +2666,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     case sstable::version_types::la:
         return v + "-" + g + "-" + f + "-" + component;
     case sstable::version_types::mc:
+    case sstable::version_types::md:
         return v + "-" + g + "-" + f + "-" + component;
     }
     assert(0 && "invalid version");
@@ -2742,7 +2771,7 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
-    static std::regex la_mc("(la|mc)-(\\d+)-(\\w+)-(.*)");
+    static std::regex la_mx("(la|m[cd])-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     static std::regex dir(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/staging|/upload|/snapshots/[^/]+)?/?");
@@ -2759,7 +2788,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
 
     sstlog.debug("Make descriptor sstdir: {}; fname: {}", sstdir, fname);
     std::string s(fname);
-    if (std::regex_match(s, match, la_mc)) {
+    if (std::regex_match(s, match, la_mx)) {
         std::string sdir(sstdir);
         std::smatch dirmatch;
         if (std::regex_match(sdir, dirmatch, dir)) {
@@ -2824,7 +2853,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 
     input_stream<char> stream;
     if (_components->compression) {
-        if (_version == sstable_version_types::mc) {
+        if (_version >= sstable_version_types::mc) {
              return make_compressed_file_m_format_input_stream(f, &_components->compression,
                 pos, len, std::move(options));
         } else {

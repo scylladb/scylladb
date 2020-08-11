@@ -128,6 +128,7 @@ extern const std::string_view ROLES;
 extern const std::string_view LA_SSTABLE;
 extern const std::string_view STREAM_WITH_RPC_STREAM;
 extern const std::string_view MC_SSTABLE;
+extern const std::string_view MD_SSTABLE;
 extern const std::string_view ROW_LEVEL_REPAIR;
 extern const std::string_view TRUNCATION_TABLE;
 extern const std::string_view CORRECT_STATIC_COMPACT_IN_MC;

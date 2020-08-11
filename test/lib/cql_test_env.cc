@@ -59,6 +59,7 @@
 #include "service/storage_service.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "db/sstables-format-selector.hh"
 
 using namespace std::chrono_literals;
 
@@ -475,6 +476,10 @@ public:
             auto stop_db = defer([&db] {
                 db.stop().get();
             });
+
+            db.invoke_on_all([] (database& db) {
+                db.set_format_by_config();
+            }).get();
 
             auto stop_ms_fd_gossiper = defer([] {
                 gms::get_gossiper().stop().get();

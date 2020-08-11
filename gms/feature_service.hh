@@ -90,6 +90,7 @@ private:
     gms::feature _roles_feature;
     gms::feature _stream_with_rpc_stream_feature;
     gms::feature _mc_sstable_feature;
+    gms::feature _md_sstable_feature;
     gms::feature _row_level_repair_feature;
     gms::feature _truncation_table;
     gms::feature _correct_static_compact_in_mc;
@@ -163,6 +164,10 @@ public:
 
     const feature& cluster_supports_mc_sstable() const {
         return _mc_sstable_feature;
+    }
+
+    const feature& cluster_supports_md_sstable() const {
+        return _md_sstable_feature;
     }
 
     const feature& cluster_supports_cdc() const {

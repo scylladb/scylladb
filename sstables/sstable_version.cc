@@ -51,6 +51,7 @@ sstable_version_constants::get_component_map(sstable_version_types version) {
         case sstable_version_types::la:
             return sstable_version_constants_k_l::_component_map;
         case sstable_version_types::mc:
+        case sstable_version_types::md:
             return sstable_version_constants_m::_component_map;
     }
     // Should never reach this.

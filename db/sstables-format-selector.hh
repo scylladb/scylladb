@@ -62,6 +62,7 @@ class sstables_format_selector {
     seastar::gate _sel;
 
     feature_enabled_listener _mc_feature_listener;
+    feature_enabled_listener _md_feature_listener;
 
     sstables::sstable_version_types _selected_format = sstables::sstable_version_types::la;
     future<> select_format(sstables::sstable_version_types new_format);

@@ -28,7 +28,7 @@
 #include "column_translation.hh"
 #include "m_format_read_helpers.hh"
 #include "utils/overloaded_functor.hh"
-#include "sstables/mc/parsers.hh"
+#include "sstables/mx/parsers.hh"
 
 namespace sstables {
 

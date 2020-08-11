@@ -29,7 +29,7 @@
 #include "sstables/prepended_input_stream.hh"
 #include "tracing/traced_file.hh"
 #include "sstables/scanning_clustered_index_cursor.hh"
-#include "sstables/mc/bsearch_clustered_cursor.hh"
+#include "sstables/mx/bsearch_clustered_cursor.hh"
 
 namespace sstables {
 
@@ -376,7 +376,7 @@ class index_reader {
                        trace_state ? sst->filename(component_type::Index) : sstring(),
                        get_file(*sst, permit, trace_state),
                        get_file_input_stream_options(sst, pc), begin, end - begin,
-                       (sst->get_version() == sstable_version_types::mc
+                       (sst->get_version() >= sstable_version_types::mc
                            ? std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header()))
                            : std::optional<column_values_fixed_lengths>{}),
                        trace_state)
