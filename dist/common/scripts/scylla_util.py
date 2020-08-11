@@ -144,10 +144,11 @@ class gcp_instance:
     def _non_root_nvmes(self):
         """get list of nvme disks from os, filter away if one of them is root"""
         nvme_re = re.compile(r"nvme\d+n\d+$")
+        mountpoint = os.environ.get('ROOT_MOUNTPOINT', '/')
 
-        root_dev_candidates = [x for x in psutil.disk_partitions() if x.mountpoint == "/"]
+        root_dev_candidates = [ x for x in psutil.disk_partitions() if x.mountpoint == mountpoint ]
         if len(root_dev_candidates) != 1:
-            raise Exception("found more than one disk mounted at root ".format(root_dev_candidates))
+            raise Exception("found more than one disk ({}) mounted at root {}'".format(root_dev_candidates, mountpoint))
 
         root_dev = root_dev_candidates[0].device
         # if root_dev.startswith("/dev/mapper"):
@@ -331,10 +332,11 @@ class aws_instance:
 
     def _non_root_nvmes(self):
         nvme_re = re.compile(r"nvme\d+n\d+$")
+        mountpoint = os.environ.get('ROOT_MOUNTPOINT', '/')
 
-        root_dev_candidates = [ x for x in psutil.disk_partitions() if x.mountpoint == "/" ]
+        root_dev_candidates = [ x for x in psutil.disk_partitions() if x.mountpoint == mountpoint ]
         if len(root_dev_candidates) != 1:
-            raise Exception("found more than one disk mounted at root'".format(root_dev_candidates))
+            raise Exception("found more than one disk ({}) mounted at root {}'".format(root_dev_candidates, mountpoint))
 
         root_dev = root_dev_candidates[0].device
         nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
