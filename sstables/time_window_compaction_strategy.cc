@@ -25,6 +25,53 @@
 
 namespace sstables {
 
+time_window_compaction_strategy_options::time_window_compaction_strategy_options(const std::map<sstring, sstring>& options) {
+    std::chrono::seconds window_unit = DEFAULT_COMPACTION_WINDOW_UNIT;
+    int window_size = DEFAULT_COMPACTION_WINDOW_SIZE;
+
+    auto it = options.find(COMPACTION_WINDOW_UNIT_KEY);
+    if (it != options.end()) {
+        auto valid_window_units_it = valid_window_units.find(it->second);
+        if (valid_window_units_it == valid_window_units.end()) {
+            throw exceptions::syntax_exception(sstring("Invalid window unit ") + it->second + " for " + COMPACTION_WINDOW_UNIT_KEY);
+        }
+        window_unit = valid_window_units_it->second;
+    }
+
+    it = options.find(COMPACTION_WINDOW_SIZE_KEY);
+    if (it != options.end()) {
+        try {
+            window_size = std::stoi(it->second);
+        } catch (const std::exception& e) {
+            throw exceptions::syntax_exception(sstring("Invalid integer value ") + it->second + " for " + COMPACTION_WINDOW_SIZE_KEY);
+        }
+    }
+
+    sstable_window_size = window_size * window_unit;
+
+    it = options.find(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
+    if (it != options.end()) {
+        try {
+            expired_sstable_check_frequency = std::chrono::seconds(std::stol(it->second));
+        } catch (const std::exception& e) {
+            throw exceptions::syntax_exception(sstring("Invalid long value ") + it->second + "for " + EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
+        }
+    }
+
+    it = options.find(TIMESTAMP_RESOLUTION_KEY);
+    if (it != options.end()) {
+        if (!valid_timestamp_resolutions.contains(it->second)) {
+            throw exceptions::syntax_exception(sstring("Invalid timestamp resolution ") + it->second + "for " + TIMESTAMP_RESOLUTION_KEY);
+        } else {
+            timestamp_resolution = valid_timestamp_resolutions.at(it->second);
+        }
+    }
+}
+
+time_window_compaction_strategy_options::time_window_compaction_strategy_options(time_window_compaction_strategy_options&&) = default;
+
+time_window_compaction_strategy_options::time_window_compaction_strategy_options(const time_window_compaction_strategy_options&) = default;
+
 class classify_by_timestamp {
     time_window_compaction_strategy_options _options;
     std::vector<int64_t> _known_windows;
