@@ -43,6 +43,7 @@
 #include <random>
 #include <optional>
 #include <boost/range/adaptors.hpp>
+#include <boost/intrusive/list.hpp>
 #include "../db/view/view_update_generator.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
@@ -624,13 +625,21 @@ public:
     }
 };
 
+class repair_meta;
+class repair_meta_tracker;
+
+static void add_to_repair_meta_for_masters(repair_meta& rm);
+static void add_to_repair_meta_for_followers(repair_meta& rm);
+
 class repair_meta {
+    friend repair_meta_tracker;
 public:
     using repair_master = bool_class<class repair_master_tag>;
     using update_working_row_buf = bool_class<class update_working_row_buf_tag>;
     using update_peer_row_hash_sets = bool_class<class update_peer_row_hash_sets_tag>;
     using needs_all_rows_t = bool_class<class needs_all_rows_tag>;
     using msg_addr = netw::messaging_service::msg_addr;
+    using tracker_link_type = boost::intrusive::list_member_hook<bi::link_mode<boost::intrusive::auto_unlink>>;
 private:
     seastar::sharded<database>& _db;
     column_family& _cf;
@@ -675,6 +684,7 @@ private:
     sink_source_for_get_full_row_hashes _sink_source_for_get_full_row_hashes;
     sink_source_for_get_row_diff _sink_source_for_get_row_diff;
     sink_source_for_put_row_diff _sink_source_for_put_row_diff;
+    tracker_link_type _tracker_link;
 public:
     repair_stats& stats() {
         return _stats;
@@ -752,6 +762,11 @@ public:
                         return netw::get_local_messaging_service().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, addr);
                 })
             {
+            if (master) {
+                add_to_repair_meta_for_masters(*this);
+            } else {
+                add_to_repair_meta_for_followers(*this);
+            }
     }
 
 public:
@@ -765,10 +780,7 @@ public:
         });
     }
 
-    static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map() {
-        static thread_local std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>> _repair_metas;
-        return _repair_metas;
-    }
+    static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map();
 
     static lw_shared_ptr<repair_meta> get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
         node_repair_meta_id id{from, repair_meta_id};
@@ -1860,6 +1872,12 @@ public:
     }
 };
 
+// The repair_metas created passively, i.e., local node is the repair follower.
+static thread_local std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>> _repair_metas;
+std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta::repair_meta_map() {
+    return _repair_metas;
+}
+
 static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
         gms::inet_address from,
         uint32_t src_cpu_id,
@@ -2246,6 +2264,28 @@ future<> repair_uninit_messaging_service_handler() {
             ms.unregister_repair_set_estimated_partitions(),
             ms.unregister_repair_get_diff_algorithms()).discard_result();
     });
+}
+
+class repair_meta_tracker {
+    boost::intrusive::list<repair_meta,
+        boost::intrusive::member_hook<repair_meta, repair_meta::tracker_link_type, &repair_meta::_tracker_link>,
+        boost::intrusive::constant_time_size<false>> _repair_metas;
+public:
+    void add(repair_meta& rm) {
+        _repair_metas.push_back(rm);
+    }
+};
+
+namespace debug {
+    static thread_local repair_meta_tracker repair_meta_for_masters;
+    static thread_local repair_meta_tracker repair_meta_for_followers;
+}
+
+static void add_to_repair_meta_for_masters(repair_meta& rm) {
+    debug::repair_meta_for_masters.add(rm);
+}
+static void add_to_repair_meta_for_followers(repair_meta& rm) {
+    debug::repair_meta_for_followers.add(rm);
 }
 
 class row_level_repair {
