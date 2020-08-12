@@ -1,0 +1,138 @@
+#!/bin/bash
+
+# Exit if any one of the commands below fails
+set -e
+
+script_path=$(dirname $(readlink -e $0))
+source_path=$script_path/../..
+
+# By default, we take the latest build/*/scylla as the executable:
+SCYLLA=${SCYLLA-$(ls -t "$source_path/build/"*"/scylla" | head -1)}
+SCYLLA=$(readlink -f "$SCYLLA")
+
+# we need to use python3 and the redis driver
+if ! python3 -c 'import redis' >/dev/null 2>&1
+then
+    echo "Error: python3 and python3-redis must be installed to configure redis." >&2
+    exit 1
+fi
+
+# Pick a loopback IP address for Scylla to run, in an attempt not to collide
+# other concurrent runs of Scylla. CCM uses 127.0.0.<nodenum>, so if we use
+# 127.1.*.* which cannot collide with it. Moreover, we'll take the last two
+# bytes of the address from the current process - so as to allow multiple
+# concurrent runs of this code to use a different address.
+SCYLLA_IP=127.1.$(($$ >> 8 & 255)).$(($$ & 255))
+
+echo "Running Scylla on $SCYLLA_IP"
+
+REDIS_PORT=6379
+
+tmp_dir="$(readlink -e ${TMPDIR-/tmp})"/redis-test-$$
+mkdir "$tmp_dir"
+
+# We run the cleanup() function on exit for any reason - successful finish
+# of the script, an error (since we have "set -e"), or a signal.
+# It ensures that Scylla is killed and its temporary storage directory is
+# deleted. It also shows Scylla's output log.
+code=17
+summary=
+cleanup() {
+    kill -9 $SCYLLA_PROCESS 2>/dev/null || :
+    echo
+    echo "Scylla log:"
+    echo
+    # we want to cat "$tmp_dir/log", but this can take a long time,
+    # especially if stdout is piped, and be interrupted. We don't want
+    # the "rm" below to not happen, so we need to open the file later,
+    # and cat it later:
+    exec 3<"$tmp_dir/log"
+    rm -rf --preserve-root "$tmp_dir"
+    cat <&3
+    echo $summary
+    exit $code
+}
+trap 'cleanup' EXIT
+
+# To make things easier for users of "killall", "top", and similar, we want
+# the Scylla executable which we run during the test to have a different name
+# from manul runs of Scylla. Unfortunately, using "exec -a" to change just
+# argv[0] isn't good enough - because killall inspects the actual executable
+# filename in /proc/<pid>/stat. So we need to name the executable differently.
+# Luckily, using a symbolic link is good enough.
+SCYLLA_LINK="$tmp_dir"/test_scylla
+ln -s "$SCYLLA" "$SCYLLA_LINK"
+
+"$SCYLLA_LINK" --options-file "$source_path/conf/scylla.yaml" \
+        --redis-port="$REDIS_PORT" \
+        --developer-mode=1 \
+        --experimental-features=cdc \
+        --ring-delay-ms 0 --collectd 0 \
+        --smp 2 -m 1G \
+        --overprovisioned --unsafe-bypass-fsync 1 \
+        --api-address $SCYLLA_IP \
+        --rpc-address $SCYLLA_IP \
+        --listen-address $SCYLLA_IP \
+        --prometheus-address $SCYLLA_IP \
+        --seed-provider-parameters seeds=$SCYLLA_IP \
+        --workdir "$tmp_dir" \
+        --auto-snapshot 0 \
+        --skip-wait-for-gossip-to-settle 0 \
+        --logger-log-level compaction=warn \
+        --logger-log-level migration_manager=warn \
+        --num-tokens 16 \
+        >"$tmp_dir/log" 2>&1 &
+SCYLLA_PROCESS=$!
+
+# Test that redis is serving. redis starts after CQL, so we use
+# check_redis() to verify that both are up.
+check_redis() {
+    python3 -c 'from socket import *; print("check_redis"); s = socket(AF_INET, SOCK_STREAM); s.connect(("'$SCYLLA_IP'", '$REDIS_PORT')); s.send(b"*1\r\n$4\r\nping\r\n"); s.close()'
+}
+echo "Scylla is: $SCYLLA."
+echo -n "Booting Scylla..."
+ok=
+SECONDS=0
+while ((SECONDS < 200))
+do
+    sleep 1
+    echo -n .
+    if ! kill -0 $SCYLLA_PROCESS 2>/dev/null
+    then
+        summary="Error: Scylla failed to boot after $SECONDS seconds."
+        break
+    fi
+    case "`check_redis 2>&1`" in
+    *"Connection refused"*)
+        # This may indicate that Scylla is still booting, or that it failed
+        # to boot and exited. Try again (and check again if Scylla exited).
+        continue;;
+    esac
+    ok=yes
+    break
+done
+if test -n "$ok" && kill -0 $SCYLLA_PROCESS 2>/dev/null
+then
+    echo "Done ($SECONDS seconds)"
+else
+    echo
+    if test -z "$summary"
+    then
+        summary="Error: Scylla failed to boot after $SECONDS seconds."
+        echo $summary
+    fi
+    exit 1
+fi
+
+cd "$script_path"
+set +e
+pytest --redis-host "$SCYLLA_IP" --redis-port "$REDIS_PORT" "$@"
+code=$?
+case $code in
+0) summary="redis tests pass";;
+*) summary="redis tests failure";;
+esac
+
+# Note that the cleanup() function runs now, just like on any exit from
+# any reason in this script. It will delete the temporary files and
+# announce the failure or success of the test.
