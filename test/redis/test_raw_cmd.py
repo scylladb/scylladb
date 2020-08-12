@@ -45,8 +45,8 @@ class RedisSocket:
     def close(self):
         self.socket.close()
 
-def verify_cmd_response(cmd, expect_ret, shutdown=False):
-    rs = RedisSocket()
+def verify_cmd_response(host, port, cmd, expect_ret, shutdown=False):
+    rs = RedisSocket(host, port)
     rs.send(cmd.encode())
     if shutdown:
         rs.shutdown()
@@ -56,19 +56,19 @@ def verify_cmd_response(cmd, expect_ret, shutdown=False):
     assert ret == expect_ret
     rs.close()
 
-def test_ping():
-    verify_cmd_response('*1\r\n$4\r\nping\r\n', '+PONG\r\n')
+def test_ping(redis_host, redis_port):
+    verify_cmd_response(redis_host, redis_port, '*1\r\n$4\r\nping\r\n', '+PONG\r\n')
 
-def test_eof():
+def test_eof(redis_host, redis_port):
     # shutdown socket, and read nothing
-    verify_cmd_response("", "", shutdown=True)
+    verify_cmd_response(redis_host, redis_port, "", "", shutdown=True)
 
     # a EOF char `\x04` should be triggered parse error
-    verify_cmd_response("\x04", "-ERR unknown command ''\r\n", shutdown=True)
+    verify_cmd_response(redis_host, redis_port, "\x04", "-ERR unknown command ''\r\n", shutdown=True)
 
-def test_ping_and_eof():
+def test_ping_and_eof(redis_host, redis_port):
     # regular ping with shutdown
-    verify_cmd_response('*1\r\n$4\r\nping\r\n', '+PONG\r\n', shutdown=True)
+    verify_cmd_response(redis_host, redis_port, '*1\r\n$4\r\nping\r\n', '+PONG\r\n', shutdown=True)
 
     # a EOF char `\x04` should be triggered parse error
-    verify_cmd_response("*1\r\n$4\r\nping\r\n\x04", "+PONG\r\n-ERR unknown command ''\r\n", shutdown=True)
+    verify_cmd_response(redis_host, redis_port, "*1\r\n$4\r\nping\r\n\x04", "+PONG\r\n-ERR unknown command ''\r\n", shutdown=True)
