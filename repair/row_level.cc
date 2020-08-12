@@ -764,10 +764,7 @@ public:
         });
     }
 
-    static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map() {
-        static thread_local std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>> _repair_metas;
-        return _repair_metas;
-    }
+    static std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta_map();
 
     static lw_shared_ptr<repair_meta> get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {
         node_repair_meta_id id{from, repair_meta_id};
@@ -1843,6 +1840,12 @@ public:
         });
     }
 };
+
+// The repair_metas created passively, i.e., local node is the repair follower.
+static thread_local std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>> _repair_metas;
+std::unordered_map<node_repair_meta_id, lw_shared_ptr<repair_meta>>& repair_meta::repair_meta_map() {
+    return _repair_metas;
+}
 
 static future<stop_iteration> repair_get_row_diff_with_rpc_stream_process_op(
         gms::inet_address from,
