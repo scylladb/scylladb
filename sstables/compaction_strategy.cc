@@ -912,6 +912,28 @@ date_tiered_manifest::create_sst_and_min_timestamp_pairs(const std::vector<sstab
     return sstable_min_timestamp_pairs;
 }
 
+date_tiered_compaction_strategy_options::date_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options) {
+    using namespace cql3::statements;
+
+    auto tmp_value = get_value(options, TIMESTAMP_RESOLUTION_KEY);
+    auto target_unit = tmp_value ? tmp_value.value() : DEFAULT_TIMESTAMP_RESOLUTION;
+
+    tmp_value = get_value(options, MAX_SSTABLE_AGE_KEY);
+    auto fractional_days = property_definitions::to_double(MAX_SSTABLE_AGE_KEY, tmp_value, DEFAULT_MAX_SSTABLE_AGE_DAYS);
+    int64_t max_sstable_age_in_hours = std::lround(fractional_days * 24);
+    max_sstable_age = duration_conversor::convert(target_unit, std::chrono::hours(max_sstable_age_in_hours));
+
+    tmp_value = get_value(options, BASE_TIME_KEY);
+    auto base_time_seconds = property_definitions::to_long(BASE_TIME_KEY, tmp_value, DEFAULT_BASE_TIME_SECONDS);
+    base_time = duration_conversor::convert(target_unit, std::chrono::seconds(base_time_seconds));
+}
+
+date_tiered_compaction_strategy_options::date_tiered_compaction_strategy_options() {
+    auto max_sstable_age_in_hours = int64_t(DEFAULT_MAX_SSTABLE_AGE_DAYS * 24);
+    max_sstable_age = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(max_sstable_age_in_hours)).count();
+    base_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::seconds(DEFAULT_BASE_TIME_SECONDS)).count();
+}
+
 namespace sstables {
 
 date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
