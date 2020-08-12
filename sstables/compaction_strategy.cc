@@ -473,6 +473,14 @@ compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, s
     return compaction_descriptor();
 }
 
+std::optional<sstring> compaction_strategy_impl::get_value(const std::map<sstring, sstring>& options, const sstring& name) {
+    auto it = options.find(name);
+    if (it == options.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 } // namespace sstables
 
 size_tiered_backlog_tracker::inflight_component

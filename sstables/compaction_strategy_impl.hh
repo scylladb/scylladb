@@ -48,13 +48,7 @@ protected:
     float _tombstone_threshold = DEFAULT_TOMBSTONE_THRESHOLD;
     db_clock::duration _tombstone_compaction_interval = DEFAULT_TOMBSTONE_COMPACTION_INTERVAL();
 public:
-    static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
-        auto it = options.find(name);
-        if (it == options.end()) {
-            return std::nullopt;
-        }
-        return it->second;
-    }
+    static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name);
 protected:
     compaction_strategy_impl() = default;
     explicit compaction_strategy_impl(const std::map<sstring, sstring>& options) {
