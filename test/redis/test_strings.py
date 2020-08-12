@@ -27,8 +27,8 @@ from util import random_string, connect
 
 logger = logging.getLogger('redis-test')
 
-def test_set_get_delete():
-    r = connect()
+def test_set_get_delete(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     val = random_string(10)
 
@@ -38,15 +38,15 @@ def test_set_get_delete():
     assert r.get(key) == None 
 
 
-def test_get():
-    r = connect()
+def test_get(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     r.delete(key)
 
     assert r.get(key) == None 
 
-def test_del_existent_key():
-    r = connect()
+def test_del_existent_key(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     val = random_string(10)
 
@@ -55,38 +55,38 @@ def test_del_existent_key():
     assert r.delete(key) == 1
 
 @pytest.mark.xfail(reason="DEL command does not support to return number of deleted keys")
-def test_del_non_existent_key():
-    r = connect()
+def test_del_non_existent_key(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     r.delete(key)
     assert r.delete(key) == 0
 
-def test_set_empty_string():
-    r = connect()
+def test_set_empty_string(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     val = ""
     r.set(key, val)
     assert r.get(key) == val
     r.delete(key)
 
-def test_set_large_string():
-    r = connect()
+def test_set_large_string(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     val = random_string(4096)
     r.set(key, val)
     assert r.get(key) == val
     r.delete(key)
 
-def test_ping():
-    r = connect()
+def test_ping(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     assert r.ping() == True
 
-def test_echo():
-    r = connect()
+def test_echo(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     assert r.echo('hello world') == 'hello world'
 
-def test_select():
-    r = connect()
+def test_select(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     val = random_string(4096)
     r.set(key, val)
@@ -109,8 +109,8 @@ def test_select():
     except redis.exceptions.ResponseError as ex:
         assert str(ex) == 'DB index is out of range'
 
-def test_exists_existent_key():
-    r = connect()
+def test_exists_existent_key(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     val = random_string(10)
 
@@ -118,14 +118,14 @@ def test_exists_existent_key():
     assert r.get(key) == val
     assert r.exists(key) == 1
 
-def test_exists_non_existent_key():
-    r = connect()
+def test_exists_non_existent_key(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     r.delete(key)
     assert r.exists(key) == 0
 
-def test_exists_multiple_existent_key():
-    r = connect()
+def test_exists_multiple_existent_key(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key1 = random_string(10)
     val1 = random_string(10)
     key2 = random_string(10)
@@ -144,8 +144,8 @@ def test_exists_multiple_existent_key():
     assert r.get(key4) == None
     assert r.exists(key1, key2, key3, key4) == 3
 
-def test_setex_ttl():
-    r = connect()
+def test_setex_ttl(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     val = random_string(10)
 
@@ -153,8 +153,8 @@ def test_setex_ttl():
     time.sleep(1)
     assert r.ttl(key) == 99
 
-def test_set_ex():
-    r = connect()
+def test_set_ex(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key = random_string(10)
     val = random_string(10)
 
@@ -162,7 +162,7 @@ def test_set_ex():
     time.sleep(1)
     assert r.ttl(key) == 99
 
-def test_lolwut():
+def test_lolwut(redis_host, redis_port):
     pattern1 = r'''
 ^⠀⡤⠤⠤⠤⠤⠤⠤⠤⡄
 ⠀⡇⠀⠀⠀⠀⠀⠀⠀⡇
@@ -192,7 +192,7 @@ Georg Nees - schotter, plotter on paper, 1968\. Redis ver\. [0-9]+\.[0-9]+\.[0-9
 
 Georg Nees - schotter, plotter on paper, 1968\. Redis ver\. [0-9]+\.[0-9]+\.[0-9]+
 '''[1:-1]
-    r = connect()
+    r = connect(redis_host, redis_port)
     res = r.execute_command('LOLWUT', 10, 1, 2)
     assert re.match(pattern1, res)
     res = r.execute_command('LOLWUT', 10, 2, 2)
@@ -200,8 +200,8 @@ Georg Nees - schotter, plotter on paper, 1968\. Redis ver\. [0-9]+\.[0-9]+\.[0-9
     res = r.execute_command('LOLWUT', 10, 4, 2)
     assert re.match(pattern3, res)
 
-def test_strlen():
-    r = connect()
+def test_strlen(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key1 = random_string(10)
     val1 = random_string(10)
     key2 = random_string(10)
@@ -216,8 +216,8 @@ def test_strlen():
     assert r.strlen(key3) == 0
 
 @pytest.mark.xfail(reason="types on redis does not implemented yet")
-def test_strlen_wrongtype():
-    r = connect()
+def test_strlen_wrongtype(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
     key1 = random_string(10)
     val1 = random_string(10)
     val2 = random_string(10)
