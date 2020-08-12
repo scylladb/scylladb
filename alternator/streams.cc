@@ -908,10 +908,10 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
                 break;
             case stream_view_type::NEW_AND_OLD_IMAGES: 
                 opts.postimage(true);
-                opts.preimage(true);
+                opts.preimage(cdc::image_mode::full);
                 break;
             case stream_view_type::OLD_IMAGE: 
-                opts.preimage(true);
+                opts.preimage(cdc::image_mode::full);
                 break;
             case stream_view_type::NEW_IMAGE: 
                 opts.postimage(true);
