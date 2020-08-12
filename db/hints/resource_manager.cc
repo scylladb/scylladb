@@ -59,6 +59,10 @@ future<semaphore_units<named_semaphore::exception_factory>> resource_manager::ge
     return get_units(_send_limiter, hint_memory_budget);
 }
 
+size_t resource_manager::sending_queue_length() const {
+    return _send_limiter.waiters();
+}
+
 const std::chrono::seconds space_watchdog::_watchdog_period = std::chrono::seconds(1);
 
 space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map)

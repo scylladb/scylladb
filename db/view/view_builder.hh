@@ -115,6 +115,11 @@ class view_builder final : public service::migration_listener::only_view_notific
         std::optional<dht::token> next_token;
     };
 
+    struct stats {
+        uint64_t steps_performed = 0;
+        uint64_t steps_failed = 0;
+    };
+
     /**
      * Keeps track of the build progress for all the views of a particular
      * base table. Each execution of the build step comprises a query of
@@ -164,6 +169,8 @@ class view_builder final : public service::migration_listener::only_view_notific
     seastar::shared_promise<> _shards_finished_read_promise;
     // Used for testing.
     std::unordered_map<std::pair<sstring, sstring>, seastar::shared_promise<>, utils::tuple_hash> _build_notifiers;
+    stats _stats;
+    metrics::metric_groups _metrics;
 
 public:
     // The view builder processes the base table in steps of batch_size rows.
@@ -206,6 +213,7 @@ private:
     future<> do_build_step();
     void execute(build_step&, exponential_backoff_retry);
     future<> maybe_mark_view_as_built(view_ptr, dht::token);
+    void setup_metrics();
 
     struct consumer;
 };
