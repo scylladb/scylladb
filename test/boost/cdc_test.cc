@@ -517,7 +517,7 @@ SEASTAR_THREAD_TEST_CASE(test_primary_key_logging) {
 
 SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
     do_with_cql_env_thread([](cql_test_env& e) {
-        auto test = [&e] (bool pre_enabled, bool post_enabled, bool with_ttl) {
+        auto test = [&e] (cdc::image_mode pre_enabled, bool post_enabled, bool with_ttl) {
             // note: 'val3' column is not used, but since not set in initial update, would provoke #6143 unless fixed.
             cquery_nofail(e, format("CREATE TABLE ks.tbl (pk int, pk2 int, ck int, ck2 int, val int, val2 int, val3 int, PRIMARY KEY((pk, pk2), ck, ck2)) "
                 "WITH cdc = {{'enabled':'true', 'preimage':'{}', 'postimage':'{}'}}", pre_enabled, post_enabled));
@@ -525,7 +525,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
 
             auto rows = select_log(e, "tbl");
 
-            BOOST_REQUIRE_EQUAL(!pre_enabled, to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
+            BOOST_REQUIRE_EQUAL(pre_enabled == cdc::image_mode::off, to_bytes_filtered(*rows, cdc::operation::pre_image).empty());
             BOOST_REQUIRE_EQUAL(!post_enabled, to_bytes_filtered(*rows, cdc::operation::post_image).empty());
 
             auto first = to_bytes_filtered(*rows, cdc::operation::update);
@@ -556,14 +556,14 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
                 auto second = to_bytes_filtered(*rows, cdc::operation::update);
                 auto post_image = to_bytes_filtered(*rows, cdc::operation::post_image);
 
-                BOOST_REQUIRE_EQUAL(!pre_enabled, pre_image.empty());
+                BOOST_REQUIRE_EQUAL(pre_enabled == cdc::image_mode::off, pre_image.empty());
                 BOOST_REQUIRE_EQUAL(!post_enabled, post_image.empty());
 
                 sort_by_time(*rows, second);
                 sort_by_time(*rows, pre_image);
                 sort_by_time(*rows, post_image);
 
-                if (pre_enabled) {
+                if (pre_enabled != cdc::image_mode::off) {
                     BOOST_REQUIRE_EQUAL(pre_image.size(), i + 2);
 
                     val = *pre_image.back()[val_index];
@@ -571,6 +571,13 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
                     BOOST_REQUIRE_EQUAL(int32_type->decompose(1111), *pre_image.back()[ck2_index]);
                     BOOST_REQUIRE_EQUAL(data_value(last), val_type->deserialize(bytes_view(val)));
                     BOOST_REQUIRE_EQUAL(bytes_opt(), pre_image.back()[ttl_index]);
+                }
+
+                if (pre_enabled == cdc::image_mode::full) {
+                    BOOST_REQUIRE_EQUAL(int32_type->decompose(22222), *pre_image.back()[val2_index]);
+                }
+                if (pre_enabled == cdc::image_mode::on) {
+                    BOOST_REQUIRE(!pre_image.back()[val2_index]);
                 }
 
                 if (post_enabled) {
@@ -594,7 +601,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
             }
             e.execute_cql("DROP TABLE ks.tbl").get();
         };
-        for (auto pre : { true, false}) {
+        for (auto pre : { cdc::image_mode::on, cdc::image_mode::full, cdc::image_mode::off }) {
             for (auto post : { true, false }) {
                 for (auto ttl : { true, false}) {
                     test(pre, post, ttl);
