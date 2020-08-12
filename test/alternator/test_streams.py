@@ -696,10 +696,56 @@ def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodbstreams):
         return events
     do_test(test_table_ss_old_image, dynamodbstreams, do_updates, 'OLD_IMAGE')
 
-# TODO: test OLD_IMAGE as in test_streams_updateitem_old_image, except one
-# column is an LSI key. Because the LSI key is a real regular column in the
-# base table, not a map member, the CDC's preimage will not include it.
-# For more information, see https://github.com/scylladb/scylla/issues/6935#issuecomment-664847634
+# Test that OLD_IMAGE indeed includes the entire old item and not just the
+# modified attributes, in the special case of attributes which are a key of
+# a secondary index.
+# The unique thing about this case is that as currently implemented,
+# secondary-index key attributes are real Scylla columns, contrasting with
+# other attributes which are just elements of a map. And our CDC
+# implementation treats those cases differently - when a map is modified
+# the preimage includes the entire content of the map, but for regular
+# columns they are only included in the preimage if they change.
+# Currently fails in Alternator because the item's key is missing in
+# OldImage (#6935) and the LSI key is also missing (#7030).
+@pytest.fixture(scope="function")
+def test_table_ss_old_image_and_lsi(dynamodb, dynamodbstreams):
+    table = create_test_table(dynamodb,
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH'},
+            {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'k', 'AttributeType': 'S' }],
+        LocalSecondaryIndexes=[{
+            'IndexName': 'index',
+            'KeySchema': [
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+                {'AttributeName': 'k', 'KeyType': 'RANGE'}],
+            'Projection': { 'ProjectionType': 'ALL' }
+        }],
+        StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'OLD_IMAGE' })
+    arn = wait_for_active_stream(dynamodbstreams, table, timeout=60)
+    yield table, arn
+    table.delete()
+
+@pytest.mark.xfail(reason="Currently fails - see issue #6935, #7030")
+def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET x = :x, k = :k',
+            ExpressionAttributeValues={':x': 2, ':k': 'dog'})
+        # We use here '*' instead of the really expected 'INSERT' to avoid
+        # checking again the same Alternator bug already checked by
+        # test_streams_updateitem_keys_only (issue #6918).
+        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2, 'k': 'dog'}])
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET y = :y', ExpressionAttributeValues={':y': 3})
+        # In issue #7030, the 'k' value was missing from the OldImage.
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2, 'k': 'dog'}, {'p': p, 'c': c, 'x': 2, 'k': 'dog', 'y': 3}])
+        return events
+    do_test(test_table_ss_old_image_and_lsi, dynamodbstreams, do_updates, 'OLD_IMAGE')
 
 # TODO: test NEW_IMAGE and NEW_AND_OLD_IMAGES, similar to OLD_IMAGE above.
 # In fact, it can be exactly the same code, sharing one do_update() function.
