@@ -921,6 +921,7 @@ scylla_tests_generic_dependencies = [
     'test/lib/reader_permit.cc',
     'test/lib/test_utils.cc',
     'test/lib/tmpdir.cc',
+    'test/lib/sstable_run_based_compaction_strategy_for_tests.cc',
 ]
 
 scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependencies + [
