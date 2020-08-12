@@ -984,8 +984,9 @@ void test_all_data_is_read_back(populate_fn_ex populate) {
 void test_mutation_reader_fragments_have_monotonic_positions(populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
-    for_each_mutation([] (const mutation& m) {
-        auto rd = flat_mutation_reader_from_mutations({m});
+    for_each_mutation([&populate] (const mutation& m) {
+        auto ms = populate(m.schema(), {m}, gc_clock::now());
+        auto rd = ms.make_reader(m.schema(), tests::make_permit());
         assert_that(std::move(rd)).has_monotonic_positions();
     });
 }
