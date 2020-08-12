@@ -149,6 +149,8 @@ public:
     // Better co-locate some windows into the same sstables than OOM.
     static constexpr uint64_t max_data_segregation_window_count = 100;
 
+    using bucket_t = std::vector<shared_sstable>;
+    enum class bucket_compaction_mode { none, size_tiered, major };
 public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cf, std::vector<shared_sstable> candidates) override;
@@ -164,6 +166,10 @@ private:
             throw std::runtime_error("Timestamp resolution invalid for TWCS");
         };
     }
+
+    // Returns which compaction type should be performed on a given window bucket.
+    bucket_compaction_mode
+    compaction_mode(const bucket_t& bucket, timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const;
 
     std::vector<shared_sstable>
     get_next_non_expired_sstables(column_family& cf, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point gc_before);

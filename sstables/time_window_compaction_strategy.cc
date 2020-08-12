@@ -156,6 +156,16 @@ time_window_compaction_strategy::get_sstables_for_compaction(column_family& cf, 
     return compaction_descriptor(std::move(compaction_candidates), cf.get_sstable_set(), service::get_local_compaction_priority());
 }
 
+time_window_compaction_strategy::bucket_compaction_mode
+time_window_compaction_strategy::compaction_mode(const bucket_t& bucket, timestamp_type bucket_key,
+        timestamp_type now, size_t min_threshold) const {
+    if (bucket.size() >= size_t(min_threshold) && bucket_key >= now) {
+        return bucket_compaction_mode::size_tiered;
+    } else if (bucket.size() >= 2 && bucket_key < now) {
+        return bucket_compaction_mode::major;
+    }
+    return bucket_compaction_mode::none;
+}
 
 std::vector<shared_sstable>
 time_window_compaction_strategy::get_next_non_expired_sstables(column_family& cf,
@@ -236,7 +246,8 @@ time_window_compaction_strategy::newest_bucket(std::map<timestamp_type, std::vec
 
         clogger.trace("Key {}, now {}", key, now);
 
-        if (bucket.size() >= size_t(min_threshold) && key >= now) {
+        switch (compaction_mode(bucket, key, now, min_threshold)) {
+        case bucket_compaction_mode::size_tiered: {
             // If we're in the newest bucket, we'll use STCS to prioritize sstables
             auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, min_threshold, max_threshold, stcs_options);
 
@@ -244,11 +255,14 @@ time_window_compaction_strategy::newest_bucket(std::map<timestamp_type, std::vec
             if (!stcs_interesting_bucket.empty()) {
                 return stcs_interesting_bucket;
             }
-        } else if (bucket.size() >= 2 && key < now) {
+            break;
+        }
+        case bucket_compaction_mode::major:
             clogger.debug("bucket size {} >= 2 and not in current bucket, compacting what's here", bucket.size());
             return trim_to_threshold(std::move(bucket), max_threshold);
-        } else {
+        default:
             clogger.debug("No compaction necessary for bucket size {} , key {}, now {}", bucket.size(), key, now);
+            break;
         }
     }
     return {};
@@ -270,15 +284,16 @@ void time_window_compaction_strategy::update_estimated_compaction_by_tasks(std::
     int64_t n = 0;
     timestamp_type now = _highest_window_seen;
 
-    for (auto task : tasks) {
-        auto key = task.first;
+    for (auto& task : tasks) {
+        const bucket_t& bucket = task.second;
+        timestamp_type bucket_key = task.first;
 
-        // For current window, make sure it's compactable
-        auto count = task.second.size();
-        if (key >= now && count >= size_t(min_threshold)) {
+        switch (compaction_mode(bucket, bucket_key, now, min_threshold)) {
+        case bucket_compaction_mode::size_tiered:
+        case bucket_compaction_mode::major:
             n++;
-        } else if (key < now && count >= 2) {
-            n++;
+        default:
+            break;
         }
     }
     _estimated_remaining_tasks = n;
