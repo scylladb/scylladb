@@ -51,18 +51,7 @@ public:
     static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name);
 protected:
     compaction_strategy_impl() = default;
-    explicit compaction_strategy_impl(const std::map<sstring, sstring>& options) {
-        using namespace cql3::statements;
-
-        auto tmp_value = get_value(options, TOMBSTONE_THRESHOLD_OPTION);
-        _tombstone_threshold = property_definitions::to_double(TOMBSTONE_THRESHOLD_OPTION, tmp_value, DEFAULT_TOMBSTONE_THRESHOLD);
-
-        tmp_value = get_value(options, TOMBSTONE_COMPACTION_INTERVAL_OPTION);
-        auto interval = property_definitions::to_long(TOMBSTONE_COMPACTION_INTERVAL_OPTION, tmp_value, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL().count());
-        _tombstone_compaction_interval = db_clock::duration(std::chrono::seconds(interval));
-
-        // FIXME: validate options.
-    }
+    explicit compaction_strategy_impl(const std::map<sstring, sstring>& options);
 public:
     virtual ~compaction_strategy_impl() {}
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) = 0;
