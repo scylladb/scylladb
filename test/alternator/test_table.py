@@ -308,3 +308,17 @@ def test_list_tables_wrong_limit(dynamodb):
     # lower limit (min. 1) is imposed by boto3 library checks
     with pytest.raises(ClientError, match='ValidationException'):
         dynamodb.meta.client.list_tables(Limit=101)
+
+# Even before Alternator gains support for configuring server-side encryption
+# ("encryption at rest") with CreateTable's SSESpecification option, we should
+# support the option "Enabled=false" which is the default, and means the server
+# takes care of whatever server-side encryption is done, on its own.
+# Reproduces issue #7031.
+def test_table_sse_off(dynamodb):
+    # If StreamSpecification is given, but has StreamEnabled=false, it's as
+    # if StreamSpecification was missing, and fine. No other attribues are
+    # necessary.
+    table = create_test_table(dynamodb, SSESpecification = {'Enabled': False},
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]);
+    table.delete();

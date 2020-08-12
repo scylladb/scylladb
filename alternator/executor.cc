@@ -929,10 +929,22 @@ future<executor::request_return_type> executor::create_table(client_state& clien
             view_builders.emplace_back(std::move(view_builder));
         }
     }
-    if (rjson::find(request, "SSESpecification")) {
-        return make_ready_future<request_return_type>(api_error::validation("SSESpecification: configuring encryption-at-rest is not yet supported."));
+
+    // We don't yet support configuring server-side encryption (SSE) via the
+    // SSESpecifiction attribute, but an SSESpecification with Enabled=false
+    // is simply the default, and should be accepted:
+    rjson::value* sse_specification = rjson::find(request, "SSESpecification");
+    if (sse_specification && sse_specification->IsObject()) {
+        rjson::value* enabled = rjson::find(*sse_specification, "Enabled");
+        if (!enabled || !enabled->IsBool()) {
+            return make_ready_future<request_return_type>(api_error("ValidationException", "SSESpecification needs boolean Enabled"));
+        }
+        if (enabled->GetBool()) {
+            // TODO: full support for SSESpecification
+            return make_ready_future<request_return_type>(api_error("ValidationException", "SSESpecification: configuring encryption-at-rest is not yet supported."));
+        }
     }
-    
+
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
         add_stream_options(*stream_specification, builder);
