@@ -457,6 +457,8 @@ arg_parser.add_argument('--so', dest='so', action='store_true',
 arg_parser.add_argument('--mode', action='append', choices=list(modes.keys()), dest='selected_modes')
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
 arg_parser.add_argument('--with-seastar', action='store', dest='seastar_path', default='seastar', help='Path to Seastar sources')
+add_tristate(arg_parser, name='dist', dest='enable_dist',
+                        help='scylla-tools-java, scylla-jmx and packages')
 arg_parser.add_argument('--cflags', action='store', dest='user_cflags', default='',
                         help='Extra flags for the C++ compiler')
 arg_parser.add_argument('--ldflags', action='store', dest='user_ldflags', default='',
@@ -1514,7 +1516,8 @@ with open(buildfile_tmp, 'w') as f:
                 artifacts=str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))
             )
         )
-        f.write(f'build {mode}: phony {mode}-build dist-{mode}\n')
+        include_dist_target = f'dist-{mode}' if args.enable_dist is None or args.enable_dist else ''
+        f.write(f'build {mode}: phony {mode}-build {include_dist_target}\n')
         compiles = {}
         swaggers = set()
         serializers = {}
