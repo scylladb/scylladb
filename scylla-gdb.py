@@ -596,7 +596,7 @@ def current_shard():
 
 
 def find_db(shard=None):
-    if not shard:
+    if shard is None:
         shard = current_shard()
     return gdb.parse_and_eval('::debug::db')['_instances']['_M_impl']['_M_start'][shard]['service']['_p']
 
