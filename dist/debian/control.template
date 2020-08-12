@@ -16,7 +16,7 @@ Replaces: %{product}-server (<< 1.1)
 Conflicts: %{product}-server (<< 1.1)
 
 Package: %{product}-server
-Architecture: amd64
+Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, %{product}-conf, %{product}-python3
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
@@ -25,7 +25,7 @@ Description: Scylla database server binaries
 Package: %{product}-server-dbg
 Section: debug
 Priority: extra
-Architecture: amd64
+Architecture: any
 Depends: %{product}-server (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
 Description: debugging symbols for %{product}-server
  Scylla is a highly scalable, eventually consistent, distributed,
