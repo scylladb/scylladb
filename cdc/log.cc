@@ -293,9 +293,13 @@ future<> cdc::cdc_service::stop() {
 cdc::cdc_service::~cdc_service() = default;
 
 namespace {
-const sstring delta_mode_string_off  = "off";
-const sstring delta_mode_string_keys = "keys";
-const sstring delta_mode_string_full = "full";
+static const sstring delta_mode_string_off  = "off";
+static const sstring delta_mode_string_keys = "keys";
+static const sstring delta_mode_string_full = "full";
+
+static const std::string_view image_mode_string_on  = "on";
+static const std::string_view image_mode_string_off  = delta_mode_string_off;
+static const std::string_view image_mode_string_full = delta_mode_string_full;
 
 sstring to_string(cdc::delta_mode dm) {
     switch (dm) {
@@ -305,7 +309,25 @@ sstring to_string(cdc::delta_mode dm) {
     }
     throw std::logic_error("Impossible value of cdc::delta_mode");
 }
+
+sstring to_string(cdc::image_mode m) {
+    switch (m) {
+        case cdc::image_mode::off : return "false";
+        case cdc::image_mode::on : return "true";
+        case cdc::image_mode::full : return sstring(image_mode_string_full);
+    }
+    throw std::logic_error("Impossible value of cdc::image_mode");
+}
+
 } // anon. namespace
+
+std::ostream& cdc::operator<<(std::ostream& os, delta_mode m) {
+    return os << to_string(m);
+}
+
+std::ostream& cdc::operator<<(std::ostream& os, image_mode m) {
+    return os << to_string(m);
+}
 
 cdc::options::options(const std::map<sstring, sstring>& map) {
     if (!map.contains("enabled")) {
@@ -313,21 +335,38 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
     }
 
     for (auto& p : map) {
-        if (p.first == "enabled") {
-            _enabled = p.second == "true";
-        } else if (p.first == "preimage") {
-            _preimage = p.second == "true";
-        } else if (p.first == "postimage") {
-            _postimage = p.second == "true";
-        } else if (p.first == "delta") {
-            if (p.second == delta_mode_string_keys) {
+        auto key = p.first;
+        auto val = p.second;
+
+        std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+        std::transform(val.begin(), val.end(), val.begin(), ::tolower);
+
+        auto is_true = val == "true" || val == "1";
+        auto is_false = val == "false" || val == "0";
+
+        if (key == "enabled") {
+            _enabled = is_true;
+        } else if (key == "preimage") {
+            if (is_true || val == image_mode_string_on) {
+                _preimage = image_mode::on;
+            } else if (val == image_mode_string_full) {
+                _preimage = image_mode::full;
+            } else if (val == image_mode_string_off || is_false) {
+                _preimage = image_mode::off;
+            } else {
+                throw exceptions::configuration_exception("Invalid value for CDC option \"preimage\": " + p.second);
+            }
+        } else if (key == "postimage") {
+            _postimage = is_true;
+        } else if (key == "delta") {
+            if (val == delta_mode_string_keys) {
                 _delta_mode = delta_mode::keys;
-            } else if (p.second == delta_mode_string_off) {
+            } else if (val == delta_mode_string_off) {
                 _delta_mode = delta_mode::off;
-            } else if (p.second != delta_mode_string_full) {
+            } else if (val != delta_mode_string_full) {
                 throw exceptions::configuration_exception("Invalid value for CDC option \"delta\": " + p.second);
             }
-        } else if (p.first == "ttl") {
+        } else if (key == "ttl") {
             _ttl = std::stoi(p.second);
             if (_ttl < 0) {
                 throw exceptions::configuration_exception("Invalid CDC option: ttl must be >= 0");
@@ -337,7 +376,7 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
         }
     }
 
-    if (_enabled && !_preimage && !_postimage && _delta_mode == delta_mode::off) {
+    if (_enabled && !preimage() && !postimage() && get_delta_mode() == delta_mode::off) {
         throw exceptions::configuration_exception("Invalid combination of CDC options: neither of"
                 " {preimage, postimage, delta} is enabled");
     }
@@ -349,7 +388,7 @@ std::map<sstring, sstring> cdc::options::to_map() const {
     }
     return {
         { "enabled", _enabled ? "true" : "false" },
-        { "preimage", _preimage ? "true" : "false" },
+        { "preimage", to_string(_preimage) },
         { "postimage", _postimage ? "true" : "false" },
         { "delta", to_string(_delta_mode) },
         { "ttl", std::to_string(_ttl) },
@@ -1043,7 +1082,8 @@ public:
     }
 
     void produce_preimage(const clustering_key* ck, const one_kind_column_set& columns_to_include) override {
-        generate_image(operation::pre_image, ck, &columns_to_include);
+        // iff we want full preimage, just ignore the affected columns and include everything. 
+        generate_image(operation::pre_image, ck, _schema->cdc_options().full_preimage() ? nullptr : &columns_to_include);
     };
 
     void produce_postimage(const clustering_key* ck) override {
@@ -1417,7 +1457,7 @@ public:
         // TODO: this assumes all mutations touch the same set of columns. This might not be true, and we may need to do more horrible set operation here.
         if (!p.static_row().empty()) {
             // for postimage we need everything...
-            if (_schema->cdc_options().postimage()) {
+            if (_schema->cdc_options().postimage() || _schema->cdc_options().full_preimage()) {
                 for (const column_definition& c: _schema->static_columns()) {
                     static_columns.emplace_back(c.id);
                     columns.emplace_back(&c);
@@ -1435,7 +1475,7 @@ public:
                 return re.row().deleted_at();
             });
             // for postimage we need everything...
-            if (has_row_delete || _schema->cdc_options().postimage()) {
+            if (has_row_delete || _schema->cdc_options().postimage() || _schema->cdc_options().full_preimage()) {
                 for (const column_definition& c: _schema->regular_columns()) {
                     regular_columns.emplace_back(c.id);
                     columns.emplace_back(&c);
