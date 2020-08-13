@@ -1546,6 +1546,10 @@ void storage_proxy_stats::stats::register_stats() {
                 {storage_proxy_stats::current_scheduling_group_label()},
                 [this]{ return to_metrics_histogram(estimated_read);}),
 
+        sm::make_histogram("successful_read_latency", sm::description("The read latency histogram for successful reads only"),
+                {storage_proxy_stats::current_scheduling_group_label()},
+                [this]{ return to_metrics_histogram(estimated_successful_read);}),
+
         sm::make_queue_length("foreground_reads", foreground_reads,
                 sm::description("number of currently pending foreground read requests"),
                 {storage_proxy_stats::current_scheduling_group_label()}),
@@ -4281,11 +4285,15 @@ storage_proxy::do_query(schema_ptr s,
                 return query_singular(cmd,
                         std::move(partition_ranges),
                         cl,
-                        std::move(query_options)).finally([lc, p] () mutable {
+                        std::move(query_options)).then_wrapped([lc, p] (future<coordinator_query_result>&& f) mutable {
                     p->get_stats().read.mark(lc.stop().latency());
                     if (lc.is_start()) {
+                        if (!f.failed()) {
+                            p->get_stats().estimated_successful_read.add(lc.latency());
+                        }
                         p->get_stats().estimated_read.add(lc.latency());
                     }
+                    return std::move(f);
                 });
             } catch (const no_such_column_family&) {
                 get_stats().read.mark(lc.stop().latency());
