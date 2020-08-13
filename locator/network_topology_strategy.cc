@@ -104,7 +104,7 @@ network_topology_strategy::network_topology_strategy(
 
 std::vector<inet_address>
 network_topology_strategy::calculate_natural_endpoints(
-    const token& search_token, token_metadata& tm) const {
+    const token& search_token, const token_metadata& tm) const {
 
     using endpoint_set = utils::sequenced_set<inet_address>;
     using endpoint_dc_rack_set = std::unordered_set<endpoint_dc_rack>;
@@ -200,20 +200,20 @@ network_topology_strategy::calculate_natural_endpoints(
     // tracks the racks we have already placed replicas in
     endpoint_dc_rack_set  seen_racks;
 
-    topology& tp = tm.get_topology();
+    const topology& tp = tm.get_topology();
 
     //
     // all endpoints in each DC, so we can check when we have exhausted all
     // the members of a DC
     //
-    std::unordered_map<sstring,
+    const std::unordered_map<sstring,
                        std::unordered_set<inet_address>>&
         all_endpoints = tp.get_datacenter_endpoints();
     //
     // all racks in a DC so we can check when we have exhausted all racks in a
     // DC
     //
-    std::unordered_map<sstring,
+    const std::unordered_map<sstring,
                        std::unordered_map<sstring,
                                           std::unordered_set<inet_address>>>&
         racks = tp.get_datacenter_racks();

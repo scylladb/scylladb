@@ -87,7 +87,7 @@ public:
         snitch_ptr& snitch,
         const std::map<sstring, sstring>& config_options,
         replication_strategy_type my_type);
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, token_metadata& tm) const = 0;
+    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const = 0;
     virtual ~abstract_replication_strategy() {}
     static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& token_metadata, const std::map<sstring, sstring>& config_options);
     static void validate_replication_strategy(const sstring& ks_name,

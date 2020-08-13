@@ -42,7 +42,7 @@ simple_strategy::simple_strategy(const sstring& keyspace_name, token_metadata& t
     }
 }
 
-std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const token& t, token_metadata& tm) const {
+std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
     const std::vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {
