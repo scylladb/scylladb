@@ -1352,7 +1352,8 @@ schema::column_name_type(const column_definition& def) const {
 const column_definition&
 schema::regular_column_at(column_id id) const {
     if (id >= regular_columns_count()) {
-        on_internal_error(dblog, format("regular column id {:d} >= {:d}", id, regular_columns_count()));
+        on_internal_error(dblog, format("{}.{}@{}: regular column id {:d} >= {:d}",
+            ks_name(), cf_name(), version(), id, regular_columns_count()));
     }
     return _raw._columns.at(column_offset(column_kind::regular_column) + id);
 }
@@ -1360,7 +1361,8 @@ schema::regular_column_at(column_id id) const {
 const column_definition&
 schema::clustering_column_at(column_id id) const {
     if (id >= clustering_key_size()) {
-        on_internal_error(dblog, format("clustering column id {:d} >= {:d}", id, clustering_key_size()));
+        on_internal_error(dblog, format("{}.{}@{}: clustering column id {:d} >= {:d}",
+            ks_name(), cf_name(), version(), id, clustering_key_size()));
     }
     return _raw._columns.at(column_offset(column_kind::clustering_key) + id);
 }
@@ -1368,7 +1370,8 @@ schema::clustering_column_at(column_id id) const {
 const column_definition&
 schema::static_column_at(column_id id) const {
     if (id >= static_columns_count()) {
-        on_internal_error(dblog, format("static column id {:d} >= {:d}", id, static_columns_count()));
+        on_internal_error(dblog, format("{}.{}@{}: static column id {:d} >= {:d}",
+            ks_name(), cf_name(), version(), id, static_columns_count()));
     }
     return _raw._columns.at(column_offset(column_kind::static_column) + id);
 }
