@@ -1466,6 +1466,10 @@ void storage_proxy_stats::write_stats::register_stats() {
                     {storage_proxy_stats::current_scheduling_group_label()},
                     [this]{return to_metrics_histogram(estimated_write);}),
 
+            sm::make_histogram("successful_write_latency", sm::description("The write latency histogram for successful writes only"),
+                    {storage_proxy_stats::current_scheduling_group_label()},
+                    [this]{return to_metrics_histogram(estimated_successful_write);}),
+
             sm::make_queue_length("foreground_writes", [this] { return writes - background_writes; },
                            sm::description("number of currently pending foreground write requests"),
                            {storage_proxy_stats::current_scheduling_group_label()}),
@@ -2101,6 +2105,7 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
     }
     try {
         mutate_result.get();
+        stats.estimated_successful_write.add(lc.latency());
         tracing::trace(trace_state, "Mutation successfully completed");
         return make_ready_future<>();
     } catch (no_such_keyspace& ex) {
