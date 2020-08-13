@@ -113,6 +113,13 @@ public:
         return _dc_racks;
     }
 
+    const std::unordered_map<sstring,
+                       std::unordered_map<sstring,
+                                          std::unordered_set<inet_address>>>&
+    get_datacenter_racks() const {
+        return _dc_racks;
+    }
+
     const endpoint_dc_rack& get_location(const inet_address& ep) const;
 private:
     /** multi-map: DC -> endpoints in that DC */
