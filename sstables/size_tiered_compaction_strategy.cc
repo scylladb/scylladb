@@ -181,23 +181,28 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
     return sstables::compaction_descriptor();
 }
 
+int64_t size_tiered_compaction_strategy::estimated_pending_compactions(const std::vector<sstables::shared_sstable>& sstables,
+        int min_threshold, int max_threshold, size_tiered_compaction_strategy_options options) {
+    int64_t n = 0;
+    for (auto& bucket : get_buckets(sstables, options)) {
+        if (bucket.size() >= size_t(min_threshold)) {
+            n += std::ceil(double(bucket.size()) / max_threshold);
+        }
+    }
+    return n;
+}
+
 int64_t size_tiered_compaction_strategy::estimated_pending_compactions(column_family& cf) const {
     int min_threshold = cf.min_compaction_threshold();
     int max_threshold = cf.schema()->max_compaction_threshold();
     std::vector<sstables::shared_sstable> sstables;
-    int64_t n = 0;
 
     sstables.reserve(cf.sstables_count());
     for (auto& entry : *cf.get_sstables()) {
         sstables.push_back(entry);
     }
 
-    for (auto& bucket : get_buckets(sstables)) {
-        if (bucket.size() >= size_t(min_threshold)) {
-            n += std::ceil(double(bucket.size()) / max_threshold);
-        }
-    }
-    return n;
+    return estimated_pending_compactions(sstables, min_threshold, max_threshold, _options);
 }
 
 std::vector<sstables::shared_sstable>
