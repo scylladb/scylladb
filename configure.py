@@ -1724,13 +1724,13 @@ with open(buildfile_tmp, 'w') as f:
     f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(mode, hh) for hh in headers])))
 
     f.write(
-            'build build: phony {}\n'.format(' '.join([f'{mode}-build' for mode in modes]))
+            'build build: phony {}\n'.format(' '.join([f'{mode}-build' for mode in build_modes]))
     )
     f.write(
-            'build test: phony {}\n'.format(' '.join(['{mode}-test'.format(mode=mode) for mode in modes]))
+            'build test: phony {}\n'.format(' '.join(['{mode}-test'.format(mode=mode) for mode in build_modes]))
     )
     f.write(
-            'build check: phony {}\n'.format(' '.join(['{mode}-check'.format(mode=mode) for mode in modes]))
+            'build check: phony {}\n'.format(' '.join(['{mode}-check'.format(mode=mode) for mode in build_modes]))
     )
 
     f.write(textwrap.dedent(f'''\
