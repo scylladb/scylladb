@@ -150,7 +150,7 @@ void unset_rpc_controller(http_context& ctx, routes& r) {
     ss::is_rpc_server_running.unset(r);
 }
 
-void set_repair(http_context& ctx, routes& r) {
+void set_repair(http_context& ctx, routes& r, sharded<netw::messaging_service>& ms) {
     ss::repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
         static std::vector<sstring> options = {"primaryRange", "parallelism", "incremental",
                 "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "trace",
