@@ -634,6 +634,7 @@ public:
 
 class repair_meta;
 class repair_meta_tracker;
+class row_level_repair;
 
 static void add_to_repair_meta_for_masters(repair_meta& rm);
 static void add_to_repair_meta_for_followers(repair_meta& rm);
@@ -693,6 +694,7 @@ private:
     sink_source_for_get_row_diff _sink_source_for_get_row_diff;
     sink_source_for_put_row_diff _sink_source_for_put_row_diff;
     tracker_link_type _tracker_link;
+    row_level_repair* _row_level_repair_ptr;
 public:
     repair_stats& stats() {
         return _stats;
@@ -730,7 +732,8 @@ public:
             uint32_t repair_meta_id,
             streaming::stream_reason reason,
             shard_config master_node_shard_config,
-            size_t nr_peer_nodes = 1)
+            size_t nr_peer_nodes = 1,
+            row_level_repair* row_level_repair_ptr = nullptr)
             : _db(db)
             , _messaging(ms)
             , _cf(cf)
@@ -771,6 +774,7 @@ public:
                     [&ms] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
                         return ms.local().make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(repair_meta_id, addr);
                 })
+            , _row_level_repair_ptr(row_level_repair_ptr)
             {
             if (master) {
                 add_to_repair_meta_for_masters(*this);
@@ -2605,7 +2609,8 @@ public:
                     repair_meta_id,
                     _ri.reason,
                     std::move(master_node_shard_config),
-                    _all_live_peer_nodes.size());
+                    _all_live_peer_nodes.size(),
+                    this);
 
             // All nodes including the node itself.
             _all_nodes.insert(_all_nodes.begin(), master.myip());
