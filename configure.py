@@ -433,13 +433,18 @@ perf_tests = set([
     'test/perf/perf_big_decimal',
 ])
 
+raft_tests = set([
+    'test/raft/replication_test',
+    'test/boost/raft_fsm_test',
+])
+
 apps = set([
     'scylla',
     'test/tools/cql_repl',
     'tools/scylla-types',
 ])
 
-tests = scylla_tests | perf_tests
+tests = scylla_tests | perf_tests | raft_tests
 
 other = set([
     'iotune',
@@ -498,6 +503,8 @@ arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', def
                         help='path to antlr3 executable')
 arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', default='ragel',
         help='path to ragel executable')
+arg_parser.add_argument('--build-raft', dest='build_raft', action='store_true', default=False,
+                        help='build raft code')
 add_tristate(arg_parser, name='stack-guards', dest='stack_guards', help='Use stack guards')
 arg_parser.add_argument('--verbose', dest='verbose', action='store_true',
                         help='Make configure.py output more verbose (useful for debugging the build process itself)')
@@ -505,6 +512,21 @@ arg_parser.add_argument('--test-repeat', dest='test_repeat', action='store', typ
                          help='Set number of times to repeat each unittest.')
 arg_parser.add_argument('--test-timeout', dest='test_timeout', action='store', type=str, default='7200')
 args = arg_parser.parse_args()
+
+coroutines_test_src = '''
+#define GCC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
+#if GCC_VERSION < 100201
+    #error "Coroutines support requires at leat gcc 10.2.1"
+#endif
+'''
+compiler_supports_coroutines = try_compile(compiler=args.cxx, source=coroutines_test_src)
+
+if args.build_raft and not compiler_supports_coroutines:
+    raise Exception("--build-raft is requested, while the used compiler does not support coroutines")
+
+if not args.build_raft:
+    all_artifacts.difference_update(raft_tests)
+    tests.difference_update(raft_tests)
 
 defines = ['XXH_PRIVATE_API',
            'SEASTAR_TESTING_MAIN',
@@ -943,6 +965,15 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
     'test/lib/random_schema.cc',
 ]
 
+scylla_raft_dependencies = [
+    'raft/raft.cc',
+    'raft/server.cc',
+    'raft/fsm.cc',
+    'raft/progress.cc',
+    'raft/log.cc',
+    'utils/uuid.cc'
+]
+
 deps = {
     'scylla': idls + ['main.cc', 'release.cc', 'utils/build_id.cc'] + scylla_core + api + alternator + redis,
     'test/tools/cql_repl': idls + ['test/tools/cql_repl.cc'] + scylla_core + scylla_tests_generic_dependencies,
@@ -1063,7 +1094,11 @@ deps['test/boost/linearizing_input_stream_test'] = [
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/alternator_base64_test'] += ['alternator/base64.cc']
 
+deps['test/raft/replication_test'] = ['test/raft/replication_test.cc'] + scylla_raft_dependencies
+deps['test/boost/raft_fsm_test'] =  ['test/boost/raft_fsm_test.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
+
 deps['utils/gz/gen_crc_combine_table'] = ['utils/gz/gen_crc_combine_table.cc']
+
 
 warnings = [
     '-Wall',
@@ -1240,6 +1275,10 @@ args.user_cflags += ' -Wno-error=stack-usage='
 args.user_cflags += f"-ffile-prefix-map={curdir}=."
 
 seastar_cflags = args.user_cflags
+
+if build_raft:
+    seastar_cflags += ' -fcoroutines'
+
 if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
@@ -1367,6 +1406,9 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
 
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
+
+if build_raft:
+    args.user_cflags += ' -DENABLE_SCYLLA_RAFT -fcoroutines'
 
 # thrift version detection, see #4538
 proc_res = subprocess.run(["thrift", "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
