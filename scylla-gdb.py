@@ -605,6 +605,12 @@ class uuid_printer(gdb.printing.PrettyPrinter):
     def display_hint(self):
         return 'string'
 
+class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = intrusive_list(val)
+    def to_string(self):
+        items = [str(v) for v in self.val]
+        return 'boost::intrusive::list of size {} = [{}]'.format(len(items), ', '.join(items))
 
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
@@ -615,6 +621,7 @@ def build_pretty_printer():
     pp.add_printer('row', r'^row$', row_printer)
     pp.add_printer('managed_vector', r'^managed_vector<.*>$', managed_vector_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
+    pp.add_printer('b0ost_intrusive_list', r'^boost::intrusive::list<.*>$', boost_intrusive_list_printer)
     return pp
 
 
