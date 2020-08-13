@@ -66,4 +66,4 @@ for pkg in $PKGS; do
 done
 ln -f unified/install.sh build/"$MODE"/unified/
 cd build/"$MODE"/unified
-tar cvpf "$UNIFIED_PKG" * .relocatable_package_version
+tar czvpf "$UNIFIED_PKG" * .relocatable_package_version
