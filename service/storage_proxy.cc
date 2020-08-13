@@ -90,6 +90,7 @@
 #include "db/consistency_level_validations.hh"
 #include "cdc/log.hh"
 #include "cdc/stats.hh"
+#include "cdc/cdc_options.hh"
 #include "utils/histogram_metrics_helper.hh"
 #include "service/paxos/prepare_summary.hh"
 #include "service/paxos/proposal.hh"

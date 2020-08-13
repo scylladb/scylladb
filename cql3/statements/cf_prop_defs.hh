@@ -46,10 +46,12 @@
 #include "schema_builder.hh"
 #include "compaction_strategy.hh"
 #include "utils/UUID.hh"
-#include "cdc/cdc_options.hh"
 
 namespace db {
 class extensions;
+}
+namespace cdc {
+class options;
 }
 
 namespace cql3 {

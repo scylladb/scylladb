@@ -41,7 +41,6 @@
 #include "exceptions/exceptions.hh"
 #include "timestamp.hh"
 #include "tracing/trace_state.hh"
-#include "cdc_options.hh"
 #include "utils/UUID.hh"
 
 class schema;

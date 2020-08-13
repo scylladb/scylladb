@@ -42,13 +42,16 @@
 #include "compaction_strategy_type.hh"
 #include "caching_options.hh"
 #include "column_computation.hh"
-#include "cdc/cdc_options.hh"
 
 namespace dht {
 
 class i_partitioner;
 class sharder;
 
+}
+
+namespace cdc {
+class options;
 }
 
 class database;

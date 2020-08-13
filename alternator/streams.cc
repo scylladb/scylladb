@@ -30,6 +30,7 @@
 
 #include "cdc/log.hh"
 #include "cdc/generation.hh"
+#include "cdc/cdc_options.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "utils/UUID_gen.hh"
 #include "cql3/selection/selection.hh"

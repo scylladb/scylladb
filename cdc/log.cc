@@ -30,6 +30,7 @@
 #include "cdc/log.hh"
 #include "cdc/generation.hh"
 #include "cdc/split.hh"
+#include "cdc/cdc_options.hh"
 #include "bytes.hh"
 #include "database.hh"
 #include "db/config.hh"
