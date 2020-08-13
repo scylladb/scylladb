@@ -201,7 +201,7 @@ time_window_compaction_strategy::get_compaction_candidates(column_family& cf, st
     // Update the highest window seen, if necessary
     _highest_window_seen = std::max(_highest_window_seen, p.second);
 
-    update_estimated_compaction_by_tasks(p.first, cf.min_compaction_threshold());
+    update_estimated_compaction_by_tasks(p.first, cf.min_compaction_threshold(), cf.schema()->max_compaction_threshold());
 
     return newest_bucket(std::move(p.first), cf.min_compaction_threshold(), cf.schema()->max_compaction_threshold(),
         _options.sstable_window_size, _highest_window_seen, _stcs_options);
@@ -284,7 +284,7 @@ time_window_compaction_strategy::trim_to_threshold(std::vector<shared_sstable> b
 }
 
 void time_window_compaction_strategy::update_estimated_compaction_by_tasks(std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
-                                                                           int min_threshold) {
+                                                                           int min_threshold, int max_threshold) {
     int64_t n = 0;
     timestamp_type now = _highest_window_seen;
 
@@ -294,6 +294,8 @@ void time_window_compaction_strategy::update_estimated_compaction_by_tasks(std::
 
         switch (compaction_mode(bucket, bucket_key, now, min_threshold)) {
         case bucket_compaction_mode::size_tiered:
+            n += size_tiered_compaction_strategy::estimated_pending_compactions(bucket, min_threshold, max_threshold, _stcs_options);
+            break;
         case bucket_compaction_mode::major:
             n++;
         default:

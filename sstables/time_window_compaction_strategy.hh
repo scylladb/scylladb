@@ -210,7 +210,8 @@ public:
         return timestamp_type(std::chrono::duration_cast<std::chrono::microseconds>(options.get_sstable_window_size()).count());
     }
 private:
-    void update_estimated_compaction_by_tasks(std::map<timestamp_type, std::vector<shared_sstable>>& tasks, int min_threshold);
+    void update_estimated_compaction_by_tasks(std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
+        int min_threshold, int max_threshold);
 
     friend class time_window_backlog_tracker;
 public:
