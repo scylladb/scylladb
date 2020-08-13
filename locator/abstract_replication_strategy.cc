@@ -177,17 +177,17 @@ abstract_replication_strategy::get_ranges_in_thread(inet_address ep) const {
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_ranges(inet_address ep, token_metadata& tm) const {
+abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata& tm) const {
     return do_get_ranges(ep, tm, false);
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_ranges_in_thread(inet_address ep, token_metadata& tm) const {
+abstract_replication_strategy::get_ranges_in_thread(inet_address ep, const token_metadata& tm) const {
     return do_get_ranges(ep, tm, true);
 }
 
 dht::token_range_vector
-abstract_replication_strategy::do_get_ranges(inet_address ep, token_metadata& tm, bool can_yield) const {
+abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metadata& tm, bool can_yield) const {
     dht::token_range_vector ret;
     auto prev_tok = tm.sorted_tokens().back();
     for (auto tok : tm.sorted_tokens()) {
