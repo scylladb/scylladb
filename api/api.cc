@@ -113,6 +113,10 @@ future<> set_server_storage_service(http_context& ctx) {
     return register_api(ctx, "storage_service", "The storage service API", set_storage_service);
 }
 
+future<> set_server_repair(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { set_repair(ctx, r); });
+}
+
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl) {
     return ctx.http_server.set_routes([&ctx, &snap_ctl] (routes& r) { set_snapshot(ctx, r, snap_ctl); });
 }

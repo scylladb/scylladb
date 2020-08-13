@@ -1047,6 +1047,7 @@ int main(int ac, char** av) {
                 api::unset_server_messaging_service(ctx).get();
             });
             api::set_server_storage_service(ctx).get();
+            api::set_server_repair(ctx).get();
 
             gossiper.local().register_(ss.shared_from_this());
             auto stop_listening = defer_verbose_shutdown("storage service notifications", [&gossiper, &ss] {
