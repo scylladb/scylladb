@@ -296,10 +296,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
             // lower than anything the new session will produce.
             if (cf.schema()->version() != fm.schema_version()) {
                 auto& local_cm = _column_mappings.local().map;
-                auto cm_it = local_cm.find(fm.schema_version());
-                if (cm_it == local_cm.end()) {
-                    cm_it = local_cm.emplace(fm.schema_version(), src_cm).first;
-                }
+                auto cm_it = local_cm.try_emplace(fm.schema_version(), src_cm).first;
                 const column_mapping& cm = cm_it->second;
                 mutation m(cf.schema(), fm.decorated_key(*cf.schema()));
                 converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());

@@ -678,10 +678,9 @@ database::shard_of(const frozen_mutation& m) {
 }
 
 void database::add_keyspace(sstring name, keyspace k) {
-    if (_keyspaces.contains(name)) {
+    if (auto [ignored, added] = _keyspaces.try_emplace(std::move(name), std::move(k)); !added) {
         throw std::invalid_argument("Keyspace " + name + " already exists");
     }
-    _keyspaces.emplace(std::move(name), std::move(k));
 }
 
 future<> database::update_keyspace(const sstring& name) {

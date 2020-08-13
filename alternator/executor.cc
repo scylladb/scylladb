@@ -1748,12 +1748,8 @@ static future<> do_batch_write(service::storage_proxy& proxy,
             key_builders(1, schema_decorated_key_hash{}, schema_decorated_key_equal{});
         for (auto& b : mutation_builders) {
             auto dk = dht::decorate_key(*b.first, b.second.pk());
-            auto it = key_builders.find({b.first, dk});
-            if (it == key_builders.end()) {
-                key_builders.emplace(schema_decorated_key{b.first, dk}, std::vector<put_or_delete_item>{std::move(b.second)});
-            } else {
-                it->second.push_back(std::move(b.second));
-            }
+            auto [it, added] = key_builders.try_emplace(schema_decorated_key{b.first, dk});
+            it->second.push_back(std::move(b.second));
         }
         return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state, ssg, permit = std::move(permit)] (auto& e) {
             stats.write_using_lwt++;

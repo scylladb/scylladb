@@ -1742,12 +1742,11 @@ void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep
     sstring dc = get_dc(ep);
     // if this is the first time we see an endpoint from this DC - add a
     // corresponding collectd metric
-    if (!_dc_stats.contains(dc)) {
+    if (auto [ignored, added] = _dc_stats.try_emplace(dc); added) {
         _metrics.add_group(_category, {
             sm::make_derive(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
                             sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {storage_proxy_stats::current_scheduling_group_label(), datacenter_label(dc), op_type_label(_op_type)})
         });
-        _dc_stats.emplace(dc, stats_counter{});
     }
 }
 
@@ -3305,15 +3304,12 @@ public:
                 auto diff = v.par
                           ? m.partition().difference(schema, v.par->mut().unfreeze(schema).partition())
                           : mutation_partition(*schema, m.partition());
-                auto it = _diffs[m.token()].find(v.from);
                 std::optional<mutation> mdiff;
                 if (!diff.empty()) {
                     has_diff = true;
                     mdiff = mutation(schema, m.decorated_key(), std::move(diff));
                 }
-                if (it == _diffs[m.token()].end()) {
-                    _diffs[m.token()].emplace(v.from, std::move(mdiff));
-                } else {
+                if (auto [it, added] = _diffs[m.token()].try_emplace(v.from, std::move(mdiff)); !added) {
                     // should not really happen, but lets try to deal with it
                     if (mdiff) {
                         if (it->second) {

@@ -189,10 +189,7 @@ public:
 };
 
 future<> timestamp_based_splitting_mutation_writer::write_to_bucket(bucket_id bucket, mutation_fragment&& mf) {
-    auto it = _buckets.find(bucket);
-    if (it == _buckets.end()) {
-        std::tie(it, std::ignore) = _buckets.emplace(bucket, bucket_writer(_schema, _consumer));
-    }
+    auto it = _buckets.try_emplace(bucket, _schema, _consumer).first;
 
     auto& writer = it->second;
 

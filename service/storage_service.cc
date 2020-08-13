@@ -1993,12 +1993,7 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
         });
     }, std::move(results), [] (auto results, auto host_and_version) {
         auto version = host_and_version.second ? host_and_version.second->to_sstring() : UNREACHABLE;
-        auto it = results.find(version);
-        if (it == results.end()) {
-            results.emplace(std::move(version), std::vector<sstring> { host_and_version.first.to_sstring() });
-        } else {
-            it->second.emplace_back(host_and_version.first.to_sstring());
-        }
+        results.try_emplace(version).first->second.emplace_back(host_and_version.first.to_sstring());
         return results;
     }).then([] (auto results) {
         // we're done: the results map is ready to return to the client.  the rest is just debug logging:

@@ -65,11 +65,7 @@ row_locker::lock_holder::lock_holder(row_locker* locker, const dht::decorated_ke
 future<row_locker::lock_holder>
 row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats) {
     mylog.debug("taking {} lock on entire partition {}", (exclusive ? "exclusive" : "shared"), pk);
-    auto i = _two_level_locks.find(pk);
-    if (i == _two_level_locks.end()) {
-        // Lock doesn't exist, we need to create it first
-        i = _two_level_locks.emplace(pk, this).first;
-    }
+    auto i = _two_level_locks.try_emplace(pk, this).first;
     single_lock_stats &single_lock_stats = exclusive ? stats.exclusive_partition : stats.shared_partition;
     single_lock_stats.operations_currently_waiting_for_lock++;
     utils::latency_counter waiting_latency;
@@ -90,11 +86,7 @@ row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_cl
 future<row_locker::lock_holder>
 row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& cpk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats) {
     mylog.debug("taking shared lock on partition {}, and {} lock on row {} in it", pk, (exclusive ? "exclusive" : "shared"), cpk);
-    auto i = _two_level_locks.find(pk);
-    if (i == _two_level_locks.end()) {
-        // Not yet locked, we need to create the lock. This makes a copy of pk.
-        i = _two_level_locks.emplace(pk, this).first;
-    }
+    auto i = _two_level_locks.try_emplace(pk, this).first;
     future<lock_type::holder> lock_partition = i->second._partition_lock.hold_read_lock(timeout);
     auto j = i->second._row_locks.find(cpk);
     if (j == i->second._row_locks.end()) {

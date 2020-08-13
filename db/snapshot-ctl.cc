@@ -148,15 +148,13 @@ snapshot_ctl::get_snapshot_details() {
     public:
         future<> operator()(const snapshot_map& value) {
             for (auto&& vp: value) {
-                if (!_result.contains(vp.first)) {
-                    _result.emplace(vp.first, std::move(vp.second));
+                if (auto [ignored, added] = _result.try_emplace(vp.first, std::move(vp.second)); added) {
                     continue;
                 }
 
                 auto& rp = _result.at(vp.first);
                 for (auto&& cf: vp.second) {
-                    if (!rp.contains(cf.first)) {
-                        rp.emplace(cf.first, std::move(cf.second));
+                    if (auto [ignored, added] = rp.try_emplace(cf.first, std::move(cf.second)); added) {
                         continue;
                     }
                     auto& rcf = rp.at(cf.first);
@@ -177,10 +175,8 @@ snapshot_ctl::get_snapshot_details() {
             return parallel_for_each(db.get_column_families(), [local_snapshots] (auto& cf_pair) {
                 return cf_pair.second->get_snapshot_details().then([uuid = cf_pair.first, local_snapshots] (auto map) {
                     for (auto&& snap_map: map) {
-                        if (!local_snapshots->contains(snap_map.first)) {
-                            local_snapshots->emplace(snap_map.first, cf_snapshot_map());
-                        }
-                        local_snapshots->at(snap_map.first).emplace(uuid, snap_map.second);
+                        auto [it, ignored] = local_snapshots->try_emplace(snap_map.first);
+                        it->second.emplace(uuid, snap_map.second);
                     }
                     return make_ready_future<>();
                 });
