@@ -1550,6 +1550,10 @@ void storage_proxy_stats::stats::register_stats() {
                 {storage_proxy_stats::current_scheduling_group_label()},
                 [this]{ return to_metrics_histogram(estimated_successful_read);}),
 
+        sm::make_histogram("range_read_latency", sm::description("The read latency histogram for partition range reads"),
+                {storage_proxy_stats::current_scheduling_group_label()},
+                [this]{ return to_metrics_histogram(estimated_range);}),
+
         sm::make_queue_length("foreground_reads", foreground_reads,
                 sm::description("number of currently pending foreground read requests"),
                 {storage_proxy_stats::current_scheduling_group_label()}),
