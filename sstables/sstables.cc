@@ -3044,16 +3044,16 @@ remove_by_toc_name(std::string_view sstable_toc_strview) noexcept {
         sstable_toc_name = sstring(sstable_toc_strview);
         prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
         new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
-        dir = dirname(sstable_toc_name);
     } catch (...) {
         return current_exception_as_future();
     }
 
-    return do_with(std::move(sstable_toc_name), std::move(prefix), std::move(new_toc_name), std::move(dir),
+    return do_with(std::move(sstable_toc_name), std::move(prefix), std::move(new_toc_name), sstring(),
             [] (sstring& sstable_toc_name, sstring& prefix, sstring& new_toc_name, sstring& dir) {
         sstlog.debug("Removing by TOC name: {}", sstable_toc_name);
         return sstable_io_check(sstable_write_error_handler, file_exists, sstable_toc_name).then([&] (bool toc_exists) {
             if (toc_exists) {
+                dir = dirname(sstable_toc_name);
                 // If new_toc_name exists it will be atomically replaced.  See rename(2)
                 return sstable_io_check(sstable_write_error_handler, rename_file, sstable_toc_name, new_toc_name).then([&dir] {
                     return fsync_directory(sstable_write_error_handler, dir);
@@ -3067,6 +3067,8 @@ remove_by_toc_name(std::string_view sstable_toc_strview) noexcept {
             if (!exists) {
                 sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
                 return make_ready_future<>();
+            } else {
+                dir = dirname(new_toc_name);
             }
             return with_file(open_checked_file_dma(sstable_write_error_handler, new_toc_name, open_flags::ro), [&] (file& toc_file) {
                 return toc_file.size().then([&] (size_t size) {
