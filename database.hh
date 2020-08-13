@@ -355,6 +355,7 @@ struct table_stats {
     utils::timed_rate_moving_average_and_histogram cas_accept{256};
     utils::timed_rate_moving_average_and_histogram cas_learn{256};
     utils::time_estimated_histogram estimated_read;
+    utils::time_estimated_histogram estimated_successful_read;
     utils::time_estimated_histogram estimated_write;
     utils::time_estimated_histogram estimated_cas_prepare;
     utils::time_estimated_histogram estimated_cas_accept;

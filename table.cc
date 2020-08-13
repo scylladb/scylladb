@@ -895,6 +895,7 @@ void table::set_metrics() {
         if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
             _metrics.add_group("column_family", {
                     ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_read);})(cf)(ks),
+                    ms::make_histogram("successful_read_latency", ms::description("Successful read latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_successful_read);})(cf)(ks),
                     ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_write);})(cf)(ks),
                     ms::make_histogram("cas_prepare_latency", ms::description("CAS prepare round latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_cas_prepare);})(cf)(ks),
                     ms::make_histogram("cas_propose_latency", ms::description("CAS accept round latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_cas_accept);})(cf)(ks),
@@ -1963,12 +1964,16 @@ table::query(schema_ptr s,
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
-        }).finally([lc, this, leave = std::move(leave)]() mutable {
+        }).then_wrapped([lc, this, leave = std::move(leave)](future<lw_shared_ptr<query::result>>&& f) mutable {
             _stats.reads.mark(lc);
             if (lc.is_start()) {
+                if (!f.failed()) {
+                    _stats.estimated_successful_read.add(lc.latency());
+                }
                 _stats.estimated_read.add(lc.latency());
             }
             // "leave" is destroyed here
+            return std::move(f);
         });
     });
 }
