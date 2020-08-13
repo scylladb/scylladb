@@ -357,6 +357,7 @@ struct table_stats {
     utils::time_estimated_histogram estimated_read;
     utils::time_estimated_histogram estimated_successful_read;
     utils::time_estimated_histogram estimated_write;
+    utils::time_estimated_histogram estimated_successful_write;
     utils::time_estimated_histogram estimated_cas_prepare;
     utils::time_estimated_histogram estimated_cas_accept;
     utils::time_estimated_histogram estimated_cas_learn;

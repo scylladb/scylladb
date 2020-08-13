@@ -897,6 +897,7 @@ void table::set_metrics() {
                     ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_read);})(cf)(ks),
                     ms::make_histogram("successful_read_latency", ms::description("Successful read latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_successful_read);})(cf)(ks),
                     ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_write);})(cf)(ks),
+                    ms::make_histogram("successful_write_latency", ms::description("Successful write latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_successful_write);})(cf)(ks),
                     ms::make_histogram("cas_prepare_latency", ms::description("CAS prepare round latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_cas_prepare);})(cf)(ks),
                     ms::make_histogram("cas_propose_latency", ms::description("CAS accept round latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_cas_accept);})(cf)(ks),
                     ms::make_histogram("cas_commit_latency", ms::description("CAS learn round latency histogram"), [this] {return to_metrics_histogram(_stats.estimated_cas_learn);})(cf)(ks),
@@ -1862,6 +1863,9 @@ void table::do_apply(db::rp_handle&& h, Args&&... args) {
     check_valid_rp(rp);
     try {
         _memtables->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
+        if (lc.is_start()) {
+            _stats.estimated_successful_write.add(lc.latency());
+        }
         _highest_rp = std::max(_highest_rp, rp);
     } catch (...) {
         _failed_counter_applies_to_memtable++;
