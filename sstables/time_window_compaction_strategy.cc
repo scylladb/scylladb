@@ -236,15 +236,24 @@ time_window_compaction_strategy::get_buckets(std::vector<shared_sstable> files, 
     return std::make_pair(std::move(buckets), max_timestamp);
 }
 
+static std::ostream& operator<<(std::ostream& os, const std::map<timestamp_type, std::vector<shared_sstable>>& buckets) {
+    os << "  buckets = {\n";
+    for (auto& bucket : buckets | boost::adaptors::reversed) {
+        os << format("    key={}, size={}\n", bucket.first, bucket.second.size());
+    }
+    os << "  }\n";
+    return os;
+}
+
 std::vector<shared_sstable>
 time_window_compaction_strategy::newest_bucket(std::map<timestamp_type, std::vector<shared_sstable>> buckets,
         int min_threshold, int max_threshold, std::chrono::seconds sstable_window_size, timestamp_type now,
         size_tiered_compaction_strategy_options& stcs_options) {
+    clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
+
     for (auto&& key_bucket : buckets | boost::adaptors::reversed) {
         auto key = key_bucket.first;
         auto& bucket = key_bucket.second;
-
-        clogger.trace("Key {}, now {}", key, now);
 
         if (is_last_active_bucket(key, now)) {
             _recent_active_windows.insert(key);
