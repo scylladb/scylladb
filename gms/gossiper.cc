@@ -428,6 +428,7 @@ future<> gossiper::handle_shutdown_msg(inet_address from) {
         return make_ready_future<>();
     }
     return seastar::async([this, from] {
+        auto permit = this->lock_endpoint(from).get0();
         this->mark_as_shutdown(from);
     });
 }
