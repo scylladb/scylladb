@@ -159,10 +159,14 @@ time_window_compaction_strategy::get_sstables_for_compaction(column_family& cf, 
 time_window_compaction_strategy::bucket_compaction_mode
 time_window_compaction_strategy::compaction_mode(const bucket_t& bucket, timestamp_type bucket_key,
         timestamp_type now, size_t min_threshold) const {
-    if (bucket.size() >= size_t(min_threshold) && bucket_key >= now) {
-        return bucket_compaction_mode::size_tiered;
-    } else if (bucket.size() >= 2 && bucket_key < now) {
+    // STCS will also be performed on older window buckets, to avoid a bad write and
+    // space amplification when something like read repair cause small updates to
+    // those past windows.
+
+    if (bucket.size() >= 2 && !is_last_active_bucket(bucket_key, now) && _recent_active_windows.contains(bucket_key)) {
         return bucket_compaction_mode::major;
+    } else if (bucket.size() >= size_t(min_threshold)) {
+        return bucket_compaction_mode::size_tiered;
     }
     return bucket_compaction_mode::none;
 }
@@ -236,19 +240,18 @@ std::vector<shared_sstable>
 time_window_compaction_strategy::newest_bucket(std::map<timestamp_type, std::vector<shared_sstable>> buckets,
         int min_threshold, int max_threshold, std::chrono::seconds sstable_window_size, timestamp_type now,
         size_tiered_compaction_strategy_options& stcs_options) {
-    // If the current bucket has at least minThreshold SSTables, choose that one.
-    // For any other bucket, at least 2 SSTables is enough.
-    // In any case, limit to maxThreshold SSTables.
-
     for (auto&& key_bucket : buckets | boost::adaptors::reversed) {
         auto key = key_bucket.first;
         auto& bucket = key_bucket.second;
 
         clogger.trace("Key {}, now {}", key, now);
 
+        if (is_last_active_bucket(key, now)) {
+            _recent_active_windows.insert(key);
+        }
         switch (compaction_mode(bucket, key, now, min_threshold)) {
         case bucket_compaction_mode::size_tiered: {
-            // If we're in the newest bucket, we'll use STCS to prioritize sstables
+            // If we're in the newest bucket, we'll use STCS to prioritize sstables.
             auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, min_threshold, max_threshold, stcs_options);
 
             // If the tables in the current bucket aren't eligible in the STCS strategy, we'll skip it and look for other buckets
@@ -258,6 +261,7 @@ time_window_compaction_strategy::newest_bucket(std::map<timestamp_type, std::vec
             break;
         }
         case bucket_compaction_mode::major:
+            _recent_active_windows.erase(key);
             clogger.debug("bucket size {} >= 2 and not in current bucket, compacting what's here", bucket.size());
             return trim_to_threshold(std::move(bucket), max_threshold);
         default:

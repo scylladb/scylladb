@@ -141,6 +141,8 @@ class time_window_compaction_strategy : public compaction_strategy_impl {
     int64_t _estimated_remaining_tasks = 0;
     db_clock::time_point _last_expired_check;
     timestamp_type _highest_window_seen;
+    // Keep track of all recent active windows that still need to be compacted into a single SSTable
+    std::unordered_set<timestamp_type> _recent_active_windows;
     size_tiered_compaction_strategy_options _stcs_options;
     compaction_backlog_tracker _backlog_tracker;
 public:
@@ -165,6 +167,11 @@ private:
         default:
             throw std::runtime_error("Timestamp resolution invalid for TWCS");
         };
+    }
+
+    // Returns true if bucket is the last, most active one.
+    bool is_last_active_bucket(timestamp_type bucket_key, timestamp_type now) const {
+        return bucket_key >= now;
     }
 
     // Returns which compaction type should be performed on a given window bucket.
