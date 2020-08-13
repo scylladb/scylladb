@@ -658,6 +658,8 @@ private:
     service_permit _permit;
     // how many replicas replied to learn
     uint64_t _learned = 0;
+    //The origin sg stats in order to avoid unbalance
+    storage_proxy::stats& _stats;
 
     // Unique request id generator.
     static thread_local uint64_t next_id;
@@ -687,19 +689,20 @@ public:
         , _cas_timeout(cas_timeout_arg)
         , _key(std::move(key_arg))
         , _permit(std::move(permit_arg))
+        , _stats(_proxy->get_stats())
         , tr_state(tr_state_arg) {
         storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(_schema->ks_name(), _key.token(), _cl_for_paxos);
         _live_endpoints = std::move(pp.endpoints);
         _required_participants = pp.required_participants;
         tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
                 _key.token(), _live_endpoints, _required_participants);
-        _proxy->get_stats().cas_foreground++;
-        _proxy->get_stats().cas_total_running++;
-        _proxy->get_stats().cas_total_operations++;
+        _stats.cas_foreground++;
+        _stats.cas_total_running++;
+        _stats.cas_total_operations++;
     }
 
     ~paxos_response_handler() {
-        _proxy->get_stats().cas_total_running--;
+        _stats.cas_total_running--;
     }
 
     // Result of PREPARE step, i.e. begin_and_repair_paxos().

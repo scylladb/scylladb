@@ -846,9 +846,9 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
                     paxos::paxos_state::logger.debug("CAS[{}] Finishing incomplete paxos round {}", _id, *in_progress);
                     tracing::trace(tr_state, "Finishing incomplete paxos round {}", *in_progress);
                     if (is_write) {
-                        ++_proxy->get_stats().cas_write_unfinished_commit;
+                        ++_stats.cas_write_unfinished_commit;
                     } else {
-                        ++_proxy->get_stats().cas_read_unfinished_commit;
+                        ++_stats.cas_read_unfinished_commit;
                     }
 
                     auto refreshed_in_progress = make_lw_shared<paxos::proposal>(ballot, std::move(in_progress->update));
@@ -1189,7 +1189,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                         // accepted, either.
                         paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: proposal is partially rejected", _id);
                         tracing::trace(tr_state, "accept_proposal: proposal is partially rejected");
-                        _proxy->get_stats().cas_write_timeout_due_to_uncertainty++;
+                        _stats.cas_write_timeout_due_to_uncertainty++;
                         // TODO: we report write timeout exception to be compatible with Cassandra,
                         // which uses write_timeout_exception to signal any "unknown" state.
                         // To be changed in scope of work on https://issues.apache.org/jira/browse/CASSANDRA-15350
@@ -1255,12 +1255,12 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
 }
 
 void paxos_response_handler::prune(utils::UUID ballot) {
-    if ( _proxy->get_stats().cas_now_pruning >= pruning_limit) {
-        _proxy->get_stats().cas_coordinator_dropped_prune++;
+    if ( _stats.cas_now_pruning >= pruning_limit) {
+        _stats.cas_coordinator_dropped_prune++;
         return;
     }
-     _proxy->get_stats().cas_now_pruning++;
-    _proxy->get_stats().cas_prune++;
+    _stats.cas_now_pruning++;
+    _stats.cas_prune++;
     // running in the background, but the amount of the bg job is limited by pruning_limit
     // it is waited by holding shared pointer to storage_proxy which guaranties
     // that storage_proxy::stop() will wait for this to complete
@@ -1274,7 +1274,7 @@ void paxos_response_handler::prune(utils::UUID ballot) {
             return ms.send_paxos_prune(peer, _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
         }
     }).finally([h = shared_from_this()] {
-        h->_proxy->get_stats().cas_now_pruning--;
+        h->_stats.cas_now_pruning--;
     });
 }
 
@@ -3393,24 +3393,24 @@ protected:
     lw_shared_ptr<column_family> _cf;
     bool _foreground = true;
     service_permit _permit; // holds admission permit until operation completes
-
+    storage_proxy::stats &_stats;
 private:
     void on_read_resolved() noexcept {
         // We could have !_foreground if this is called on behalf of background reconciliation.
-        _proxy->get_stats().foreground_reads -= int(_foreground);
+        _stats.foreground_reads -= int(_foreground);
         _foreground = false;
     }
 public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state, service_permit permit) :
                            _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
-                           _cf(std::move(cf)), _permit(std::move(permit)) {
-        _proxy->get_stats().reads++;
-        _proxy->get_stats().foreground_reads++;
+                           _cf(std::move(cf)), _permit(std::move(permit)), _stats(_proxy->get_stats()) {
+        _stats.reads++;
+        _stats.foreground_reads++;
     }
     virtual ~abstract_read_executor() {
-        _proxy->get_stats().reads--;
-        _proxy->get_stats().foreground_reads -= int(_foreground);
+        _stats.reads--;
+        _stats.foreground_reads -= int(_foreground);
     }
 
     /// Targets that were successfully ised for data and/or digest requests.
@@ -3423,7 +3423,7 @@ public:
 
 protected:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
-        ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(ep);
+        ++_stats.mutation_data_read_attempts.get_ep_stat(ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
@@ -3438,7 +3438,7 @@ protected:
         }
     }
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
-        ++_proxy->get_stats().data_read_attempts.get_ep_stat(ep);
+        ++_stats.data_read_attempts.get_ep_stat(ep);
         auto opts = want_digest
                   ? query::result_options{query::result_request::result_and_digest, digest_algorithm(*_proxy)}
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
@@ -3456,7 +3456,7 @@ protected:
         }
     }
     future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
-        ++_proxy->get_stats().digest_read_attempts.get_ep_stat(ep);
+        ++_stats.digest_read_attempts.get_ep_stat(ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->query_result_local_digest(_schema, _cmd, _partition_range, _trace_state,
@@ -3480,9 +3480,9 @@ protected:
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
-                    ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(ep);
+                    ++_stats.mutation_data_read_completed.get_ep_stat(ep);
                 } catch(...) {
-                    ++_proxy->get_stats().mutation_data_read_errors.get_ep_stat(ep);
+                    ++_stats.mutation_data_read_errors.get_ep_stat(ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -3495,10 +3495,10 @@ protected:
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_data(ep, std::get<0>(std::move(v)));
-                    ++_proxy->get_stats().data_read_completed.get_ep_stat(ep);
+                    ++_stats.data_read_completed.get_ep_stat(ep);
                     _used_targets.push_back(ep);
                 } catch(...) {
-                    ++_proxy->get_stats().data_read_errors.get_ep_stat(ep);
+                    ++_stats.data_read_errors.get_ep_stat(ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -3511,10 +3511,10 @@ protected:
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
-                    ++_proxy->get_stats().digest_read_completed.get_ep_stat(ep);
+                    ++_stats.digest_read_completed.get_ep_stat(ep);
                     _used_targets.push_back(ep);
                 } catch(...) {
-                    ++_proxy->get_stats().digest_read_errors.get_ep_stat(ep);
+                    ++_stats.digest_read_errors.get_ep_stat(ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -3580,7 +3580,7 @@ protected:
                         on_read_resolved();
                     });
                 } else {
-                    _proxy->get_stats().read_retries++;
+                    _stats.read_retries++;
                     _retry_cmd = make_lw_shared<query::read_command>(*cmd);
                     // We asked t (= cmd->get_row_limit()) live columns and got l (=data_resolver->total_live_count) ones.
                     // From that, we can estimate that on this row, for x requested
@@ -3664,14 +3664,14 @@ public:
                         auto write_timeout = exec->_proxy->_db.local().get_config().write_request_timeout_in_ms() * 1000;
                         auto delta = int64_t(digest_resolver->last_modified()) - int64_t(exec->_cmd->read_timestamp);
                         if (std::abs(delta) <= write_timeout) {
-                            exec->_proxy->get_stats().global_read_repairs_canceled_due_to_concurrent_write++;
+                            exec->_stats.global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
                             auto i = boost::range::remove_if(exec->_targets, std::not_fn(std::cref(db::is_local)));
                             exec->_targets.erase(i, exec->_targets.end());
                         }
                     }
                     exec->reconcile(exec->_cl, timeout);
-                    exec->_proxy->get_stats().read_repair_repaired_blocking++;
+                    exec->_stats.read_repair_repaired_blocking++;
                 }
             } catch (...) {
                 exec->_result_promise.set_exception(std::current_exception());
@@ -3681,7 +3681,7 @@ public:
             // Waited on indirectly.
             (void)digest_resolver->done().then([exec, digest_resolver, timeout, background_repair_check] () mutable {
                 if (background_repair_check && !digest_resolver->digests_match()) {
-                    exec->_proxy->get_stats().read_repair_repaired_background++;
+                    exec->_stats.read_repair_repaired_background++;
                     exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
                     exec->reconcile(exec->_cl, timeout);
                     return exec->_result_promise.get_future().discard_result();
@@ -3735,10 +3735,10 @@ public:
                 // FIXME: consider disabling for CL=*ONE
                 auto send_request = [&] (bool has_data) {
                     if (has_data) {
-                        _proxy->get_stats().speculative_digest_reads++;
+                        _stats.speculative_digest_reads++;
                         return make_digest_requests(resolver, _targets.end() - 1, _targets.end(), timeout);
                     } else {
-                        _proxy->get_stats().speculative_data_reads++;
+                        _stats.speculative_data_reads++;
                         return make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout, true);
                     }
                 };
