@@ -1348,7 +1348,7 @@ schema::column_name_type(const column_definition& def) const {
 
 const column_definition&
 schema::regular_column_at(column_id id) const {
-    if (id > regular_columns_count()) {
+    if (id >= regular_columns_count()) {
         throw std::out_of_range(format("regular column id {:d} >= {:d}", id, regular_columns_count()));
     }
     return _raw._columns.at(column_offset(column_kind::regular_column) + id);
@@ -1364,7 +1364,7 @@ schema::clustering_column_at(column_id id) const {
 
 const column_definition&
 schema::static_column_at(column_id id) const {
-    if (id > static_columns_count()) {
+    if (id >= static_columns_count()) {
         throw std::out_of_range(format("static column id {:d} >= {:d}", id, static_columns_count()));
     }
     return _raw._columns.at(column_offset(column_kind::static_column) + id);
