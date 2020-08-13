@@ -239,6 +239,15 @@ void set_repair(http_context& ctx, routes& r) {
 
 }
 
+void unset_repair(http_context& ctx, routes& r) {
+    ss::repair_async.unset(r);
+    ss::get_active_repair_async.unset(r);
+    ss::repair_async_status.unset(r);
+    ss::repair_await_completion.unset(r);
+    ss::force_terminate_all_repair_sessions.unset(r);
+    ss::force_terminate_all_repair_sessions_new.unset(r);
+}
+
 void set_storage_service(http_context& ctx, routes& r) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {

@@ -1048,6 +1048,9 @@ int main(int ac, char** av) {
             });
             api::set_server_storage_service(ctx).get();
             api::set_server_repair(ctx).get();
+            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
+                api::unset_server_repair(ctx).get();
+            });
 
             gossiper.local().register_(ss.shared_from_this());
             auto stop_listening = defer_verbose_shutdown("storage service notifications", [&gossiper, &ss] {

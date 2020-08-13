@@ -117,6 +117,10 @@ future<> set_server_repair(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { set_repair(ctx, r); });
 }
 
+future<> unset_server_repair(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_repair(ctx, r); });
+}
+
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl) {
     return ctx.http_server.set_routes([&ctx, &snap_ctl] (routes& r) { set_snapshot(ctx, r, snap_ctl); });
 }
