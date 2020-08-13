@@ -131,7 +131,7 @@ static bool check_EQ_for_sets(const rjson::value& set1, const rjson::value& set2
         set1_raw.insert(&*it);
     }
     for (const auto& a : set2.GetArray()) {
-        if (set1_raw.count(&a) == 0) {
+        if (!set1_raw.contains(&a)) {
             return false;
         }
     }

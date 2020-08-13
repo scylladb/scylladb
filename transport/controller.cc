@@ -108,16 +108,16 @@ future<> controller::do_start_server() {
             cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
             cred->set_priority_string(db::config::default_tls_priority);
 
-            if (ceo.count("priority_string")) {
+            if (ceo.contains("priority_string")) {
                 cred->set_priority_string(ceo.at("priority_string"));
             }
-            if (ceo.count("require_client_auth") && ceo.at("require_client_auth") == "true") {
+            if (ceo.contains("require_client_auth") && ceo.at("require_client_auth") == "true") {
                 cred->set_client_auth(seastar::tls::client_auth::REQUIRE);
             }
 
             cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM).get();
 
-            if (ceo.count("truststore")) {
+            if (ceo.contains("truststore")) {
                 cred->set_x509_trust_file(ceo.at("truststore"), seastar::tls::x509_crt_format::PEM).get();
             }
 

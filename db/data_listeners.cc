@@ -40,7 +40,7 @@ void data_listeners::uninstall(data_listener* listener) {
 }
 
 bool data_listeners::exists(data_listener* listener) const {
-    return _listeners.count(listener) != 0;
+    return _listeners.contains(listener);
 }
 
 flat_mutation_reader data_listeners::on_read(const schema_ptr& s, const dht::partition_range& range,

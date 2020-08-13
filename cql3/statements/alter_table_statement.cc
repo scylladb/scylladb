@@ -182,7 +182,7 @@ void alter_table_statement::add_column(const schema& schema, const table& cf, sc
     }
 
     // Cannot re-add a dropped counter column. See #7831.
-    if (schema.is_counter() && schema.dropped_columns().count(column_name.text())) {
+    if (schema.is_counter() && schema.dropped_columns().contains(column_name.text())) {
         throw exceptions::invalid_request_exception(format("Cannot re-add previously dropped counter column {}", column_name));
     }
 

@@ -212,10 +212,10 @@ authentication_option_set password_authenticator::alterable_options() const {
 
 future<authenticated_user> password_authenticator::authenticate(
                 const credentials_map& credentials) const {
-    if (!credentials.count(USERNAME_KEY)) {
+    if (!credentials.contains(USERNAME_KEY)) {
         throw exceptions::authentication_exception(format("Required key '{}' is missing", USERNAME_KEY));
     }
-    if (!credentials.count(PASSWORD_KEY)) {
+    if (!credentials.contains(PASSWORD_KEY)) {
         throw exceptions::authentication_exception(format("Required key '{}' is missing", PASSWORD_KEY));
     }
 

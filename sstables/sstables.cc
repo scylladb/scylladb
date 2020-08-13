@@ -2610,7 +2610,7 @@ uint64_t sstable::bytes_on_disk() const {
 }
 
 const bool sstable::has_component(component_type f) const {
-    return _recognized_components.count(f);
+    return _recognized_components.contains(f);
 }
 
 future<> sstable::touch_temp_dir() {

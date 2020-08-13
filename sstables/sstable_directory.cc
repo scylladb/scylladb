@@ -295,7 +295,7 @@ sstable_directory::remove_input_sstables_from_reshaping(std::vector<sstables::sh
         auto old = std::exchange(_unshared_local_sstables, {});
 
         for (auto& sst : old) {
-            if (!exclude.count(sst)) {
+            if (!exclude.contains(sst)) {
                 _unshared_local_sstables.push_back(sst);
             }
         }

@@ -81,7 +81,7 @@ void secondary_index_manager::reload() {
     auto it = _indices.begin();
     while (it != _indices.end()) {
         auto index_name = it->first;
-        if (table_indices.count(index_name) == 0) {
+        if (!table_indices.contains(index_name)) {
             it = _indices.erase(it);
         } else {
             ++it;

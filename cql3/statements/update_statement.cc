@@ -327,7 +327,7 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
         if (!def) {
             throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
         }
-        if (column_ids.count(id->name())) {
+        if (column_ids.contains(id->name())) {
             throw exceptions::invalid_request_exception(format("Multiple definitions found for column {}", *id));
         }
         column_ids.emplace(id->name());

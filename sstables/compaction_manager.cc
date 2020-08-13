@@ -158,7 +158,7 @@ bool compaction_manager::can_register_weight(column_family* cf, int weight) cons
     // TODO: Maybe allow only *smaller* compactions to start? That can be done
     // by returning true only if weight is not in the set and is lower than any
     // entry in the set.
-    if (_weight_tracker.count(weight)) {
+    if (_weight_tracker.contains(weight)) {
         // If reached this point, it means that there is an ongoing compaction
         // with the weight of the compaction job.
         return false;
@@ -186,10 +186,10 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const c
 
     // Filter out sstables that are being compacted.
     for (auto& sst : cf.candidates_for_compaction()) {
-        if (_compacting_sstables.count(sst)) {
+        if (_compacting_sstables.contains(sst)) {
             continue;
         }
-        if (!cs.can_compact_partial_runs() && partial_run_identifiers.count(sst->run_identifier())) {
+        if (!cs.can_compact_partial_runs() && partial_run_identifiers.contains(sst->run_identifier())) {
             continue;
         }
         candidates.push_back(sst);

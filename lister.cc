@@ -18,7 +18,7 @@ lister::lister(file f, dir_entry_types type, walker_type walker, filter_type fil
 future<> lister::visit(directory_entry de) {
     return guarantee_type(std::move(de)).then([this] (directory_entry de) {
         // Hide all synthetic directories and hidden files if not requested to show them.
-        if ((!_expected_type.empty() && !_expected_type.count(*(de.type))) || (!_show_hidden && de.name[0] == '.')) {
+        if ((!_expected_type.empty() && !_expected_type.contains(*(de.type))) || (!_show_hidden && de.name[0] == '.')) {
             return make_ready_future<>();
         }
 

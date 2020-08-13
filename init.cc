@@ -120,7 +120,7 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
     //engine().at_exit([] { return netw::get_messaging_service().stop(); });
     // Init gossiper
     std::set<gms::inet_address> seeds;
-    if (seed_provider.parameters.count("seeds") > 0) {
+    if (seed_provider.parameters.contains("seeds")) {
         size_t begin = 0;
         size_t next = 0;
         sstring seeds_str = seed_provider.parameters.find("seeds")->second;
@@ -141,11 +141,11 @@ void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
     startlog.info("seeds={}, listen_address={}, broadcast_address={}",
             to_string(seeds), listen_address_in, broadcast_address);
-    if (broadcast_address != listen && seeds.count(listen)) {
+    if (broadcast_address != listen && seeds.contains(listen)) {
         startlog.error("Use broadcast_address instead of listen_address for seeds list");
         throw std::runtime_error("Use broadcast_address for seeds list");
     }
-    if ((!cfg.replace_address_first_boot().empty() || !cfg.replace_address().empty()) && seeds.count(broadcast_address)) {
+    if ((!cfg.replace_address_first_boot().empty() || !cfg.replace_address().empty()) && seeds.contains(broadcast_address)) {
         startlog.error("Bad configuration: replace-address and replace-address-first-boot are not allowed for seed nodes");
         throw bad_configuration_error();
     }

@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
         ;
 
     return app.run(argc, argv, [&app] {
-        if (app.configuration().count("trace")) {
+        if (app.configuration().contains("trace")) {
             testlog.set_level(seastar::log_level::trace);
         }
 

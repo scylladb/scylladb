@@ -241,7 +241,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
         return do_with(std::move(syn_msg), [this, from, g = this->shared_from_this()] (gossip_digest_syn& syn_msg) mutable {
             return repeat([this, from, g, &syn_msg] {
                 return do_send_ack_msg(from, std::move(syn_msg)).then([this, from, &syn_msg] () mutable {
-                    if (!_syn_handlers.count(from.addr)) {
+                    if (!_syn_handlers.contains(from.addr)) {
                         return stop_iteration::yes;
                     }
                     syn_msg_pending& p = _syn_handlers[from.addr];
@@ -260,7 +260,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
                         return stop_iteration::yes;
                     }
                 }).handle_exception([this, from] (std::exception_ptr ep) {
-                    if (_syn_handlers.count(from.addr)) {
+                    if (_syn_handlers.contains(from.addr)) {
                         syn_msg_pending& p = _syn_handlers[from.addr];
                         p.pending = false;
                         p.syn_msg = {};
@@ -345,7 +345,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
             return do_with(std::move(ack_msg_digest), [this, from, g] (utils::chunked_vector<gossip_digest>& ack_msg_digest) mutable {
                 return repeat([this, from, g, &ack_msg_digest] {
                     return do_send_ack2_msg(from, std::move(ack_msg_digest)).then([this, from, &ack_msg_digest] () mutable {
-                        if (!_ack_handlers.count(from.addr)) {
+                        if (!_ack_handlers.contains(from.addr)) {
                             return stop_iteration::yes;
                         }
                         ack_msg_pending& p = _ack_handlers[from.addr];
@@ -364,7 +364,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
                             return stop_iteration::yes;
                         }
                     }).handle_exception([this, from] (std::exception_ptr ep) {
-                        if (_ack_handlers.count(from.addr)) {
+                        if (_ack_handlers.contains(from.addr)) {
                             ack_msg_pending& p = _ack_handlers[from.addr];
                             p.pending = false;
                             p.ack_msg_digest = {};
@@ -572,7 +572,7 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
             if (ep == this->get_broadcast_address() && !this->is_in_shadow_round()) {
                 return make_ready_future<>();
             }
-            if (_just_removed_endpoints.count(ep)) {
+            if (_just_removed_endpoints.contains(ep)) {
                 logger.trace("Ignoring gossip for {} because it is quarantined", ep);
                 return make_ready_future<>();
             }
@@ -641,7 +641,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
         logger.warn("Fail to call on_remove callback: {}", ep);
     });
 
-    if(_seeds.count(endpoint)) {
+    if(_seeds.contains(endpoint)) {
         build_seeds_list();
         _seeds.erase(endpoint);
         logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
@@ -677,7 +677,7 @@ void gossiper::do_status_check() {
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
         if (is_gossip_only_member(endpoint)
-            && !_just_removed_endpoints.count(endpoint)
+            && !_just_removed_endpoints.contains(endpoint)
             && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
             remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
@@ -865,11 +865,11 @@ void gossiper::run() {
 
 void gossiper::check_seen_seeds() {
     auto seen = std::any_of(endpoint_state_map.begin(), endpoint_state_map.end(), [this] (auto& entry) {
-        if (_seeds.count(entry.first)) {
+        if (_seeds.contains(entry.first)) {
             return true;
         }
         auto* internal_ip = entry.second.get_application_state_ptr(application_state::INTERNAL_IP);
-        return internal_ip && _seeds.count(inet_address(internal_ip->value));
+        return internal_ip && _seeds.contains(inet_address(internal_ip->value));
     });
     logger.info("Known endpoints={}, current_seeds={}, seeds_from_config={}, seen_any_seed={}",
         boost::copy_range<std::list<inet_address>>(endpoint_state_map | boost::adaptors::map_keys),
@@ -881,7 +881,7 @@ void gossiper::check_seen_seeds() {
 }
 
 bool gossiper::is_seed(const gms::inet_address& endpoint) const {
-    return _seeds.count(endpoint);
+    return _seeds.contains(endpoint);
 }
 
 void gossiper::register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
@@ -1155,7 +1155,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
 }
 
 bool gossiper::is_known_endpoint(inet_address endpoint) {
-    return endpoint_state_map.count(endpoint);
+    return endpoint_state_map.contains(endpoint);
 }
 
 future<int> gossiper::get_current_generation_number(inet_address endpoint) {
@@ -1477,7 +1477,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
 void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps) {
     auto eps_old = get_endpoint_state_for_endpoint(ep);
     if (!is_dead_state(eps) && !_in_shadow_round) {
-        if (endpoint_state_map.count(ep))  {
+        if (endpoint_state_map.contains(ep))  {
             logger.debug("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
         } else {
             logger.debug("Node {} is now part of the cluster, status = {}", ep, get_gossip_status(eps));
@@ -2182,7 +2182,7 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
         sstring(versioned_value::STATUS_LEFT),
         sstring(versioned_value::REMOVED_TOKEN),
     };
-    allowed = allowed_statuses.count(status);
+    allowed = allowed_statuses.contains(status);
     logger.debug("is_safe_for_bootstrap: node={}, status={}, allowed_to_bootstrap={}", endpoint, status, allowed);
     return allowed;
 }
@@ -2325,7 +2325,7 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
         ss << "  " << app_state << ":" << versioned_val.version << ":" << versioned_val.value << "\n";
     }
     const auto& app_state_map = state.get_application_state_map();
-    if (app_state_map.count(application_state::TOKENS)) {
+    if (app_state_map.contains(application_state::TOKENS)) {
         ss << "  TOKENS:" << app_state_map.at(application_state::TOKENS).version << ":<hidden>\n";
     } else {
         ss << "  TOKENS: not present" << "\n";

@@ -278,17 +278,17 @@ int main(int argc, char** argv) {
             cfg.partitions = app.configuration()["partitions"].as<unsigned>();
             cfg.duration_in_seconds = app.configuration()["duration"].as<unsigned>();
             cfg.concurrency = app.configuration()["concurrency"].as<unsigned>();
-            cfg.query_single_key = app.configuration().count("query-single-key");
-            cfg.counters = app.configuration().count("counters");
-            cfg.flush_memtables = app.configuration().count("flush");
-            if (app.configuration().count("write")) {
+            cfg.query_single_key = app.configuration().contains("query-single-key");
+            cfg.counters = app.configuration().contains("counters");
+            cfg.flush_memtables = app.configuration().contains("flush");
+            if (app.configuration().contains("write")) {
                 cfg.mode = test_config::run_mode::write;
-            } else if (app.configuration().count("delete")) {
+            } else if (app.configuration().contains("delete")) {
                 cfg.mode = test_config::run_mode::del;
             } else {
                 cfg.mode = test_config::run_mode::read;
             };
-            if (app.configuration().count("operations-per-shard")) {
+            if (app.configuration().contains("operations-per-shard")) {
                 cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
             }
             auto results = do_test(env, cfg);
@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
             auto mad = results[results.size() / 2];
             std::cout << format("\nmedian {:.2f}\nmedian absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}\n", median, mad, max, min);
 
-            if (app.configuration().count("json-result")) {
+            if (app.configuration().contains("json-result")) {
                 write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, median, mad, max, min);
             }
           });

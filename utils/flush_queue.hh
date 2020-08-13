@@ -104,7 +104,7 @@ public:
         // already is in the map. If either condition is true we can
         // uphold the guarantee to enforce ordered "post" execution
         // and signalling of all larger elements.
-        if (!_map.empty() && !_map.count(rp) && rp < _map.rbegin()->first) {
+        if (!_map.empty() && !_map.contains(rp) && rp < _map.rbegin()->first) {
             throw std::invalid_argument(format("Attempting to insert key out of order: {}", rp));
         }
 
@@ -176,7 +176,7 @@ public:
         return _map.size();
     }
     bool has_operation(T rp) const {
-        return _map.count(rp) != 0;
+        return _map.contains(rp);
     }
     T highest_key() const {
         return _map.rbegin()->first;

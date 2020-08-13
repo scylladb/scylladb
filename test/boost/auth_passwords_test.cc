@@ -43,7 +43,7 @@ BOOST_AUTO_TEST_CASE(passwords_are_salted) {
 
     for (int i = 0; i < 10; ++i) {
         const sstring e = auth::passwords::hash(cleartext, rng_for_salt);
-        BOOST_REQUIRE_EQUAL(observed_passwords.count(e), 0);
+        BOOST_REQUIRE(!observed_passwords.contains(e));
         observed_passwords.insert(e);
     }
 }

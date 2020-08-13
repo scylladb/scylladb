@@ -174,11 +174,11 @@ void production_snitch_base::parse_property_file() {
         auto key = split_line[0]; trim(key);
         auto val = split_line[1]; trim(val);
 
-        if (val.empty() || !allowed_property_keys.count(key)) {
+        if (val.empty() || !allowed_property_keys.contains(key)) {
             throw_bad_format(line);
         }
 
-        if (_prop_values.count(key)) {
+        if (_prop_values.contains(key)) {
             throw_double_declaration(key);
         }
 

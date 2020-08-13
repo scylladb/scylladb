@@ -184,7 +184,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         }
         // We require, like Cassandra does, that the current host must also
         // be part of the repair
-        if (!dc_endpoints.count(utils::fb_utilities::get_broadcast_address())) {
+        if (!dc_endpoints.contains(utils::fb_utilities::get_broadcast_address())) {
             throw std::runtime_error("The current host must be part of the repair");
         }
         // The resulting list of nodes is the intersection of the nodes in the
@@ -192,7 +192,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         std::unordered_set<gms::inet_address> neighbor_set(ret.begin(), ret.end());
         ret.clear();
         for (const auto& endpoint : dc_endpoints) {
-            if (neighbor_set.count(endpoint)) {
+            if (neighbor_set.contains(endpoint)) {
                 ret.push_back(endpoint);
             }
         }
@@ -209,7 +209,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
             }
             if (endpoint == utils::fb_utilities::get_broadcast_address()) {
                 found_me = true;
-            } else if (neighbor_set.count(endpoint)) {
+            } else if (neighbor_set.contains(endpoint)) {
                 ret.push_back(endpoint);
                 // If same host is listed twice, don't add it again later
                 neighbor_set.erase(endpoint);
@@ -1141,7 +1141,7 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
             }
             ri._sub_ranges_nr++;
             if (ri.row_level_repair()) {
-                if (ri.dropped_tables.count(cf)) {
+                if (ri.dropped_tables.contains(cf)) {
                     return make_ready_future<>();
                 }
                 return repair_cf_range_row_level(ri, cf, table_id, range, neighbors).handle_exception_type([&ri, cf] (no_such_column_family&) mutable {
@@ -1811,7 +1811,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_me
                             // that it contains only the node that will lose
                             // the ownership of the range.
                             auto nodes = boost::copy_range<std::vector<gms::inet_address>>(old_nodes |
-                                    boost::adaptors::filtered([&] (const gms::inet_address& node) { return !new_nodes.count(node); }));
+                                    boost::adaptors::filtered([&] (const gms::inet_address& node) { return !new_nodes.contains(node); }));
                             if (nodes.size() != 1) {
                                 throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, expected 1 node losing range but found more nodes={}",
                                         keyspace_name, desired_range, nodes));

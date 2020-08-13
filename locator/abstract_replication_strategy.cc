@@ -66,7 +66,7 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
     if (expected) {
         for (auto&& item : config_options) {
             sstring key = item.first;
-            if (!expected->count(key)) {
+            if (!expected->contains(key)) {
                  throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} passed to {} for keyspace {}", key, strategy_name, ks_name));
             }
         }
@@ -231,7 +231,7 @@ abstract_replication_strategy::get_primary_ranges_within_dc(inet_address ep) {
         // owner of this range, here we check if ep is the first just
         // among nodes which belong to the local dc of ep.
         for (auto& e : eps) {
-            if (local_dc_nodes.count(e)) {
+            if (local_dc_nodes.contains(e)) {
                 if (e == ep) {
                     insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
                 }

@@ -268,7 +268,7 @@ void cql_server::event_notifier::on_leave_cluster(const gms::inet_address& endpo
 
 void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
 {
-    bool was_up = _last_status_change.count(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::UP;
+    bool was_up = _last_status_change.contains(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::UP;
     _last_status_change[endpoint] = event::status_change::status_type::UP;
     if (!was_up) {
         for (auto&& conn : _status_change_listeners) {
@@ -282,7 +282,7 @@ void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
 
 void cql_server::event_notifier::on_down(const gms::inet_address& endpoint)
 {
-    bool was_down = _last_status_change.count(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::DOWN;
+    bool was_down = _last_status_change.contains(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::DOWN;
     _last_status_change[endpoint] = event::status_change::status_type::DOWN;
     if (!was_down) {
         for (auto&& conn : _status_change_listeners) {

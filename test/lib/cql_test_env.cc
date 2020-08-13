@@ -91,7 +91,7 @@ static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features,
             sharded<abort_source>& abort_sources, sstring cluster_name = "Test Cluster") {
         // Init gossiper
         std::set<gms::inet_address> seeds;
-        if (seed_provider.parameters.count("seeds") > 0) {
+        if (seed_provider.parameters.contains("seeds")) {
             size_t begin = 0;
             size_t next = 0;
             sstring seeds_str = seed_provider.parameters.find("seeds")->second;

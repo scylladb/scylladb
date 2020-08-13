@@ -1230,7 +1230,7 @@ private:
         return do_with(std::list<repair_row>(), std::move(set_diff),
                 [this] (std::list<repair_row>& rows, repair_hash_set& set_diff) {
             return do_for_each(_working_row_buf, [this, &set_diff, &rows] (const repair_row& r) {
-                if (set_diff.count(r.hash()) > 0) {
+                if (set_diff.contains(r.hash())) {
                     rows.push_back(r);
                 }
             }).then([&rows] {

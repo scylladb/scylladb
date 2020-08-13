@@ -1131,7 +1131,7 @@ void token_metadata_impl::update_host_id(const UUID& host_id, inet_address endpo
 }
 
 utils::UUID token_metadata_impl::get_host_id(inet_address endpoint) const {
-    if (!_endpoint_to_host_id_map.count(endpoint)) {
+    if (!_endpoint_to_host_id_map.contains(endpoint)) {
         throw std::runtime_error(format("host_id for endpoint {} is not found", endpoint));
     }
     return _endpoint_to_host_id_map.at(endpoint);
@@ -1232,11 +1232,11 @@ void token_metadata_impl::remove_bootstrap_tokens(std::unordered_set<token> toke
 }
 
 bool token_metadata_impl::is_leaving(inet_address endpoint) {
-    return _leaving_endpoints.count(endpoint);
+    return _leaving_endpoints.contains(endpoint);
 }
 
 bool token_metadata_impl::is_being_replaced(inet_address endpoint) {
-    return _replacing_endpoints.count(endpoint);
+    return _replacing_endpoints.contains(endpoint);
 }
 
 bool token_metadata_impl::is_any_node_being_replaced() {
@@ -1546,7 +1546,7 @@ void token_metadata_impl::add_replacing_endpoint(inet_address existing_node, ine
 }
 
 void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
-    if (_replacing_endpoints.count(existing_node)) {
+    if (_replacing_endpoints.contains(existing_node)) {
         tlogger.info("Removed node {} as pending replacing endpoint which replaces existing node {}",
                 _replacing_endpoints[existing_node], existing_node);
     }
@@ -1989,7 +1989,7 @@ void topology::add_endpoint(const inet_address& ep)
 }
 
 void topology::update_endpoint(inet_address ep) {
-    if (!_current_locations.count(ep) || !locator::i_endpoint_snitch::snitch_instance().local_is_initialized()) {
+    if (!_current_locations.contains(ep) || !locator::i_endpoint_snitch::snitch_instance().local_is_initialized()) {
         return;
     }
 

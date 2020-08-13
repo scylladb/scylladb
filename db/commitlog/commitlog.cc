@@ -535,7 +535,7 @@ public:
     }
 
     bool is_schema_version_known(schema_ptr s) {
-        return _known_schema_versions.count(s->version());
+        return _known_schema_versions.contains(s->version());
     }
     void add_schema_version(schema_ptr s) {
         _known_schema_versions.emplace(s->version());
@@ -1582,7 +1582,7 @@ future<> db::commitlog::segment_manager::shutdown() {
 }
 
 void db::commitlog::segment_manager::add_file_to_delete(sstring filename, descriptor d) {
-    assert(!_files_to_delete.count(filename));
+    assert(!_files_to_delete.contains(filename));
     _files_to_delete.emplace(std::move(filename), std::move(d));
 }
 

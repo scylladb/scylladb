@@ -146,7 +146,7 @@ static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     sstring file;
 
-    if (opts.count("options-file") > 0) {
+    if (opts.contains("options-file")) {
         file = opts["options-file"].as<sstring>();
     } else {
         file = db::config::get_conf_sub("scylla.yaml").string();
@@ -505,7 +505,7 @@ int main(int ac, char** av) {
 
         const std::unordered_set<sstring> ignored_options = { "auto-adjust-flush-quota", "background-writer-scheduling-quota" };
         for (auto& opt: ignored_options) {
-            if (opts.count(opt)) {
+            if (opts.contains(opt)) {
                 fmt::print("{} option ignored (deprecated)\n", opt);
             }
         }
@@ -513,7 +513,7 @@ int main(int ac, char** av) {
         // Check developer mode before even reading the config file, because we may not be
         // able to read it if we need to disable strict dma mode.
         // We'll redo this later and apply it to all reactors.
-        if (opts.count("developer-mode")) {
+        if (opts.contains("developer-mode")) {
             engine().set_strict_dma(false);
         }
 
@@ -670,7 +670,7 @@ int main(int ac, char** av) {
             using namespace locator;
             // Re-apply strict-dma after we've read the config file, this time
             // to all reactors
-            if (opts.count("developer-mode")) {
+            if (opts.contains("developer-mode")) {
                 smp::invoke_on_all([] { engine().set_strict_dma(false); }).get();
             }
 
@@ -769,7 +769,7 @@ int main(int ac, char** av) {
                 }).get();
             });
             api::set_server_config(ctx).get();
-            verify_seastar_io_scheduler(opts.count("max-io-requests"), opts.count("io-properties") || opts.count("io-properties-file"),
+            verify_seastar_io_scheduler(opts.contains("max-io-requests"), opts.contains("io-properties") || opts.contains("io-properties-file"),
                                         cfg->developer_mode()).get();
 
             dirs.init(*cfg, bool(hinted_handoff_enabled)).get();

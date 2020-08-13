@@ -112,7 +112,7 @@ private:
 
 public:
     static std::optional<params> parse_params(boost::program_options::variables_map& app_config) {
-        if (!app_config.count("collect-stats")) {
+        if (!app_config.contains("collect-stats")) {
             return {};
         }
         return params{
@@ -224,7 +224,7 @@ int main(int argc, char** argv) {
 
         auto& db_cfg = *test_cfg.db_config;
 
-        db_cfg.enable_cache(app.configuration().count("enable-cache"));
+        db_cfg.enable_cache(app.configuration().contains("enable-cache"));
         db_cfg.enable_commitlog(false);
         db_cfg.virtual_dirty_soft_limit(1.0);
 
@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
         }
 
         return do_with_cql_env_thread([] (cql_test_env& env) {
-            bool with_compression = app.configuration().count("with-compression");
+            bool with_compression = app.configuration().contains("with-compression");
             auto compressor = with_compression ? "LZ4Compressor" : "";
             uint64_t sstable_size = app.configuration()["sstable-size"].as<uint64_t>();
             uint64_t sstables = app.configuration()["sstables"].as<uint64_t>();

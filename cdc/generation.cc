@@ -198,7 +198,7 @@ class topology_description_generator final {
     // Fetch sharding parameters for a node that owns vnode ending with this.end
     // Returns <shard_count, ignore_msb> pair.
     std::pair<size_t, uint8_t> get_sharding_info(dht::token end) const {
-        if (_bootstrap_tokens.count(end) > 0) {
+        if (_bootstrap_tokens.contains(end)) {
             return {smp::count, _cfg.murmur3_partitioner_ignore_msb_bits()};
         } else {
             auto endpoint = _token_metadata.get_endpoint(end);

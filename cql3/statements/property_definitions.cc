@@ -66,10 +66,10 @@ void property_definitions::add_property(const sstring& name, const std::map<sstr
 void property_definitions::validate(const std::set<sstring>& keywords, const std::set<sstring>& exts, const std::set<sstring>& obsolete) const {
     for (auto&& kv : _properties) {
         auto&& name = kv.first;
-        if (keywords.count(name) || exts.count(name)) {
+        if (keywords.contains(name) || exts.contains(name)) {
             continue;
         }
-        if (obsolete.count(name)) {
+        if (obsolete.contains(name)) {
 #if 0
             logger.warn("Ignoring obsolete property {}", name);
 #endif

@@ -868,7 +868,7 @@ future<> storage_service::check_and_repair_cdc_streams() {
                 gen_ends.insert(entry.token_range_end);
             }
             for (const auto& metadata_token : _token_metadata.sorted_tokens()) {
-                if (!gen_ends.count(metadata_token)) {
+                if (!gen_ends.contains(metadata_token)) {
                     cdc_log.warn("CDC generation {} missing token {}. Regenerating.", latest, metadata_token);
                     should_regenerate = true;
                     break;
@@ -1190,7 +1190,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
                     ep_to_token_copy.erase(it);
                 }
             }
-            if (ep_to_token_copy.count(*current_owner) < 1) {
+            if (!ep_to_token_copy.contains(*current_owner)) {
                 slogger.info("handle_state_normal: endpoints_to_remove endpoint={}", *current_owner);
                 endpoints_to_remove.insert(*current_owner);
             }
@@ -1662,7 +1662,7 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
                     db::system_keyspace::remove_endpoint(ep).get();
                 } else {
                     _token_metadata.update_normal_tokens(tokens, ep);
-                    if (loaded_host_ids.count(ep)) {
+                    if (loaded_host_ids.contains(ep)) {
                         _token_metadata.update_host_id(loaded_host_ids.at(ep), ep);
                     }
                     loaded_endpoints.push_back(ep);
@@ -1814,7 +1814,7 @@ storage_service::prepare_replacement_info(const std::unordered_map<gms::inet_add
     // if (!MessagingService.instance().isListening())
     //     MessagingService.instance().listen(FBUtilities.getLocalAddress());
     auto seeds = _gossiper.get_seeds();
-    if (seeds.size() == 1 && seeds.count(replace_address)) {
+    if (seeds.size() == 1 && seeds.contains(replace_address)) {
         throw std::runtime_error(format("Cannot replace_address {} because no seed node is up", replace_address));
     }
 
@@ -2177,7 +2177,7 @@ future<> storage_service::removenode(sstring host_id_string) {
                 throw std::runtime_error("Cannot remove self");
             }
 
-            if (ss._gossiper.get_live_members().count(endpoint)) {
+            if (ss._gossiper.get_live_members().contains(endpoint)) {
                 throw std::runtime_error(format("Node {} is alive and owns this ID. Use decommission command to remove it from the ring", endpoint));
             }
 

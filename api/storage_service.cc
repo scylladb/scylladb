@@ -955,7 +955,7 @@ void set_storage_service(http_context& ctx, routes& r) {
                                     e.value = p.second;
                                     nm.attributes.push(std::move(e));
                                 }
-                                if (!cp->options().count(compression_parameters::SSTABLE_COMPRESSION)) {
+                                if (!cp->options().contains(compression_parameters::SSTABLE_COMPRESSION)) {
                                     ss::mapper e;
                                     e.key = compression_parameters::SSTABLE_COMPRESSION;
                                     e.value = cp->name();

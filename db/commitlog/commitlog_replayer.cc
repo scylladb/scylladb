@@ -191,7 +191,7 @@ future<> db::commitlog_replayer::impl::init() {
         // have data for it, assume we must set global pos to zero.
         for (auto&p : _db.local().get_column_families()) {
             for (auto&p1 : _rpm) { // for each shard
-                if (!p1.second.count(p.first)) {
+                if (!p1.second.contains(p.first)) {
                     _min_pos[p1.first] = replay_position();
                 }
             }

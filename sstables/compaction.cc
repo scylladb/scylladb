@@ -117,7 +117,7 @@ static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, 
     auto timestamp = api::max_timestamp;
     std::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk).sstables, cf.compacted_undeleted_sstables())) {
-        if (compacting_set.count(sst)) {
+        if (compacting_set.contains(sst)) {
             continue;
         }
         if (!hk) {
@@ -558,7 +558,7 @@ private:
 
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
-            if (tombstone_expiration_enabled() && fully_expired.count(sst)) {
+            if (tombstone_expiration_enabled() && fully_expired.contains(sst)) {
                 continue;
             }
 
@@ -1003,7 +1003,7 @@ private:
             for (auto& sst : pending_replacement.removed) {
                 // Set may not contain sstable to be removed because this compaction may have started
                 // before the creation of that sstable.
-                if (!_sstable_set->all()->count(sst)) {
+                if (!_sstable_set->all()->contains(sst)) {
                     continue;
                 }
                 _sstable_set->erase(sst);
@@ -1487,7 +1487,7 @@ get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared
             return false;
         }
         return boost::algorithm::any_of(candidate->get_metadata_collector().ancestors(), [&compacted_undeleted_gens] (auto gen) {
-            return compacted_undeleted_gens.count(gen);
+            return compacted_undeleted_gens.contains(gen);
         });
     };
 

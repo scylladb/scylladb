@@ -1217,7 +1217,7 @@ template <typename T> static std::vector<user_type> create_types(keyspace_metada
     // recreate them.
     for (const auto& p : ks.user_types().get_all_types()) {
         const user_type& t = p.second;
-        if (names.count(t->_name) != 0) {
+        if (names.contains(t->_name)) {
             continue;
         }
         for (const auto& name : names) {
@@ -2173,13 +2173,13 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
                 builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
             }
         }
-        if (map.count("max_threshold")) {
+        if (map.contains("max_threshold")) {
             builder.set_max_compaction_threshold(std::stoi(map["max_threshold"]));
         }
-        if (map.count("min_threshold")) {
+        if (map.contains("min_threshold")) {
             builder.set_min_compaction_threshold(std::stoi(map["min_threshold"]));
         }
-        if (map.count("enabled")) {
+        if (map.contains("enabled")) {
             builder.set_compaction_enabled(boost::algorithm::iequals(map["enabled"], "true"));
         }
 
@@ -2922,7 +2922,7 @@ future<> maybe_update_legacy_secondary_index_mv_schema(service::migration_manage
     // If the first clustering key part of a view is a column with name not found in base schema,
     // it implies it might be backing an index created before computed columns were introduced,
     // and as such it must be recreated properly.
-    if (base_schema->columns_by_name().count(first_view_ck.name()) == 0) {
+    if (!base_schema->columns_by_name().contains(first_view_ck.name())) {
         schema_builder builder{schema_ptr(v)};
         builder.mark_column_computed(first_view_ck.name(), std::make_unique<token_column_computation>());
         return mm.announce_view_update(view_ptr(builder.build()), true);

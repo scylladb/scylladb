@@ -331,7 +331,7 @@ rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
         set1_raw.insert(rjson::copy(*it));
     }
     for (const auto& a : set2->GetArray()) {
-        if (set1_raw.count(a) == 0) {
+        if (!set1_raw.contains(a)) {
             rjson::push_back(sum, rjson::copy(a));
         }
     }

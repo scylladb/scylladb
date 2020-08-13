@@ -767,7 +767,7 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
     , _stcs_options(options)
     , _backlog_tracker(std::make_unique<time_window_backlog_tracker>(_options))
 {
-    if (!options.count(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.count(TOMBSTONE_THRESHOLD_OPTION)) {
+    if (!options.contains(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.contains(TOMBSTONE_THRESHOLD_OPTION)) {
         _disable_tombstone_compaction = true;
         clogger.debug("Disabling tombstone compactions for TWCS");
     } else {
@@ -906,7 +906,7 @@ date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<
     // - with time series workloads, it's usually better to wait for whole sstable to be expired rather than
     // compacting a single sstable when it's more than 20% (default value) expired.
     // For more details, see CASSANDRA-9234
-    if (!options.count(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.count(TOMBSTONE_THRESHOLD_OPTION)) {
+    if (!options.contains(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.contains(TOMBSTONE_THRESHOLD_OPTION)) {
         _disable_tombstone_compaction = true;
         date_tiered_manifest::logger.debug("Disabling tombstone compactions for DTCS");
     } else {

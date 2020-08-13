@@ -135,7 +135,7 @@ private:
         unsigned id;
         do {
             id = id_dist(engine);
-        } while (used_ids.count(id));
+        } while (used_ids.contains(id));
 
         used_ids.insert(id);
         return id;

@@ -89,7 +89,7 @@ std::vector<column_definition> create_table_statement::get_columns() const
     std::vector<column_definition> column_defs;
     for (auto&& col : _columns) {
         column_kind kind = column_kind::regular_column;
-        if (_static_columns.count(col.first)) {
+        if (_static_columns.contains(col.first)) {
             kind = column_kind::static_column;
         }
         column_defs.emplace_back(col.first->name(), col.second, kind);
@@ -257,7 +257,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         if (t->references_duration()) {
             throw exceptions::invalid_request_exception(format("duration type is not supported for PRIMARY KEY part {}", alias->text()));
         }
-        if (_static_columns.count(alias) > 0) {
+        if (_static_columns.contains(alias)) {
             throw exceptions::invalid_request_exception(format("Static column {} cannot be part of the PRIMARY KEY", alias->text()));
         }
         key_types.emplace_back(t);
@@ -284,7 +284,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                 throw exceptions::invalid_request_exception("Non-frozen collections and UDTs are not supported with COMPACT STORAGE");
             }
             auto alias = _column_aliases[0];
-            if (_static_columns.count(alias) > 0) {
+            if (_static_columns.contains(alias)) {
                 throw exceptions::invalid_request_exception(format("Static column {} cannot be part of the PRIMARY KEY", alias->text()));
             }
             stmt->_column_aliases.emplace_back(alias->name());
@@ -307,7 +307,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                 if (type->references_duration()) {
                     throw exceptions::invalid_request_exception(format("duration type is not supported for PRIMARY KEY part {}", t->text()));
                 }
-                if (_static_columns.count(t) > 0) {
+                if (_static_columns.contains(t)) {
                     throw exceptions::invalid_request_exception(format("Static column {} cannot be part of the PRIMARY KEY", t->text()));
                 }
                 types.emplace_back(type);

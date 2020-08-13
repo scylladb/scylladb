@@ -117,7 +117,7 @@ void user_types::literal::validate_assignable_to(database& db, const sstring& ke
     auto ut = static_pointer_cast<const user_type_impl>(receiver.type);
     for (size_t i = 0; i < ut->size(); i++) {
         column_identifier field(to_bytes(ut->field_name(i)), utf8_type);
-        if (_entries.count(field) == 0) {
+        if (!_entries.contains(field)) {
             continue;
         }
         const shared_ptr<term::raw>& value = _entries.at(field);

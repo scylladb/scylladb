@@ -104,7 +104,7 @@ void ks_prop_defs::validate() {
     property_definitions::validate(keywords);
 
     auto replication_options = get_replication_options();
-    if (replication_options.count(REPLICATION_STRATEGY_CLASS_KEY)) {
+    if (replication_options.contains(REPLICATION_STRATEGY_CLASS_KEY)) {
         _strategy_class = replication_options[REPLICATION_STRATEGY_CLASS_KEY];
     }
 }

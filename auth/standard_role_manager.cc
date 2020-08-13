@@ -421,7 +421,7 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
         return this->query_granted(
                 grantee_name,
                 recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
-            if (roles.count(sstring(role_name)) != 0) {
+            if (roles.contains(sstring(role_name))) {
                 throw role_already_included(grantee_name, role_name);
             }
 
@@ -433,7 +433,7 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
         return this->query_granted(
                 role_name,
                 recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
-            if (roles.count(sstring(grantee_name)) != 0) {
+            if (roles.contains(sstring(grantee_name))) {
                 throw role_already_included(role_name, grantee_name);
             }
 
@@ -456,7 +456,7 @@ standard_role_manager::revoke(std::string_view revokee_name, std::string_view ro
         return this->query_granted(
                 revokee_name,
                 recursive_role_query::no).then([revokee_name, role_name](role_set roles) {
-            if (roles.count(sstring(role_name)) == 0) {
+            if (!roles.contains(sstring(role_name))) {
                 throw revoke_ungranted_role(revokee_name, role_name);
             }
 

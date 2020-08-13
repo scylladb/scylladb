@@ -372,16 +372,16 @@ bool is_enforcing(const service& ser)  {
 }
 
 bool is_protected(const service& ser, const resource& r) noexcept {
-    return ser.underlying_role_manager().protected_resources().count(r)
-            || ser.underlying_authenticator().protected_resources().count(r)
-            || ser.underlying_authorizer().protected_resources().count(r);
+    return ser.underlying_role_manager().protected_resources().contains(r)
+            || ser.underlying_authenticator().protected_resources().contains(r)
+            || ser.underlying_authorizer().protected_resources().contains(r);
 }
 
 static void validate_authentication_options_are_supported(
         const authentication_options& options,
         const authentication_option_set& supported) {
     const auto check = [&supported](authentication_option k) {
-        if (supported.count(k) == 0) {
+        if (!supported.contains(k)) {
             throw unsupported_authentication_option(k);
         }
     };
@@ -461,7 +461,7 @@ future<bool> has_role(const service& ser, std::string_view grantee, std::string_
     return when_all_succeed(
             validate_role_exists(ser, name),
             ser.get_roles(grantee)).then_unpack([name](role_set all_roles) {
-        return make_ready_future<bool>(all_roles.count(sstring(name)) != 0);
+        return make_ready_future<bool>(all_roles.contains(sstring(name)));
     });
 }
 future<bool> has_role(const service& ser, const authenticated_user& u, std::string_view name) {
@@ -519,7 +519,7 @@ future<std::vector<permission_details>> list_filtered_permissions(
                     : auth::resource_set{r};
 
             std::erase_if(all_details, [&resources](const permission_details& pd) {
-                return resources.count(pd.resource) == 0;
+                return !resources.contains(pd.resource);
             });
         }
 
@@ -548,7 +548,7 @@ future<std::vector<permission_details>> list_filtered_permissions(
         return do_with(std::move(all_details), [&ser, role_name](auto& all_details) {
             return ser.get_roles(*role_name).then([&all_details](role_set all_roles) {
                 std::erase_if(all_details, [&all_roles](const permission_details& pd) {
-                    return all_roles.count(pd.role_name) == 0;
+                    return !all_roles.contains(pd.role_name);
                 });
 
                 return make_ready_future<std::vector<permission_details>>(std::move(all_details));

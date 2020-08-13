@@ -150,7 +150,7 @@ schema_ptr zsets_schema(sstring ks_name) {
 
 future<> create_keyspace_if_not_exists_impl(db::config& config, int default_replication_factor) {
     auto keyspace_replication_strategy_options = config.redis_keyspace_replication_strategy_options();
-    if (keyspace_replication_strategy_options.count("class") == 0) {
+    if (!keyspace_replication_strategy_options.contains("class")) {
         keyspace_replication_strategy_options["class"] = "SimpleStrategy";
         keyspace_replication_strategy_options["replication_factor"] = sprint("%d", default_replication_factor);
     }

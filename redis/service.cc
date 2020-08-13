@@ -77,16 +77,16 @@ future<> redis_service::listen(distributed<auth::service>& auth_service, db::con
                 cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
                 cred->set_priority_string(db::config::default_tls_priority);
 
-                if (ceo.count("priority_string")) {
+                if (ceo.contains("priority_string")) {
                     cred->set_priority_string(ceo.at("priority_string"));
                 }
-                if (ceo.count("require_client_auth") && ceo.at("require_client_auth") == "true") {
+                if (ceo.contains("require_client_auth") && ceo.at("require_client_auth") == "true") {
                     cred->set_client_auth(seastar::tls::client_auth::REQUIRE);
                 }
 
                 f = cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM);
 
-                if (ceo.count("truststore")) {
+                if (ceo.contains("truststore")) {
                     f = f.then([cred, f = ceo.at("truststore")] { return cred->set_x509_trust_file(f, seastar::tls::x509_crt_format::PEM); });
                 }
 

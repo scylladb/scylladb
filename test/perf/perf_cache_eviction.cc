@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
         ;
 
     return app.run(argc, argv, [&app] {
-        if (app.configuration().count("trace")) {
+        if (app.configuration().contains("trace")) {
             testlog.set_level(seastar::log_level::trace);
         }
 
@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
         cfg.enable_cache(true);
 
         return do_with_cql_env_thread([&app] (cql_test_env& env) {
-            auto reads_enabled = !app.configuration().count("no-reads");
+            auto reads_enabled = !app.configuration().contains("no-reads");
             auto seconds = app.configuration()["seconds"].as<unsigned>();
 
             engine().at_exit([] {

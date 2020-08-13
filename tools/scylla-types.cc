@@ -222,7 +222,7 @@ $ scylla_types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819
         const action_handler& handler = [&app] () -> const action_handler& {
             std::vector<const action_handler*> found_handlers;
             for (const auto& ah : action_handlers) {
-                if (app.configuration().count(ah.name())) {
+                if (app.configuration().contains(ah.name())) {
                     found_handlers.push_back(&ah);
                 }
             }
@@ -239,15 +239,15 @@ $ scylla_types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819
             throw std::invalid_argument(fmt::format("error: need exactly one action, cannot specify more then one of {}", all_handler_names));
         }();
 
-        if (!app.configuration().count("type")) {
+        if (!app.configuration().contains("type")) {
             throw std::invalid_argument("error: missing required option '--type'");
         }
         type_variant type = [&app] () -> type_variant {
             auto types = boost::copy_range<std::vector<data_type>>(app.configuration()["type"].as<std::vector<sstring>>()
                     | boost::adaptors::transformed([] (const sstring_view type_name) { return db::marshal::type_parser::parse(type_name); }));
-            if (app.configuration().count("prefix-compound")) {
+            if (app.configuration().contains("prefix-compound")) {
                 return compound_type<allow_prefixes::yes>(std::move(types));
-            } else if (app.configuration().count("full-compound")) {
+            } else if (app.configuration().contains("full-compound")) {
                 return compound_type<allow_prefixes::no>(std::move(types));
             } else { // non-compound type
                 if (types.size() != 1) {
@@ -257,7 +257,7 @@ $ scylla_types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819
             }
         }();
 
-        if (!app.configuration().count("value")) {
+        if (!app.configuration().contains("value")) {
             throw std::invalid_argument("error: no values specified");
         }
         auto values = boost::copy_range<std::vector<bytes>>(

@@ -178,7 +178,7 @@ int main(int ac, char ** av) {
         auto config = app.configuration();
         uint16_t api_port = config["api-port"].as<uint16_t>();
         bool stay_alive = config["stay-alive"].as<bool>();
-        if (config.count("server")) {
+        if (config.contains("server")) {
             api_port++;
         }
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
@@ -192,7 +192,7 @@ int main(int ac, char ** av) {
                 return testers->invoke_on_all(&tester::init_handler);
             }).then([testers, config, stay_alive] {
                 auto t = &testers->local();
-                if (!config.count("server")) {
+                if (!config.contains("server")) {
                     return make_ready_future<>();
                 }
                 auto ip = config["server"].as<std::string>();

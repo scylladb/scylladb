@@ -1092,15 +1092,15 @@ void clear_cache() {
 }
 
 void on_test_group() {
-    if (!app.configuration().count("keep-cache-across-test-groups")
-        && !app.configuration().count("keep-cache-across-test-cases")) {
+    if (!app.configuration().contains("keep-cache-across-test-groups")
+        && !app.configuration().contains("keep-cache-across-test-cases")) {
         clear_cache();
     }
 };
 
 void on_test_case() {
     new_test_case = true;
-    if (!app.configuration().count("keep-cache-across-test-cases")) {
+    if (!app.configuration().contains("keep-cache-across-test-cases")) {
         clear_cache();
     }
     if (cancel) {
@@ -1783,7 +1783,7 @@ int main(int argc, char** argv) {
         auto db_cfg_ptr = make_shared<db::config>();
         auto& db_cfg = *db_cfg_ptr;
 
-        if (app.configuration().count("list-tests")) {
+        if (app.configuration().contains("list-tests")) {
             std::cout << "Test groups:\n";
             for (auto&& tc : test_groups) {
                 std::cout << "\tname: " << tc.name << "\n"
@@ -1795,7 +1795,7 @@ int main(int argc, char** argv) {
             return make_ready_future<int>(0);
         }
 
-        if (app.configuration().count("list-datasets")) {
+        if (app.configuration().contains("list-datasets")) {
             std::cout << "Datasets:\n";
             for (auto&& e : datasets) {
                 std::cout << "\tname: " << e.first << "\n"
@@ -1809,7 +1809,7 @@ int main(int argc, char** argv) {
 
         output_dir = app.configuration()["output-directory"].as<sstring>();
 
-        db_cfg.enable_cache(app.configuration().count("enable-cache"));
+        db_cfg.enable_cache(app.configuration().contains("enable-cache"));
         db_cfg.enable_commitlog(false);
         db_cfg.data_file_directories({datadir}, db::config::config_source::CommandLine);
         db_cfg.virtual_dirty_soft_limit(1.0); // prevent background memtable flushes.
@@ -1832,10 +1832,10 @@ int main(int argc, char** argv) {
 
         test_case_duration = app.configuration()["test-case-duration"].as<double>();
 
-        if (!app.configuration().count("verbose")) {
+        if (!app.configuration().contains("verbose")) {
             logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
         }
-        if (app.configuration().count("trace")) {
+        if (app.configuration().contains("trace")) {
             logging::logger_registry().set_logger_level("sstable", seastar::log_level::trace);
         }
 
@@ -1856,7 +1856,7 @@ int main(int argc, char** argv) {
                 cql_env = &env;
                 sstring name = app.configuration()["name"].as<std::string>();
 
-                dump_all_results = app.configuration().count("dump-all-results");
+                dump_all_results = app.configuration().contains("dump-all-results");
                 output_mgr = std::make_unique<output_manager>(app.configuration()["output-format"].as<sstring>());
 
                 auto enabled_dataset_names = app.configuration()["datasets"].as<std::vector<std::string>>();
@@ -1868,11 +1868,11 @@ int main(int argc, char** argv) {
                     return datasets[name].get();
                 }));
 
-                if (app.configuration().count("populate")) {
+                if (app.configuration().contains("populate")) {
                     int n_rows = app.configuration()["rows"].as<int>();
                     int value_size = app.configuration()["value-size"].as<int>();
                     auto flush_threshold = app.configuration()["flush-threshold"].as<size_t>();
-                    bool with_compression = app.configuration().count("with-compression");
+                    bool with_compression = app.configuration().contains("with-compression");
                     auto compressor = with_compression ? "LZ4Compressor" : "";
                     table_config cfg{name, n_rows, value_size, compressor};
                     populate(enabled_datasets, env, cfg, flush_threshold);
@@ -1884,7 +1884,7 @@ int main(int argc, char** argv) {
                     database& db = env.local_db();
 
                     cfg = read_config(env, name);
-                    cache_enabled = app.configuration().count("enable-cache");
+                    cache_enabled = app.configuration().contains("enable-cache");
                     new_test_case = false;
 
                     std::cout << "Config: rows: " << cfg.n_rows << ", value size: " << cfg.value_size << "\n";
@@ -1900,7 +1900,7 @@ int main(int argc, char** argv) {
                             app.configuration()["run-tests"].as<std::vector<std::string>>()
                     );
                     auto enabled_test_groups = test_groups | boost::adaptors::filtered([&] (auto&& tc) {
-                        return requested_test_groups.count(tc.name) != 0;
+                        return requested_test_groups.contains(tc.name);
                     });
 
                     auto compaction_guard = make_compaction_disabling_guard(boost::copy_range<std::vector<table*>>(

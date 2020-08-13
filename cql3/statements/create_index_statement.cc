@@ -165,7 +165,7 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
         }
     }
 
-    if (db.existing_index_names(keyspace()).count(_index_name) > 0) {
+    if (db.existing_index_names(keyspace()).contains(_index_name)) {
         if (_if_not_exists) {
             return;
         } else {
@@ -263,7 +263,7 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     }
     std::unordered_set<sstring> columns;
     for (auto& target : targets) {
-        if (columns.count(target->as_string()) > 0) {
+        if (columns.contains(target->as_string())) {
             throw exceptions::invalid_request_exception(format("Duplicate column {} in index target list", target->as_string()));
         }
         columns.emplace(target->as_string());

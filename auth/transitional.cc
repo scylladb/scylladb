@@ -101,7 +101,7 @@ public:
     virtual future<authenticated_user> authenticate(const credentials_map& credentials) const override {
         auto i = credentials.find(authenticator::USERNAME_KEY);
         if ((i == credentials.end() || i->second.empty())
-                && (!credentials.count(PASSWORD_KEY) || credentials.at(PASSWORD_KEY).empty())) {
+                && (!credentials.contains(PASSWORD_KEY) || credentials.at(PASSWORD_KEY).empty())) {
             // return anon user
             return make_ready_future<authenticated_user>(anonymous_user());
         }

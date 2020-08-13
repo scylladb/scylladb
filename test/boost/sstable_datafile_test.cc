@@ -3059,8 +3059,8 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
         gens.insert(sst->generation());
     }
     BOOST_REQUIRE(sstables.size() == size_t(min_threshold + 1));
-    BOOST_REQUIRE(gens.count(min_threshold + 1));
-    BOOST_REQUIRE(!gens.count(min_threshold + 2));
+    BOOST_REQUIRE(gens.contains(min_threshold + 1));
+    BOOST_REQUIRE(!gens.contains(min_threshold + 2));
 
     return make_ready_future<>();
 }
@@ -4445,7 +4445,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
         auto sstables = selector.select(key).sstables;
         BOOST_REQUIRE_EQUAL(sstables.size(), expected_gens.size());
         for (auto& sst : sstables) {
-            BOOST_REQUIRE_EQUAL(expected_gens.count(sst->generation()), 1);
+            BOOST_REQUIRE(expected_gens.contains(sst->generation()));
         }
     };
 
@@ -4511,7 +4511,7 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
         set.erase(unleveled_sst);
         set.erase(leveled_sst);
         BOOST_REQUIRE(set.all()->size() == 1);
-        BOOST_REQUIRE(set.all()->count(sst));
+        BOOST_REQUIRE(set.all()->contains(sst));
     }
 
     {
@@ -4543,7 +4543,7 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
         auto sst2 = sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[0].first, 0);
         set.erase(sst2);
         BOOST_REQUIRE(set.all()->size() == 1);
-        BOOST_REQUIRE(set.all()->count(sst));
+        BOOST_REQUIRE(set.all()->contains(sst));
     }
 
     return make_ready_future<>();
@@ -4751,7 +4751,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             auto sst = make_shared_sstable(expected_owners, ignore_msb, smp_count);
             auto owners = boost::copy_range<std::unordered_set<unsigned>>(sst->get_shards_for_this_sstable());
             BOOST_REQUIRE(boost::algorithm::all_of(expected_owners, [&] (unsigned expected_owner) {
-                return owners.count(expected_owner);
+                return owners.contains(expected_owner);
             }));
         };
 
@@ -5585,11 +5585,11 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
         auto do_replace = [&] (const std::vector<shared_sstable>& old_sstables, const std::vector<shared_sstable>& new_sstables) {
             for (auto& old_sst : old_sstables) {
-                BOOST_REQUIRE(sstables.count(old_sst));
+                BOOST_REQUIRE(sstables.contains(old_sst));
                 sstables.erase(old_sst);
             }
             for (auto& new_sst : new_sstables) {
-                BOOST_REQUIRE(!sstables.count(new_sst));
+                BOOST_REQUIRE(!sstables.contains(new_sst));
                 sstables.insert(new_sst);
             }
             column_family_test(cf).rebuild_sstable_list(new_sstables, old_sstables);

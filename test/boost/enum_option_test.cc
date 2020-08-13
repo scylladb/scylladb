@@ -147,9 +147,9 @@ BOOST_AUTO_TEST_CASE(test_multiple_parse) {
 }
 
 BOOST_AUTO_TEST_CASE(test_multiple_format) {
-    BOOST_CHECK((std::set<std::string>{"SanFrancisco", "SF", "SFO", "Frisco"}).count(format<cities>(cities::SF)));
-    BOOST_CHECK((std::set<std::string>{"Toronto", "TO", "YYZ", "TheSix"}).count(format<cities>(cities::TO)));
-    BOOST_CHECK((std::set<std::string>{"NewYork", "NY", "NYC", "BigApple"}).count(format<cities>(cities::NY)));
+    BOOST_CHECK((std::set<std::string>{"SanFrancisco", "SF", "SFO", "Frisco"}).contains(format<cities>(cities::SF)));
+    BOOST_CHECK((std::set<std::string>{"Toronto", "TO", "YYZ", "TheSix"}).contains(format<cities>(cities::TO)));
+    BOOST_CHECK((std::set<std::string>{"NewYork", "NY", "NYC", "BigApple"}).contains(format<cities>(cities::NY)));
 }
 
 namespace {

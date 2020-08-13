@@ -652,7 +652,7 @@ database::init_commitlog() {
     return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
-            if (_column_families.count(id) == 0) {
+            if (!_column_families.contains(id)) {
                 // the CF has been removed.
                 _commitlog->discard_completed_segments(id);
                 return;
@@ -678,7 +678,7 @@ database::shard_of(const frozen_mutation& m) {
 }
 
 void database::add_keyspace(sstring name, keyspace k) {
-    if (_keyspaces.count(name) != 0) {
+    if (_keyspaces.contains(name)) {
         throw std::invalid_argument("Keyspace " + name + " already exists");
     }
     _keyspaces.emplace(std::move(name), std::move(k));
@@ -713,11 +713,11 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     }
 
     auto uuid = schema->id();
-    if (_column_families.count(uuid) != 0) {
+    if (_column_families.contains(uuid)) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
     auto kscf = std::make_pair(schema->ks_name(), schema->cf_name());
-    if (_ks_cf_to_uuid.count(kscf) != 0) {
+    if (_ks_cf_to_uuid.contains(kscf)) {
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
     ks.add_or_update_column_family(schema);
@@ -812,7 +812,7 @@ const keyspace& database::find_keyspace(const sstring& name) const {
 }
 
 bool database::has_keyspace(std::string_view name) const {
-    return _keyspaces.count(name) != 0;
+    return _keyspaces.contains(name);
 }
 
 std::vector<sstring>  database::get_non_system_keyspaces() const {
@@ -867,7 +867,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 }
 
 bool database::column_family_exists(const utils::UUID& uuid) const {
-    return _column_families.count(uuid);
+    return _column_families.contains(uuid);
 }
 
 void
@@ -1089,7 +1089,7 @@ schema_ptr database::find_schema(const utils::UUID& uuid) const {
 }
 
 bool database::has_schema(std::string_view ks_name, std::string_view cf_name) const {
-    return _ks_cf_to_uuid.count(std::make_pair(ks_name, cf_name)) > 0;
+    return _ks_cf_to_uuid.contains(std::make_pair(ks_name, cf_name));
 }
 
 std::vector<view_ptr> database::get_views() const {
@@ -1715,7 +1715,7 @@ sstring database::get_available_index_name(const sstring &ks_name, const sstring
     auto base_name = index_metadata::get_default_index_name(cf_name, index_name_root);
     sstring accepted_name = base_name;
     int i = 0;
-    while (existing_names.count(accepted_name) > 0) {
+    while (existing_names.contains(accepted_name)) {
         accepted_name = base_name + "_" + std::to_string(++i);
     }
     return accepted_name;

@@ -183,14 +183,14 @@ future<> gossiping_property_file_snitch::reload_configuration() {
     sstring new_rack;
 
     // Rack and Data Center have to be defined in the properties file!
-    if (!_prop_values.count(dc_property_key) || !_prop_values.count(rack_property_key)) {
+    if (!_prop_values.contains(dc_property_key) || !_prop_values.contains(rack_property_key)) {
         throw_incomplete_file();
     }
 
     new_dc   = _prop_values[dc_property_key];
     new_rack = _prop_values[rack_property_key];
 
-    if (_prop_values.count(prefer_local_property_key)) {
+    if (_prop_values.contains(prefer_local_property_key)) {
         if (_prop_values[prefer_local_property_key] == "false") {
             new_prefer_local = false;
         } else if (_prop_values[prefer_local_property_key] == "true") {

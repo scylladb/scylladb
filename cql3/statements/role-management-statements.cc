@@ -201,7 +201,7 @@ future<> alter_role_statement::check_access(service::storage_proxy& proxy, const
             const auto alterable_options = state.get_auth_service()->underlying_authenticator().alterable_options();
 
             const auto check = [&alterable_options](auth::authentication_option ao) {
-                if (alterable_options.count(ao) == 0) {
+                if (!alterable_options.contains(ao)) {
                     throw exceptions::unauthorized_exception(format("You aren't allowed to alter the {} option.", ao));
                 }
             };

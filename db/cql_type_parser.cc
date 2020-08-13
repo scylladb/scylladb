@@ -143,7 +143,7 @@ public:
 
         std::deque<entry *> resolvable_types;
         for (auto& e : _definitions) {
-            if (!vertices.count(&e)) {
+            if (!vertices.contains(&e)) {
                 resolvable_types.emplace_back(&e);
             }
         }

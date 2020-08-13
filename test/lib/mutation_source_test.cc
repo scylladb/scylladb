@@ -1851,7 +1851,7 @@ public:
                 // Make sure we don't get shards with the same id and clock
                 // but different value.
                 int64_t clock = clock_dist(_gen);
-                while (counter_used_clock_values[id].count(clock)) {
+                while (counter_used_clock_values[id].contains(clock)) {
                     clock = clock_dist(_gen);
                 }
                 counter_used_clock_values[id].emplace(clock);

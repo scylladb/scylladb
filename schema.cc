@@ -1504,7 +1504,7 @@ const std::unordered_map<sstring, index_metadata>& schema::all_indices() const {
 }
 
 bool schema::has_index(const sstring& index_name) const {
-    return _raw._indices_by_name.count(index_name) > 0;
+    return _raw._indices_by_name.contains(index_name);
 }
 
 std::vector<sstring> schema::index_names() const {

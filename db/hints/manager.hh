@@ -528,7 +528,7 @@ public:
     }
 
     bool has_ep_with_pending_hints(ep_key_type key) const {
-        return _eps_with_pending_hints.count(key);
+        return _eps_with_pending_hints.contains(key);
     }
 
     size_t ep_managers_size() const {

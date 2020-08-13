@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("This test has to be run with -c1");
         }
 
-        if (!app.configuration().count("verbose")) {
+        if (!app.configuration().contains("verbose")) {
             logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
         }
 

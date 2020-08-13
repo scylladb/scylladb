@@ -148,14 +148,14 @@ snapshot_ctl::get_snapshot_details() {
     public:
         future<> operator()(const snapshot_map& value) {
             for (auto&& vp: value) {
-                if (_result.count(vp.first) == 0) {
+                if (!_result.contains(vp.first)) {
                     _result.emplace(vp.first, std::move(vp.second));
                     continue;
                 }
 
                 auto& rp = _result.at(vp.first);
                 for (auto&& cf: vp.second) {
-                    if (rp.count(cf.first) == 0) {
+                    if (!rp.contains(cf.first)) {
                         rp.emplace(cf.first, std::move(cf.second));
                         continue;
                     }
@@ -177,7 +177,7 @@ snapshot_ctl::get_snapshot_details() {
             return parallel_for_each(db.get_column_families(), [local_snapshots] (auto& cf_pair) {
                 return cf_pair.second->get_snapshot_details().then([uuid = cf_pair.first, local_snapshots] (auto map) {
                     for (auto&& snap_map: map) {
-                        if (local_snapshots->count(snap_map.first) == 0) {
+                        if (!local_snapshots->contains(snap_map.first)) {
                             local_snapshots->emplace(snap_map.first, cf_snapshot_map());
                         }
                         local_snapshots->at(snap_map.first).emplace(uuid, snap_map.second);

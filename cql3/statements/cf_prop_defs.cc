@@ -248,7 +248,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
 
     std::optional<sstring> tmp_value = {};
     if (has_property(KW_COMPACTION)) {
-        if (get_compaction_options().count(KW_MINCOMPACTIONTHRESHOLD)) {
+        if (get_compaction_options().contains(KW_MINCOMPACTIONTHRESHOLD)) {
             tmp_value = get_compaction_options().at(KW_MINCOMPACTIONTHRESHOLD);
         }
     }
@@ -256,7 +256,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
 
     tmp_value = {};
     if (has_property(KW_COMPACTION)) {
-        if (get_compaction_options().count(KW_MAXCOMPACTIONTHRESHOLD)) {
+        if (get_compaction_options().contains(KW_MAXCOMPACTIONTHRESHOLD)) {
             tmp_value = get_compaction_options().at(KW_MAXCOMPACTIONTHRESHOLD);
         }
     }
@@ -268,7 +268,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
     builder.set_max_compaction_threshold(max_compaction_threshold);
 
     if (has_property(KW_COMPACTION)) {
-        if (get_compaction_options().count(COMPACTION_ENABLED_KEY)) {
+        if (get_compaction_options().contains(COMPACTION_ENABLED_KEY)) {
             auto enabled = boost::algorithm::iequals(get_compaction_options().at(COMPACTION_ENABLED_KEY), "true");
             builder.set_compaction_enabled(enabled);
         }

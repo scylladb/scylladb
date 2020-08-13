@@ -184,7 +184,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         return tmp;
     }();
 
-    if (p == auth::permission::SELECT && readable_system_resources.count(resource) != 0) {
+    if (p == auth::permission::SELECT && readable_system_resources.contains(resource)) {
         return make_ready_future();
     }
     if (alteration_permissions.contains(p)) {

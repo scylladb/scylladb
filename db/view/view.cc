@@ -1859,7 +1859,7 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
     vlogger.debug("Shard finished building view {}.{}", view->ks_name(), view->cf_name());
     return container().map_reduce0(
             [view_id = view->id()] (view_builder& builder) {
-                return builder._built_views.count(view_id);
+                return builder._built_views.contains(view_id);
             },
             true,
             [] (bool result, bool shard_complete) {

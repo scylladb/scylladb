@@ -1674,7 +1674,7 @@ static void test_pre_post_image(cql_test_env& e, const std::vector<image_persist
         const auto time_index = column_index(*rows, cdc::log_meta_column_name("time"));
         for (const auto& row : results) {
             const auto time = *row[time_index];
-            if (!processed_times.count(time)) {
+            if (!processed_times.contains(time)) {
                 groups[time].push_back(row);
             }
         }

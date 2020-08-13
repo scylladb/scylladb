@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
         ("debug", "enable debug logging");
 
     return app.run(argc, argv, [&app] {
-        if (app.configuration().count("debug")) {
+        if (app.configuration().contains("debug")) {
             logging::logger_registry().set_all_loggers_level(logging::log_level::debug);
         }
 

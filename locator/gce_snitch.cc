@@ -156,7 +156,7 @@ future<sstring> gce_snitch::read_property_file() {
     return load_property_file().then([this] {
         sstring dc_suffix;
 
-        if (_prop_values.count(dc_suffix_property_key)) {
+        if (_prop_values.contains(dc_suffix_property_key)) {
             dc_suffix = _prop_values[dc_suffix_property_key];
         }
 

@@ -82,7 +82,7 @@ public:
         std::set<gms::inet_address> _down_nodes;
     public:
         failure_detector_source_filter(std::set<gms::inet_address> down_nodes) : _down_nodes(std::move(down_nodes)) { }
-        virtual bool should_include(inet_address endpoint) override { return !_down_nodes.count(endpoint); }
+        virtual bool should_include(inet_address endpoint) override { return !_down_nodes.contains(endpoint); }
     };
 
     /**

@@ -5229,7 +5229,7 @@ void storage_proxy::on_down(const gms::inet_address& endpoint) {
     auto it = _view_update_handlers_list->begin();
     while (it != _view_update_handlers_list->end()) {
         auto guard = it->shared_from_this();
-        if (it->get_targets().count(endpoint) > 0 && _response_handlers.contains(it->id())) {
+        if (it->get_targets().contains(endpoint) && _response_handlers.contains(it->id())) {
             it->timeout_cb();
         }
         ++it;

@@ -183,7 +183,7 @@ void repl(seastar::app_template& app) {
 // on the command line.
 void apply_configuration(const boost::program_options::variables_map& cfg) {
 
-    if (cfg.count("input")) {
+    if (cfg.contains("input")) {
         static std::ifstream input(cfg["input"].as<std::string>());
         std::cin.rdbuf(input.rdbuf());
     }
@@ -192,7 +192,7 @@ void apply_configuration(const boost::program_options::variables_map& cfg) {
     // by redirecting std::cout to a file and capturing
     // the old std::cout in std_cout
     auto save_filebuf = std::cout.rdbuf(log.rdbuf());
-    if (cfg.count("output")) {
+    if (cfg.contains("output")) {
         std_cout.open(cfg["output"].as<std::string>());
     } else  {
         std_cout.std::ios::rdbuf(save_filebuf);

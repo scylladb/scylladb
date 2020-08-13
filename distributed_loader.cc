@@ -707,7 +707,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
             for (auto& [name, ks] : db.get_keyspaces()) {
                 // mark all user keyspaces that are _not_ on disk as already
                 // populated.
-                if (!dirs.count(ks.metadata()->name())) {
+                if (!dirs.contains(ks.metadata()->name())) {
                     ks.mark_as_populated();
                 }
             }
