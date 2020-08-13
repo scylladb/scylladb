@@ -265,13 +265,14 @@ time_window_compaction_strategy::newest_bucket(std::map<timestamp_type, std::vec
 
             // If the tables in the current bucket aren't eligible in the STCS strategy, we'll skip it and look for other buckets
             if (!stcs_interesting_bucket.empty()) {
+                clogger.debug("bucket size {} >= 2, key {}, performing STCS on what's here", bucket.size(), key);
                 return stcs_interesting_bucket;
             }
             break;
         }
         case bucket_compaction_mode::major:
             _recent_active_windows.erase(key);
-            clogger.debug("bucket size {} >= 2 and not in current bucket, compacting what's here", bucket.size());
+            clogger.debug("bucket size {} >= 2 and not in current bucket, key {}, compacting what's here", bucket.size(), key);
             return trim_to_threshold(std::move(bucket), max_threshold);
         default:
             clogger.debug("No compaction necessary for bucket size {} , key {}, now {}", bucket.size(), key, now);
