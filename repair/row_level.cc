@@ -380,6 +380,8 @@ private:
     std::optional<evictable_reader_handle> _reader_handle;
     // Current partition read from disk
     lw_shared_ptr<const decorated_key_with_hash> _current_dk;
+    uint64_t _reads_issued = 0;
+    uint64_t _reads_finished = 0;
 
 public:
     repair_reader(
@@ -431,7 +433,11 @@ public:
 
     future<mutation_fragment_opt>
     read_mutation_fragment() {
-        return _reader(db::no_timeout);
+        ++_reads_issued;
+        return _reader(db::no_timeout).then([this] (mutation_fragment_opt mfopt) {
+            ++_reads_finished;
+            return mfopt;
+        });
     }
 
     void on_end_of_stream() {
