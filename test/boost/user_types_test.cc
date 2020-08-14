@@ -544,7 +544,6 @@ SEASTAR_TEST_CASE(test_nonfrozen_user_types_prepared) {
             mk_null_row(3),
         });
 
-#if 0 // TODO: fix dependence on #6369 incorrect behaviour.
         auto query_prepared = [&] (const sstring& cql, const std::vector<cql3::raw_value>& vs) {
             auto id = e.prepare(cql).get0();
             return e.execute_prepared(id, vs).get0();
@@ -564,9 +563,7 @@ SEASTAR_TEST_CASE(test_nonfrozen_user_types_prepared) {
         assert_that(query_prepared("select * from cf where b in ? allow filtering", {mk_ut_list({{1, "text1", long_null}, {}})}))
                 .is_rows().with_rows_ignore_order({
             mk_row(1, {1, "text1", long_null}),
-            mk_null_row(3), // TODO: drop this element, due to #6369 fix.
         });
-#endif // 0
 
         execute_prepared("insert into cf (a, b) values (?, ?)", {mk_int(4), mk_tuple({4, "text4", int64_t(4)})});
         assert_that(e.execute_cql("select * from cf where a = 4").get0()).is_rows().with_rows_ignore_order({
