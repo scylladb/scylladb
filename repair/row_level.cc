@@ -2314,7 +2314,7 @@ class row_level_repair {
     std::vector<gms::inet_address> _all_live_peer_nodes;
     column_family& _cf;
 
-    // All particular peer nodes not including the node itself.
+    // All peer nodes and the node itself.
     std::vector<gms::inet_address> _all_nodes;
 
     // Repair master and followers will propose a sync boundary. Each of them
