@@ -37,6 +37,7 @@ override_dh_strip:
 	# The binaries (ethtool...patchelf) don't pass dh_strip after going through patchelf. Since they are
 	# already stripped, nothing is lost if we exclude them, so that's what we do.
 	dh_strip -Xlibprotobuf.so.15 -Xld.so -Xethtool -Xgawk -Xgzip -Xhwloc-calc -Xhwloc-distrib -Xifconfig -Xlscpu -Xnetstat -Xpatchelf --dbg-package={{product}}-server-dbg
+	find $(CURDIR)/debian/{{product}}-server-dbg/usr/lib/debug/.build-id/ -name "*.debug" -exec objcopy --decompress-debug-sections {} \;
 
 override_dh_makeshlibs:
 
