@@ -1891,7 +1891,9 @@ sharding_metadata
 create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
     auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sm = sharding_metadata();
-    for (auto&& range : dht::split_range_to_single_shard(*schema, prange, shard).get0()) {
+    auto&& ranges = dht::split_range_to_single_shard(*schema, prange, shard).get0();
+    sm.token_ranges.elements.reserve(ranges.size());
+    for (auto&& range : std::move(ranges)) {
         if (true) { // keep indentation
             // we know left/right are not infinite
             auto&& left = range.start()->value();
