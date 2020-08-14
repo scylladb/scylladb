@@ -2894,7 +2894,7 @@ class scylla_netw(gdb.Command):
         ms = sharded(gdb.parse_and_eval('netw::_the_messaging_service')).local()
         gdb.write('Dropped messages: %s\n' % ms['_dropped_messages'])
         gdb.write('Outgoing connections:\n')
-        for (addr, shard_info) in list_unordered_map(ms['_clients']['_M_elems'][0]):
+        for (addr, shard_info) in list_unordered_map(std_vector(ms['_clients'])[0]):
             ip = ip_to_str(int(addr['addr']['_addr']['ip']['raw']), byteorder=sys.byteorder)
             client = shard_info['rpc_client']['_p']
             rpc_client = std_unique_ptr(client['_p'])
@@ -2910,7 +2910,7 @@ class scylla_netw(gdb.Command):
             if srv:
                 gdb.write('Server: resources=%s\n' % srv['_resources_available'])
                 gdb.write('Incoming connections:\n')
-                for clnt in list_unordered_set(srv['_conns']):
+                for clnt in list_unordered_map(srv['_conns']):
                     conn = clnt['_p'].cast(clnt.type.template_argument(0).pointer())
                     ip = ip_to_str(int(conn['_info']['addr']['u']['in']['sin_addr']['s_addr']), byteorder='big')
                     port = int(conn['_info']['addr']['u']['in']['sin_port'])
