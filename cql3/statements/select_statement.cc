@@ -782,7 +782,7 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
         if (_restrictions->need_filtering() ||
                 _restrictions->get_partition_key_restrictions()->empty() ||
                 (has_token(_restrictions->get_partition_key_restrictions()->expression) &&
-                 !find(_restrictions->get_partition_key_restrictions()->expression, operator_type::EQ))) {
+                 !find(_restrictions->get_partition_key_restrictions()->expression, expr::oper_t::EQ))) {
             _range_scan = true;
             if (!_parameters->bypass_cache())
                 _range_scan_no_bypass_cache = true;

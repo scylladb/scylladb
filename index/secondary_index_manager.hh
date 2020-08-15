@@ -43,6 +43,7 @@
 
 #include "schema.hh"
 
+#include "cql3/expr/expression.hh"
 #include "cql3/operator.hh"
 #include "database_fwd.hh"
 
@@ -66,7 +67,7 @@ class index {
 public:
     index(const sstring& target_column, const index_metadata& im);
     bool depends_on(const column_definition& cdef) const;
-    bool supports_expression(const column_definition& cdef, const cql3::operator_type& op) const;
+    bool supports_expression(const column_definition& cdef, const cql3::expr::oper_t op) const;
     const index_metadata& metadata() const;
     const sstring& target_column() const {
         return _target_column;

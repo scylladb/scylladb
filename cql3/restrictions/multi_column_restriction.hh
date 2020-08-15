@@ -191,13 +191,14 @@ public:
         : multi_column_restriction(schema, std::move(defs))
         , _value(std::move(value))
     {
-        expression = expr::binary_operator{
-            std::vector<expr::column_value>(_column_defs.cbegin(), _column_defs.cend()), &operator_type::EQ, _value};
+        using namespace expr;
+        expression = binary_operator{
+            std::vector<column_value>(_column_defs.cbegin(), _column_defs.cend()), oper_t::EQ, _value};
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
         for (auto* cdef : _column_defs) {
-            if (index.supports_expression(*cdef, cql3::operator_type::EQ)) {
+            if (index.supports_expression(*cdef, expr::oper_t::EQ)) {
                 return true;
             }
         }
@@ -259,7 +260,7 @@ public:
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
         for (auto* cdef : _column_defs) {
-            if (index.supports_expression(*cdef, cql3::operator_type::IN)) {
+            if (index.supports_expression(*cdef, expr::oper_t::IN)) {
                 return true;
             }
         }
@@ -332,9 +333,10 @@ public:
         : multi_column_restriction::IN(schema, std::move(defs))
         , _values(std::move(value))
     {
-        expression = expr::binary_operator{
-            std::vector<expr::column_value>(_column_defs.cbegin(), _column_defs.cend()),
-            &operator_type::IN,
+        using namespace expr;
+        expression = binary_operator{
+            std::vector<column_value>(_column_defs.cbegin(), _column_defs.cend()),
+            oper_t::IN,
             ::make_shared<lists::delayed_value>(_values)};
     }
 
@@ -360,9 +362,10 @@ private:
 public:
     IN_with_marker(schema_ptr schema, std::vector<const column_definition*> defs, shared_ptr<abstract_marker> marker)
         : IN(schema, std::move(defs)), _marker(marker) {
-        expression = expr::binary_operator{
-            std::vector<expr::column_value>(_column_defs.cbegin(), _column_defs.cend()),
-            &operator_type::IN,
+        using namespace expr;
+        expression = binary_operator{
+            std::vector<column_value>(_column_defs.cbegin(), _column_defs.cend()),
+            oper_t::IN,
             std::move(marker)};
     }
 
@@ -558,14 +561,15 @@ private:
     ::shared_ptr<restriction> make_single_column_restriction(std::optional<cql3::statements::bound> bound, bool inclusive,
                                                              std::size_t column_pos,const bytes_opt& value) const {
         ::shared_ptr<cql3::term> term = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(value));
+        using namespace expr;
         if (!bound){
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);
-            r->expression = expr::make_column_op(_column_defs[column_pos], operator_type::EQ, std::move(term));
+            r->expression = make_column_op(_column_defs[column_pos], operator_type::EQ, std::move(term));
             return r;
         } else {
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);
-            r->expression = expr::make_column_op(
-                    _column_defs[column_pos], *expr::pick_operator(*bound, inclusive), std::move(term));
+            r->expression = binary_operator{
+                column_value(_column_defs[column_pos]), pick_operator(*bound, inclusive), std::move(term)};
             return r;
         }
     }

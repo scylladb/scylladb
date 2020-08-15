@@ -22,6 +22,7 @@
 #pragma once
 
 #include <fmt/core.h>
+#include <ostream>
 #include <seastar/core/shared_ptr.hh>
 #include <variant>
 
@@ -33,12 +34,16 @@
 #include "cql3/term.hh"
 #include "database_fwd.hh"
 #include "gc_clock.hh"
-#include "index/secondary_index_manager.hh"
 #include "mutation_partition.hh"
 #include "query-result-reader.hh"
 #include "range.hh"
 #include "seastarx.hh"
 #include "utils/overloaded_functor.hh"
+
+namespace secondary_index {
+class index;
+class secondary_index_manager;
+} // namespace secondary_index
 
 namespace cql3 {
 
@@ -67,10 +72,12 @@ struct column_value {
 /// here -- token takes exactly the partition key as its argument.
 struct token {};
 
+enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE };
+
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
     std::variant<column_value, std::vector<column_value>, token> lhs;
-    const operator_type* op; // Pointer because operator_type isn't copyable or assignable.
+    oper_t op;
     ::shared_ptr<term> rhs;
 };
 
@@ -82,6 +89,8 @@ struct conjunction {
 /// Creates a conjunction of a and b.  If either a or b is itself a conjunction, its children are inserted
 /// directly into the resulting conjunction's children, flattening the expression tree.
 extern expression make_conjunction(expression a, expression b);
+
+extern std::ostream& operator<<(std::ostream&, oper_t);
 
 /// True iff restr is satisfied with respect to the row provided from a partition slice.
 extern bool is_satisfied_by(
@@ -172,16 +181,38 @@ size_t count_if(const expression& e, Fn f) {
         }, e);
 }
 
-inline const binary_operator* find(const expression& e, const operator_type& op) {
-    return find_atom(e, [&] (const binary_operator& o) { return *o.op == op; });
+inline const binary_operator* find(const expression& e, oper_t op) {
+    return find_atom(e, [&] (const binary_operator& o) { return o.op == op; });
 }
 
-inline bool needs_filtering(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return o.op->needs_filtering(); });
+inline bool needs_filtering(oper_t op) {
+    return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE);
+}
+
+inline auto find_needs_filtering(const expression& e) {
+    return find_atom(e, [] (const binary_operator& bo) { return needs_filtering(bo.op); });
+}
+
+inline bool is_slice(oper_t op) {
+    return (op == oper_t::LT) || (op == oper_t::LTE) || (op == oper_t::GT) || (op == oper_t::GTE);
 }
 
 inline bool has_slice(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return o.op->is_slice(); });
+    return find_atom(e, [] (const binary_operator& bo) { return is_slice(bo.op); });
+}
+
+inline bool is_compare(oper_t op) {
+    switch (op) {
+    case oper_t::EQ:
+    case oper_t::LT:
+    case oper_t::LTE:
+    case oper_t::GT:
+    case oper_t::GTE:
+    case oper_t::NEQ:
+        return true;
+    default:
+        return false;
+    }
 }
 
 inline bool has_token(const expression& e) {
@@ -189,7 +220,7 @@ inline bool has_token(const expression& e) {
 }
 
 inline bool has_slice_or_needs_filtering(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return o.op->is_slice() || o.op->needs_filtering(); });
+    return find_atom(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
 }
 
 /// True iff binary_operator involves a collection.
@@ -200,14 +231,12 @@ extern bool is_on_collection(const binary_operator&);
 extern expression replace_column_def(const expression&, const column_definition*);
 
 /// Makes a binary_operator on a column_definition.
-inline expression make_column_op(const column_definition* cdef, const operator_type& op, ::shared_ptr<term> value) {
-    return binary_operator{column_value(cdef), &op, std::move(value)};
-}
+extern expression make_column_op(const column_definition*, const operator_type&, ::shared_ptr<term>);
 
-inline const operator_type* pick_operator(statements::bound b, bool inclusive) {
+inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
-            (inclusive ? &operator_type::GTE : &operator_type::GT) :
-            (inclusive ? &operator_type::LTE : &operator_type::LT);
+            (inclusive ? oper_t::GTE : oper_t::GT) :
+            (inclusive ? oper_t::LTE : oper_t::LT);
 }
 
 } // namespace expr

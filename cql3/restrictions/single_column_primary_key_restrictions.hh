@@ -250,7 +250,7 @@ private:
             const column_definition* def = e.first;
             auto&& r = e.second;
 
-            if (vec_of_values.size() != _schema->position(*def) || expr::needs_filtering(r->expression)) {
+            if (vec_of_values.size() != _schema->position(*def) || find_needs_filtering(r->expression)) {
                 // The prefixes built so far are the longest we can build,
                 // the rest of the constraints will have to be applied using filtering.
                 break;
@@ -443,7 +443,7 @@ inline unsigned single_column_primary_key_restrictions<clustering_key>::num_pref
     column_id position = 0;
     unsigned int count = 0;
     for (const auto& restriction : restrictions() | boost::adaptors::map_values) {
-        if (expr::needs_filtering(restriction->expression)
+        if (find_needs_filtering(restriction->expression)
             || position != restriction->get_column_def().id) {
             return count;
         }

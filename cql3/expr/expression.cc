@@ -24,11 +24,12 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptors.hpp>
-
 #include <fmt/ostream.h>
+#include <unordered_map>
 
 #include "cql3/lists.hh"
 #include "cql3/tuples.hh"
+#include "index/secondary_index_manager.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
@@ -205,23 +206,29 @@ bool equal(term& t, const std::vector<column_value>& columns, const column_value
 }
 
 /// True iff lhs is limited by rhs in the manner prescribed by op.
-bool limits(bytes_view lhs, const operator_type& op, bytes_view rhs, const abstract_type& type) {
-    if (!op.is_compare()) {
-        throw std::logic_error("limits() called on non-compare op");
-    }
+bool limits(bytes_view lhs, oper_t op, bytes_view rhs, const abstract_type& type) {
     const auto cmp = type.compare(lhs, rhs);
-    if (cmp < 0) {
-        return op == operator_type::LT || op == operator_type::LTE || op == operator_type::NEQ;
-    } else if (cmp > 0) {
-        return op == operator_type::GT || op == operator_type::GTE || op == operator_type::NEQ;
-    } else {
-        return op == operator_type::LTE || op == operator_type::GTE || op == operator_type::EQ;
+    switch (op) {
+    case oper_t::LT:
+        return cmp < 0;
+    case oper_t::LTE:
+        return cmp <= 0;
+    case oper_t::GT:
+        return cmp > 0;
+    case oper_t::GTE:
+        return cmp >= 0;
+    case oper_t::EQ:
+        return cmp == 0;
+    case oper_t::NEQ:
+        return cmp != 0;
+    default:
+        throw std::logic_error(format("limits() called on non-compare op {}", op));
     }
 }
 
 /// True iff the column value is limited by rhs in the manner prescribed by op.
-bool limits(const column_value& col, const operator_type& op, term& rhs, const column_value_eval_bag& bag) {
-    if (!op.is_slice()) { // For EQ or NEQ, use equal().
+bool limits(const column_value& col, oper_t op, term& rhs, const column_value_eval_bag& bag) {
+    if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
     auto lhs = get_value(col, bag);
@@ -233,9 +240,9 @@ bool limits(const column_value& col, const operator_type& op, term& rhs, const c
 }
 
 /// True iff the column values are limited by t in the manner prescribed by op.
-bool limits(const std::vector<column_value>& columns, const operator_type& op, term& t,
+bool limits(const std::vector<column_value>& columns, const oper_t op, term& t,
             const column_value_eval_bag& bag) {
-    if (!op.is_slice()) { // For EQ or NEQ, use equal().
+    if (!is_slice(op)) { // For EQ or NEQ, use equal().
         throw std::logic_error("limits() called on non-slice op");
     }
     const auto tup = get_tuple(t, bag.options);
@@ -256,17 +263,17 @@ bool limits(const std::vector<column_value>& columns, const operator_type& op, t
                 *rhs[i]);
         // If the components aren't equal, then we just learned the LHS/RHS order.
         if (cmp < 0) {
-            if (op == operator_type::LT || op == operator_type::LTE) {
+            if (op == oper_t::LT || op == oper_t::LTE) {
                 return true;
-            } else if (op == operator_type::GT || op == operator_type::GTE) {
+            } else if (op == oper_t::GT || op == oper_t::GTE) {
                 return false;
             } else {
                 throw std::logic_error("Unknown slice operator");
             }
         } else if (cmp > 0) {
-            if (op == operator_type::LT || op == operator_type::LTE) {
+            if (op == oper_t::LT || op == oper_t::LTE) {
                 return false;
-            } else if (op == operator_type::GT || op == operator_type::GTE) {
+            } else if (op == oper_t::GT || op == oper_t::GTE) {
                 return true;
             } else {
                 throw std::logic_error("Unknown slice operator");
@@ -275,7 +282,7 @@ bool limits(const std::vector<column_value>& columns, const operator_type& op, t
         // Otherwise, we don't know the LHS/RHS order, so check the next component.
     }
     // Getting here means LHS == RHS.
-    return op == operator_type::LTE || op == operator_type::GTE;
+    return op == oper_t::LTE || op == oper_t::GTE;
 }
 
 /// True iff collection (list, set, or map) contains value.
@@ -438,13 +445,19 @@ bool is_one_of(const std::vector<column_value>& cvs, term& rhs, const column_val
 }
 
 /// True iff op means bnd type of bound.
-bool matches(const operator_type* op, statements::bound bnd) {
-    static const std::vector<std::vector<const operator_type*>> operators{
-        {&operator_type::EQ, &operator_type::GT, &operator_type::GTE}, // These mean a lower bound.
-        {&operator_type::EQ, &operator_type::LT, &operator_type::LTE}, // These mean an upper bound.
-    };
-    const auto zero_if_lower_one_if_upper = get_idx(bnd);
-    return boost::algorithm::any_of_equal(operators[zero_if_lower_one_if_upper], op);
+bool matches(oper_t op, statements::bound bnd) {
+    switch (op) {
+    case oper_t::GT:
+    case oper_t::GTE:
+        return is_start(bnd); // These set a lower bound.
+    case oper_t::LT:
+    case oper_t::LTE:
+        return is_end(bnd); // These set an upper bound.
+    case oper_t::EQ:
+        return true; // Bounds from both sides.
+    default:
+        return false;
+    }
 }
 
 const value_set empty_value_set = value_list{};
@@ -481,30 +494,30 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
 bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& bag) {
     return std::visit(overloaded_functor{
             [&] (const column_value& col) {
-                if (*opr.op == operator_type::EQ) {
+                if (opr.op == oper_t::EQ) {
                     return equal(*opr.rhs, col, bag);
-                } else if (*opr.op == operator_type::NEQ) {
+                } else if (opr.op == oper_t::NEQ) {
                     return !equal(*opr.rhs, col, bag);
-                } else if (opr.op->is_slice()) {
-                    return limits(col, *opr.op, *opr.rhs, bag);
-                } else if (*opr.op == operator_type::CONTAINS) {
+                } else if (is_slice(opr.op)) {
+                    return limits(col, opr.op, *opr.rhs, bag);
+                } else if (opr.op == oper_t::CONTAINS) {
                     return contains(col, opr.rhs->bind_and_get(bag.options), bag);
-                } else if (*opr.op == operator_type::CONTAINS_KEY) {
+                } else if (opr.op == oper_t::CONTAINS_KEY) {
                     return contains_key(col, opr.rhs->bind_and_get(bag.options), bag);
-                } else if (*opr.op == operator_type::LIKE) {
+                } else if (opr.op == oper_t::LIKE) {
                     return like(col, to_bytes_opt(opr.rhs->bind_and_get(bag.options)), bag);
-                } else if (*opr.op == operator_type::IN) {
+                } else if (opr.op == oper_t::IN) {
                     return is_one_of(col, *opr.rhs, bag);
                 } else {
                     throw exceptions::unsupported_operation_exception(format("Unhandled binary_operator: {}", opr));
                 }
             },
             [&] (const std::vector<column_value>& cvs) {
-                if (*opr.op == operator_type::EQ) {
+                if (opr.op == oper_t::EQ) {
                     return equal(*opr.rhs, cvs, bag);
-                } else if (opr.op->is_slice()) {
-                    return limits(cvs, *opr.op, *opr.rhs, bag);
-                } else if (*opr.op == operator_type::IN) {
+                } else if (is_slice(opr.op)) {
+                    return limits(cvs, opr.op, *opr.rhs, bag);
+                } else if (opr.op == oper_t::IN) {
                     return is_one_of(cvs, *opr.rhs, bag);
                 } else {
                     throw exceptions::unsupported_operation_exception(
@@ -596,17 +609,19 @@ value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_opti
 static constexpr bool inclusive = true, exclusive = false;
 
 /// A range of all X such that X op val.
-nonwrapping_range<bytes> to_range(const operator_type& op, const bytes& val) {
-    if (op == operator_type::GT) {
+nonwrapping_range<bytes> to_range(oper_t op, const bytes& val) {
+    switch (op) {
+    case oper_t::GT:
         return nonwrapping_range<bytes>::make_starting_with(range_bound(val, exclusive));
-    } else if (op == operator_type::GTE) {
+    case oper_t::GTE:
         return nonwrapping_range<bytes>::make_starting_with(range_bound(val, inclusive));
-    } else if (op == operator_type::LT) {
+    case oper_t::LT:
         return nonwrapping_range<bytes>::make_ending_with(range_bound(val, exclusive));
-    } else if (op == operator_type::LTE) {
+    case oper_t::LTE:
         return nonwrapping_range<bytes>::make_ending_with(range_bound(val, inclusive));
+    default:
+        throw std::logic_error(format("to_range: unknown comparison operator {}", op));
     }
-    throw std::logic_error(format("to_range: unknown comparison operator {}", op));
 }
 
 } // anonymous namespace
@@ -665,14 +680,14 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             if (!cdef || cdef != col.col) {
                                 return unbounded_value_set;
                             }
-                            if (oper.op->is_compare()) {
+                            if (is_compare(oper.op)) {
                                 const auto val = to_bytes_opt(oper.rhs->bind_and_get(options));
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
-                                return *oper.op == operator_type::EQ ? value_set(value_list{*val})
-                                        : to_range(*oper.op, *val);
-                            } else if (*oper.op == operator_type::IN) {
+                                return oper.op == oper_t::EQ ? value_set(value_list{*val})
+                                        : to_range(oper.op, *val);
+                            } else if (oper.op == oper_t::IN) {
                                 return get_IN_values(oper.rhs, options, type->as_less_comparator());
                             }
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
@@ -687,13 +702,13 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                 return unbounded_value_set;
                             }
                             const auto column_index_on_lhs = std::distance(cvs.begin(), found);
-                            if (oper.op->is_compare()) {
+                            if (is_compare(oper.op)) {
                                 // RHS must be a tuple due to upstream checks.
                                 bytes_opt val = get_tuple(*oper.rhs, options)->get_elements()[column_index_on_lhs];
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
-                                if (*oper.op == operator_type::EQ) {
+                                if (oper.op == oper_t::EQ) {
                                     return value_list{*val};
                                 }
                                 if (column_index_on_lhs > 0) {
@@ -701,8 +716,8 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                     // comparison is lexicographical.
                                     return unbounded_value_set;
                                 }
-                                return to_range(*oper.op, *val);
-                            } else if (*oper.op == operator_type::IN) {
+                                return to_range(oper.op, *val);
+                            } else if (oper.op == oper_t::IN) {
                                 return get_IN_values(oper.rhs, column_index_on_lhs, options, type->as_less_comparator());
                             }
                             return unbounded_value_set;
@@ -715,11 +730,11 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             if (!val) {
                                 return empty_value_set; // All NULL comparisons fail; no token values match.
                             }
-                            if (*oper.op == operator_type::EQ) {
+                            if (oper.op == oper_t::EQ) {
                                 return value_list{*val};
-                            } else if (*oper.op == operator_type::GT) {
+                            } else if (oper.op == oper_t::GT) {
                                 return nonwrapping_range<bytes>::make_starting_with(range_bound(*val, exclusive));
-                            } else if (*oper.op == operator_type::GTE) {
+                            } else if (oper.op == oper_t::GTE) {
                                 return nonwrapping_range<bytes>::make_starting_with(range_bound(*val, inclusive));
                             }
                             static const bytes MININT = serialized(std::numeric_limits<int64_t>::min()),
@@ -727,12 +742,12 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             // Undocumented feature: when the user types `token(...) < MININT`, we interpret
                             // that as MAXINT for some reason.
                             const auto adjusted_val = (*val == MININT) ? serialized(MAXINT) : *val;
-                            if (*oper.op == operator_type::LT) {
+                            if (oper.op == oper_t::LT) {
                                 return nonwrapping_range<bytes>::make_ending_with(range_bound(adjusted_val, exclusive));
-                            } else if (*oper.op == operator_type::LTE) {
+                            } else if (oper.op == oper_t::LTE) {
                                 return nonwrapping_range<bytes>::make_ending_with(range_bound(adjusted_val, inclusive));
                             }
-                            throw std::logic_error(format("get_token_interval invalid operator {}", *oper.op));
+                            throw std::logic_error(format("get_token_interval invalid operator {}", oper.op));
                         },
                     }, oper.lhs);
             },
@@ -780,11 +795,11 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
             [&] (const binary_operator& oper) {
                 return std::visit(overloaded_functor{
                         [&] (const column_value& col) {
-                            return idx.supports_expression(*col.col, *oper.op);
+                            return idx.supports_expression(*col.col, oper.op);
                         },
                         [&] (const std::vector<column_value>& cvs) {
                             return boost::algorithm::any_of(cvs, [&] (const column_value& c) {
-                                return idx.supports_expression(*c.col, *oper.op);
+                                return idx.supports_expression(*c.col, oper.op);
                             });
                         },
                         [&] (const token&) { return false; },
@@ -828,7 +843,7 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                             fmt::print(os, "(({}))", fmt::join(cvs, ","));
                         },
                     }, opr.lhs);
-                os << ' ' << *opr.op << ' ' << *opr.rhs;
+                os << ' ' << opr.op << ' ' << *opr.rhs;
             },
         }, expr);
     return os;
@@ -839,7 +854,7 @@ sstring to_string(const expression& expr) {
 }
 
 bool is_on_collection(const binary_operator& b) {
-    if (*b.op == operator_type::CONTAINS || *b.op == operator_type::CONTAINS_KEY) {
+    if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
         return true;
     }
     if (auto cvs = std::get_if<std::vector<column_value>>(&b.lhs)) {
@@ -868,6 +883,55 @@ expression replace_column_def(const expression& expr, const column_definition* n
                     }, oper.lhs);
             },
         }, expr);
+}
+
+expression make_column_op(const column_definition* cdef, const operator_type& op, ::shared_ptr<term> value) {
+    const std::unordered_map<const operator_type*, oper_t> opmap{
+        {&operator_type::EQ, oper_t::EQ},
+        {&operator_type::NEQ, oper_t::NEQ},
+        {&operator_type::LT, oper_t::LT},
+        {&operator_type::LTE, oper_t::LTE},
+        {&operator_type::GT, oper_t::GT},
+        {&operator_type::GTE, oper_t::GTE},
+        {&operator_type::IN, oper_t::IN},
+        {&operator_type::CONTAINS, oper_t::CONTAINS},
+        {&operator_type::CONTAINS_KEY, oper_t::CONTAINS_KEY},
+        {&operator_type::IS_NOT, oper_t::IS_NOT},
+        {&operator_type::LIKE, oper_t::LIKE},
+    };
+    const auto found = opmap.find(&op);
+    if (found == opmap.end()) {
+        throw std::logic_error(format("make_column_op: Unrecognized operator_type: {}", op));
+    }
+    return binary_operator{column_value(cdef), found->second, std::move(value)};
+}
+
+std::ostream& operator<<(std::ostream& s, oper_t op) {
+    switch (op) {
+    case oper_t::EQ:
+        return s << "=";
+    case oper_t::NEQ:
+        return s << "!=";
+    case oper_t::LT:
+        return s << "<";
+    case oper_t::LTE:
+        return s << "<=";
+    case oper_t::GT:
+        return s << ">";
+    case oper_t::GTE:
+        return s << ">=";
+    case oper_t::IN:
+        return s << "IN";
+    case oper_t::CONTAINS:
+        return s << "CONTAINS";
+    case oper_t::CONTAINS_KEY:
+        return s << "CONTAINS KEY";
+    case oper_t::IS_NOT:
+        return s << "IS NOT";
+    case oper_t::LIKE:
+        return s << "LIKE";
+    }
+    __builtin_unreachable();
 }
 
 } // namespace expr
